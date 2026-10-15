@@ -5,13 +5,19 @@ local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 -- Cross-client API wrappers (see compat.lua).
 local api = st.api
+local get_tab = st.utils.convert_lookup_table
 
-local maul_ids = {
+--=========================================================================================
+-- Spell data
+--=========================================================================================
+-- Maul, all ranks across the classic families (vanilla -> BCC -> WotLK).
+-- The lookup table keeps every rank id; get_family_spell_id picks the highest id
+-- that exists on the running client (the current rank).
+local maul_ids = get_tab({
     6807, 6808, 6809, 8972, 9745, 9880, 9881, 26996, 48479, 48480
-}
+})
 
--- The list above mixes rank ids from several expansions; this resolves to the rank
--- that exists on the running client (see compat.lua). Cached after first use.
+-- Cached current-rank id, resolved once on first use.
 local maul_current_id
 
 function ST.DRUID.on_rage_update(self)
@@ -32,14 +38,14 @@ function ST.DRUID.on_rage_update(self)
 end
 
 function ST.DRUID.on_spellcast_failed_quiet(self, unit_id, cast_guid, spell_id)
-    if self:is_value_in_array(spell_id, maul_ids) then
+    if maul_ids[spell_id] ~= nil then
         self.maul_queued = false
         self:set_bar_color("mainhand")
     end
 end
 
 function ST.DRUID.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id)
-    if self:is_value_in_array(spell_id, maul_ids) then
+    if maul_ids[spell_id] ~= nil then
         self.maul_queued = false
         self:set_bar_color("mainhand")
     end
@@ -55,7 +61,7 @@ function ST.DRUID.on_current_spell_cast_changed(self, is_cancelled)
     end
 
     if db.enable_maul_color then
-        for spell_id in self:generic_iter(maul_ids) do
+        for spell_id in pairs(maul_ids) do
             local result = api.IsCurrentSpell(spell_id)
             if result then
                 self.maul_queued = true
@@ -139,3 +145,5 @@ function ST.DRUID.set_bar_color(self, hand)
     return false
 
 end
+
+if st.debug then st.utils.print_msg('-- Parsed classes/druid.lua module correctly') end

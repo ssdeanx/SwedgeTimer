@@ -315,14 +315,20 @@ end
 -- Per-family spell data helpers
 --------------------------------------------------------------------------------
 
--- Resolves a list of candidate rank ids (mixed across expansions) down to the id that
--- exists on the running client, i.e. the current rank for this game family. Ids from
--- other expansions are absent from the client's spell data. Lists do not need to be
--- ordered. Returns nil when none of the ids exist on this client.
-function api.get_family_spell_id(id_list)
+-- Resolves the candidate rank ids of a spell (mixed across expansions) down to the id
+-- that exists on the running client, i.e. the current rank for this game family. Ids
+-- from other expansions are absent from the client's spell data. Accepts either a
+-- lookup table (st.utils.convert_lookup_table) or a plain list of ids; order does not
+-- matter. Returns nil when none of the ids exist on this client.
+function api.get_family_spell_id(id_table)
 	local best
-	for i = 1, #id_list do
-		local id = id_list[i]
+	for key, value in pairs(id_table) do
+		local id
+		if type(value) == "number" then
+			id = value -- plain list of ids
+		else
+			id = key -- lookup table keyed by id
+		end
 		if api.GetSpellInfo(id) and (not best or id > best) then
 			best = id
 		end

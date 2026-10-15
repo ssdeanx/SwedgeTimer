@@ -6,36 +6,41 @@ local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LCG = LibStub("LibCustomGlow-1.0")
 -- Cross-client API wrappers (see compat.lua).
 local api = st.api
+local get_tab = st.utils.convert_lookup_table
 
--- Seal IDs. The lists span every classic family: the active aura keeps the id of the
--- rank that was cast, so all rank ids must be listed (vanilla/BCC rank data per the
--- archived TBC/Forever builds). On Wrath the seals were consolidated to a single rank
--- which is contained in each list, so Wrath behaviour is unchanged.
-local soc_ids = {
+--=========================================================================================
+-- Spell data
+--=========================================================================================
+-- Seals: every rank id per classic family, because the active aura keeps the id of the
+-- rank that was cast. On Wrath the seals were consolidated to a single rank which is
+-- contained in each list, so Wrath behaviour is unchanged. Rank data per the archived
+-- TBC/Forever builds.
+local soc_ids = get_tab({
     20375, 20915, 20918, 20919, 20920, 27170
-}
-local sov_ids = {
+})
+local sov_ids = get_tab({
     31801, 348704
-}
-local sol_ids = {
+})
+local sol_ids = get_tab({
     20165, 20347, 20348, 20349, 27160
-}
-local sow_ids = {
+})
+local sow_ids = get_tab({
     20166, 20356, 20357, 27166
-}
-local sor_ids = {
+})
+local sor_ids = get_tab({
     21084, 20154, 20287, 20288, 20289, 20290, 20291, 20292, 20293, 27155
-}
-local soj_ids = {
+})
+local soj_ids = get_tab({
     20164, 31895
-}
+})
 
--- Art of War
+-- Art of War (WotLK proc)
 local aow_id = 59578
 
-local exorcism_ids = {
+-- Exorcism, all ranks.
+local exorcism_ids = get_tab({
     879, 5614, 5615, 10312, 10313, 10314, 27138, 48800, 48801
-}
+})
 
 function ST.PALADIN.post_init(self)
     self.exo_on_cooldown = false
@@ -45,7 +50,7 @@ end
 
 function ST.PALADIN.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id)
     -- Track exo casts
-    if self:is_value_in_array(spell_id, exorcism_ids) then
+    if exorcism_ids[spell_id] ~= nil then
         self.exo_on_cooldown = true
         self.PALADIN.process_aow(self)
         C_Timer.After(self.exo_cooldown_time, function()
@@ -74,22 +79,22 @@ function ST.PALADIN.on_aura_change(self)
             break
         end
         -- Seals
-        if self:is_value_in_array(spell_id, soc_ids) then
+        if soc_ids[spell_id] ~= nil then
             self.has_soc = true
         end
-        if self:is_value_in_array(spell_id, sov_ids) then
+        if sov_ids[spell_id] ~= nil then
             self.has_sov = true
         end
-        if self:is_value_in_array(spell_id, sol_ids) then
+        if sol_ids[spell_id] ~= nil then
             self.has_sol = true
         end
-        if self:is_value_in_array(spell_id, sow_ids) then
+        if sow_ids[spell_id] ~= nil then
             self.has_sow = true
         end
-        if self:is_value_in_array(spell_id, sor_ids) then
+        if sor_ids[spell_id] ~= nil then
             self.has_sor = true
         end
-        if self:is_value_in_array(spell_id, soj_ids) then
+        if soj_ids[spell_id] ~= nil then
             self.has_soj = true
         end
 
@@ -203,3 +208,5 @@ function ST.PALADIN.set_bar_color(self, hand)
 
     return false
 end
+
+if st.debug then st.utils.print_msg('-- Parsed classes/paladin.lua module correctly') end

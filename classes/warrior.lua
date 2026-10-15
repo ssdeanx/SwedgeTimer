@@ -6,22 +6,29 @@ local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LCG = LibStub("LibCustomGlow-1.0")
 -- Cross-client API wrappers (see compat.lua).
 local api = st.api
+local get_tab = st.utils.convert_lookup_table
 
-
-local hs_ids = {
+--=========================================================================================
+-- Spell data
+--=========================================================================================
+-- Heroic Strike, all ranks across the classic families (vanilla -> BCC -> WotLK).
+-- The lookup table keeps every rank id; get_family_spell_id picks the highest id
+-- that exists on the running client (the current rank).
+local hs_ids = get_tab({
     47450, 47449, 30324, 29707, 25286, 11567, 11566,
     11565, 11564, 1608, 285, 284, 78
-}
+})
 
-local cleave_ids = {
+-- Cleave, all ranks.
+local cleave_ids = get_tab({
     47520, 47519, 25231, 20569, 11609, 11608, 7369, 845
-}
+})
 
--- The lists above mix rank ids from several expansions; these resolve to the rank
--- that exists on the running client (see compat.lua). Cached after first use.
+-- Cached current-rank ids, resolved once on first use.
 local hs_current_id
 local cleave_current_id
 
+-- Bloodsurge (WotLK proc)
 local bloodsurge_id = 46916
 
 
@@ -61,12 +68,12 @@ function ST.WARRIOR.on_rage_update(self)
 end
 
 function ST.WARRIOR.on_spellcast_failed_quiet(self, unit_id, cast_guid, spell_id)
-    if self:is_value_in_array(spell_id, hs_ids) then
+    if hs_ids[spell_id] ~= nil then
         self.hs_queued = false
         self:set_bar_color("mainhand")
         return
     end
-    if self:is_value_in_array(spell_id, cleave_ids) then
+    if cleave_ids[spell_id] ~= nil then
         self.cleave_queued = false
         self:set_bar_color("mainhand")
         return
@@ -76,12 +83,12 @@ end
 function ST.WARRIOR.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id)
     -- print(unit_target)
     -- print(spell_id)
-    if self:is_value_in_array(spell_id, hs_ids) then
+    if hs_ids[spell_id] ~= nil then
         self.hs_queued = false
         self:set_bar_color("mainhand")
         return
     end
-    if self:is_value_in_array(spell_id, cleave_ids) then
+    if cleave_ids[spell_id] ~= nil then
         self.cleave_queued = false
         self:set_bar_color("mainhand")
         return
@@ -99,7 +106,7 @@ function ST.WARRIOR.on_current_spell_cast_changed(self, is_cancelled)
     end
 
     if db.enable_hs_color then
-        for spell_id in self:generic_iter(hs_ids) do
+        for spell_id in pairs(hs_ids) do
             local result = api.IsCurrentSpell(spell_id)
             if result then
                 -- print('matched HS id: '..tostring(spell_id))
@@ -113,7 +120,7 @@ function ST.WARRIOR.on_current_spell_cast_changed(self, is_cancelled)
     end
 
     -- If we get here, cleave color is enabled and no HS queued so check that always.
-    for spell_id in self:generic_iter(cleave_ids) do
+    for spell_id in pairs(cleave_ids) do
         local result = api.IsCurrentSpell(spell_id)
         if result then
             -- print('matched cleave id: '..tostring(spell_id))
@@ -220,3 +227,5 @@ function ST.WARRIOR.set_bar_color(self, hand)
     return false
 
 end
+
+if st.debug then st.utils.print_msg('-- Parsed classes/warrior.lua module correctly') end
