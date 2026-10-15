@@ -3,6 +3,8 @@
 --=========================================================================================
 local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
+-- Cross-client API wrappers (see compat.lua).
+local api = st.api
 
 local maul_ids = {
     6807, 6808, 6809, 8972, 9745, 9880, 9881, 26996, 48479, 48480
@@ -15,7 +17,7 @@ function ST.DRUID.on_rage_update(self)
     end
     if self.maul_queued then
         local power = UnitPower("player")
-        local rage_cost = GetSpellPowerCost(48480)[1].cost
+        local rage_cost = api.GetSpellPowerCost(48480)[1].cost
         if power < rage_cost then
             self.insufficient_rage = true
             self:set_bar_color("mainhand")
@@ -50,7 +52,7 @@ function ST.DRUID.on_current_spell_cast_changed(self, is_cancelled)
 
     if db.enable_maul_color then
         for spell_id in self:generic_iter(maul_ids) do
-            local result = IsCurrentSpell(spell_id)
+            local result = api.IsCurrentSpell(spell_id)
             if result then
                 self.maul_queued = true
                 self:set_bar_color("mainhand")

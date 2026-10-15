@@ -13,6 +13,8 @@ local LGC = LibStub("LibGlobalCooldown")
 local LWIN = LibStub("LibWindow-1.1")
 
 local print = st.utils.print_msg
+-- Cross-client API wrappers (see compat.lua).
+local api = st.api
 
 ST.DEATHKNIGHT = {}
 ST.DRUID = {}
@@ -316,9 +318,9 @@ function ST:OnInitialize()
 	self.has_target = false
 	self.has_attackable_target = false
 
-	self.current_talent_group = GetActiveTalentGroup()
+	self.current_talent_group = api.GetActiveTalentGroup()
 
-	self.form_index = GetShapeshiftForm()
+	self.form_index = api.GetShapeshiftForm()
 	self.is_cat_or_bear = false
 	if self.player_class == "DRUID" then
 		if self.form_index == 1 or self.form_index == 3 then
@@ -466,9 +468,9 @@ function ST:check_weapons()
 	-- This lib used the same events that this function is triggered on internally,
 	-- which led to inconsistencies depending on callback order. Using the basic 
 	-- WoW API to make these checks fixes the issue.
-	local _, speed_offhand = UnitAttackSpeed("player")
+	local _, speed_offhand = api.UnitAttackSpeed("player")
 	speed_offhand = speed_offhand or 0
-	local speed_ranged = UnitRangedDamage("player") or 0
+	local speed_ranged = api.UnitRangedDamage("player") or 0
 	if speed_offhand == 0 then
 		self.offhand.has_weapon = false
 	else
@@ -743,7 +745,7 @@ function ST:UPDATE_SHAPESHIFT_FORM()
 	if not self.class == "DRUID" then
         return
     end
-	local i = GetShapeshiftForm()
+	local i = api.GetShapeshiftForm()
 
 	-- If form hasn't changed, do nothing.
 	if i == self.form_index then
@@ -772,7 +774,7 @@ end
 function ST:determine_form_visibility_flag()
 	-- function called on form or settings change to 
 	-- set the form visibility flag
-	local i = GetShapeshiftForm()
+	local i = api.GetShapeshiftForm()
 	local db = self:get_class_table()
 	self.should_show_bar_this_form = false
 	if i == 0 and db.form_vis_normal then
@@ -824,16 +826,16 @@ end
 function ST:get_druid_talent_info()
 	-- function to get the druid talent info and determine
 	-- if the player has moonkin or tree
-	self.has_moonkin = select(5, GetTalentInfo(1, 11)) == 1
-	self.has_tree_of_life = select(5, GetTalentInfo(3, 19)) == 1
+	self.has_moonkin = select(5, api.GetTalentInfo(1, 11)) == 1
+	self.has_tree_of_life = select(5, api.GetTalentInfo(3, 19)) == 1
 end
 
 function ST:get_warrior_talent_info()
 	-- Functions to get talents for specs that the user may want to hide
 	-- the swing timer in.
-	self.has_devastate = select(5, GetTalentInfo(3, 20)) == 1
-	self.has_imp_def_stance = select(5, GetTalentInfo(3, 16)) ~= 0
-	self.has_bladestorm = select(5, GetTalentInfo(1, 27)) == 1
+	self.has_devastate = select(5, api.GetTalentInfo(3, 20)) == 1
+	self.has_imp_def_stance = select(5, api.GetTalentInfo(3, 16)) ~= 0
+	self.has_bladestorm = select(5, api.GetTalentInfo(1, 27)) == 1
 end
 
 ------------------------------------------------------------------------------------

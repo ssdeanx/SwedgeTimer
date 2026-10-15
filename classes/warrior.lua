@@ -4,6 +4,8 @@
 local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LCG = LibStub("LibCustomGlow-1.0")
+-- Cross-client API wrappers (see compat.lua).
+local api = st.api
 
 
 local hs_ids = {
@@ -26,7 +28,7 @@ function ST.WARRIOR.on_rage_update(self)
     
     if self.hs_queued then
         local power = UnitPower("player")
-        local rage_cost = GetSpellPowerCost(47450)[1].cost
+        local rage_cost = api.GetSpellPowerCost(47450)[1].cost
         if power < rage_cost then
             self.insufficient_rage = true
             self:set_bar_color("mainhand")
@@ -39,7 +41,7 @@ function ST.WARRIOR.on_rage_update(self)
 
     if self.cleave_queued then
         local power = UnitPower("player")
-        local rage_cost = GetSpellPowerCost(47520)[1].cost
+        local rage_cost = api.GetSpellPowerCost(47520)[1].cost
         if power < rage_cost then
             self.insufficient_rage = true
             self:set_bar_color("mainhand")
@@ -91,7 +93,7 @@ function ST.WARRIOR.on_current_spell_cast_changed(self, is_cancelled)
 
     if db.enable_hs_color then
         for spell_id in self:generic_iter(hs_ids) do
-            local result = IsCurrentSpell(spell_id)
+            local result = api.IsCurrentSpell(spell_id)
             if result then
                 -- print('matched HS id: '..tostring(spell_id))
                 self.hs_queued = true
@@ -105,7 +107,7 @@ function ST.WARRIOR.on_current_spell_cast_changed(self, is_cancelled)
 
     -- If we get here, cleave color is enabled and no HS queued so check that always.
     for spell_id in self:generic_iter(cleave_ids) do
-        local result = IsCurrentSpell(spell_id)
+        local result = api.IsCurrentSpell(spell_id)
         if result then
             -- print('matched cleave id: '..tostring(spell_id))
             self.cleave_queued = true
@@ -121,7 +123,7 @@ function ST.WARRIOR.on_aura_change(self)
     -- Iterate all player auras
     local i = 1
     while true do
-        local name, _, _, _, _, _, _, _, _, spell_id = UnitAura("player", i)
+        local name, _, _, _, _, _, _, _, _, spell_id = api.UnitAura("player", i)
         if name == nil then
             break
         end

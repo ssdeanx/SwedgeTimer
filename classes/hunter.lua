@@ -3,6 +3,8 @@
 --=========================================================================================
 local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
+-- Cross-client API wrappers (see compat.lua).
+local api = st.api
 
 local raptor_strike_ids = {
     2973, 14260, 14261, 14262, 14263, 14264, 14265, 27014, 48995, 48996
@@ -32,7 +34,7 @@ function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
     end
     if db.enable_maul_color then
         for spell_id in self:generic_iter(raptor_strike_ids) do
-            local result = IsCurrentSpell(spell_id)
+            local result = api.IsCurrentSpell(spell_id)
             if result then
                 self.raptor_strike_queued = true
                 self:set_bar_color("mainhand")

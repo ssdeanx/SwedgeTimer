@@ -6,10 +6,14 @@ if not lib then
     return
 end
 
+-- Cross-client API wrappers (see compat.lua).
+local _, st = ...
+local api = st.api
+
 local CreateFrame = CreateFrame
 local C_Timer = C_Timer
 local GetTime = GetTime
-local GetNetStats = GetNetStats
+local GetNetStats = api.GetNetStats
 local type = type
 
 lib.callbacks = lib.callbacks or LibStub("CallbackHandler-1.0"):New(lib)

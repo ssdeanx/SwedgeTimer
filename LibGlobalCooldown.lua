@@ -6,13 +6,18 @@ if not lib then
     return
 end
 
+-- Cross-client API wrappers (see compat.lua).
+local _, st = ...
+local api = st.api
+
 local CreateFrame = CreateFrame
 local C_Timer = C_Timer
-local GetCombatRatingBonus = GetCombatRatingBonus
-local GetSpellCooldown = GetSpellCooldown
-local GetSpellInfo = GetSpellInfo
+local GetCombatRating = api.GetCombatRating
+local GetCombatRatingBonus = api.GetCombatRatingBonus
+local GetSpellCooldown = api.GetSpellCooldown
+local GetSpellInfo = api.GetSpellInfo
 local GetTime = GetTime
-local GetShapeshiftForm = GetShapeshiftForm
+local GetShapeshiftForm = api.GetShapeshiftForm
 local math = math
 local select = select
 local UnitClass = UnitClass

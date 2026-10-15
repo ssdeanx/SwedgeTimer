@@ -4,6 +4,8 @@
 local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LCG = LibStub("LibCustomGlow-1.0")
+-- Cross-client API wrappers (see compat.lua).
+local api = st.api
 
 -- Seal IDs
 local soc_id = 20375
@@ -24,7 +26,7 @@ local exorcism_ids = {
 
 function ST.PALADIN.post_init(self)
     self.exo_on_cooldown = false
-    self.exo_cooldown_time = GetSpellBaseCooldown(879) / 1000
+    self.exo_cooldown_time = api.GetSpellBaseCooldown(879) / 1000
     self.PALADIN.on_aura_change(self)
 end
 
@@ -54,7 +56,7 @@ function ST.PALADIN.on_aura_change(self)
     -- Iterate all player auras
     local i = 1
     while true do
-        local name, _, _, _, _, _, _, _, _, spell_id = UnitAura("player", i)
+        local name, _, _, _, _, _, _, _, _, spell_id = api.UnitAura("player", i)
         if name == nil then
             break
         end
