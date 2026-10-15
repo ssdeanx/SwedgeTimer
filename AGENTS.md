@@ -1,6 +1,6 @@
 # SwedgeTimer
 
-WoW addon (Lua) shipping one universal build for WotLK Classic and the other classic-line and Mainline clients (see the Cross-engine section for the target matrix). Vendored Ace3 and other libs. There is no build step; verification happens by loading the addon in a client.
+WoW addon (Lua) shipping one universal build for WotLK Classic and the other classic-line and Mainline clients (see the Cross-engine section for the target matrix). Vendored Ace3 and other libs. There is no build step; offline checks live in `tests/` (`bash tests/run.sh`), and the real check for API behaviour is loading the addon in a client.
 
 ## Layout
 
@@ -13,6 +13,7 @@ WoW addon (Lua) shipping one universal build for WotLK Classic and the other cla
 - `classes/{druid,hunter,paladin,warrior}.lua`: class-specific colors/procs; only these four classes have logic.
 - `utils.lua`, `LibLatencyMonitor.lua`, `LibGlobalCooldown.lua`: helpers.
 - `compat.lua`: the single cross-client layer — family detection (`st.family`, `st.is_retail`, `st.is_mainline`), normalized `st.api.*` wrappers, `st.gcd_probe_spell_id`. Never call a cross-client API directly elsewhere; go through `st.api`.
+- `tests/`: offline verification — `smoke.lua` (client-profile family/API checks), `toc_check.lua` (TOC path casing, duplicates, module coverage), `run.sh` (runs both plus `luac5.1` and `luacheck`). `.luacheckrc` configures luacheck: WoW API globals and callback-signature arguments ignored, `Libs/`/`docs/` excluded.
 - `docs/swedge/SwedgeTimer_TBC` and `..._Forever`: separate archived addons (BCC 2.5 and Forever/Project Epoch, Interface `20506`). They are not part of the shipped addon and have their own tocs; repo-wide searches will return duplicates. Do not edit them for WotLK fixes. The archived `_Forever` build targets the Project Epoch server, not the WoW Forever/Camelot client (Interface 16001) targeted below.
 
 ## Conventions
@@ -27,7 +28,7 @@ WoW addon (Lua) shipping one universal build for WotLK Classic and the other cla
 
 ## Gotchas
 
-- There are no automated tests; the only real check is startup in game. Guard against nil globals and WoW API ordering.
+- `tests/` covers family detection, spell-id resolution and TOC integrity offline; startup in game remains the only real check for WoW-API behaviour. Guard against nil globals and WoW API ordering.
 - TOC path casing matters. A historic `AceEVent-3.0.xml` typo was tolerated by Windows clients but fails on case-sensitive loaders; keep path casing exactly matching the files.
 - `config_presets.lua` must define `ST.<CLASS>.defaults` before `config.lua` assembles `ST.defaults`.
 - SavedVariables key is `SwedgeTimerDB`; profile data lives under `db.profile[CLASS][hand]`.
