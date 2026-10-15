@@ -10,20 +10,24 @@ local maul_ids = {
     6807, 6808, 6809, 8972, 9745, 9880, 9881, 26996, 48479, 48480
 }
 
+-- The list above mixes rank ids from several expansions; this resolves to the rank
+-- that exists on the running client (see compat.lua). Cached after first use.
+local maul_current_id
+
 function ST.DRUID.on_rage_update(self)
     if not self.maul_queued then
         self.insufficient_rage = false
         return
     end
-    if self.maul_queued then
-        local power = UnitPower("player")
-        local rage_cost = api.GetSpellPowerCost(48480)[1].cost
-        if power < rage_cost then
-            self.insufficient_rage = true
-            self:set_bar_color("mainhand")
-        else
-            self.insufficient_rage = false
-        end
+    maul_current_id = maul_current_id or api.get_family_spell_id(maul_ids)
+    local costs = maul_current_id and api.GetSpellPowerCost(maul_current_id)
+    local rage_cost = costs and costs[1] and costs[1].cost
+    local power = UnitPower("player")
+    if rage_cost and power < rage_cost then
+        self.insufficient_rage = true
+        self:set_bar_color("mainhand")
+    else
+        self.insufficient_rage = false
     end
 end
 

@@ -742,7 +742,7 @@ end
 function ST:UPDATE_SHAPESHIFT_FORM()
 	-- At present, only druids care about shapeshifting, so the code
 	-- to handle their forms goes here.
-	if not self.class == "DRUID" then
+	if self.player_class ~= "DRUID" then
         return
     end
 	local i = api.GetShapeshiftForm()
@@ -823,19 +823,46 @@ function ST:get_talent_information()
 	self:get_warrior_talent_info()
 end
 
+-- Talent-tree positions are only verified on the Wrath of the Lich King client.
+-- Every other family lays its talent trees out differently (or replaced the tree
+-- system entirely), so these checks stay off there until per-family positions are
+-- verified; the flags then simply stay false.
+local talent_positions = {
+	WRATH = {
+		moonkin = {1, 11},
+		tree_of_life = {3, 19},
+		devastate = {3, 20},
+		imp_def_stance = {3, 16},
+		bladestorm = {1, 27},
+	},
+}
+
 function ST:get_druid_talent_info()
 	-- function to get the druid talent info and determine
 	-- if the player has moonkin or tree
-	self.has_moonkin = select(5, api.GetTalentInfo(1, 11)) == 1
-	self.has_tree_of_life = select(5, api.GetTalentInfo(3, 19)) == 1
+	local positions = talent_positions[st.family]
+	if not positions then
+		self.has_moonkin = false
+		self.has_tree_of_life = false
+		return
+	end
+	self.has_moonkin = select(5, api.GetTalentInfo(positions.moonkin[1], positions.moonkin[2])) == 1
+	self.has_tree_of_life = select(5, api.GetTalentInfo(positions.tree_of_life[1], positions.tree_of_life[2])) == 1
 end
 
 function ST:get_warrior_talent_info()
 	-- Functions to get talents for specs that the user may want to hide
 	-- the swing timer in.
-	self.has_devastate = select(5, api.GetTalentInfo(3, 20)) == 1
-	self.has_imp_def_stance = select(5, api.GetTalentInfo(3, 16)) ~= 0
-	self.has_bladestorm = select(5, api.GetTalentInfo(1, 27)) == 1
+	local positions = talent_positions[st.family]
+	if not positions then
+		self.has_devastate = false
+		self.has_imp_def_stance = false
+		self.has_bladestorm = false
+		return
+	end
+	self.has_devastate = select(5, api.GetTalentInfo(positions.devastate[1], positions.devastate[2])) == 1
+	self.has_imp_def_stance = select(5, api.GetTalentInfo(positions.imp_def_stance[1], positions.imp_def_stance[2])) ~= 0
+	self.has_bladestorm = select(5, api.GetTalentInfo(positions.bladestorm[1], positions.bladestorm[2])) == 1
 end
 
 ------------------------------------------------------------------------------------

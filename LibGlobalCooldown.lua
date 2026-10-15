@@ -18,6 +18,8 @@ local GetSpellCooldown = api.GetSpellCooldown
 local GetSpellInfo = api.GetSpellInfo
 local GetTime = GetTime
 local GetShapeshiftForm = api.GetShapeshiftForm
+-- Spell id whose cooldown reading mirrors the global cooldown (family-specific).
+local gcd_probe_spell_id = st.gcd_probe_spell_id
 local math = math
 local select = select
 local UnitClass = UnitClass
@@ -119,7 +121,7 @@ function lib:poll_gcd()
     if self.gcd_duration then
         return
     end
-    local time_started, duration_reported = GetSpellCooldown(29515)
+    local time_started, duration_reported = GetSpellCooldown(gcd_probe_spell_id)
     if duration_reported == 0 then
         return
     end
@@ -191,7 +193,7 @@ end
 
 function lib:UNIT_SPELLCAST_INTERRUPTED()
     if self.gcd_duration then
-        local time_started, duration_reported = GetSpellCooldown(29515)
+        local time_started, duration_reported = GetSpellCooldown(gcd_probe_spell_id)
         if duration_reported == 0 then
             self:release_gcd_lock()
         end

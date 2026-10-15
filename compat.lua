@@ -9,6 +9,7 @@
 --   st.family           : "ERA" | "TBC" | "WRATH" | "CATA" | "MISTS" | "RETAIL" | "UNKNOWN"
 --   st.interface_number : the running client's TOC interface version, when knowable
 --   st.is_retail        : true on Mainline/Retail clients
+--   st.gcd_probe_spell_id : spell id whose cooldown reading mirrors the global cooldown
 --   st.api.*            : normalized wrappers for APIs that differ across clients
 --
 -- On clients where the original global function still exists, each wrapper is a direct
@@ -76,6 +77,15 @@ end
 st.family = family
 st.interface_number = interface_number
 st.is_retail = (family == "RETAIL")
+
+-- GCD probe spell: a spell that has no cooldown of its own, so its cooldown reading
+-- mirrors the global cooldown. 29515 ("TEST Scorch") is a vanilla-era test spell
+-- present on every classic client; 61304 ("Global Cooldown") is Blizzard's dummy
+-- for the same purpose on Mainline clients.
+st.gcd_probe_spell_id = 29515
+if family == "RETAIL" then
+	st.gcd_probe_spell_id = 61304
+end
 
 --------------------------------------------------------------------------------
 -- Normalized API surface
@@ -193,11 +203,31 @@ end
 -- Talents --------------------------------------------------------------------------------
 -- Classic (Era/TBC/Wrath/Cata): GetTalentInfo(tab, index) returns
 --   name, icon, tier, column, rank, maxRank, ...
--- Mists and Retail use different talent systems. The fallback reports rank 0 so that
--- "has talent" checks all evaluate to false instead of erroring.
+-- The global only exists on clients that expose Blizzard's deprecation fallbacks, so
+-- mirror Blizzard's own C_SpecializationInfo mapping (see Blizzard_DeprecatedSpecialization).
+-- Mists and Retail use different talent systems. The final fallback reports rank 0 so
+-- that "has talent" checks all evaluate to false instead of erroring.
 
 if GetTalentInfo then
 	api.GetTalentInfo = GetTalentInfo
+elseif C_SpecializationInfo and C_SpecializationInfo.GetTalentInfo then
+	api.GetTalentInfo = function(tab, index, isInspect, isPet, groupIndex)
+		local query = {
+			specializationIndex = tab,
+			talentIndex = index,
+			isInspect = isInspect,
+			isPet = isPet,
+			groupIndex = groupIndex,
+		}
+		local info = C_SpecializationInfo.GetTalentInfo(query)
+		if not info then
+			return nil, nil, nil, nil, 0
+		end
+		return info.name, info.icon, info.tier, info.column, info.rank,
+			info.maxRank, info.meetsPrereq, info.previewRank,
+			info.meetsPreviewPrereq, info.isExceptional, info.hasGoldBorder,
+			info.talentID
+	end
 else
 	api.GetTalentInfo = function()
 		return nil, nil, nil, nil, 0
@@ -279,4 +309,23 @@ else
 	api.GetNetStats = function()
 		return 0, 0, 0, 0
 	end
+end
+
+--------------------------------------------------------------------------------
+-- Per-family spell data helpers
+--------------------------------------------------------------------------------
+
+-- Resolves a list of candidate rank ids (mixed across expansions) down to the id that
+-- exists on the running client, i.e. the current rank for this game family. Ids from
+-- other expansions are absent from the client's spell data. Lists do not need to be
+-- ordered. Returns nil when none of the ids exist on this client.
+function api.get_family_spell_id(id_list)
+	local best
+	for i = 1, #id_list do
+		local id = id_list[i]
+		if api.GetSpellInfo(id) and (not best or id > best) then
+			best = id
+		end
+	end
+	return best
 end

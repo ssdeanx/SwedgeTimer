@@ -17,6 +17,11 @@ local cleave_ids = {
     47520, 47519, 25231, 20569, 11609, 11608, 7369, 845
 }
 
+-- The lists above mix rank ids from several expansions; these resolve to the rank
+-- that exists on the running client (see compat.lua). Cached after first use.
+local hs_current_id
+local cleave_current_id
+
 local bloodsurge_id = 46916
 
 
@@ -27,29 +32,31 @@ function ST.WARRIOR.on_rage_update(self)
     end
     
     if self.hs_queued then
+        hs_current_id = hs_current_id or api.get_family_spell_id(hs_ids)
+        local costs = hs_current_id and api.GetSpellPowerCost(hs_current_id)
+        local rage_cost = costs and costs[1] and costs[1].cost
         local power = UnitPower("player")
-        local rage_cost = api.GetSpellPowerCost(47450)[1].cost
-        if power < rage_cost then
+        if rage_cost and power < rage_cost then
             self.insufficient_rage = true
             self:set_bar_color("mainhand")
-            return
         else
             self.insufficient_rage = false
-            return
         end
+        return
     end
 
     if self.cleave_queued then
+        cleave_current_id = cleave_current_id or api.get_family_spell_id(cleave_ids)
+        local costs = cleave_current_id and api.GetSpellPowerCost(cleave_current_id)
+        local rage_cost = costs and costs[1] and costs[1].cost
         local power = UnitPower("player")
-        local rage_cost = api.GetSpellPowerCost(47520)[1].cost
-        if power < rage_cost then
+        if rage_cost and power < rage_cost then
             self.insufficient_rage = true
             self:set_bar_color("mainhand")
-            return
         else
             self.insufficient_rage = false
-            return
         end
+        return
     end
 end
 
