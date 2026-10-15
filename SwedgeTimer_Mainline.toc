@@ -1,4 +1,4 @@
-## Interface: 110107
+## Interface: 120100, 120105, 16001
 ## Title: SwedgeTimer
 ## Notes: General purpose swing timer addon for all WoW clients.
 ## Author: Swedge
@@ -14,7 +14,6 @@ Libs\LibStub\LibStub.lua
 Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
 Libs\LibWindow-1.1\LibWindow-1.1\LibWindow-1.1.lua
 Libs\LibSharedMedia-3.0\lib.xml
-Libs\LibClassicSwingTimerAPI\LibClassicSwingTimerAPI.lua
 Libs\LibRangeCheck-2.0\LibRangeCheck-2.0\LibRangeCheck-2.0.lua
 Libs\LibCustomGlow-1.0\LibCustomGlow-1.0.lua
 compat.lua

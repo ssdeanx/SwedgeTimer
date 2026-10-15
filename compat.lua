@@ -2,13 +2,16 @@
 -- Cross-client compatibility layer.
 --
 -- SwedgeTimer ships one build for every WoW client family (Classic Era, TBC, Wrath,
--- Cata, Mists, Retail, plus legacy/private clients). This is the single place where
--- client API differences are handled.
+-- Cata, Mists, Retail, WoW Forever, plus legacy/private clients). This is the single
+-- place where client API differences are handled.
 --
 -- Sets:
---   st.family           : "ERA" | "TBC" | "WRATH" | "CATA" | "MISTS" | "RETAIL" | "UNKNOWN"
+--   st.family           : "ERA" | "TBC" | "WRATH" | "CATA" | "MISTS" | "RETAIL"
+--                         | "FOREVER" | "UNKNOWN"
 --   st.interface_number : the running client's TOC interface version, when knowable
---   st.is_retail        : true on Mainline/Retail clients
+--   st.is_retail        : true on the Retail (mainline) client
+--   st.is_mainline      : true on Mainline-code clients (Retail, WoW Forever): their
+--                         classic combat log is gone, so the swing engine cannot run
 --   st.gcd_probe_spell_id : spell id whose cooldown reading mirrors the global cooldown
 --   st.api.*            : normalized wrappers for APIs that differ across clients
 --
@@ -30,6 +33,10 @@ local addon_name, st = ...
 local family = "UNKNOWN"
 local interface_number
 
+-- WoW Forever ("Camelot") reports WOW_PROJECT_CAMELOT; fall back to its numeric value
+-- so the comparison still works on clients where the global does not exist.
+local WOW_PROJECT_FOREVER = WOW_PROJECT_CAMELOT or 18
+
 do
 	-- Preferred: the WOW_PROJECT_ID constants, present on every official client.
 	local project_id = WOW_PROJECT_ID
@@ -46,6 +53,8 @@ do
 			family = "MISTS"
 		elseif project_id == WOW_PROJECT_MAINLINE then
 			family = "RETAIL"
+		elseif project_id == WOW_PROJECT_FOREVER then
+			family = "FOREVER"
 		end
 	end
 
@@ -77,13 +86,16 @@ end
 st.family = family
 st.interface_number = interface_number
 st.is_retail = (family == "RETAIL")
+-- Retail and WoW Forever run Mainline client code; the classic combat log is gone
+-- there, so the swing engine (LibClassicSwingTimerAPI) cannot work on them.
+st.is_mainline = (family == "RETAIL" or family == "FOREVER")
 
 -- GCD probe spell: a spell that has no cooldown of its own, so its cooldown reading
 -- mirrors the global cooldown. 29515 ("TEST Scorch") is a vanilla-era test spell
 -- present on every classic client; 61304 ("Global Cooldown") is Blizzard's dummy
 -- for the same purpose on Mainline clients.
 st.gcd_probe_spell_id = 29515
-if family == "RETAIL" then
+if st.is_mainline then
 	st.gcd_probe_spell_id = 61304
 end
 

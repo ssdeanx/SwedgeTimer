@@ -1,4 +1,4 @@
-## Interface: 11507
+## Interface: 11509
 ## Title: SwedgeTimer
 ## Notes: General purpose swing timer addon for all WoW clients.
 ## Author: Swedge

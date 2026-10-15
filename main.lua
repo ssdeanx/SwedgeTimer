@@ -7,6 +7,20 @@ local version = "2.0.8"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 local LSM = LibStub("LibSharedMedia-3.0")
 local STL = LibStub("LibClassicSwingTimerAPI", true)
+-- The swing library is only shipped on clients with a classic combat log (see the
+-- flavor TOCs). On Mainline-code clients (Retail, WoW Forever) keep the whole
+-- initialisation flow intact with an inert stand-in; the user is told in init_libs.
+local SWING_ENGINE_AVAILABLE = STL ~= nil
+if not SWING_ENGINE_AVAILABLE then
+	STL = {
+		RegisterCallback = function() end,
+		UnregisterCallback = function() end,
+		-- Same shape as the library: speed, expiration time, start time.
+		SwingTimerInfo = function()
+			return 1, GetTime() + 1, GetTime()
+		end,
+	}
+end
 local LRC = LibStub("LibRangeCheck-2.0")
 local LLM = LibStub("LibLatencyMonitor")
 local LGC = LibStub("LibGlobalCooldown")
@@ -274,7 +288,7 @@ function ST:OnInitialize()
 	-- libs are both loaded, as they are interdependent
 	-- init_libs has a check to ensure this only happens once per reload
 	self.lrc_ready = false
-	self.stl_ready = false
+	self.stl_ready = not SWING_ENGINE_AVAILABLE -- inert stand-in counts as ready
 	self.llm_ready = false
 	LRC.RegisterCallback(self, LRC.CHECKERS_CHANGED, function()
 			self.lrc_ready = true
@@ -391,7 +405,16 @@ function ST:OnInitialize()
 	self:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 	self:RegisterEvent("PLAYER_ENTERING_WORLD")
 	self:RegisterEvent("PLAYER_REGEN_ENABLED")
-	self:RegisterEvent("PLAYER_TARGET_SET_ATTACKING")
+	-- PLAYER_TARGET_SET_ATTACKING exists on the classic client line only, and
+	-- registering an unknown event throws, so gate it by family and probe where
+	-- the event-validity API is available.
+	local target_attacking_valid = not st.is_mainline
+	if target_attacking_valid and C_EventUtils and C_EventUtils.IsEventValid then
+		target_attacking_valid = C_EventUtils.IsEventValid("PLAYER_TARGET_SET_ATTACKING")
+	end
+	if target_attacking_valid then
+		self:RegisterEvent("PLAYER_TARGET_SET_ATTACKING")
+	end
 	self:RegisterEvent("PLAYER_REGEN_ENABLED")
 	self:RegisterEvent("PLAYER_REGEN_DISABLED")
 	self:RegisterEvent("PLAYER_ENTER_COMBAT")
@@ -417,7 +440,7 @@ function ST:init_libs()
 	if self.interfaces_are_initialised then
 		return
 	end
-	if not self.lrc_ready and self.stl_ready then
+	if not (self.lrc_ready and self.stl_ready) then
 		return
 	end
 	self.interfaces_are_initialised = true
@@ -430,6 +453,13 @@ function ST:init_libs()
 	local db = self:get_profile_table()
 	if db.welcome_message then
 		self:Print("Version " .. version .. " loaded!")
+	end
+
+	-- Swing data needs the classic combat log, which Mainline-code clients
+	-- (Retail, WoW Forever) no longer expose: say so once, instead of leaving
+	-- the user wondering why the swing bars never move.
+	if not SWING_ENGINE_AVAILABLE then
+		self:Print("Swing timer bars are unavailable on this client; range and GCD features remain active.")
 	end
 end
 
