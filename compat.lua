@@ -132,6 +132,32 @@ else
 	end
 end
 
+-- Spell knowledge ------------------------------------------------------------------------
+-- Whether the player knows a spell, used to resolve the highest known rank of a tracked
+-- spell family. The probes exist on different client families; the first one that returns
+-- a value wins, and a client with none of them reports "unknown" instead of erroring.
+
+local spell_known_probes = {}
+if IsSpellKnownOrOverridesKnown then
+	spell_known_probes[#spell_known_probes + 1] = IsSpellKnownOrOverridesKnown
+end
+if IsSpellKnown then
+	spell_known_probes[#spell_known_probes + 1] = IsSpellKnown
+end
+if IsPlayerSpell then
+	spell_known_probes[#spell_known_probes + 1] = IsPlayerSpell
+end
+
+function api.is_spell_known(spell_id)
+	for i = 1, #spell_known_probes do
+		local known = spell_known_probes[i](spell_id)
+		if known ~= nil then
+			return known == true
+		end
+	end
+	return false
+end
+
 -- Spell cooldowns ------------------------------------------------------------------------
 -- Classic shape: start, duration, enabled, modRate (enabled is 1/0)
 -- Retail shape:  C_Spell.GetSpellCooldown returns a SpellCooldownInfo table.
@@ -215,6 +241,22 @@ else
 		return nil
 	end
 end
+
+-- Casting and channels -------------------------------------------------------------------
+-- Pass-throughs (nil when the client lacks them). The payloads are NOT identical:
+-- UnitCastingInfo returns castID before notInterruptible and the spell id 9th, while
+-- UnitChannelInfo has no castID and returns the spell id 8th; callers must unpack each
+-- accordingly.
+
+api.UnitCastingInfo = UnitCastingInfo or function() return nil end
+api.UnitChannelInfo = UnitChannelInfo or function() return nil end
+
+-- Spell haste ----------------------------------------------------------------------------
+-- UnitSpellHaste is the current global where available; GetSpellHaste is the older one.
+-- Both return a percentage, or nil on clients that lack them.
+
+api.UnitSpellHaste = UnitSpellHaste or function() return nil end
+api.GetSpellHaste = GetSpellHaste or function() return nil end
 
 -- Talents --------------------------------------------------------------------------------
 -- Classic (Era/TBC/Wrath/Cata): GetTalentInfo(tab, index) returns
@@ -324,6 +366,40 @@ if GetNetStats then
 else
 	api.GetNetStats = function()
 		return 0, 0, 0, 0
+	end
+end
+
+--------------------------------------------------------------------------------
+-- Clock
+--------------------------------------------------------------------------------
+-- Swing-relative timing must live in the GetTime() domain: bars.lua and the swing engine
+-- compare against GetTime(). GetTimePreciseSec() (where present) ticks on a different
+-- epoch, so its readings are converted ONCE into the GetTime() domain via a cached
+-- offset. Raw precise time must never leave this wrapper.
+
+do
+	local precise = GetTimePreciseSec
+	if type(precise) == "function" then
+		local offset
+		api.get_time = function()
+			local precise_now = precise()
+			if type(precise_now) ~= "number" then
+				return GetTime()
+			end
+			if offset == nil then
+				-- The offset between the two clocks is constant: learn it once on
+				-- first use, with GetTime() as the reference domain.
+				offset = GetTime() - precise_now
+			end
+			return precise_now + offset
+		end
+	elseif type(GetTime) == "function" then
+		api.get_time = GetTime
+	else
+		-- Unknown client (offline harness): a constant clock keeps compares sane.
+		api.get_time = function()
+			return 0
+		end
 	end
 end
 

@@ -18,6 +18,7 @@ Libs\LibClassicSwingTimerAPI\LibClassicSwingTimerAPI.lua
 Libs\LibRangeCheck-2.0\LibRangeCheck-2.0\LibRangeCheck-2.0.lua
 Libs\LibCustomGlow-1.0\LibCustomGlow-1.0.lua
 compat.lua
+swing_source.lua
 LibLatencyMonitor.lua
 LibGlobalCooldown.lua
 
@@ -32,6 +33,7 @@ Libs\AceConfig-3.0\AceConfig-3.0.xml
 
 utils.lua
 twist.lua
+weave.lua
 main.lua
 bars.lua
 config_presets.lua
@@ -42,4 +44,5 @@ config.lua
 classes\druid.lua
 classes\hunter.lua
 classes\paladin.lua
+classes\shaman.lua
 classes\warrior.lua

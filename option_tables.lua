@@ -1328,6 +1328,153 @@ end
 --=========================================================================================
 -- Bar Positioning group
 --=========================================================================================
+-- Spell weaving family toggles live in the nested weave_families table, so they need
+-- key-specific accessors rather than the generic class getter/setter pair.
+local function weave_family_getter(family)
+    return function()
+        local db = ST:get_class_table()
+        return not db.weave_families or db.weave_families[family] ~= false
+    end
+end
+
+local function weave_family_setter(family)
+    return function(_, value)
+        local db = ST:get_class_table()
+        db.weave_families = db.weave_families or {}
+        db.weave_families[family] = value and true or false
+    end
+end
+
+function ST.class_opts_funcs.SHAMAN(self)
+    local opts_group = {
+        weave_header = {
+            type = "header",
+            order = 1.01,
+            name = "Spell Weaving",
+        },
+        weave_desc = {
+            type = "description",
+            order = 1.05,
+            name = "Enhancement weave assist: the marker shows the latest swing position a "..
+                "tracked cast may start at and still land before the next swing; the spark "..
+                "shows the active cast (red when it would clip the swing).",
+        },
+        weave_enabled = {
+            type = "toggle",
+            order = 1.1,
+            name = "Enable",
+            desc = "Show the spell weaving breakpoint marker and cast spark on the mainhand bar.",
+            get = "getter",
+            set = "setter",
+        },
+        weave_family_LB = {
+            type = "toggle",
+            order = 1.2,
+            name = "Lightning Bolt",
+            desc = "Track Lightning Bolt breakpoints.",
+            get = weave_family_getter("LB"),
+            set = weave_family_setter("LB"),
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_family_CL = {
+            type = "toggle",
+            order = 1.21,
+            name = "Chain Lightning",
+            desc = "Track Chain Lightning breakpoints.",
+            get = weave_family_getter("CL"),
+            set = weave_family_setter("CL"),
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_family_HW = {
+            type = "toggle",
+            order = 1.22,
+            name = "Healing Wave",
+            desc = "Track Healing Wave breakpoints.",
+            get = weave_family_getter("HW"),
+            set = weave_family_setter("HW"),
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_family_LHW = {
+            type = "toggle",
+            order = 1.23,
+            name = "Lesser Healing Wave",
+            desc = "Track Lesser Healing Wave breakpoints.",
+            get = weave_family_getter("LHW"),
+            set = weave_family_setter("LHW"),
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_family_CH = {
+            type = "toggle",
+            order = 1.24,
+            name = "Chain Heal",
+            desc = "Track Chain Heal breakpoints.",
+            get = weave_family_getter("CH"),
+            set = weave_family_setter("CH"),
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_mw_enabled = {
+            type = "toggle",
+            order = 1.3,
+            name = "Maelstrom Weapon",
+            desc = "Reduce the effective cast time by 20% per Maelstrom Weapon stack; 5 stacks are instant.",
+            get = "getter",
+            set = "setter",
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_marker_size = {
+            type = "range",
+            order = 1.4,
+            name = "Marker size",
+            desc = "Size of the breakpoint spell icon.",
+            min = 6, max = 24, step = 1,
+            get = "getter",
+            set = "setter",
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_marker_alpha = {
+            type = "range",
+            order = 1.41,
+            name = "Marker alpha",
+            desc = "Opacity of the breakpoint spell icon (dimmed while the cast would clip).",
+            min = 0, max = 1, step = 0.05,
+            get = "getter",
+            set = "setter",
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_spark_width = {
+            type = "range",
+            order = 1.5,
+            name = "Spark width",
+            desc = "Width of the moving cast spark.",
+            min = 2, max = 60, step = 1,
+            get = "getter",
+            set = "setter",
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_spark_height = {
+            type = "range",
+            order = 1.51,
+            name = "Spark height",
+            desc = "Height of the moving cast spark (clamped to the bar height).",
+            min = 2, max = 100, step = 1,
+            get = "getter",
+            set = "setter",
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+        weave_spark_alpha = {
+            type = "range",
+            order = 1.52,
+            name = "Spark alpha",
+            desc = "Opacity of the moving cast spark.",
+            min = 0, max = 1, step = 0.05,
+            get = "getter",
+            set = "setter",
+            disabled = function() return ST:get_class_table().weave_enabled == false end,
+        },
+    }
+    return opts_group
+end
+
 function ST:generate_bar_position_options_table()
 
     local opts_group = {

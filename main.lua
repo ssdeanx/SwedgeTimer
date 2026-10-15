@@ -8,10 +8,11 @@ local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEv
 local LSM = LibStub("LibSharedMedia-3.0")
 local STL = LibStub("LibClassicSwingTimerAPI", true)
 -- The swing library is only shipped on clients with a classic combat log (see the
--- flavor TOCs). On Mainline-code clients (Retail, WoW Forever) keep the whole
--- initialisation flow intact with an inert stand-in; the user is told in init_libs.
--- The same stand-in replaces a library that loads but never reports itself ready
--- (see the init deadline in OnInitialize).
+-- flavor TOCs). WoW Forever has no classic combat log but exposes PLAYER_SWING, so
+-- swing_source.lua provides a compatible engine there; Retail keeps the whole
+-- initialisation flow intact with an inert stand-in, and the user is told in
+-- init_libs. The same stand-in replaces an engine that loads but never reports
+-- itself ready (see the init deadline in OnInitialize).
 local function make_swing_stub()
 	return {
 		RegisterCallback = function() end,
@@ -22,7 +23,13 @@ local function make_swing_stub()
 		end,
 	}
 end
+-- The vendored library always wins when it is present (the classic client line);
+-- st.swing_source only reports itself available on the FOREVER family.
 local SWING_ENGINE_AVAILABLE = STL ~= nil
+if not SWING_ENGINE_AVAILABLE and st.swing_source and st.swing_source.available then
+	STL = st.swing_source
+	SWING_ENGINE_AVAILABLE = true
+end
 if not SWING_ENGINE_AVAILABLE then
 	STL = make_swing_stub()
 end
@@ -460,6 +467,16 @@ function ST:OnInitialize()
 	end
 	self:RegisterEvent("UNIT_SPELLCAST_FAILED_QUIET")
 	self:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+	-- Player spellcast lifecycle for the class modules (weave assist and friends).
+	-- Unlike PLAYER_TARGET_SET_ATTACKING these events exist on every supported
+	-- client, so they need no family/validity gate.
+	self:RegisterEvent("UNIT_SPELLCAST_START")
+	self:RegisterEvent("UNIT_SPELLCAST_DELAYED")
+	self:RegisterEvent("UNIT_SPELLCAST_STOP")
+	self:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+	self:RegisterEvent("UNIT_SPELLCAST_FAILED")
+	self:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")
+	self:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
 	self:RegisterEvent("UNIT_TARGET")
 	self:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
 
@@ -492,9 +509,9 @@ function ST:init_libs()
 		self:Print("Version " .. version .. " loaded!")
 	end
 
-	-- Swing data needs the classic combat log, which Mainline-code clients
-	-- (Retail, WoW Forever) no longer expose: say so once, instead of leaving
-	-- the user wondering why the swing bars never move.
+	-- No swing engine at all (Retail, or a Forever engine that never reported
+	-- ready - see the init deadline): say so once, instead of leaving the user
+	-- wondering why the swing bars never move.
 	if not SWING_ENGINE_AVAILABLE then
 		self:Print("Swing timer bars are unavailable on this client; range and GCD features remain active.")
 	end
@@ -812,6 +829,38 @@ function ST:UNIT_SPELLCAST_SUCCEEDED(event, unit_id, cast_guid, spell_id)
 	if self[self.player_class].on_spellcast_succeeded then
 		self[self.player_class].on_spellcast_succeeded(self, unit_id, cast_guid, spell_id)
 	end
+end
+
+-- Player spellcast lifecycle events: one thin handler per event, each forwarded to
+-- the class module's on_spellcast_event hook when it has one. cast_guid/spell_id
+-- can be nil on some clients (e.g. UNIT_SPELLCAST_STOP may omit the spell id) and
+-- are passed through as received.
+function ST:UNIT_SPELLCAST_START(event, unit_id, cast_guid, spell_id)
+	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
+end
+
+function ST:UNIT_SPELLCAST_DELAYED(event, unit_id, cast_guid, spell_id)
+	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
+end
+
+function ST:UNIT_SPELLCAST_STOP(event, unit_id, cast_guid, spell_id)
+	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
+end
+
+function ST:UNIT_SPELLCAST_INTERRUPTED(event, unit_id, cast_guid, spell_id)
+	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
+end
+
+function ST:UNIT_SPELLCAST_FAILED(event, unit_id, cast_guid, spell_id)
+	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
+end
+
+function ST:UNIT_SPELLCAST_CHANNEL_START(event, unit_id, cast_guid, spell_id)
+	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
+end
+
+function ST:UNIT_SPELLCAST_CHANNEL_STOP(event, unit_id, cast_guid, spell_id)
+	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
 end
 
 function ST:UNIT_TARGET(event, unit_id)
@@ -1223,6 +1272,18 @@ function ST:class_on_current_spell_cast_changed(is_cancelled)
 	local c = self.player_class
 	if self[c].on_current_spell_cast_changed then
 		self[c].on_current_spell_cast_changed(self, is_cancelled)
+	end
+end
+
+function ST:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
+	-- Player spellcast lifecycle dispatch for the class modules (weave assist and
+	-- friends). Nilable cast_guid/spell_id are passed through untouched.
+	if unit_id ~= "player" then
+		return
+	end
+	local c = self.player_class
+	if self[c].on_spellcast_event then
+		self[c].on_spellcast_event(self, event, unit_id, cast_guid, spell_id)
 	end
 end
 

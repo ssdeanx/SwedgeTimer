@@ -363,6 +363,22 @@ ST.ROGUE.defaults = {
 -- SHAMAN
 ------------------------------------------------------------------------------------
 ST.SHAMAN.defaults = {
+    -- Spell weaving assist (Enhancement shaman LB weaving; math lives in weave.lua).
+    weave_enabled = true,
+    weave_mw_enabled = true,
+    weave_marker_size = 6,
+    weave_marker_alpha = 1,
+    weave_spark_width = 3,
+    weave_spark_height = 15,
+    weave_spark_alpha = 0.95,
+    weave_families = {
+        LB = true,
+        CL = true,
+        HW = true,
+        LHW = true,
+        CH = true,
+    },
+
     -- Bar options
     ['**'] = ST.bar_defaults,
 	mainhand = {
