@@ -67,7 +67,11 @@ do
 
 	if family == "UNKNOWN" and interface_number then
 		local major = math.floor(interface_number / 10000)
-		if major == 1 then
+		if major == 1 and interface_number >= 16000 then
+			-- WoW Forever shares Classic Era's major version (1.60.x -> 16000+)
+			-- but runs Mainline client code: never bucket it as Era.
+			family = "FOREVER"
+		elseif major == 1 then
 			family = "ERA"
 		elseif major == 2 then
 			family = "TBC"

@@ -10,9 +10,10 @@ local STL = LibStub("LibClassicSwingTimerAPI", true)
 -- The swing library is only shipped on clients with a classic combat log (see the
 -- flavor TOCs). On Mainline-code clients (Retail, WoW Forever) keep the whole
 -- initialisation flow intact with an inert stand-in; the user is told in init_libs.
-local SWING_ENGINE_AVAILABLE = STL ~= nil
-if not SWING_ENGINE_AVAILABLE then
-	STL = {
+-- The same stand-in replaces a library that loads but never reports itself ready
+-- (see the init deadline in OnInitialize).
+local function make_swing_stub()
+	return {
 		RegisterCallback = function() end,
 		UnregisterCallback = function() end,
 		-- Same shape as the library: speed, expiration time, start time.
@@ -20,6 +21,10 @@ if not SWING_ENGINE_AVAILABLE then
 			return 1, GetTime() + 1, GetTime()
 		end,
 	}
+end
+local SWING_ENGINE_AVAILABLE = STL ~= nil
+if not SWING_ENGINE_AVAILABLE then
+	STL = make_swing_stub()
 end
 local LRC = LibStub("LibRangeCheck-2.0")
 local LLM = LibStub("LibLatencyMonitor")
@@ -288,15 +293,45 @@ function ST:OnInitialize()
 	-- libs are both loaded, as they are interdependent
 	-- init_libs has a check to ensure this only happens once per reload
 	self.lrc_ready = false
+	self.lrc_unavailable = false -- set by the init deadline if LRC never reports ready
 	self.stl_ready = not SWING_ENGINE_AVAILABLE -- inert stand-in counts as ready
 	self.llm_ready = false
 	LRC.RegisterCallback(self, LRC.CHECKERS_CHANGED, function()
 			self.lrc_ready = true
+			-- If the init deadline below ran first, checkers arriving now lift
+			-- the temporary disable: bring range checking up after all.
+			if self.lrc_unavailable then
+				self.lrc_unavailable = false
+				if self.interfaces_are_initialised then
+					self:init_range_finders()
+				end
+			end
 			self:init_libs()
 		end
 	)
 	STL.RegisterCallback(self, "SWING_TIMER_INFO_INITIALIZED", function()
 			self.stl_ready = true
+			self:init_libs()
+		end
+	)
+
+	-- A library that never reports ready (an incompatible client, or an error
+	-- inside its own initialisation) must not stall init_libs forever: after a
+	-- grace period, initialise anyway, with the missing library disabled for
+	-- this session. A late report still lifts the LRC disable (callback above).
+	C_Timer.After(5, function()
+			if self.interfaces_are_initialised then
+				return
+			end
+			if not self.lrc_ready then
+				self.lrc_unavailable = true
+				self.lrc_ready = true
+			end
+			if not self.stl_ready then
+				STL = make_swing_stub()
+				SWING_ENGINE_AVAILABLE = false
+				self.stl_ready = true
+			end
 			self:init_libs()
 		end
 	)
@@ -460,6 +495,12 @@ function ST:init_libs()
 	-- the user wondering why the swing bars never move.
 	if not SWING_ENGINE_AVAILABLE then
 		self:Print("Swing timer bars are unavailable on this client; range and GCD features remain active.")
+	end
+
+	-- If the init deadline ran before LibRangeCheck was ready, range checking
+	-- is disabled for the session: say so once as well.
+	if self.lrc_unavailable then
+		self:Print("Range checking is unavailable on this client; the range display is disabled.")
 	end
 end
 
@@ -937,6 +978,12 @@ end
 -- Range finding
 ------------------------------------------------------------------------------------
 function ST:init_range_finders()
+	-- With the range library unavailable (see the init deadline in
+	-- OnInitialize) leave the fields empty: nothing retries and the bars'
+	-- range text simply stays blank.
+	if self.lrc_unavailable then
+		return
+	end
 	self.rangefinder_interval = 0.05
 	self.melee_range_checker_func = LRC:GetHarmMaxChecker(LRC.MeleeRange)
 
@@ -953,6 +1000,10 @@ function ST:init_range_finders()
 end
 
 function ST:rf_update()
+	if self.lrc_unavailable then
+		-- Range checking was disabled by the init deadline: stop the retry loop.
+		return
+	end
 	-- On the very first load of the game, CHECKERS_CHANGED can get a callback
 	-- before the checker funcs are ready. If that happens, loop a C_Timer
 	-- regardless and re-assign the functions until we get valid checkers,

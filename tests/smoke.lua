@@ -195,6 +195,21 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+-- WoW Forever without WOW_PROJECT_ID: interface 16001 must still map to
+-- FOREVER (Mainline-code), not the Classic Era bucket
+-- ---------------------------------------------------------------------------
+do
+    local _, st = build_profile({
+        project = nil,
+        interface = 16001,
+    })
+    eq(st.family, "FOREVER", "legacy 16001: family falls back to FOREVER")
+    eq(st.interface_number, 16001, "legacy 16001: interface number recorded")
+    eq(st.is_mainline, true, "legacy 16001: mainline-code client")
+    eq(st.gcd_probe_spell_id, 61304, "legacy 16001: gcd probe is 61304")
+end
+
+-- ---------------------------------------------------------------------------
 -- Retail client: C_* wrappers and the modern GCD probe
 -- ---------------------------------------------------------------------------
 do
