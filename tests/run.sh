@@ -51,6 +51,7 @@ syntax_check() {
 
 run "luac5.1 -p (root + classes .lua files)" syntax_check
 run "lua5.1 tests/smoke.lua" lua5.1 tests/smoke.lua
+run "lua5.1 tests/twist_state.lua" lua5.1 tests/twist_state.lua
 run "lua5.1 tests/toc_check.lua" lua5.1 tests/toc_check.lua
 
 # luacheck: exit 1 means warnings only, which is acceptable; exit >= 2 means errors.

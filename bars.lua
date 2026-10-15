@@ -416,6 +416,12 @@ function ST:onupdate_common(hand, elapsed)
 
     -- Set texts
     self:set_bar_texts(hand)
+
+    -- Generic class hook for per-frame bar visuals (e.g. the paladin twist band).
+    local class = self[self.player_class]
+    if class and class.on_bar_update then
+        class.on_bar_update(self, hand)
+    end
 end
 
 ST.mainhand.onupdate = function(elapsed)

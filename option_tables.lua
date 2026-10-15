@@ -700,6 +700,191 @@ function ST.class_opts_funcs.PALADIN(self)
                 return not db.use_aow_glow
             end,
         },
+        twist_header = {
+            type = "header",
+            order = 3.0,
+            name = "Seal Twisting",
+        },
+        twist_desc = {
+            order = 3.05,
+            type = "description",
+            name = "The twist window band marks the final ~0.4 s of each swing. The band's color shows when a "..
+                "twist is armed or impossible, and feedback appears when a twist attempt lands.",
+        },
+        twist_enabled = {
+            type = "toggle",
+            order = 3.1,
+            name = "Enable twist helpers",
+            desc = "Master toggle for the twist window band and twist attempt feedback.",
+            get = "getter",
+            set = "setter",
+        },
+        twist_marker_enabled = {
+            type = "toggle",
+            order = 3.2,
+            name = "Twist window band",
+            desc = "Shows a band over the final part of each swing where a seal twist can land.",
+            get = "getter",
+            set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.twist_enabled
+            end,
+        },
+        twist_marker_color = {
+            order=3.3,
+            type="color",
+            name="Band color",
+            desc="Color to use for the twist window band while a twist can still land.",
+            hasAlpha=true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not (db.twist_enabled and db.twist_marker_enabled)
+            end,
+        },
+        twist_feedback_enabled = {
+            type = "toggle",
+            order = 3.4,
+            name = "Twist attempt feedback",
+            desc = "Shows attempt feedback on the timer bar, and the success text when that is enabled.",
+            get = "getter",
+            set = "setter",
+        },
+        twist_color_twisting = {
+            order=3.5,
+            type="color",
+            name="Armed / attempted color",
+            desc="Color to use when a seal twist is armed or attempted.",
+            hasAlpha=true,
+            get = "color_getter",
+            set = "color_setter",
+        },
+        twist_color_cant = {
+            order=3.6,
+            type="color",
+            name="'Can't twist' warning color",
+            desc="Color to use when a twist cannot land within the current swing.",
+            hasAlpha=true,
+            get = "color_getter",
+            set = "color_setter",
+        },
+        twist_success_text_enabled = {
+            type = "toggle",
+            order = 3.7,
+            name = "Success text",
+            desc = "Shows floating text when a seal twist lands successfully.",
+            get = "getter",
+            set = "setter",
+        },
+        twist_success_text_color = {
+            order=3.8,
+            type="color",
+            name="Success text color",
+            desc="Color to use for the twist success text.",
+            hasAlpha=true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.twist_success_text_enabled
+            end,
+        },
+        twist_success_text_size = {
+            type = "range",
+            order = 3.9,
+            name = "Success text size",
+            desc = "The font size of the twist success text.",
+            min = 12, max = 48, step = 1,
+            get = "getter",
+            set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.twist_success_text_enabled
+            end,
+        },
+        twist_success_text_duration = {
+            type = "range",
+            order = 3.95,
+            name = "Success text duration (s)",
+            desc = "How long the twist success text stays on screen, in seconds.",
+            min = 0.5, max = 5, step = 0.1,
+            get = "getter",
+            set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.twist_success_text_enabled
+            end,
+        },
+        lag_header = {
+            type = "header",
+            order = 4.0,
+            name = "Lag Compensation",
+        },
+        lag_desc = {
+            order = 4.05,
+            type = "description",
+            name = "The global cooldown and latency can make a correct twist fail. Raising these values makes "..
+                "the 'can't twist' warning fire earlier.",
+        },
+        lag_detection_enabled = {
+            type = "toggle",
+            order = 4.1,
+            name = "Warn on impossible twists",
+            desc = "Enables the warning color when a twist cannot land within the current swing.",
+            get = "getter",
+            set = "setter",
+        },
+        lag_multiplier = {
+            type = "range",
+            order = 4.2,
+            name = "Latency multiplier",
+            desc = "The player's world latency is multiplied by this value in the lag detection calibration.",
+            min = 1.0, max = 3.0, step = 0.1,
+            get = "getter",
+            set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.lag_detection_enabled
+            end,
+        },
+        lag_offset = {
+            type = "range",
+            order = 4.3,
+            name = "Latency offset (ms)",
+            desc = "Added to the player's world latency in the lag detection calibration.",
+            min = 0, max = 200, step = 1,
+            get = "getter",
+            set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.lag_detection_enabled
+            end,
+        },
+        twist_padding_mode = {
+            type = "select",
+            order = 4.4,
+            name = "Window padding mode",
+            desc = "Whether to push the twist window back from the end of the swing to account for input and "..
+                "latency. Dynamic uses the lag calibration values above; Fixed uses the offset below.",
+            values = {None="None", Fixed="Fixed", Dynamic="Dynamic"},
+            get = "getter",
+            set = "setter",
+        },
+        twist_window_padding_ms = {
+            type = "range",
+            order = 4.5,
+            name = "Fixed padding (ms)",
+            desc = "The twist window is pushed this far back from the end of the swing.",
+            min = 0, max = 400, step = 1,
+            get = "getter",
+            set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return db.twist_padding_mode ~= "Fixed"
+            end,
+        },
     }
     return opts_group
 end

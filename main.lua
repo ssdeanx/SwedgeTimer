@@ -455,7 +455,9 @@ function ST:OnInitialize()
 	self:RegisterEvent("PLAYER_ENTER_COMBAT")
 	self:RegisterEvent("PLAYER_LEAVE_COMBAT")
 	self:RegisterEvent("UNIT_AURA")
-	self:RegisterEvent("UNIT_POWER_FREQUENT")
+	if self.player_class == "PALADIN" and not st.is_mainline then
+		self:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+	end
 	self:RegisterEvent("UNIT_SPELLCAST_FAILED_QUIET")
 	self:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 	self:RegisterEvent("UNIT_TARGET")
@@ -588,6 +590,14 @@ end
 --=========================================================================================
 -- CallbackHandlers
 --=========================================================================================
+function ST:COMBAT_LOG_EVENT_UNFILTERED(event, ...)
+	-- AceEvent dispatches handlers as (event, ...): keep the event name in the
+	-- forwarded arguments so the paladin module's signature lines up.
+	if self.player_class == "PALADIN" and self.interfaces_are_initialised then
+		self.PALADIN.on_combat_log_unfiltered(self, event, ...)
+	end
+end
+
 function ST.callback_event_handler(event, ...)
 	-- Func to pass all callbacks to their relevant handler
 	-- if string.find(event, "GCD") then
@@ -732,6 +742,12 @@ end
 
 function ST:PLAYER_REGEN_ENABLED()
 	self.in_combat = false
+	-- Reset combat-scoped class state (e.g. the paladin extra-attack counter):
+	-- orphaned procs must not suppress the next fight's first twists.
+	local class = self[self.player_class]
+	if class and class.on_combat_exit then
+		class.on_combat_exit(self)
+	end
 end
 
 function ST:PLAYER_REGEN_DISABLED()

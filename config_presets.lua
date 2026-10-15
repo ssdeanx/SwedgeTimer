@@ -260,6 +260,25 @@ ST.PALADIN.defaults = {
     sob_color = {219, 97, 28, 1.0},
     sotc_color = {230, 191, 107, 1.0},
 
+    -- Seal twisting (per the archived build's feature set).
+    twist_enabled = true,
+    twist_feedback_enabled = true,
+    twist_marker_enabled = true,
+    twist_padding_mode = "None",
+    twist_window_padding_ms = 0,
+    lag_detection_enabled = true,
+    lag_multiplier = 1.4,
+    lag_offset = 15,
+
+    -- Twist helper visuals (window band, state colors, success text).
+    twist_marker_color = {255, 255, 255, 0.35},
+    twist_color_twisting = {179, 26, 153, 1.0},
+    twist_color_cant = {212, 212, 3, 1.0},
+    twist_success_text_enabled = true,
+    twist_success_text_color = {90, 255, 90, 1.0},
+    twist_success_text_size = 24,
+    twist_success_text_duration = 1.5,
+
     use_aow_glow = true,
     require_exo_ready = true,
     aow_glow_color = {209, 198, 115, 1.0},

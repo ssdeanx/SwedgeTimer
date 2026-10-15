@@ -435,6 +435,7 @@ do
         module = "classes/paladin.lua",
     })
     local self = paladin_self()
+    self.PALADIN = ST.PALADIN
     ST.PALADIN.on_aura_change(self)
     eq(self.has_soc, true, "paladin(era): Seal of Command rank 4 (20920) recognized")
     eq(self.has_sol, true, "paladin(era): Seal of Light rank 9 (20349) recognized")
@@ -459,6 +460,7 @@ do
         module = "classes/paladin.lua",
     })
     local self = paladin_self()
+    self.PALADIN = ST.PALADIN
     ST.PALADIN.on_aura_change(self)
     eq(self.has_soc, true, "paladin(wrath): Seal of Command (20375) recognized")
     eq(self.has_sol, true, "paladin(wrath): Seal of Light (20165) recognized")
@@ -497,9 +499,85 @@ do
             module = "classes/paladin.lua",
         })
         local self = paladin_self()
+        self.PALADIN = ST.PALADIN
         ST.PALADIN.on_aura_change(self)
         eq(self[case.flag], true, "paladin(tbc): " .. case.label .. " recognized")
     end
+end
+
+-- ---------------------------------------------------------------------------
+-- Paladin twist detection (runtime-shaped CLEU calls)
+-- ---------------------------------------------------------------------------
+do
+    -- Mirrors exactly what main.lua forwards for COMBAT_LOG_EVENT_UNFILTERED:
+    -- (event, timestamp, subevent, hideCaster, sourceGUID, ...) per AceEvent.
+    local auras = { 20375, 31892 } -- Seal of Command + Seal of Blood
+    local now = 100
+    local ST = { PALADIN = {} }
+    local env, st = build_profile({
+        project = 5,
+        globals = {
+            UnitAura = aura_stub(auras),
+            UnitGUID = function() return "Player-1" end,
+            GetTime = function() return now end,
+            GetSpellBaseCooldown = function() return 15000 end,
+            C_Timer = { After = function() end },
+        },
+        ST = ST,
+        module = "classes/paladin.lua",
+    })
+    local twist_mod = assert(loadfile(ROOT .. "twist.lua"))
+    setfenv(twist_mod, env)
+    twist_mod("SwedgeTimer", st)
+
+    ST.get_visuals_frame = function() return nil end
+    ST.set_bar_color = function() end
+    ST.get_class_table = function() return {} end
+    ST.mainhand = {}
+    ST.latency = { world_ms = 0 }
+    ST.gcd = {}
+    ST.PALADIN.post_init(ST)
+
+    local function cleu(event, ...)
+        ST.PALADIN.on_combat_log_unfiltered(
+            ST, "COMBAT_LOG_EVENT_UNFILTERED", now, event, false,
+            "Player-1", "Player", 0, 0, "Target-1", "Target", 0, 0, ...)
+    end
+
+    eq(ST.twist_active_seals_count, 2, "twist: two seals counted at post_init")
+
+    -- Two seals at a landing swing => attempt; an unrelated spell does not consume it.
+    cleu("SWING_DAMAGE", 10, 0)
+    eq(ST.twist_attempt_pending, true, "twist: two seals on SWING_DAMAGE => attempt pending")
+    eq(ST.twist_attempt_until, now + 0.25, "twist: attempt feedback window armed")
+    cleu("SPELL_DAMAGE", 9999, "Not a proc", 1, 10, 0)
+    eq(ST.twist_attempt_pending, true, "twist: unrelated SPELL_DAMAGE keeps the attempt pending")
+
+    -- The Command proc confirms it.
+    cleu("SPELL_DAMAGE", 20424, "Seal of Command", 1, 10, 0)
+    eq(ST.twist_attempt_pending, false, "twist: SoC proc consumes the pending attempt")
+    check((ST.twist_success_until or 0) > now, "twist: success feedback armed")
+
+    -- Extra attacks: amount is honoured, one is consumed per extra swing, and no
+    -- twist attempt is registered for an extra swing.
+    cleu("SPELL_EXTRA_ATTACKS", 12345, "Windfury", 1, 2)
+    eq(ST.twist_extra_attacks_pending, 2, "twist: SPELL_EXTRA_ATTACKS amount=2 counted")
+    cleu("SWING_DAMAGE", 10, 0)
+    eq(ST.twist_extra_attacks_pending, 1, "twist: extra swing consumes one pending extra")
+    eq(ST.twist_attempt_pending, false, "twist: extra swing does not register an attempt")
+
+    -- Combat exit clears orphaned extras.
+    ST.PALADIN.on_combat_exit(ST)
+    eq(ST.twist_extra_attacks_pending, 0, "twist: combat exit clears orphaned extras")
+
+    -- Single seal => no attempt; restoring the second seal arms it again.
+    auras[2] = nil
+    cleu("SWING_DAMAGE", 10, 0)
+    eq(ST.twist_active_seals_count, 1, "twist: single seal counted")
+    eq(ST.twist_attempt_pending, false, "twist: single seal does not register an attempt")
+    auras[2] = 31892
+    cleu("SWING_DAMAGE", 10, 0)
+    eq(ST.twist_attempt_pending, true, "twist: second seal re-arms the attempt")
 end
 
 -- ---------------------------------------------------------------------------
