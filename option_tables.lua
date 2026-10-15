@@ -595,6 +595,32 @@ function ST.class_opts_funcs.PALADIN(self)
                 return not db.use_seal_colors
             end,
         },
+        sob_color = {
+            order=1.18,
+            type="color",
+            name="Seal of Blood/Martyr",
+            desc="Color to use when Seal of Blood/Martyr is active.",
+            hasAlpha=true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.use_seal_colors
+            end,
+        },
+        sotc_color = {
+            order=1.19,
+            type="color",
+            name="Seal of the Crusader",
+            desc="Color to use when Seal of the Crusader is active.",
+            hasAlpha=true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.use_seal_colors
+            end,
+        },
         aow_header = {
             type = "header",
             order = 2.0,

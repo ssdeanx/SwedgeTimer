@@ -466,6 +466,40 @@ do
     eq(self.has_sor, true, "paladin(wrath): Seal of Righteousness (21084) recognized")
     eq(self.has_soj, true, "paladin(wrath): Seal of Justice (20164) recognized")
     eq(self.has_aow, true, "paladin(wrath): Art of War (59578) recognized")
+    eq(self.has_sob, false, "paladin(wrath): no Blood/Martyr aura")
+    eq(self.has_sotc, false, "paladin(wrath): no Crusader aura")
+end
+
+do
+    -- TBC Anniversary: every id in the Blood/Martyr and Crusader seal tables must
+    -- be recognized on its own.
+    local cases = {
+        { id = 31892,  flag = "has_sob",  label = "Seal of Blood (31892)" },
+        { id = 348700, flag = "has_sob",  label = "Seal of the Martyr (348700)" },
+        { id = 21082,  flag = "has_sotc", label = "Seal of the Crusader rank 1 (21082)" },
+        { id = 20162,  flag = "has_sotc", label = "Seal of the Crusader rank 2 (20162)" },
+        { id = 20305,  flag = "has_sotc", label = "Seal of the Crusader rank 3 (20305)" },
+        { id = 20306,  flag = "has_sotc", label = "Seal of the Crusader rank 4 (20306)" },
+        { id = 20307,  flag = "has_sotc", label = "Seal of the Crusader rank 5 (20307)" },
+        { id = 20308,  flag = "has_sotc", label = "Seal of the Crusader rank 6 (20308)" },
+        { id = 27158,  flag = "has_sotc", label = "Seal of the Crusader TBC rank (27158)" },
+    }
+    for i = 1, #cases do
+        local case = cases[i]
+        local ST = { PALADIN = {} }
+        build_profile({
+            project = 5,
+            globals = {
+                UnitAura = aura_stub({ case.id }),
+                GetSpellBaseCooldown = function() return 15000 end,
+            },
+            ST = ST,
+            module = "classes/paladin.lua",
+        })
+        local self = paladin_self()
+        ST.PALADIN.on_aura_change(self)
+        eq(self[case.flag], true, "paladin(tbc): " .. case.label .. " recognized")
+    end
 end
 
 -- ---------------------------------------------------------------------------

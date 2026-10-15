@@ -33,6 +33,14 @@ local sor_ids = get_tab({
 local soj_ids = get_tab({
     20164, 31895
 })
+-- Seal of Blood / Seal of the Martyr
+local sob_ids = get_tab({
+    31892, 348700
+})
+-- Seal of the Crusader
+local sotc_ids = get_tab({
+    21082, 20162, 20305, 20306, 20307, 20308, 27158
+})
 
 -- Art of War (WotLK proc)
 local aow_id = 59578
@@ -70,6 +78,8 @@ function ST.PALADIN.on_aura_change(self)
     self.has_sow = false
     self.has_sor = false
     self.has_soj = false
+    self.has_sob = false
+    self.has_sotc = false
 
     -- Iterate all player auras
     local i = 1
@@ -96,6 +106,12 @@ function ST.PALADIN.on_aura_change(self)
         end
         if soj_ids[spell_id] ~= nil then
             self.has_soj = true
+        end
+        if sob_ids[spell_id] ~= nil then
+            self.has_sob = true
+        end
+        if sotc_ids[spell_id] ~= nil then
+            self.has_sotc = true
         end
 
         -- Art of War
@@ -201,6 +217,18 @@ function ST.PALADIN.set_bar_color(self, hand)
         if self.has_soj then
             frame.bar:SetVertexColor(
                 self:convert_color(db_class.soj_color)
+            )
+            return true
+        end
+        if self.has_sob then
+            frame.bar:SetVertexColor(
+                self:convert_color(db_class.sob_color)
+            )
+            return true
+        end
+        if self.has_sotc then
+            frame.bar:SetVertexColor(
+                self:convert_color(db_class.sotc_color)
             )
             return true
         end
