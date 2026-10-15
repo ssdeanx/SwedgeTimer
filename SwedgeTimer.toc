@@ -1,6 +1,6 @@
 ## Interface: 30401
 ## Title: SwedgeTimer
-## Notes: General purpose swing timer addon for WotLK Classic.
+## Notes: General purpose swing timer addon for all WoW clients.
 ## Author: Swedge
 ## Version: "2.0.8"
 ## DefaultState: enabled
@@ -26,7 +26,7 @@ Libs\AceDB-3.0\AceDB-3.0.xml
 Libs\AceDBOptions-3.0\AceDBOptions-3.0.xml
 Libs\AceConsole-3.0\AceConsole-3.0.xml
 Libs\AceGUI-3.0\AceGUI-3.0.xml
-Libs\AceEvent-3.0\AceEVent-3.0.xml
+Libs\AceEvent-3.0\AceEvent-3.0.xml
 Libs\AceGUI-3.0-SharedMediaWidgets\widget.xml
 Libs\AceConfig-3.0\AceConfig-3.0.xml
 
