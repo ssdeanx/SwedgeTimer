@@ -7,15 +7,28 @@ local LCG = LibStub("LibCustomGlow-1.0")
 -- Cross-client API wrappers (see compat.lua).
 local api = st.api
 
--- Seal IDs
-local soc_id = 20375
+-- Seal IDs. The lists span every classic family: the active aura keeps the id of the
+-- rank that was cast, so all rank ids must be listed (vanilla/BCC rank data per the
+-- archived TBC/Forever builds). On Wrath the seals were consolidated to a single rank
+-- which is contained in each list, so Wrath behaviour is unchanged.
+local soc_ids = {
+    20375, 20915, 20918, 20919, 20920, 27170
+}
 local sov_ids = {
     31801, 348704
 }
-local sol_id = 20165
-local sow_id = 20166
-local sor_id = 21084
-local soj_id = 20164
+local sol_ids = {
+    20165, 20347, 20348, 20349, 27160
+}
+local sow_ids = {
+    20166, 20356, 20357, 27166
+}
+local sor_ids = {
+    21084, 20154, 20287, 20288, 20289, 20290, 20291, 20292, 20293, 27155
+}
+local soj_ids = {
+    20164, 31895
+}
 
 -- Art of War
 local aow_id = 59578
@@ -61,22 +74,22 @@ function ST.PALADIN.on_aura_change(self)
             break
         end
         -- Seals
-        if spell_id == soc_id then
+        if self:is_value_in_array(spell_id, soc_ids) then
             self.has_soc = true
         end
         if self:is_value_in_array(spell_id, sov_ids) then
             self.has_sov = true
         end
-        if spell_id == sol_id then
+        if self:is_value_in_array(spell_id, sol_ids) then
             self.has_sol = true
         end
-        if spell_id == sow_id then
+        if self:is_value_in_array(spell_id, sow_ids) then
             self.has_sow = true
         end
-        if spell_id == sor_id then
+        if self:is_value_in_array(spell_id, sor_ids) then
             self.has_sor = true
         end
-        if spell_id == soj_id then
+        if self:is_value_in_array(spell_id, soj_ids) then
             self.has_soj = true
         end
 
