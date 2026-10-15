@@ -1,0 +1,9 @@
+log/
+log.txt
+.hermes/
+undefined/
+.omo/run-continuation/ses_0d7f8e6e1ffeI4scsZV8RXLCPO.json
+.omo/run-continuation/ses_0d7f75743ffedHjn4guCgzOaHy.json
+.omo/run-continuation/*.json
+docs/media/
+OLD/

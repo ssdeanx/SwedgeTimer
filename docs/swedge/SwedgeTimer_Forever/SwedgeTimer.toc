@@ -1,0 +1,43 @@
+## Interface: 20506
+## Title: SwedgeTimer
+## Notes: Seal twisting timer bar for BCC Ret Paladins.
+## Author: Swedge
+## X-Contributors: Updated by Folktale
+## Version: "1.9.0"
+## DefaultState: enabled
+## OptDeps: Ace3, LibSharedMedia-3.0, LibStub
+## SavedVariables: SwedgeTimerDB
+## X-Wago-ID: 9rN4dMND
+## X-WoWI-ID: 26295
+## X-Curse-Project-ID: 621214
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
+Libs\LibSharedMedia-3.0\lib.xml
+Libs\AceAddon-3.0\AceAddon-3.0.xml
+Libs\AceDB-3.0\AceDB-3.0.xml
+Libs\AceDBOptions-3.0\AceDBOptions-3.0.xml
+Libs\AceConsole-3.0\AceConsole-3.0.xml
+Libs\AceGUI-3.0\AceGUI-3.0.xml
+Libs\AceGUI-3.0-SharedMediaWidgets\widget.xml
+Libs\AceConfig-3.0\AceConfig-3.0.xml
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+Libs\LibCustomGlow-1.0\LibCustomGlow-1.0.xml
+
+utils.lua
+widgets.lua
+st_data.lua
+core.lua
+player.lua
+bar.lua
+minimap.lua
+rotation.lua
+practice.lua
+nextaction.lua
+hud.lua
+rotationtext.lua
+import_export.lua
+settings_ui.lua
+editmode.lua
+main.lua
