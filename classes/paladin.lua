@@ -73,6 +73,12 @@ function ST.PALADIN.post_init(self)
     if st.nextaction_ui then
         st.nextaction_ui.init(self)
     end
+
+    -- Twist Practice: builds its own UIParent frames and the pure-engine bridge;
+    -- guarded so a flavor without the practice files stays inert.
+    if st.practice_ui then
+        st.practice_ui.init(self)
+    end
 end
 
 function ST.PALADIN.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id)
@@ -88,10 +94,43 @@ function ST.PALADIN.on_spellcast_succeeded(self, unit_target, cast_guid, spell_i
 end
 
 
+--=========================================================================================
+-- Twist Practice: seal-state mirror for the simulation
+--=========================================================================================
+function ST.PALADIN.practice_sync(self)
+    -- Replaces the aura-derived seal state with the practice simulation's state while a
+    -- session runs (practice_ui's bridge calls this; parse_seals branches into it too).
+    -- The sim seals never expire on their own as far as the guide is concerned, so no
+    -- expiry input is provided; every other seal flag belongs to the real auras and is
+    -- cleared so stale state cannot leak into the practice display.
+    local sim = st.practice_ui and st.practice_ui.sim
+    if not sim then
+        return self.twist_active_seals_count or 0
+    end
+    self.has_soc = sim.active_seals["command"] == true
+    self.has_sob = sim.active_seals["blood"] == true
+    self.has_sor = sim.active_seals["crusader"] == true
+    self.has_sov = false
+    self.has_sol = false
+    self.has_sow = false
+    self.has_soj = false
+    self.has_sotc = false
+    self.has_aow = false
+    self.soc_expires = nil
+    self.sob_expires = nil
+    self.twist_active_seals_count = sim.n_active_seals or 0
+    return self.twist_active_seals_count
+end
+
 function ST.PALADIN.parse_seals(self)
     -- Refresh seal and Art of War flags from the player's auras; returns the
     -- active-seal count. Shared by on_aura_change and the twist swing path
     -- (which must not restart the AoW glow on every swing).
+    -- While a Twist Practice session runs the simulation owns the seal state, so the
+    -- real auras must not clobber it.
+    if st.practice_ui and st.practice_ui.is_active() then
+        return self.PALADIN.practice_sync(self)
+    end
     self.has_aow = false
     self.has_soc = false
     self.has_sov = false
@@ -281,6 +320,12 @@ function ST.PALADIN.set_bar_color(self, hand)
 end
 
 function ST.PALADIN.on_combat_log_unfiltered(self, _, timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, ...)
+    -- Twist Practice: the simulation owns the twist state while a session runs, so real
+    -- combat-log events must not arm attempts or consume procs (they would also fight
+    -- the 0.05 s seal mirror for control of the same flags).
+    if st.practice_ui and st.practice_ui.is_active() then
+        return
+    end
     -- Only our own actions matter for twisting.
     if source_guid ~= UnitGUID("player") then
         return

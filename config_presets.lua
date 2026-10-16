@@ -310,6 +310,18 @@ ST.PALADIN.defaults = {
     aow_glow_freq = 0.1,
     aow_glow_line_length = 12,
 
+    -- Twist Practice (phase 2 UI; the key names stay archive-compatible for the later
+    -- phases). practice_weapon_speed is the practice swing base speed: 0 uses the
+    -- equipped weapon speed. practice_panel_x/y are offsets from the panel's anchor,
+    -- added to the archive's 8 px gap right of the mainhand bar.
+    practice_result_duration = 0.8,
+    practice_result_text_size = 28,
+    practice_result_color_hit = {0, 1, 0, 1},
+    practice_result_color_miss = {1, 0.2, 0.2, 1},
+    practice_weapon_speed = 0,
+    practice_panel_x = 0,
+    practice_panel_y = 0,
+
     -- Bar options
     ['**'] = ST.bar_defaults,
 	mainhand = {

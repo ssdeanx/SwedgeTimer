@@ -1182,6 +1182,44 @@ function ST.class_opts_funcs.PALADIN(self)
             get = "getter",
             set = "setter",
         },
+        practice_header = {
+            type = "header",
+            order = 7.0,
+            name = "Twist Practice",
+        },
+        practice_desc = {
+            order = 7.05,
+            type = "description",
+            name = "Practice minigame: simulate a boss fight's swing rotation and seal twisting in a "..
+                "separate simulation, without attacking anything. The panel's ability icons cast "..
+                "simulated spells (left click); /st practice toggles the session. The full practice "..
+                "options (rotation lock, haste buttons, keybinds) are still in development.",
+        },
+        practice_toggle = {
+            type = "execute",
+            order = 7.1,
+            name = function()
+                if st.practice_ui and st.practice_ui.is_active() then
+                    return "Stop Practice"
+                end
+                return "Start Practice"
+            end,
+            desc = "Toggle the practice session. A session can only be started out of combat.",
+            func = function()
+                if st.practice_ui then
+                    st.practice_ui.toggle(ST)
+                end
+            end,
+        },
+        practice_weapon_speed = {
+            type = "range",
+            order = 7.2,
+            name = "Weapon speed override (s)",
+            desc = "0 uses the equipped weapon speed.",
+            min = 0, max = 4, step = 0.1,
+            get = "getter",
+            set = "setter",
+        },
     }
     return opts_group
 end

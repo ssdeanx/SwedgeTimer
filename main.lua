@@ -176,12 +176,24 @@ function ST:get_in_range(hand)
 end
 
 function ST:hide_bar(hand)
+	-- Twist Practice owns the mainhand bar while its session runs: the simulated swing
+	-- must stay visible even though the range-finder loop (set_bar_visibilities every
+	-- 0.05 s) re-applies the user's show conditions. Every other hand keeps them.
+	if hand == "mainhand" and st.practice_ui and st.practice_ui.is_active() then
+		return
+	end
 	self:get_bar_frame(hand):Hide()
 	self:get_hiding_anchor_frame(hand):Hide()
 end
 
 function ST:check_bar_enable_settings(db_class, hand)
 	-- Function to check if the settings indicate the bar should be shown or hidden.
+	-- Twist Practice owns the mainhand bar while its session runs (archive parity: the
+	-- archived build's should_show_bar hook forced it visible): the simulated swing
+	-- must show regardless of the user's enable/spec gating.
+	if hand == "mainhand" and st.practice_ui and st.practice_ui.is_active() then
+		return true
+	end
 	if not db_class.class_enabled then 	-- Global enable/disable
 		return false
 	end
@@ -1277,9 +1289,23 @@ end
 function ST:test1()
 end
 
-function ST:open_menu()
-	local ACD = LibStub("AceConfigDialog-3.0")
-	ACD:Open(addon_name.."_Options")
+function ST:open_menu(input)
+	-- AceConsole passes the raw input: no argument opens the options menu,
+	-- "practice" toggles the Twist Practice session, anything else prints usage.
+	local arg = input and input:match("^%s*(.-)%s*$") or ""
+	arg = arg:lower()
+	if arg == "" then
+		local ACD = LibStub("AceConfigDialog-3.0")
+		ACD:Open(addon_name.."_Options")
+	elseif arg == "practice" then
+		if st.practice_ui then
+			st.practice_ui.toggle(self)
+		else
+			self:Print("Practice mode is not available on this client.")
+		end
+	else
+		self:Print("Unknown argument '" .. arg .. "'. Usage: /st practice to toggle practice mode, /st to open options.")
+	end
 end
 
 --=========================================================================================
