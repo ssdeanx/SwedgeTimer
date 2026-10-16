@@ -66,6 +66,13 @@ function ST.PALADIN.post_init(self)
 
     -- Twist window band and success text (the visuals frames exist by now).
     self.PALADIN.setup_twist_visuals(self)
+
+    -- Next Action Guide (rotation prompt): builds its own UIParent frame and needs
+    -- the pure st.nextaction engine module; guarded so a flavor without the guide
+    -- files stays inert.
+    if st.nextaction_ui then
+        st.nextaction_ui.init(self)
+    end
 end
 
 function ST.PALADIN.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id)
@@ -94,17 +101,22 @@ function ST.PALADIN.parse_seals(self)
     self.has_soj = false
     self.has_sob = false
     self.has_sotc = false
+    -- Seal expiry timestamps in seconds (next-action guide seal input). Reset so a
+    -- dropped seal cannot leave a stale value behind.
+    self.soc_expires = nil
+    self.sob_expires = nil
 
     -- Iterate all player auras
     local i = 1
     while true do
-        local name, _, _, _, _, _, _, _, _, spell_id = api.UnitAura("player", i)
+        local name, _, _, _, _, expiration_time, _, _, _, spell_id = api.UnitAura("player", i)
         if name == nil then
             break
         end
         -- Seals
         if soc_ids[spell_id] ~= nil then
             self.has_soc = true
+            self.soc_expires = expiration_time
         end
         if sov_ids[spell_id] ~= nil then
             self.has_sov = true
@@ -123,6 +135,7 @@ function ST.PALADIN.parse_seals(self)
         end
         if sob_ids[spell_id] ~= nil then
             self.has_sob = true
+            self.sob_expires = expiration_time
         end
         if sotc_ids[spell_id] ~= nil then
             self.has_sotc = true
@@ -385,6 +398,27 @@ function ST.PALADIN.on_bar_update(self, hand)
     if not (hand_state and hand_state.anchor_frame) then
         return
     end
+    -- Next Action Guide (mainhand only): driven before the twist-only gates below so
+    -- it also runs on Mainline-code clients (WoW Forever shows the guide but not the
+    -- twist band). It never gates on st.is_mainline itself; swing activity decides.
+    -- Settings that rebuild the frame (scale/position/lock) are applied when the class
+    -- options change; the display toggles are read live by the UI.
+    local gdb = self:get_class_table()
+    if gdb.nextaction_icon_size ~= self.guide_ui_icon_size
+        or gdb.nextaction_x ~= self.guide_ui_x
+        or gdb.nextaction_y ~= self.guide_ui_y
+        or gdb.nextaction_locked ~= self.guide_ui_locked then
+        self.guide_ui_icon_size = gdb.nextaction_icon_size
+        self.guide_ui_x = gdb.nextaction_x
+        self.guide_ui_y = gdb.nextaction_y
+        self.guide_ui_locked = gdb.nextaction_locked
+        if st.nextaction_ui then
+            st.nextaction_ui.apply_settings(self)
+        end
+    end
+    if st.nextaction_ui then
+        st.nextaction_ui.on_bar_update(self, hand)
+    end
     local vf = self:get_visuals_frame(hand)
     if not vf or not vf.twist_band then
         return
@@ -513,6 +547,172 @@ function ST.PALADIN.on_combat_exit(self)
     -- next fight (they would suppress its first twist attempts).
     self.twist_extra_attacks_pending = 0
     self.twist_attempt_pending = false
+    -- Combat-scoped next-action guide state: the guide may already be hidden when
+    -- the fight ends, so it cannot rely on its own display tick to reset these.
+    self.guide_melee_count = 0
+    self.guide_waiting_judgement = false
+end
+
+--=========================================================================================
+-- Next Action Guide: live inputs for the pure st.nextaction engine
+--=========================================================================================
+-- The engine (nextaction.lua) is pure and reads these frozen input names:
+--   speed, swing_remaining, G, gcd_remaining, twist_window, reaction, cs_remaining,
+--   judge_remaining, seal, cs_delay_max, waiting_judgement, melee_count, mana_pct,
+--   creature_type, filler_remaining
+-- filler_remaining is one number (the chosen filler's own cooldown remaining) or nil
+-- (unknown on this client). The engine also accepts the optional inputs
+-- gcd_before_swing and both mana thresholds; this gather fills them.
+
+-- One reused input table: no per-frame allocations on the guide tick.
+ST.PALADIN.guide_inputs = {}
+
+-- Localized filler spell names, resolved lazily (name-based cooldown lookups see
+-- whatever rank the player knows, unlike a fixed rank id).
+local filler_name_consecration
+local filler_name_exorcism
+
+-- Live cooldown remaining (seconds) for a spell id or name, handling the client's GCD
+-- echo: GetSpellCooldown reports whichever cooldown ends later, so a real ability
+-- cooldown shows its full duration while a shorter ability cooldown inside a running
+-- GCD reports the GCD's ~1.5 s instead. With latch_key the last real cooldown end is
+-- remembered on the addon (the archive's rule), so the true remaining time survives
+-- the echo window.
+local function get_guide_cooldown_remaining(self, spell, latch_key)
+    local now = api.get_time()
+    local start_time, duration = api.GetSpellCooldown(spell)
+    if not start_time or not duration or duration == 0 then
+        return 0
+    end
+    if duration > 1.51 then
+        if latch_key then
+            self[latch_key] = start_time + duration
+        end
+        local remaining = start_time + duration - now
+        if remaining < 0 then
+            remaining = 0
+        end
+        return remaining
+    end
+    -- GCD echo: the real cooldown (if any) ends before this GCD does.
+    if not latch_key then
+        return 0
+    end
+    local remaining = (self[latch_key] or 0) - now
+    if remaining <= 0 then
+        return 0
+    end
+    local echo_end = start_time + duration - now
+    if remaining > echo_end then
+        remaining = echo_end
+    end
+    return remaining
+end
+
+-- Player mana percentage and the target's (localized) creature type for the filler
+-- kind choice; the engine owns the Undead/Demon name table.
+local function get_guide_mana_pct()
+    local power_max = UnitPowerMax and UnitPowerMax("player") or 0
+    if type(power_max) == "number" and power_max > 0 then
+        local power = (UnitPower and UnitPower("player")) or 0
+        if type(power) == "number" then
+            return power / power_max * 100
+        end
+    end
+    return 0
+end
+
+local function get_guide_creature_type()
+    if UnitExists and UnitExists("target") then
+        return UnitCreatureType and UnitCreatureType("target")
+    end
+    return nil
+end
+
+function ST.PALADIN.gather_guide_inputs(self)
+    local na = st.nextaction
+    local now = api.get_time()
+    local d = self.mainhand
+    local gcd = self.gcd
+    local db = self:get_class_table()
+    local inputs = self.PALADIN.guide_inputs
+
+    -- Swing state and clock (seconds). ends_at and the GCD/aura stamps all live in
+    -- the GetTime() domain, which api.get_time() shares, so the comparisons hold.
+    inputs.speed = (d and d.speed) or 0
+    inputs.swing_remaining = math.max(0, ((d and d.ends_at) or now) - now)
+    inputs.G = self:get_spell_gcd_duration()
+    inputs.gcd_remaining = (gcd and gcd.expires and math.max(0, gcd.expires - now)) or 0
+    inputs.twist_window = self.PALADIN.get_twist_window_time_before_swing(self)
+    inputs.reaction = (db.nextaction_reaction_time_ms or 100) / 1000
+    inputs.cs_delay_max = (db.nextaction_cs_max_delay_ms or 1700) / 1000
+
+    -- Active seal for the decision tree ("soc" | "sob" | "none"; Command's
+    -- remaining time guards the engine's reseal branch).
+    if na then
+        inputs.seal = na.get_seal_state(self.has_soc, self.has_sob,
+            self.soc_expires and (self.soc_expires - now))
+    else
+        inputs.seal = "none"
+    end
+
+    -- Crusader Strike / Judgement cooldowns. The archive's rules: an unknown CS
+    -- talent means the engine must never see CS available (999 s), and Judgement
+    -- needs no latch of its own.
+    if na and na.CS_SPELL_ID then
+        if api.is_spell_known(na.CS_SPELL_ID) then
+            inputs.cs_remaining = get_guide_cooldown_remaining(self, na.CS_SPELL_ID,
+                "guide_cs_expires")
+        else
+            inputs.cs_remaining = 999
+        end
+        inputs.judge_remaining = na.JUDGEMENT_SPELL_ID
+            and get_guide_cooldown_remaining(self, na.JUDGEMENT_SPELL_ID) or 0
+    else
+        inputs.cs_remaining = 999
+        inputs.judge_remaining = 0
+    end
+
+    -- Filler availability. The engine consumes one cooldown value: the remaining
+    -- time of the filler it would pick. That pick is mirrored here from the data the
+    -- engine itself uses (its own target-type table; the mana thresholds passed
+    -- below), so the two sides always agree. A nil value means the spell is unknown
+    -- on this client, i.e. the archive's known=false.
+    inputs.melee_count = self.guide_melee_count or 0
+    inputs.mana_pct = get_guide_mana_pct()
+    inputs.creature_type = get_guide_creature_type()
+    inputs.gcd_before_swing = self:get_gcd_time_before_swing_seconds("mainhand")
+    inputs.mana_consecration_threshold = db.nextaction_filler_mana_consecration or 35
+    inputs.mana_exorcism_threshold = db.nextaction_filler_mana_exorcism or 30
+    local consecration_remaining
+    local exorcism_remaining
+    if na then
+        if filler_name_consecration == nil and na.CONSECRATION_SPELL_ID then
+            filler_name_consecration = api.GetSpellInfo(na.CONSECRATION_SPELL_ID)
+        end
+        if filler_name_consecration then
+            consecration_remaining = get_guide_cooldown_remaining(self, filler_name_consecration)
+        end
+        if filler_name_exorcism == nil and na.EXORCISM_SPELL_ID then
+            filler_name_exorcism = api.GetSpellInfo(na.EXORCISM_SPELL_ID)
+        end
+        if filler_name_exorcism then
+            exorcism_remaining = get_guide_cooldown_remaining(self, filler_name_exorcism)
+        end
+    end
+    inputs.filler_remaining = nil
+    if na and inputs.creature_type and na.exorcism_target_types
+        and na.exorcism_target_types[inputs.creature_type] then
+        if inputs.mana_pct > inputs.mana_exorcism_threshold then
+            inputs.filler_remaining = exorcism_remaining
+        end
+    elseif na and inputs.mana_pct > inputs.mana_consecration_threshold then
+        inputs.filler_remaining = consecration_remaining
+    end
+
+    -- Judgement-wait carry from the engine's previous output (kept by the display).
+    inputs.waiting_judgement = self.guide_waiting_judgement and true or false
+    return inputs
 end
 
 if st.debug then st.utils.print_msg('-- Parsed classes/paladin.lua module correctly (twist)') end

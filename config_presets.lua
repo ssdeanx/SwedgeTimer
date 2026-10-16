@@ -279,6 +279,23 @@ ST.PALADIN.defaults = {
     twist_success_text_size = 24,
     twist_success_text_duration = 1.5,
 
+    -- Next Action Guide (archived rotation prompt ported to the live addon).
+    nextaction_enabled = true,
+    nextaction_locked = true,
+    nextaction_visibility_key = "in_combat",
+    nextaction_icon_size = 45,
+    nextaction_x = 0,
+    nextaction_y = -180,
+    nextaction_reaction_time_ms = 100,
+    nextaction_cs_max_delay_ms = 1700,
+    nextaction_hold_enabled = true,
+    nextaction_show_rotation_text = true,
+    nextaction_show_label = true,
+    nextaction_show_judgement = true,
+    nextaction_show_fillers = true,
+    nextaction_filler_mana_consecration = 35,
+    nextaction_filler_mana_exorcism = 30,
+
     use_aow_glow = true,
     require_exo_ready = true,
     aow_glow_color = {209, 198, 115, 1.0},

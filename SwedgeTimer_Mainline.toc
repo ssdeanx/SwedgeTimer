@@ -33,8 +33,10 @@ Libs\AceConfig-3.0\AceConfig-3.0.xml
 utils.lua
 twist.lua
 weave.lua
+nextaction.lua
 main.lua
 bars.lua
+nextaction_ui.lua
 config_presets.lua
 option_table_presets.lua
 option_tables.lua

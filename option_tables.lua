@@ -885,6 +885,157 @@ function ST.class_opts_funcs.PALADIN(self)
                 return db.twist_padding_mode ~= "Fixed"
             end,
         },
+        nag_header = {
+            type = "header",
+            order = 5.0,
+            name = "Next Action Guide",
+        },
+        nag_desc = {
+            type = "description",
+            order = 5.05,
+            name = "On-screen rotation prompt: the next ability to press (Crusader Strike, Command, "..
+                "Blood, twist) with HOLD/RIDE and Judgement cues. Drag the frame while it is unlocked to position it.",
+        },
+        nextaction_enabled = {
+            type = "toggle",
+            order = 5.1,
+            name = "Enable",
+            desc = "Show the next action guide.",
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_locked = {
+            type = "toggle",
+            order = 5.11,
+            name = "Lock frame",
+            desc = "Prevent dragging the guide frame.",
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_visibility_key = {
+            type = "select",
+            order = 5.12,
+            name = "Show guide",
+            desc = "When the guide is visible.",
+            values = { always = "Always", in_combat = "In combat" },
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_icon_size = {
+            type = "range",
+            order = 5.13,
+            name = "Icon size",
+            desc = "Guide icon size in pixels.",
+            min = 20, max = 80, step = 1,
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_x = {
+            type = "input",
+            order = 5.14,
+            name = "X position",
+            desc = "Horizontal screen position (dragging the frame also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().nextaction_x or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().nextaction_x = n
+                end
+            end,
+        },
+        nextaction_y = {
+            type = "input",
+            order = 5.15,
+            name = "Y position",
+            desc = "Vertical screen position (dragging the frame also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().nextaction_y or -180)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().nextaction_y = n
+                end
+            end,
+        },
+        nextaction_reaction_time_ms = {
+            type = "range",
+            order = 5.2,
+            name = "Reaction time (ms)",
+            desc = "Assumed player reaction time used by the guide's timing model.",
+            min = 0, max = 350, step = 10,
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_cs_max_delay_ms = {
+            type = "range",
+            order = 5.21,
+            name = "Crusader Strike max delay (ms)",
+            desc = "How late Crusader Strike may be suggested over a twist.",
+            min = 0, max = 3000, step = 50,
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_hold_enabled = {
+            type = "toggle",
+            order = 5.22,
+            name = "Show HOLD/RIDE overlay",
+            desc = "Show the HOLD/RIDE circle on the guide.",
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_show_rotation_text = {
+            type = "toggle",
+            order = 5.23,
+            name = "Show rotation text",
+            desc = "Show the recommended rotation pattern under the guide.",
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_show_label = {
+            type = "toggle",
+            order = 5.24,
+            name = "Show \"Next action:\" label",
+            desc = "Show the small frame label.",
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_show_judgement = {
+            type = "toggle",
+            order = 5.25,
+            name = "Show Judgement cue",
+            desc = "Show the Judgement cue icon when it is time to judge.",
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_show_fillers = {
+            type = "toggle",
+            order = 5.26,
+            name = "Show filler suggestions",
+            desc = "Show Consecration/Exorcism filler suggestions.",
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_filler_mana_consecration = {
+            type = "range",
+            order = 5.3,
+            name = "Consecration mana threshold (%)",
+            desc = "Suggest Consecration only above this mana percentage.",
+            min = 0, max = 100, step = 1,
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_filler_mana_exorcism = {
+            type = "range",
+            order = 5.31,
+            name = "Exorcism mana threshold (%)",
+            desc = "Suggest Exorcism only above this mana percentage.",
+            min = 0, max = 100, step = 1,
+            get = "getter",
+            set = "setter",
+        },
     }
     return opts_group
 end

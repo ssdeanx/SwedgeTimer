@@ -374,6 +374,10 @@ function ST:OnInitialize()
 	self.has_target = false
 	self.has_attackable_target = false
 
+	-- Next-action guide (paladin): landed melee swings this fight; incremented on
+	-- swing start in combat, reset by the guide display when guidance stops.
+	self.guide_melee_count = 0
+
 	self.current_talent_group = api.GetActiveTalentGroup()
 
 	self.form_index = api.GetShapeshiftForm()
@@ -654,6 +658,20 @@ function ST:GCD_DURATIONS_UPDATED(_, phys_length, spell_length)
 	end
 end
 
+function ST:get_spell_gcd_duration()
+	-- Base spell-GCD length in seconds (the lib's reported spell length; 1.5 before
+	-- it has reported). The next-action guide consumes this as the engine's G input.
+	return self.gcd.spell_length or 1.5
+end
+
+function ST:get_gcd_time_before_swing_seconds(hand)
+	-- Precomputed spell-GCD "time before swing" (the spell GCD plus the configured
+	-- marker offset) - the next-action guide's reseal deadline basis. Only the first
+	-- marker is precomputed and its value is hand-independent today; the hand
+	-- argument keeps this accessor symmetric with the other bar accessors.
+	return self.gcd.gcd1_spell_time_before_swing or self:get_spell_gcd_duration()
+end
+
 -----------------------------------------------------------
 -- Latency tracking
 -----------------------------------------------------------
@@ -698,6 +716,12 @@ function ST:SWING_TIMER_START(_, speed, expiration_time, hand)
 	self[hand].speed = speed
 	self[hand].ends_at = expiration_time
 	self:set_bar_color(hand)
+	-- Next-action guide: count melee swings started while in combat (the guide's
+	-- filler suggestion waits for more than two swings; paladins only have a
+	-- mainhand, so one count per swing).
+	if self.player_class == "PALADIN" and self.in_combat then
+		self.guide_melee_count = (self.guide_melee_count or 0) + 1
+	end
 	if self.recent_form_change then
 		self:on_gcd_length_change()
 		self.recent_form_change = false
