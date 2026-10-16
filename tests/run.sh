@@ -56,6 +56,7 @@ run "lua5.1 tests/weave_state.lua" lua5.1 tests/weave_state.lua
 run "lua5.1 tests/swing_source_state.lua" lua5.1 tests/swing_source_state.lua
 run "lua5.1 tests/shaman_state.lua" lua5.1 tests/shaman_state.lua
 run "lua5.1 tests/nextaction_state.lua" lua5.1 tests/nextaction_state.lua
+run "lua5.1 tests/practice_state.lua" lua5.1 tests/practice_state.lua
 run "lua5.1 tests/toc_check.lua" lua5.1 tests/toc_check.lua
 
 # luacheck: exit 1 means warnings only, which is acceptable; exit >= 2 means errors.

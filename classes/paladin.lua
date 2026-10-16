@@ -310,6 +310,7 @@ function ST.PALADIN.on_combat_log_unfiltered(self, _, timestamp, event, hide_cas
             self.PALADIN.on_twist_attempt(self)
         else
             self.twist_attempt_pending = false
+            self.twist_sound_played = false
         end
         return
     end
@@ -329,6 +330,103 @@ end
 --=========================================================================================
 -- Seal twisting: window band and success feedback visuals
 --=========================================================================================
+-- Twist feedback sounds: key -> file map ported from the archived build's bar.lua
+-- (69 entries; the archive's map carries the same key set). The keys are saved option
+-- values (never rename them). DEVIATION from the archive: the archived build shipped
+-- these files under Sounds\ while the live addon ships them under Media\Sounds\
+-- (same file names), so every path below points at the live layout.
+local twist_sounds = {
+    -- Original sounds
+    ["pop"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\pop.ogg",
+    ["bubble-pop"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\bubble-pop.ogg",
+    ["swoosh"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\swoosh.ogg",
+    ["whoopee"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\whoopee.ogg",
+    -- Instruments
+    ["AcousticGuitar"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\AcousticGuitar.ogg",
+    ["Brass"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Brass.mp3",
+    ["Drums"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Drums.ogg",
+    ["Glass"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Glass.mp3",
+    ["SynthChord"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\SynthChord.ogg",
+    ["TempleBellHuge"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\TempleBellHuge.ogg",
+    ["Xylophone"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Xylophone.ogg",
+    -- Alerts & UI
+    ["AirHorn"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\AirHorn.ogg",
+    ["BikeHorn"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\BikeHorn.ogg",
+    ["ErrorBeep"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\ErrorBeep.ogg",
+    ["RingingPhone"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\RingingPhone.ogg",
+    ["RobotBlip"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\RobotBlip.ogg",
+    ["WarningSiren"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\WarningSiren.ogg",
+    ["WaterDrop"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\WaterDrop.ogg",
+    -- Animals
+    ["Bleat"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Bleat.ogg",
+    ["CatMeow2"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\CatMeow2.ogg",
+    ["ChickenAlarm"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\ChickenAlarm.ogg",
+    ["CowMooing"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\CowMooing.ogg",
+    ["GoatBleating"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\GoatBleating.ogg",
+    ["KittenMeow"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\KittenMeow.ogg",
+    ["RoaringLion"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\RoaringLion.ogg",
+    ["RoosterChickenCalls"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\RoosterChickenCalls.ogg",
+    ["SheepBleat"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\SheepBleat.ogg",
+    -- Combat & Action
+    ["Bloodlust"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Bloodlust.ogg",
+    ["BatmanPunch"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\BatmanPunch.ogg",
+    ["Blast"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Blast.ogg",
+    ["BoxingArenaSound"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\BoxingArenaSound.ogg",
+    ["DoubleWhoosh"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\DoubleWhoosh.ogg",
+    ["SharpPunch"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\SharpPunch.ogg",
+    ["Shotgun"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Shotgun.ogg",
+    -- Cartoon & Fun
+    ["Applause"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Applause.ogg",
+    ["BananaPeelSlip"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\BananaPeelSlip.ogg",
+    ["CartoonVoiceBaritone"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\CartoonVoiceBaritone.ogg",
+    ["CartoonWalking"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\CartoonWalking.ogg",
+    ["HeartbeatSingle"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\HeartbeatSingle.ogg",
+    ["SqueakyToyShort"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\SqueakyToyShort.ogg",
+    ["SquishFart"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\SquishFart.ogg",
+    ["TadaFanfare"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\TadaFanfare.ogg",
+    -- Voice Callouts
+    ["Adds"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Adds.ogg",
+    ["Boss"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Boss.ogg",
+    ["DontRelease"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\DontRelease.ogg",
+    ["Empowered"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Empowered.ogg",
+    ["Focus"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Focus.ogg",
+    ["Idiot"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Idiot.ogg",
+    ["OhNo"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\OhNo.ogg",
+    ["Protected"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Protected.ogg",
+    ["Release"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Release.ogg",
+    ["RunAway"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\RunAway.ogg",
+    ["Spread"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Spread.ogg",
+    ["Stack"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Stack.ogg",
+    ["Taunt"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Taunt.ogg",
+    -- Shapes (Markers)
+    ["Circle"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Circle.ogg",
+    ["Cross"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Cross.ogg",
+    ["Diamond"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Diamond.ogg",
+    ["Left"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Left.ogg",
+    ["Moon"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Moon.ogg",
+    ["Right"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Right.ogg",
+    ["Skull"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Skull.ogg",
+    ["Square"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Square.ogg",
+    ["Star"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Star.ogg",
+    ["Triangle"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Triangle.ogg",
+    -- Misc
+    ["Next"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Next.ogg",
+    ["Portal"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Portal.ogg",
+    ["Switch"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Switch.ogg",
+    ["Torch"] = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Torch.ogg",
+}
+
+-- Plays a twist feedback sound by option key (fallback_key covers a nil choice);
+-- no-op when the key has no entry (unknown/renamed key) or the client offers no
+-- PlaySoundFile, so a mismatched setting can never error.
+local function play_twist_sound(db, key, fallback_key)
+    local path = twist_sounds[key or fallback_key]
+    if path == nil or PlaySoundFile == nil then
+        return
+    end
+    PlaySoundFile(path, db.sound_channel or "Master")
+end
+
 -- Fallback colours used whenever a db key is missing (or malformed), so the visuals
 -- are safe to run even before the options lane lands the matching keys.
 local TWIST_MARKER_COLOR = {255, 255, 255, 0.35}
@@ -475,6 +573,13 @@ function ST.PALADIN.on_bar_update(self, hand)
     -- inside the window, idle.
     local color, alpha
     local remaining = math.max(0, d.ends_at - now)
+    -- Twist window sound cue (archive parity, off by default): fires once the bar is
+    -- inside the window, latched so the per-frame tick cannot repeat it; the
+    -- swing-landing handler clears the latch for the next swing.
+    if db.twist_sound_enabled and remaining <= window and self.twist_sound_played ~= true then
+        play_twist_sound(db, db.twist_sound_choice, "pop")
+        self.twist_sound_played = true
+    end
     local gcd_remaining = (self.gcd and self.gcd.expires
         and math.max(0, self.gcd.expires - now)) or 0
     -- Pass raw world latency: the twist lag settings calibrate it inside the
@@ -515,6 +620,12 @@ end
 function ST.PALADIN.on_twist_attempt(self)
     -- Called when a twist attempt registers (two seals active on the swing).
     local db = self:get_class_table()
+    -- Attempt sound is its own toggle and stays independent of the visual feedback
+    -- gates below (archive parity: the archived build played it at the top of its
+    -- attempt handler, ahead of the glow effect).
+    if db.twist_success_sound_enabled then
+        play_twist_sound(db, db.twist_success_sound_choice, "TadaFanfare")
+    end
     if db.twist_enabled == false or db.twist_feedback_enabled == false then
         return
     end

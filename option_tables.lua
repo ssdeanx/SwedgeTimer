@@ -492,6 +492,90 @@ function ST:generate_class_options_table()
     end
 end
 
+-- Sound choices for the Paladin twist feedback options (section 6.x). Labels ported
+-- from the archived build's core.lua; the keys are the saved option values and must
+-- stay in sync with the sound file map in classes/paladin.lua.
+local twist_sound_options = {
+    -- Original sounds
+    ["pop"] = "Pop",
+    ["bubble-pop"] = "Bubble Pop",
+    ["swoosh"] = "Swoosh",
+    ["whoopee"] = "Whoopee",
+    -- Instruments
+    ["AcousticGuitar"] = "Acoustic Guitar",
+    ["Brass"] = "Brass",
+    ["Drums"] = "Drums",
+    ["Glass"] = "Glass",
+    ["SynthChord"] = "Synth Chord",
+    ["TempleBellHuge"] = "Temple Bell",
+    ["Xylophone"] = "Xylophone",
+    -- Alerts & UI
+    ["AirHorn"] = "Air Horn",
+    ["BikeHorn"] = "Bike Horn",
+    ["ErrorBeep"] = "Error Beep",
+    ["RingingPhone"] = "Ringing Phone",
+    ["RobotBlip"] = "Robot Blip",
+    ["WarningSiren"] = "Warning Siren",
+    ["WaterDrop"] = "Water Drop",
+    -- Animals
+    ["Bleat"] = "Bleat",
+    ["CatMeow2"] = "Cat Meow",
+    ["ChickenAlarm"] = "Chicken Alarm",
+    ["CowMooing"] = "Cow Moo",
+    ["GoatBleating"] = "Goat Bleat",
+    ["KittenMeow"] = "Kitten Meow",
+    ["RoaringLion"] = "Roaring Lion",
+    ["RoosterChickenCalls"] = "Rooster Call",
+    ["SheepBleat"] = "Sheep Bleat",
+    -- Combat & Action
+    ["Bloodlust"] = "Bloodlust",
+    ["BatmanPunch"] = "Batman Punch",
+    ["Blast"] = "Blast",
+    ["BoxingArenaSound"] = "Boxing Arena",
+    ["DoubleWhoosh"] = "Double Whoosh",
+    ["SharpPunch"] = "Sharp Punch",
+    ["Shotgun"] = "Shotgun",
+    -- Cartoon & Fun
+    ["Applause"] = "Applause",
+    ["BananaPeelSlip"] = "Banana Peel Slip",
+    ["CartoonVoiceBaritone"] = "Cartoon Voice",
+    ["CartoonWalking"] = "Cartoon Walking",
+    ["HeartbeatSingle"] = "Heartbeat",
+    ["SqueakyToyShort"] = "Squeaky Toy",
+    ["SquishFart"] = "Squish Fart",
+    ["TadaFanfare"] = "Tada Fanfare",
+    -- Voice Callouts
+    ["Adds"] = "Adds",
+    ["Boss"] = "Boss",
+    ["DontRelease"] = "Don't Release",
+    ["Empowered"] = "Empowered",
+    ["Focus"] = "Focus",
+    ["Idiot"] = "Idiot",
+    ["OhNo"] = "Oh No",
+    ["Protected"] = "Protected",
+    ["Release"] = "Release",
+    ["RunAway"] = "Run Away",
+    ["Spread"] = "Spread",
+    ["Stack"] = "Stack",
+    ["Taunt"] = "Taunt",
+    -- Shapes (Markers)
+    ["Circle"] = "Circle",
+    ["Cross"] = "Cross",
+    ["Diamond"] = "Diamond",
+    ["Left"] = "Left",
+    ["Moon"] = "Moon",
+    ["Right"] = "Right",
+    ["Skull"] = "Skull",
+    ["Square"] = "Square",
+    ["Star"] = "Star",
+    ["Triangle"] = "Triangle",
+    -- Misc
+    ["Next"] = "Next",
+    ["Portal"] = "Portal",
+    ["Switch"] = "Switch",
+    ["Torch"] = "Torch",
+}
+
 function ST.class_opts_funcs.PALADIN(self)
     local opts_group = {
         -- class_header = {
@@ -1033,6 +1117,68 @@ function ST.class_opts_funcs.PALADIN(self)
             name = "Exorcism mana threshold (%)",
             desc = "Suggest Exorcism only above this mana percentage.",
             min = 0, max = 100, step = 1,
+            get = "getter",
+            set = "setter",
+        },
+        twist_sounds_header = {
+            type = "header",
+            order = 6.0,
+            name = "Twist Sounds",
+        },
+        twist_sounds_desc = {
+            order = 6.05,
+            type = "description",
+            name = "Optional sound cues for seal twisting: one when the twist window opens, and one when a "..
+                "twist attempt lands. All sounds are off by default.",
+        },
+        twist_sound_enabled = {
+            type = "toggle",
+            order = 6.1,
+            name = "Window sound",
+            desc = "Play a sound when the swing enters the twist window.",
+            get = "getter",
+            set = "setter",
+        },
+        twist_sound_choice = {
+            type = "select",
+            order = 6.2,
+            name = "Window sound effect",
+            desc = "Which sound to play when the twist window opens.",
+            values = twist_sound_options,
+            get = "getter",
+            set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.twist_sound_enabled
+            end,
+        },
+        twist_success_sound_enabled = {
+            type = "toggle",
+            order = 6.3,
+            name = "Twist attempt sound",
+            desc = "Play a sound when a twist attempt lands (two seals active on the swing).",
+            get = "getter",
+            set = "setter",
+        },
+        twist_success_sound_choice = {
+            type = "select",
+            order = 6.4,
+            name = "Twist attempt sound effect",
+            desc = "Which sound to play when a twist attempt lands.",
+            values = twist_sound_options,
+            get = "getter",
+            set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.twist_success_sound_enabled
+            end,
+        },
+        sound_channel = {
+            type = "select",
+            order = 6.5,
+            name = "Sound channel",
+            desc = "Audio channel for the twist sounds. Master bypasses SFX mute.",
+            values = {Master="Master", SFX="SFX", Music="Music", Ambience="Ambience"},
             get = "getter",
             set = "setter",
         },

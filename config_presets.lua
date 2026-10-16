@@ -279,6 +279,13 @@ ST.PALADIN.defaults = {
     twist_success_text_size = 24,
     twist_success_text_duration = 1.5,
 
+    -- Twist feedback sounds (ported from the archived build; all off by default).
+    twist_sound_enabled = false,
+    twist_sound_choice = "pop",
+    twist_success_sound_enabled = false,
+    twist_success_sound_choice = "TadaFanfare",
+    sound_channel = "Master",
+
     -- Next Action Guide (archived rotation prompt ported to the live addon).
     nextaction_enabled = true,
     nextaction_locked = true,
