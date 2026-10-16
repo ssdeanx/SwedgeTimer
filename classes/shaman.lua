@@ -202,7 +202,7 @@ end
 -- The player's live cast/channel window. UnitCastingInfo and UnitChannelInfo do NOT share
 -- a return shape: casting returns castID before notInterruptible and the spell id 9th,
 -- channeling has no castID and the spell id 8th (verified against the generated client
--- documentation on every family branch). Returns name, spell_id, duration seconds,
+-- documentation on every family branch). Returns name, spell_id, start-time and
 -- end-time seconds (ms/1000 keeps the GetTime() domain for DELAYED re-anchoring).
 local function get_live_player_cast()
 	local name, _, _, start_ms, end_ms, _, _, _, spell_id = api.UnitCastingInfo("player")
@@ -212,7 +212,7 @@ local function get_live_player_cast()
 	if type(start_ms) ~= "number" or type(end_ms) ~= "number" or end_ms <= start_ms then
 		return nil, nil, nil, nil
 	end
-	return name, spell_id, (end_ms - start_ms) / 1000, end_ms / 1000
+	return name, spell_id, start_ms / 1000, end_ms / 1000
 end
 
 -- Record the start (or delay) of a tracked cast. The client's live start/end window wins

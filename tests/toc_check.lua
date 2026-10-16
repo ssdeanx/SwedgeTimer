@@ -180,6 +180,25 @@ for _, toc in ipairs(tocs) do
         check(compat_index and main_index and compat_index < main_index,
             toc .. ": compat.lua before main.lua")
 
+        -- P9 load order: swing_source.lua needs compat's st.family/st.api and must load
+        -- before main.lua (which reads st.swing_source while it loads); weave.lua is pure
+        -- and loads before main.lua; class modules load after main.lua.
+        local swing_source_index, weave_index, twist_index, shaman_index
+        for i, entry in ipairs(entries) do
+            if entry == "swing_source.lua" and swing_source_index == nil then swing_source_index = i end
+            if entry == "weave.lua" and weave_index == nil then weave_index = i end
+            if entry == "twist.lua" and twist_index == nil then twist_index = i end
+            if entry == "classes\\shaman.lua" and shaman_index == nil then shaman_index = i end
+        end
+        check(compat_index and swing_source_index and swing_source_index > compat_index
+                and main_index and swing_source_index < main_index,
+            toc .. ": compat.lua before swing_source.lua before main.lua")
+        check(twist_index and weave_index and main_index
+                and twist_index < weave_index and weave_index < main_index,
+            toc .. ": twist.lua before weave.lua before main.lua")
+        check(shaman_index and main_index and shaman_index > main_index,
+            toc .. ": classes\\shaman.lua loads after main.lua")
+
         -- every addon .lua module on disk is listed
         for _, module_path in ipairs(root_modules) do
             check(seen[module_path] == true, toc .. ": lists " .. module_path)
