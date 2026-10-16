@@ -49,6 +49,9 @@ end
 env.UnitCastingInfo = function() return casting_impl() end
 env.UnitChannelInfo = function() return channel_impl() end
 env.UnitSpellHaste = function() return 0 end
+-- compat reads some legacy globals through _G (annotation-safe path); mirror the
+-- sandbox stubs so is_spell_known resolves against them here too.
+_G.IsSpellKnown = env.IsSpellKnown
 
 local st = {}
 local class_db = { weave_mw_enabled = true }

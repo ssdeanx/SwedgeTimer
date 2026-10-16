@@ -28,7 +28,15 @@ end
 -- opts: project (WOW_PROJECT_ID or nil), interface (TOC fallback), globals (extra
 -- environment entries), ST (addon table for module tests), module (path to load
 -- after compat.lua).
+-- Some compat wrappers read legacy globals through _G (annotation-safe on Mainline-code
+-- clients); mirror each profile's stubs into the real _G so those reads resolve here too.
+local mirrored_globals = {}
+
 local function build_profile(opts)
+    for k in pairs(mirrored_globals) do
+        _G[k] = nil
+        mirrored_globals[k] = nil
+    end
     local env = setmetatable({}, { __index = _G })
     env.WOW_PROJECT_ID = opts.project
     env.WOW_PROJECT_CLASSIC = 2
@@ -42,6 +50,10 @@ local function build_profile(opts)
     end
     for k, v in pairs(opts.globals or {}) do
         env[k] = v
+    end
+    for k, v in pairs(opts.globals or {}) do
+        _G[k] = v
+        mirrored_globals[k] = true
     end
     local st = {}
     st.utils = {
