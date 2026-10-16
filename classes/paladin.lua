@@ -119,11 +119,12 @@ function ST.PALADIN.post_init(self)
     -- LibClassicDurations: registering is what makes it track auras (it hooks
     -- COMBAT_LOG_EVENT_UNFILTERED on its own frame), and without it every
     -- GetAuraDurationByUnit read returns nil. Done here rather than at file load so it
-    -- runs after login with the library's playerClass-dependent branches valid, and so
-    -- a paladin-only addon never turns it on for other classes' clients. No-op off
-    -- Classic Era / TBC Anniversary, where the library never registered itself (see the
-    -- header block). pcall keeps a library-side failure from breaking post_init: the
-    -- guide then simply keeps using its hardcoded seal duration.
+    -- runs after login (post_init waits for the swing-engine / range libraries, so a seal
+    -- applied before that simply is not tracked yet and the guide uses its constant until
+    -- the first tracked application) and so a paladin-only addon never turns it on for
+    -- other classes' clients. No-op off Classic Era / TBC Anniversary, where the library
+    -- never registered itself (see the header block). pcall keeps a library-side failure
+    -- from breaking post_init: the guide then keeps using its hardcoded seal duration.
     if lcd_aura_duration and type(LCD.Register) == "function" then
         pcall(LCD.Register, LCD, addon_name)
     end
