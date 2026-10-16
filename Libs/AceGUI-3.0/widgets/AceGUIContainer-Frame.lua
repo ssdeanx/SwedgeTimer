@@ -1,7 +1,7 @@
 --[[-----------------------------------------------------------------------------
 Frame Container
 -------------------------------------------------------------------------------]]
-local Type, Version = "Frame", 30
+local Type, Version = "Frame", 28
 local AceGUI = LibStub and LibStub("AceGUI-3.0", true)
 if not AceGUI or (AceGUI:GetWidgetVersion(Type) or 0) >= Version then return end
 
@@ -12,6 +12,10 @@ local wipe = table.wipe
 -- WoW APIs
 local PlaySound = PlaySound
 local CreateFrame, UIParent = CreateFrame, UIParent
+
+-- Global vars/functions that we don't upvalue since they might get hooked, or upgraded
+-- List them here for Mikk's FindGlobals script
+-- GLOBALS: CLOSE
 
 --[[-----------------------------------------------------------------------------
 Scripts
@@ -186,9 +190,8 @@ local function Constructor()
 	frame:SetFrameLevel(100) -- Lots of room to draw under it
 	frame:SetBackdrop(FrameBackdrop)
 	frame:SetBackdropColor(0, 0, 0, 1)
-	if frame.SetResizeBounds then -- WoW 10.0
-		frame:SetResizeBounds(400, 200)
-	else
+	-- TBC Classic compatibility: SetMinResize doesn't exist in TBC
+	if frame.SetMinResize then
 		frame:SetMinResize(400, 200)
 	end
 	frame:SetToplevel(true)
@@ -271,7 +274,7 @@ local function Constructor()
 	line2:SetHeight(8)
 	line2:SetPoint("BOTTOMRIGHT", -8, 8)
 	line2:SetTexture(137057) -- Interface\\Tooltips\\UI-Tooltip-Border
-	x = 0.1 * 8/17
+	local x = 0.1 * 8/17
 	line2:SetTexCoord(0.05 - x, 0.5, 0.05, 0.5 + x, 0.05, 0.5 - x, 0.5 + x, 0.5)
 
 	local sizer_s = CreateFrame("Frame", nil, frame)

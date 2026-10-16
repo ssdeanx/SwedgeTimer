@@ -14,8 +14,11 @@ local get_tab = st.utils.convert_lookup_table
 -- Heroic Strike, all ranks across the classic families (vanilla -> BCC -> WotLK).
 -- The lookup table keeps every rank id; get_family_spell_id picks the highest id
 -- that exists on the running client (the current rank).
+-- Mortal Strike (29707 / 30324) is deliberately NOT in this table: it outranks the TBC
+-- Heroic Strike id, so get_family_spell_id would pick it there and query the wrong rage
+-- cost.
 local hs_ids = get_tab({
-    47450, 47449, 30324, 29707, 25286, 11567, 11566,
+    47450, 47449, 25286, 11567, 11566,
     11565, 11564, 1608, 285, 284, 78
 })
 
@@ -32,38 +35,48 @@ local cleave_current_id
 local bloodsurge_id = 46916
 
 
-function ST.WARRIOR.on_rage_update(self)
-    if (not self.hs_queued) and (not self.cleave_queued) then
-        self.insufficient_rage = false
-        return
+-- Resolves the highest rank that exists on the running client exactly once. A negative
+-- result is latched as false too, so a client without the spell stops re-walking the
+-- whole table on every power tick.
+local function resolve_rank(ids, cached)
+    if cached == nil then
+        return api.get_family_spell_id(ids) or false
     end
-    
-    if self.hs_queued then
-        hs_current_id = hs_current_id or api.get_family_spell_id(hs_ids)
-        local costs = hs_current_id and api.GetSpellPowerCost(hs_current_id)
-        local rage_cost = costs and costs[1] and costs[1].cost
-        local power = UnitPower("player")
-        if rage_cost and power < rage_cost then
-            self.insufficient_rage = true
-            self:set_bar_color("mainhand")
-        else
-            self.insufficient_rage = false
-        end
-        return
-    end
+    return cached
+end
 
+-- Compares the current rage against the queued ability cost and recolours only when the
+-- state actually changes: UNIT_POWER_FREQUENT fires several times a second.
+local function update_rage_state(self, spell_id)
+    local costs = spell_id and api.GetSpellPowerCost(spell_id)
+    local rage_cost = costs and costs[1] and costs[1].cost
+    local power = api.UnitPower("player")
+    -- No cost data (unlearned spell, client we cannot read) means we cannot claim the
+    -- player is short of rage; a non-numeric reading (or a secret value on a modern
+    -- client) degrades the same way instead of erroring on the comparison.
+    local insufficient = false
+    if type(rage_cost) == "number" and type(power) == "number" then
+        insufficient = power < rage_cost
+    end
+    if self.insufficient_rage ~= insufficient then
+        self.insufficient_rage = insufficient
+        self:set_bar_color("mainhand")
+    end
+end
+
+function ST.WARRIOR.on_rage_update(self)
+    if self.hs_queued then
+        hs_current_id = resolve_rank(hs_ids, hs_current_id)
+        return update_rage_state(self, hs_current_id or nil)
+    end
     if self.cleave_queued then
-        cleave_current_id = cleave_current_id or api.get_family_spell_id(cleave_ids)
-        local costs = cleave_current_id and api.GetSpellPowerCost(cleave_current_id)
-        local rage_cost = costs and costs[1] and costs[1].cost
-        local power = UnitPower("player")
-        if rage_cost and power < rage_cost then
-            self.insufficient_rage = true
-            self:set_bar_color("mainhand")
-        else
-            self.insufficient_rage = false
-        end
-        return
+        cleave_current_id = resolve_rank(cleave_ids, cleave_current_id)
+        return update_rage_state(self, cleave_current_id or nil)
+    end
+    -- Nothing queued: clear a stale "insufficient rage" colour left by the last fight.
+    if self.insufficient_rage then
+        self.insufficient_rage = false
+        self:set_bar_color("mainhand")
     end
 end
 
@@ -119,7 +132,12 @@ function ST.WARRIOR.on_current_spell_cast_changed(self, is_cancelled)
         self.hs_queued = false
     end
 
-    -- If we get here, cleave color is enabled and no HS queued so check that always.
+    -- No HS queued. Only probe Cleave when its colour is enabled, so the flag can never
+    -- stay stale while the option is off.
+    if not db.enable_cleave_color then
+        self.cleave_queued = false
+        return
+    end
     for spell_id in pairs(cleave_ids) do
         local result = api.IsCurrentSpell(spell_id)
         if result then
@@ -137,7 +155,9 @@ function ST.WARRIOR.on_aura_change(self)
     -- Iterate all player auras
     local i = 1
     while true do
-        local name, _, _, _, _, _, _, _, _, spell_id = api.UnitAura("player", i)
+        -- "HELPFUL" explicitly: the Retail wrapper forwards the filter into
+        -- C_UnitAuras.GetAuraDataByIndex, where it is a typed enum argument.
+        local name, _, _, _, _, _, _, _, _, spell_id = api.UnitAura("player", i, "HELPFUL")
         if name == nil then
             break
         end
@@ -171,20 +191,45 @@ end
 
 function ST.WARRIOR.process_bloodsurge(self)
     local db = self:get_class_table()
-    if not self.has_bloodsurge then
-        self.WARRIOR.glow_stop(self)
+    local should_glow = (self.has_bloodsurge and db.use_bloodsurge_glow) and true or false
+    -- LibCustomGlow pools its glow frames: re-starting (or stopping twice) on every aura
+    -- event churns the pool and can double-release the frame, so only transition when
+    -- the state actually changes.
+    if should_glow == self.bloodsurge_glow_active then
         return
     end
-    if not db.use_bloodsurge_glow then
+    self.bloodsurge_glow_active = should_glow
+    if should_glow then
+        self.WARRIOR.glow_start(self)
+    else
         self.WARRIOR.glow_stop(self)
-        return
     end
-    self.WARRIOR.glow_start(self)
 end
 
 function ST.WARRIOR.glow_stop(self)
     local frame = self:get_bar_frame("mainhand")
     LCG.PixelGlow_Stop(frame)
+end
+
+function ST.WARRIOR.post_init(self)
+    -- Starts settled so the first process_bloodsurge does not emit a spurious stop on
+    -- an already-idle frame.
+    self.bloodsurge_glow_active = false
+    self.hs_queued = false
+    self.cleave_queued = false
+    self.insufficient_rage = false
+end
+
+function ST.WARRIOR.on_combat_exit(self)
+    -- A queued ability dies with the fight; without this the bar can keep the HS /
+    -- Cleave / insufficient-rage colour into the next pull.
+    self.hs_queued = false
+    self.cleave_queued = false
+    self.insufficient_rage = false
+    self.WARRIOR.process_bloodsurge(self)
+    if self.interfaces_are_initialised then
+        self:set_bar_color("mainhand")
+    end
 end
 
 function ST.WARRIOR.set_bar_color(self, hand)

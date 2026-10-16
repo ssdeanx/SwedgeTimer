@@ -27,8 +27,20 @@ local ui = st.nextaction_ui
 local FADE_DURATION = 0.2               -- the WA's preset fade in/out time
 local BASE_ICON_SIZE = 45               -- everything is authored at WA scale
 local UPDATE_INTERVAL = 0.05            -- engine tick, matches the WA's aura poll cadence
-local CS_COOLDOWN = 6                   -- full CS cooldown (swipe duration), seconds
-local JUDGEMENT_COOLDOWN = 8            -- full Judgement cooldown (swipe duration)
+-- Fallback swipe lengths, used only while no real duration has been observed yet (the
+-- paladin module latches the length the client reported for each spell cooldown in
+-- get_guide_cooldown_remaining and hands it over as inputs.cs_duration /
+-- inputs.judge_duration; LibClassicDurations is aura-based and knows nothing about spell
+-- cooldowns, so the latch is the only real source here).
+local CS_COOLDOWN = 6                   -- fallback full CS cooldown (swipe duration), seconds
+local JUDGEMENT_COOLDOWN = 8            -- fallback full Judgement cooldown (swipe duration)
+-- Fallback seal swipe length: the vanilla/TBC seal duration the archived build used
+-- (docs/swedge/SwedgeTimer_TBC/player.lua seal_1_duration). When LibClassicDurations
+-- exists AND tracks the seal's aura (Classic Era / TBC Anniversary only, see the header
+-- block in classes/paladin.lua), the paladin module latches that length into
+-- self.soc_duration / self.sob_duration and that value is used instead; untracked auras,
+-- Seal of Blood everywhere, and every other client family land on this constant.
+local SEAL_DURATION = 30
 -- Crisp circle texture ported from the archive's Images/ (shipped as
 -- Media/Textures/circle_smooth.tga). The plain-texture fallback below stays for
 -- profiles where the asset is missing; a missing texture file never raises.
@@ -194,11 +206,11 @@ function ui.init(self)
     frame.icon_cs:SetPoint("CENTER", frame, "CENTER", 0, 0)
 
     frame.icon_command = create_wa_icon(frame, "IconCommand", 45, 45, na.SOC_ID,
-        { level = 3 })
+        { cooldown = true, level = 3 })
     frame.icon_command:SetPoint("CENTER", frame, "CENTER", 0, 0)
 
     frame.icon_blood = create_wa_icon(frame, "IconBlood", 45, 45, na.SOB_ID,
-        { level = 5 })
+        { cooldown = true, level = 5 })
     frame.icon_blood:SetPoint("CENTER", frame, "CENTER", 0, 0)
 
     -- Twist: full Command icon with a half-width, center-cropped Blood icon over
@@ -349,6 +361,26 @@ local function set_icon_cooldown(icon, remaining, full_duration)
     end
 end
 
+-- Seal swipe, same inverse swizzle and same "set once per cooldown" pattern as the
+-- spell icons: expires is the seal aura's expirationTime, latched by the paladin module
+-- in the same GetTime() domain as api.get_time(), so the remaining time is exact and
+-- needs no per-frame state of its own. It is only ever non-zero while the aura is up (a
+-- dropped seal clears the expiry, and the practice mirror supplies no expiry at all),
+-- which is what keeps the swipe from appearing on a seal that is not there. full_duration
+-- is the length LibClassicDurations reported for this aura (Era/TBC only) or nil, in
+-- which case the archived vanilla/TBC constant applies — identical behaviour on every
+-- family where the library does not load.
+local function set_seal_icon_cooldown(icon, expires, full_duration)
+    local remaining = 0
+    if expires and expires > 0 then
+        remaining = expires - api.get_time()
+        if remaining < 0 then
+            remaining = 0
+        end
+    end
+    set_icon_cooldown(icon, remaining, full_duration or SEAL_DURATION)
+end
+
 -- Rotation text (the engine's pattern key resolved through its display names) and
 -- the static "Next action:" label.
 local function update_texts(self, na, inputs)
@@ -414,13 +446,20 @@ local function display_active(self, inputs, out)
     set_element_targets(frame, cs_target, command_target, blood_target, twist_target,
         judge_target, hold_target, consec_target, exo_target)
 
-    -- Cooldown swipes on the CS and Judgement icons (inverse, like the WA). The
-    -- remaining times are the same latched reads the engine consumed this tick.
+    -- Cooldown swipes on the CS, Judgement and seal icons (inverse, like the WA). The
+    -- remaining times are the same latched reads the engine consumed this tick; the swipe
+    -- lengths prefer what the client actually reported (inputs.cs_duration /
+    -- inputs.judge_duration, latched by the paladin module) and fall back to the
+    -- constants. The seal swipes are driven from the seal mirror rather than the engine's
+    -- pick, so they are correct on whichever seal icon is the one on screen.
     local cs_remaining = inputs.cs_remaining or out.cs_remaining or 0
     local judge_remaining = inputs.judge_remaining or out.judge_remaining or 0
-    set_icon_cooldown(frame.icon_cs, cs_target > 0 and cs_remaining or 0, CS_COOLDOWN)
+    set_icon_cooldown(frame.icon_cs, cs_target > 0 and cs_remaining or 0,
+        inputs.cs_duration or CS_COOLDOWN)
     set_icon_cooldown(frame.icon_judge, judge_target > 0 and judge_remaining or 0,
-        JUDGEMENT_COOLDOWN)
+        inputs.judge_duration or JUDGEMENT_COOLDOWN)
+    set_seal_icon_cooldown(frame.icon_command, self.soc_expires, self.soc_duration)
+    set_seal_icon_cooldown(frame.icon_blood, self.sob_expires, self.sob_duration)
 
     -- Pixel glow on the Judgement cue (WA subglow: Pixel, 8 lines, 0.25 frequency,
     -- length 10, thickness 1).
@@ -442,6 +481,10 @@ local function display_idle(self, inputs)
     set_element_targets(frame, 0, 0, 0.5, 0, 0, 0, 0, 0)
     set_icon_cooldown(frame.icon_cs, 0, CS_COOLDOWN)
     set_icon_cooldown(frame.icon_judge, 0, JUDGEMENT_COOLDOWN)
+    -- Archive parity: the idle opener carries no swipes, so the seal swipes are cleared
+    -- here too (out of combat the engine is not consulted at all).
+    set_icon_cooldown(frame.icon_command, 0, SEAL_DURATION)
+    set_icon_cooldown(frame.icon_blood, 0, SEAL_DURATION)
     if ui.judge_glowing then
         ui.judge_glowing = false
         LCG.PixelGlow_Stop(frame.icon_judge, "NextActionJudge")

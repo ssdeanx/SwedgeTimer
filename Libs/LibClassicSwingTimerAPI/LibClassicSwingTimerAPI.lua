@@ -46,15 +46,15 @@ local isCata = WOW_PROJECT_ID == WOW_PROJECT_CATACLYSM_CLASSIC and LE_EXPANSION_
 local isMists = WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC and LE_EXPANSION_MISTS_OF_PANDARIA == LE_EXPANSION_MISTS_OF_PANDARIA
 local isClassicOrBCCOrWrathOrCata = isClassic or isBCC or isWrath or isCata
 
-local reset_swing_spells = nil
-local reset_swing_on_channel_stop_spells = nil
-local prevent_swing_speed_update = nil
-local next_melee_spells = nil
-local noreset_swing_spells = nil
-local prevent_reset_swing_auras = nil
-local pause_swing_spells = nil
-local ranged_swing = nil
-local reset_ranged_swing = nil
+local reset_swing_spells = {}
+local reset_swing_on_channel_stop_spells = {}
+local prevent_swing_speed_update = {}
+local next_melee_spells = {}
+local noreset_swing_spells = {}
+local prevent_reset_swing_auras = {}
+local pause_swing_spells = {}
+local ranged_swing = {}
+local reset_ranged_swing = {}
 
 local Unit = {
 	id = nil,
@@ -414,21 +414,24 @@ function lib:COMBAT_LOG_EVENT_UNFILTERED(_, ts, subEvent, _, sourceGUID, _, _, _
 		end
 	elseif subEvent == "SWING_MISSED" and amount ~= nil and amount == "PARRY" and lib:getUnit(destGUID) then
 		unit = lib:getUnit(destGUID)
-		if unit.mainTimer then
-			unit.mainTimer:Cancel()
-		end
-		local swing_timer_reduced_40p = unit.mainExpirationTime - (0.4 * unit.mainSpeed)
-		local min_swing_time = 0.2 * unit.mainSpeed
-		if swing_timer_reduced_40p < min_swing_time then
-			unit.mainExpirationTime = min_swing_time
-		else
-			unit.mainExpirationTime = swing_timer_reduced_40p
-		end
-		self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", unit.id, unit.mainSpeed, unit.mainExpirationTime, "mainhand")
-		if unit.mainSpeed > 0 and unit.mainExpirationTime - GetTime() > 0 then
-			unit.mainTimer = C_Timer.NewTimer(unit.mainExpirationTime - GetTime(), function()
-				unit:SwingEnd("mainhand")
-			end)
+		if unit and unit.mainSpeed and unit.mainExpirationTime then
+			if unit.mainTimer then
+				unit.mainTimer:Cancel()
+			end
+			local mainSpeed = unit.mainSpeed
+			local swing_timer_reduced_40p = unit.mainExpirationTime - (0.4 * mainSpeed)
+			local min_swing_time = 0.2 * mainSpeed
+			if swing_timer_reduced_40p < min_swing_time then
+				unit.mainExpirationTime = min_swing_time
+			else
+				unit.mainExpirationTime = swing_timer_reduced_40p
+			end
+			self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", unit.id, mainSpeed, unit.mainExpirationTime, "mainhand")
+			if mainSpeed > 0 and unit.mainExpirationTime - GetTime() > 0 then
+				unit.mainTimer = C_Timer.NewTimer(unit.mainExpirationTime - GetTime(), function()
+					unit:SwingEnd("mainhand")
+				end)
+			end
 		end
 	elseif (subEvent == "SPELL_AURA_APPLIED" or subEvent == "SPELL_AURA_REMOVED") and unit then
 		local spell = amount
@@ -578,14 +581,14 @@ function lib:UNIT_SPELLCAST_SUCCEEDED(_, unitType, _, spell)
 		return
 	end
 	local now = GetTime()
-	if spell ~= nil and next_melee_spells[spell] then
+	if spell ~= nil and next_melee_spells and next_melee_spells[spell] then
 		unit:SwingStart("mainhand", now, false)
 		if isWrath or isCata then
 			unit:SwingStart("ranged", now, true)
 		end
 	end
-	if (spell and reset_swing_spells[spell]) or (unit.casting and not unit.preventSwingReset) then
-		if isRetail then		
+	if (spell and reset_swing_spells and reset_swing_spells[spell]) or (unit.casting and not unit.preventSwingReset) then
+		if isRetail then
 			unit:SwingStart("mainhand", now, true)
 		else
 			-- Do not skip the attack speed update if we reset the timer
@@ -594,14 +597,14 @@ function lib:UNIT_SPELLCAST_SUCCEEDED(_, unitType, _, spell)
 			unit:SwingStart("offhand", now, true)
 		end
 	end
-	if spell and ranged_swing[spell] then
-		if (isRetail or isMists) then		
+	if spell and ranged_swing and ranged_swing[spell] then
+		if (isRetail or isMists) then
 			unit:SwingStart("mainhand", now, false)
 		else
 			unit:SwingStart("ranged", now, false)
 		end
 	end
-	if spell and pause_swing_spells[spell] and unit.pauseSwingTime then
+	if spell and pause_swing_spells and pause_swing_spells[spell] and unit.pauseSwingTime then
 		local offset = now - unit.pauseSwingTime
 		unit.pauseSwingTime = nil
 		if unit.mainSpeed > 0 then
@@ -662,11 +665,20 @@ function lib:UNIT_SPELLCAST_START(_, unitType, _, spell)
 	if spell then
 		local now = GetTime()
 		local name, rank, icon, castTime, minRange, maxRange, spellId = GetSpellInfo(spell)
+		if name and rank and icon and castTime and minRange and maxRange and spellId then
+			unit.lastCastName = name
+			unit.lastCastRank = rank
+			unit.lastCastIcon = icon
+			unit.lastCastTime = castTime
+			unit.lastCastMinRange = minRange
+			unit.lastCastMaxRange = maxRange
+			unit.lastCastSpellId = spellId
+		end
 		unit.casting = true
-		unit.preventSwingReset = unit.auraPreventSwingReset or noreset_swing_spells[spell]
-		if spell and pause_swing_spells[spell] then
+		unit.preventSwingReset = unit.auraPreventSwingReset or (noreset_swing_spells and noreset_swing_spells[spell])
+		if pause_swing_spells and pause_swing_spells[spell] then
 			unit.pauseSwingTime = now
-			if unit.mainSpeed > 0 and unit.mainExpirationTime > now then
+			if unit.mainSpeed and unit.mainSpeed > 0 and unit.mainExpirationTime and unit.mainExpirationTime > now then
 				self.callbacks:Fire("UNIT_SWING_TIMER_PAUSED", unit.id, "mainhand")
 				if unit.mainTimer then
 					unit.mainTimer:Cancel()
@@ -806,7 +818,10 @@ local EventHandler = function(event, ...)
 	-- Backward compatibility continue to fire EVENTS with SWING_TIMER_ format for player unit.
 	local unitId = select(1,...)
 	if unitId == "player" then
-		lib.callbacks:Fire(string.gsub(event,"UNIT_",""), select(2,...))
+		local legacyEvent = event:gsub("^UNIT_", "")
+		if legacyEvent ~= event then
+			lib.callbacks:Fire(legacyEvent, ...)
+		end
 	end
 	-- Fire EVENTS in Weakauras if the addon is loaded
 	if WeakAuras ~= nil then
@@ -1421,10 +1436,7 @@ elseif isMists then
 		[1464] = true, -- Slam
 		[16914] = true, -- Hurricane
 		
-		[12051] = true, -- Evocation
 		[120360] = true, -- Barrage
-		[56641] = true, -- Steady Shot
-		[19434] = true, -- Aimed Shot
 		[113656] = true, -- Fists of Fury
 		[123986] = true, -- Chi Burst	
 		[107270] = true, -- Spinning Crane Kick

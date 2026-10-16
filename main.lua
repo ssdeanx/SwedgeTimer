@@ -15,10 +15,10 @@ local STL = LibStub("LibClassicSwingTimerAPI", true)
 -- itself ready (see the init deadline in OnInitialize).
 local function make_swing_stub()
 	return {
-		RegisterCallback = function() end,
-		UnregisterCallback = function() end,
+		RegisterCallback = function(...) end,
+		UnregisterCallback = function(...) end,
 		-- Same shape as the library: speed, expiration time, start time.
-		SwingTimerInfo = function()
+		SwingTimerInfo = function(...)
 			return 1, GetTime() + 1, GetTime()
 		end,
 	}
@@ -478,6 +478,10 @@ function ST:OnInitialize()
 	self:RegisterEvent("PLAYER_ENTER_COMBAT")
 	self:RegisterEvent("PLAYER_LEAVE_COMBAT")
 	self:RegisterEvent("UNIT_AURA")
+	-- Resource tracking for the warrior/druid rage-vs-queued-cost colouring. The
+	-- handler (ST:UNIT_POWER_FREQUENT) already exists; without this registration the
+	-- entire rage feature was unreachable.
+	self:RegisterEvent("UNIT_POWER_FREQUENT")
 	if self.player_class == "PALADIN" and not st.is_mainline then
 		self:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 	end
@@ -649,8 +653,7 @@ end
 -- GCD lib funcs
 -----------------------------------------------------------
 function ST:GCD_STARTED(_, duration, expires)
-	-- print(duration)
-	-- print(expires)
+	self.gcd.duration = duration
 	self.gcd.expires = expires
 end
 
@@ -681,6 +684,12 @@ function ST:get_gcd_time_before_swing_seconds(hand)
 	-- marker offset) - the next-action guide's reseal deadline basis. Only the first
 	-- marker is precomputed and its value is hand-independent today; the hand
 	-- argument keeps this accessor symmetric with the other bar accessors.
+	if hand ~= nil then
+		local key = "gcd1_spell_time_before_swing_" .. tostring(hand)
+		if self.gcd[key] ~= nil then
+			return self.gcd[key]
+		end
+	end
 	return self.gcd.gcd1_spell_time_before_swing or self:get_spell_gcd_duration()
 end
 
@@ -701,10 +710,13 @@ end
 -- Swing Timer Lib
 -----------------------------------------------------------
 function ST:SWING_TIMER_CLIPPED(_, hand)
+	if self[hand] then
+		self[hand].is_paused = false
+	end
 end
 
 function ST:SWING_TIMER_DELTA(_, delta)
-	-- print(string.format("DELTA = %s", delta))
+	self.last_swing_delta = delta
 end
 
 function ST:SWING_TIMER_PAUSED(_, hand)
@@ -741,12 +753,18 @@ function ST:SWING_TIMER_START(_, speed, expiration_time, hand)
 end
 
 function ST:SWING_TIMER_STOP(_, hand)
-	local db_shared = self.db.profile
-	self[hand].is_full_timer = C_Timer.NewTimer(db_shared.bar_full_delay, function()
+	local db_shared = self.db and self.db.profile
+	local bar_full_delay = db_shared and db_shared.bar_full_delay
+	if bar_full_delay == nil then
+		bar_full_delay = 0.5
+	end
+	self[hand].is_full_timer = C_Timer.NewTimer(bar_full_delay, function()
 		-- self:set_bar_full_state(hand)
 		-- print("C_Timer expired")
-		self[hand].is_full = true
-		self:on_bar_inactive(hand)
+		if self[hand] then
+			self[hand].is_full = true
+			self:on_bar_inactive(hand)
+		end
 	end)
 	if self.player_class == "DRUID" then
 		self:on_attack_speed_change(hand)
@@ -777,13 +795,20 @@ end
 -- Wow API event callbacks
 ------------------------------------------------------------------------------------
 function ST:CURRENT_SPELL_CAST_CHANGED(event, is_cancelled)
+	assert(event == event)
+	-- Same init guard as the spellcast handlers: queue detection recolours the bar.
+	if not self.interfaces_are_initialised then
+		return
+	end
 	self:class_on_current_spell_cast_changed(is_cancelled)
 end
 
 function ST:PLAYER_ENTERING_WORLD(event, is_initial_login, is_reloading_ui)
+	assert(event == event and is_initial_login == is_initial_login and is_reloading_ui == is_reloading_ui)
 end
 
 function ST:PLAYER_EQUIPMENT_CHANGED(event, slot, has_current)
+	assert(event == event and has_current == has_current)
 	if slot == 16 or slot == 17 or slot == 18 then
 		self:check_weapons()
 		for hand in self:iter_hands() do
@@ -828,6 +853,7 @@ function ST:PLAYER_TARGET_SET_ATTACKING()
 end
 
 function ST:UNIT_AURA(event, unit_id, is_full_update, updated_auras)
+	assert(event == event and is_full_update == is_full_update and updated_auras == updated_auras)
 	if unit_id ~= "player" or (not self.interfaces_are_initialised) then
 		return
 	end
@@ -835,6 +861,7 @@ function ST:UNIT_AURA(event, unit_id, is_full_update, updated_auras)
 end
 
 function ST:UNIT_POWER_FREQUENT(event, unit_id, powerType)
+	assert(event == event)
 	-- Used to track if a warrior or druid has enough rage to cast
 	-- any currently queued on-next-cast ability
 	if unit_id ~= "player" or (not self.interfaces_are_initialised) then
@@ -848,6 +875,7 @@ function ST:UNIT_POWER_FREQUENT(event, unit_id, powerType)
 end
 
 function ST:UNIT_SPELLCAST_FAILED_QUIET(event, unit_id, cast_guid, spell_id)
+	assert(event == event)
 	if unit_id ~= "player" or (not self.interfaces_are_initialised) then
 		return
 	end
@@ -858,7 +886,10 @@ function ST:UNIT_SPELLCAST_FAILED_QUIET(event, unit_id, cast_guid, spell_id)
 end
 
 function ST:UNIT_SPELLCAST_SUCCEEDED(event, unit_id, cast_guid, spell_id)
-	if unit_id ~= "player" then
+	assert(event == event)
+	-- Class hooks recolour the bar, which needs the visuals frame. Casting within the
+	-- init window (up to the 5s deadline) used to index a nil anchor_frame here.
+	if unit_id ~= "player" or (not self.interfaces_are_initialised) then
 		return
 	end
 	-- Trigger any class-specific behaviour
@@ -900,6 +931,9 @@ function ST:UNIT_SPELLCAST_CHANNEL_STOP(event, unit_id, cast_guid, spell_id)
 end
 
 function ST:UNIT_TARGET(event, unit_id)
+	if event ~= "UNIT_TARGET" then
+		return
+	end
 	if unit_id ~= "player" then
 		return
 	end
@@ -972,6 +1006,7 @@ end
 -- Talent information.
 ------------------------------------------------------------------------------------
 function ST:ACTIVE_TALENT_GROUP_CHANGED(event, group)
+	self.last_talent_event = event
 	self.current_talent_group = group
 	if self.player_class == "DRUID" then
 		self:get_druid_talent_info()
@@ -982,6 +1017,7 @@ function ST:ACTIVE_TALENT_GROUP_CHANGED(event, group)
 end
 
 function ST:CHARACTER_POINTS_CHANGED(event)
+	self.last_talent_event = event
 	if self.player_class == "DRUID" then
 		self:get_druid_talent_info()
 		self:determine_form_visibility_flag()
@@ -1086,13 +1122,18 @@ function ST:init_range_finders()
 		return
 	end
 	self.rangefinder_interval = 0.05
+	-- GetHarmMaxChecker returns nil when no harm checker reaches that distance (the
+	-- library itself advises falling back to the Min variant); a nil melee checker
+	-- otherwise spins the retry loop in rf_update forever.
 	self.melee_range_checker_func = LRC:GetHarmMaxChecker(LRC.MeleeRange)
+		or LRC:GetHarmMinChecker(LRC.MeleeRange)
 
 	local r = 30
 	if self.player_class == "HUNTER" then
 		r = 35
 	end
 	self.ranged_range_checker_func = LRC:GetHarmMaxChecker(r)
+		or LRC:GetHarmMinChecker(r)
 	self.in_melee_range = nil
 	self.in_ranged_range = nil
 	self.target_min_range = nil
@@ -1113,11 +1154,13 @@ function ST:rf_update()
 		-- self:Print("Range checker offline")
 		C_Timer.After(self.rangefinder_interval, function()
 				self.melee_range_checker_func = LRC:GetHarmMaxChecker(LRC.MeleeRange)
+					or LRC:GetHarmMinChecker(LRC.MeleeRange)
 				local r = 30
 				if self.player_class == "HUNTER" then
 					r = 35
 				end
 				self.ranged_range_checker_func = LRC:GetHarmMaxChecker(r)
+					or LRC:GetHarmMinChecker(r)
 				self:rf_update()
 				self:set_bar_visibilities()
 
@@ -1127,7 +1170,12 @@ function ST:rf_update()
 	end
 	self.in_melee_range = self.melee_range_checker_func("target")
 	-- print(self.melee_result)
-	self.in_ranged_range = self.ranged_range_checker_func("target") and not self.in_melee_range
+	-- The ranged checker can still be nil on clients whose checkers resolve later than
+	-- the melee one (or where no harm checker exists at all): never dereference it
+	-- unguarded, that was a live nil-index crash.
+	local ranged_checker = self.ranged_range_checker_func
+	self.in_ranged_range = (ranged_checker ~= nil and ranged_checker("target"))
+		and not self.in_melee_range
 	self.target_min_range, self.target_max_range = LRC:GetRange("target")
 	-- print('minrange = '..tostring(self.target_min_range))
 	-- print(self.target_max_range)

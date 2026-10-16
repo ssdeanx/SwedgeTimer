@@ -10,6 +10,48 @@ local api = st.api
 local get_tab = st.utils.convert_lookup_table
 
 --=========================================================================================
+-- LibClassicDurations (next-action guide swipe durations)
+--=========================================================================================
+-- The library is Classic Era / TBC Anniversary ONLY: LibClassicDurations/core.lua line 20
+-- returns before it creates the library unless WOW_PROJECT_ID is WOW_PROJECT_CLASSIC or
+-- WOW_PROJECT_BURNING_CRUSADE_CLASSIC, so on WotLK, Titanforge, Cata, Mists, Retail and
+-- WoW Forever the silent LibStub form below yields nil. That is why it is always fetched
+-- silently and why no behaviour may depend on it existing: every duration it supplies has
+-- a hardcoded fallback (SEAL_FALLBACK_DURATION below, the display constants in
+-- nextaction_ui.lua for the spell cooldowns).
+-- It is also combat-log driven, so it has its own failure modes even where it loads: it
+-- only knows an aura once it has seen the application (nothing is tracked before the first
+-- combat-log event after Register, and a seal that is up at login stays unknown until it
+-- is re-cast), it returns nil for any aura missing from its spell table (Seal of Blood /
+-- Seal of the Martyr are not in it), and the durations it reports are 30 s for the seals
+-- it does know. Untracked -> nil -> the fallback, on every family.
+local LCD = LibStub("LibClassicDurations", true)
+local lcd_aura_duration = LCD and LCD.GetAuraDurationByUnit
+
+-- Vanilla/TBC seal duration: the archived build's own fallback
+-- (docs/swedge/SwedgeTimer_TBC/player.lua seal_1_duration / seal_2_duration).
+local SEAL_FALLBACK_DURATION = 30
+
+-- Length of a tracked aura in seconds, or nil when the library is absent, has not tracked
+-- the aura, or reports something unusable. Method cached at load; no per-call allocation
+-- and no string work (the aura name comes from the aura loop, not from a lookup).
+local function get_tracked_aura_duration(unit, spell_id, spell_name)
+    if not lcd_aura_duration then
+        return nil
+    end
+    -- pcall because the library is vendored code on a client family this addon only
+    -- supports indirectly: a failure here must degrade to the fallback, never error.
+    local ok, duration = pcall(lcd_aura_duration, LCD, unit, spell_id, nil, spell_name)
+    if not ok or type(duration) ~= "number" or duration <= 0
+        or duration > SEAL_FALLBACK_DURATION * 2 then
+        -- The upper bound rejects a nonsense length (no seal is longer than an hour);
+        -- the caller then falls back to SEAL_FALLBACK_DURATION.
+        return nil
+    end
+    return duration
+end
+
+--=========================================================================================
 -- Spell data
 --=========================================================================================
 -- Seals: every rank id per classic family, because the active aura keeps the id of the
@@ -72,6 +114,18 @@ function ST.PALADIN.post_init(self)
     -- files stays inert.
     if st.nextaction_ui then
         st.nextaction_ui.init(self)
+    end
+
+    -- LibClassicDurations: registering is what makes it track auras (it hooks
+    -- COMBAT_LOG_EVENT_UNFILTERED on its own frame), and without it every
+    -- GetAuraDurationByUnit read returns nil. Done here rather than at file load so it
+    -- runs after login with the library's playerClass-dependent branches valid, and so
+    -- a paladin-only addon never turns it on for other classes' clients. No-op off
+    -- Classic Era / TBC Anniversary, where the library never registered itself (see the
+    -- header block). pcall keeps a library-side failure from breaking post_init: the
+    -- guide then simply keeps using its hardcoded seal duration.
+    if lcd_aura_duration and type(LCD.Register) == "function" then
+        pcall(LCD.Register, LCD, addon_name)
     end
 
     -- Twist Practice: builds its own UIParent frames and the pure-engine bridge;
@@ -144,6 +198,12 @@ function ST.PALADIN.parse_seals(self)
     -- dropped seal cannot leave a stale value behind.
     self.soc_expires = nil
     self.sob_expires = nil
+    -- Swipe lengths for the guide's seal icons, from LibClassicDurations where that
+    -- library exists and tracks the aura (Classic Era / TBC Anniversary only), else nil
+    -- so the guide falls back to its own constant. Reset with the expiries for the same
+    -- reason: they describe the same aura, so neither may outlive it.
+    self.soc_duration = nil
+    self.sob_duration = nil
 
     -- Iterate all player auras
     local i = 1
@@ -156,6 +216,9 @@ function ST.PALADIN.parse_seals(self)
         if soc_ids[spell_id] ~= nil then
             self.has_soc = true
             self.soc_expires = expiration_time
+            -- The library keys its records by the rank that was cast, which is the aura
+            -- id right here (the same reason soc_ids carries every rank).
+            self.soc_duration = get_tracked_aura_duration("player", spell_id, name)
         end
         if sov_ids[spell_id] ~= nil then
             self.has_sov = true
@@ -175,6 +238,7 @@ function ST.PALADIN.parse_seals(self)
         if sob_ids[spell_id] ~= nil then
             self.has_sob = true
             self.sob_expires = expiration_time
+            self.sob_duration = get_tracked_aura_duration("player", spell_id, name)
         end
         if sotc_ids[spell_id] ~= nil then
             self.has_sotc = true
@@ -719,6 +783,11 @@ end
 -- filler_remaining is one number (the chosen filler's own cooldown remaining) or nil
 -- (unknown on this client). The engine also accepts the optional inputs
 -- gcd_before_swing and both mana thresholds; this gather fills them.
+-- cs_duration / judge_duration are display-only and are ignored by the engine: the full
+-- length (seconds) of the last real CS / Judgement cooldown the client reported, or nil
+-- when none has been seen. nextaction_ui.lua uses them for its cooldown swipes, falling
+-- back to its hardcoded constants. The seal icons' equivalent lengths are not engine
+-- inputs at all: they ride on self.soc_duration / self.sob_duration (the seal mirror).
 
 -- One reused input table: no per-frame allocations on the guide tick.
 ST.PALADIN.guide_inputs = {}
@@ -734,7 +803,14 @@ local filler_name_exorcism
 -- GCD reports the GCD's ~1.5 s instead. With latch_key the last real cooldown end is
 -- remembered on the addon (the archive's rule), so the true remaining time survives
 -- the echo window.
-local function get_guide_cooldown_remaining(self, spell, latch_key)
+-- With duration_key the client-reported LENGTH of that real cooldown is latched next to
+-- the expiry (duration_key holds seconds, never an end time). The guide's cooldown
+-- swipes need the length, not just the end: hardcoding it breaks on any client whose
+-- Crusader Strike / Judgement cooldown differs from the archived build's. Latching it
+-- here (rather than in the UI) keeps it paired with the expiry it belongs to, so both
+-- always describe the same cooldown. LibClassicDurations cannot help here: it is
+-- aura-based and knows nothing about spell cooldowns.
+local function get_guide_cooldown_remaining(self, spell, latch_key, duration_key)
     local now = api.get_time()
     local start_time, duration = api.GetSpellCooldown(spell)
     if not start_time or not duration or duration == 0 then
@@ -743,6 +819,12 @@ local function get_guide_cooldown_remaining(self, spell, latch_key)
     if duration > 1.51 then
         if latch_key then
             self[latch_key] = start_time + duration
+        end
+        if duration_key then
+            -- A real cooldown: api.GetSpellCooldown has already normalised both shapes
+            -- (classic start/duration, Mainline the SpellCooldownInfo table) and the
+            -- >1.51 branch means this is not the GCD echo.
+            self[duration_key] = duration
         end
         local remaining = start_time + duration - now
         if remaining < 0 then
@@ -814,20 +896,28 @@ function ST.PALADIN.gather_guide_inputs(self)
 
     -- Crusader Strike / Judgement cooldowns. The archive's rules: an unknown CS
     -- talent means the engine must never see CS available (999 s), and Judgement
-    -- needs no latch of its own.
+    -- needs no latch of its own. The swipe LENGTHs ride along in cs_duration /
+    -- judge_duration (display-only; see the input-contract comment above) and are read
+    -- after the calls, so they describe the cooldown this same tick reported.
     if na and na.CS_SPELL_ID then
         if api.is_spell_known(na.CS_SPELL_ID) then
             inputs.cs_remaining = get_guide_cooldown_remaining(self, na.CS_SPELL_ID,
-                "guide_cs_expires")
+                "guide_cs_expires", "guide_cs_duration")
         else
             inputs.cs_remaining = 999
         end
         inputs.judge_remaining = na.JUDGEMENT_SPELL_ID
-            and get_guide_cooldown_remaining(self, na.JUDGEMENT_SPELL_ID) or 0
+            and get_guide_cooldown_remaining(self, na.JUDGEMENT_SPELL_ID, nil,
+                "guide_judge_duration") or 0
     else
         inputs.cs_remaining = 999
         inputs.judge_remaining = 0
     end
+    -- Read after both lookups so a length latched on this very tick is the one the
+    -- guide draws. nil simply means "nothing observed yet": the display falls back to
+    -- its own constant.
+    inputs.cs_duration = self.guide_cs_duration
+    inputs.judge_duration = self.guide_judge_duration
 
     -- Filler availability. The engine consumes one cooldown value: the remaining
     -- time of the filler it would pick. That pick is mirrored here from the data the

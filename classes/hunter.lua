@@ -50,6 +50,17 @@ function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
     self.raptor_strike_queued = false
 end
 
+function ST.HUNTER.post_init(self)
+    -- Flags must exist before the first spellcast/current-cast event reaches this
+    -- module, otherwise a stale nil would decide the bar colour.
+    self.raptor_strike_queued = false
+end
+
+function ST.HUNTER.on_combat_exit(self)
+    -- A queued Raptor Strike dies with the fight.
+    self.raptor_strike_queued = false
+end
+
 function ST.HUNTER.set_bar_color(self, hand)
     local db_class = self:get_class_table()
     local frame = self:get_visuals_frame(hand)

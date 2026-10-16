@@ -11,6 +11,10 @@ local pairs = pairs
 -- WoW APIs
 local CreateFrame, UIParent = CreateFrame, UIParent
 
+-- Global vars/functions that we don't upvalue since they might get hooked, or upgraded
+-- List them here for Mikk's FindGlobals script
+-- GLOBALS: ColorPickerFrame, OpacitySliderFrame
+
 --[[-----------------------------------------------------------------------------
 Support functions
 -------------------------------------------------------------------------------]]
@@ -55,6 +59,9 @@ local function ColorSwatch_OnClick(frame)
 			local a = 1 - OpacitySliderFrame:GetValue()
 			ColorCallback(self, r, g, b, a)
 		end
+
+		-- TBC Classic compatibility: swatchFunc must be set
+		ColorPickerFrame.swatchFunc = ColorPickerFrame.func
 
 		ColorPickerFrame.hasOpacity = self.HasAlpha
 		ColorPickerFrame.opacityFunc = function()

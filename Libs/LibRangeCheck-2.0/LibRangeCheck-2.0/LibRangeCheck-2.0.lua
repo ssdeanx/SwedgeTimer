@@ -399,26 +399,32 @@ local wipe = wipe
 local tinsert = tinsert
 local tremove = tremove
 local BOOKTYPE_SPELL = BOOKTYPE_SPELL
-local GetSpellInfo = GetSpellInfo
-local GetSpellBookItemName = GetSpellBookItemName
-local GetNumSpellTabs = GetNumSpellTabs
-local GetSpellTabInfo = GetSpellTabInfo
-local GetItemInfo = GetItemInfo
-local UnitAura = UnitAura
+local function GetSpellInfo(spellId)
+  if C_Spell and C_Spell.GetSpellInfo then
+    local info = C_Spell.GetSpellInfo(spellId)
+    if info then
+      return info.name, nil, nil, nil, info.minRange, info.maxRange, info.spellID
+    end
+  elseif _G.GetSpellInfo then
+    return _G.GetSpellInfo(spellId)
+  end
+end
+local GetSpellBookItemName = _G.GetSpellBookItemName
+local GetNumSpellTabs = _G.GetNumSpellTabs
+local GetSpellTabInfo = _G.GetSpellTabInfo
+local GetItemInfo = (C_Item and C_Item.GetItemInfo) or _G.GetItemInfo -- newer clients moved the global into C_Item
 local UnitCanAttack = UnitCanAttack
 local UnitCanAssist = UnitCanAssist
 local UnitExists = UnitExists
 local UnitIsDeadOrGhost = UnitIsDeadOrGhost
 local CheckInteractDistance = CheckInteractDistance
 local IsSpellInRange = IsSpellInRange
-local IsItemInRange = IsItemInRange
+local IsItemInRange = (C_Item and C_Item.IsItemInRange) or _G.IsItemInRange
 local UnitClass = UnitClass
 local UnitRace = UnitRace
-local GetInventoryItemLink = GetInventoryItemLink
-local GetSpecialization = GetSpecialization
-local GetSpecializationInfo = GetSpecializationInfo
+local GetInventoryItemLink = (C_Inventory and C_Inventory.GetInventoryItemLink) or _G.GetInventoryItemLink
 local GetTime = GetTime
-local HandSlotId = GetInventorySlotInfo("HandsSlot")
+local HandSlotId = GetInventorySlotInfo("HANDSSLOT")
 local math_floor = math.floor
 local UnitIsVisible = UnitIsVisible
 
@@ -736,6 +742,7 @@ function lib:init(forced)
   local _, playerClass = UnitClass("player")
   local _, playerRace = UnitRace("player")
 
+  ---@diagnostic disable-next-line: assign-type-mismatch, cast-local-type
   minRangeCheck = nil
   -- first try to find a nice item we can use for minRangeCheck
   if HarmItems[15] then
@@ -1027,7 +1034,10 @@ function lib:processItemRequests(itemRequests)
         if cacheAllItems then
           print(MAJOR_VERSION .. ": timeout for item: " .. tostring(item))
         end
-        self.failedItemRequests[item] = true
+        if item ~= nil then
+          self.failedItemRequests = self.failedItemRequests or {}
+          self.failedItemRequests[item] = true
+        end
         itemRequestTimeoutAt = nil
         pendingItemRequest = nil
         tremove(items, i)

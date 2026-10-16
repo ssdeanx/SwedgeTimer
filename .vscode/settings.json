@@ -151,7 +151,14 @@
         "PanelTemplates_TabResize",
         "PanelTemplates_SetDisabledTabState",
         "PanelTemplates_SelectTab",
-        "PanelTemplates_DeselectTab"
+        "PanelTemplates_DeselectTab",
+        "LE_EXPANSION_CATACLYSM",
+        "LE_EXPANSION_MISTS_OF_PANDARIA",
+        "SPEED",
+        "INVSLOT_RANGED",
+        "BOOKTYPE_SPELL",
+        "IsSpellInRange",
+        "WOW_PROJECT_MISTS_CLASSIC"
     ],
     "Lua.diagnostics.disable": [
         "assign-type-mismatch"

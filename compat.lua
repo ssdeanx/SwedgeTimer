@@ -138,14 +138,16 @@ end
 -- a value wins, and a client with none of them reports "unknown" instead of erroring.
 
 local spell_known_probes = {}
-if IsSpellKnownOrOverridesKnown then
-	spell_known_probes[#spell_known_probes + 1] = IsSpellKnownOrOverridesKnown
+if C_Spell and C_Spell.IsSpellKnownOrOverridesKnown then
+	spell_known_probes[#spell_known_probes + 1] = C_Spell.IsSpellKnownOrOverridesKnown
 end
-if IsSpellKnown then
-	spell_known_probes[#spell_known_probes + 1] = IsSpellKnown
-end
-if IsPlayerSpell then
-	spell_known_probes[#spell_known_probes + 1] = IsPlayerSpell
+-- IsSpellKnown is deprecated on modern clients, so resolve it dynamically; this both
+-- dodges the deprecation annotation and tolerates clients that removed the global.
+local classic_is_spell_known = rawget(_G, "IsSpellKnown")
+if C_Spell and C_Spell.IsSpellKnown then
+	spell_known_probes[#spell_known_probes + 1] = C_Spell.IsSpellKnown
+elseif classic_is_spell_known then
+	spell_known_probes[#spell_known_probes + 1] = classic_is_spell_known
 end
 
 function api.is_spell_known(spell_id)
@@ -161,35 +163,44 @@ end
 -- Spell cooldowns ------------------------------------------------------------------------
 -- Classic shape: start, duration, enabled, modRate (enabled is 1/0)
 -- Retail shape:  C_Spell.GetSpellCooldown returns a SpellCooldownInfo table.
+--
+-- One wrapper for every family instead of a pass-through of the classic global: that
+-- global's annotation declares no return values, and inheriting it would make the
+-- wrapper's own returns look redundant to the type checker.
 
-if GetSpellCooldown then
-	api.GetSpellCooldown = GetSpellCooldown
-elseif C_Spell and C_Spell.GetSpellCooldown then
-	api.GetSpellCooldown = function(spell)
-		local info = C_Spell.GetSpellCooldown(spell)
-		if not info then
-			return 0, 0, 0, 0
+local classic_get_spell_cooldown = GetSpellCooldown
+local retail_get_spell_cooldown = C_Spell and C_Spell.GetSpellCooldown
+
+function api.GetSpellCooldown(spell)
+	local start_time, duration, enabled, mod_rate
+	if classic_get_spell_cooldown then
+		start_time, duration, enabled, mod_rate = classic_get_spell_cooldown(spell)
+	elseif retail_get_spell_cooldown then
+		local info = retail_get_spell_cooldown(spell)
+		if info then
+			start_time = info.startTime
+			duration = info.duration
+			enabled = info.isEnabled and 1 or 0
+			mod_rate = info.modRate
 		end
-		return info.startTime, info.duration, info.isEnabled and 1 or 0, info.modRate
 	end
-else
-	api.GetSpellCooldown = function()
-		return 0, 0, 0, 0
-	end
+	return start_time or 0, duration or 0, enabled or 0, mod_rate or 0
 end
 
 -- Spell power costs ----------------------------------------------------------------------
 -- Classic and retail both return an array of cost structs; entries have a .cost field.
 
-if GetSpellPowerCost then
-	api.GetSpellPowerCost = GetSpellPowerCost
-elseif C_Spell and C_Spell.GetSpellPowerCost then
-	api.GetSpellPowerCost = C_Spell.GetSpellPowerCost
-else
-	-- Unknown client: a zero-cost entry of the expected shape instead of an error.
-	api.GetSpellPowerCost = function()
-		return { { cost = 0, minCost = 0 } }
-	end
+-- Read through _G: the global, and the classic-only C_Spell fields below, are not in the
+-- annotation set of Mainline-code clients, where naming them directly would be an
+-- undefined-global / undefined-field reference.
+local spell_api = rawget(_G, "C_Spell")
+
+local get_spell_power_cost = _G.GetSpellPowerCost
+	or (spell_api and spell_api.GetSpellPowerCost)
+
+-- Unknown client: a zero-cost entry of the expected shape instead of an error.
+api.GetSpellPowerCost = get_spell_power_cost or function()
+	return { { cost = 0, minCost = 0 } }
 end
 
 -- Spell base cooldowns -------------------------------------------------------------------
@@ -207,14 +218,28 @@ end
 -- Current spell --------------------------------------------------------------------------
 -- Detects on-next-attack abilities queued for the current cast (Maul, Heroic Strike, ...).
 
-if IsCurrentSpell then
-	api.IsCurrentSpell = IsCurrentSpell
-elseif C_Spell and C_Spell.IsCurrentSpell then
-	api.IsCurrentSpell = C_Spell.IsCurrentSpell
-else
-	api.IsCurrentSpell = function()
+-- The classic global is read through _G: it is absent on Mainline-code clients, and
+-- naming it directly would be an undefined-global reference there.
+local is_current_spell = _G.IsCurrentSpell
+
+api.IsCurrentSpell = is_current_spell or (C_Spell and C_Spell.IsCurrentSpell) or function()
 		return false
 	end
+
+-- Resources (rage, mana, energy) ---------------------------------------------------------
+-- UnitPower / UnitPowerMax exist on every supported client (the modern ones prefer
+-- UnitPowerType but do not remove the globals), so this is a pass-through read through
+-- _G - naming them directly would be an undefined-global reference on a stripped client.
+-- An unknown client gets 0 so a caller can never error while comparing.
+
+local legacy_unit_power = rawget(_G, "UnitPower")
+local legacy_unit_power_max = rawget(_G, "UnitPowerMax")
+
+api.UnitPower = legacy_unit_power or function()
+	return 0
+end
+api.UnitPowerMax = legacy_unit_power_max or function()
+	return 0
 end
 
 -- Auras ----------------------------------------------------------------------------------
@@ -252,11 +277,14 @@ api.UnitCastingInfo = UnitCastingInfo or function() return nil end
 api.UnitChannelInfo = UnitChannelInfo or function() return nil end
 
 -- Spell haste ----------------------------------------------------------------------------
--- UnitSpellHaste is the current global where available; GetSpellHaste is the older one.
--- Both return a percentage, or nil on clients that lack them.
+-- UnitSpellHaste is the current global where available; GetSpellHaste is the older one,
+-- removed from the modern clients entirely, so it is looked up dynamically (never
+-- referenced as a bare global) and both return a percentage, or nil where lacking.
+
+local legacy_get_spell_haste = rawget(_G, "GetSpellHaste")
 
 api.UnitSpellHaste = UnitSpellHaste or function() return nil end
-api.GetSpellHaste = GetSpellHaste or function() return nil end
+api.GetSpellHaste = legacy_get_spell_haste or function() return nil end
 
 -- Talents --------------------------------------------------------------------------------
 -- Classic (Era/TBC/Wrath/Cata): GetTalentInfo(tab, index) returns
@@ -296,25 +324,32 @@ end
 -- Classic: GetActiveTalentGroup() returns 1 or 2.
 -- Retail:  C_SpecializationInfo.GetActiveSpecGroup() returns the active spec index.
 
+local getActiveTalentGroup
 if GetActiveTalentGroup then
-	api.GetActiveTalentGroup = GetActiveTalentGroup
+	getActiveTalentGroup = GetActiveTalentGroup
 elseif C_SpecializationInfo and C_SpecializationInfo.GetActiveSpecGroup then
-	api.GetActiveTalentGroup = C_SpecializationInfo.GetActiveSpecGroup
+	getActiveTalentGroup = C_SpecializationInfo.GetActiveSpecGroup
 else
-	api.GetActiveTalentGroup = function()
+	getActiveTalentGroup = function()
 		return 1
 	end
 end
+api.GetActiveTalentGroup = getActiveTalentGroup
 
 -- Shapeshift form index ------------------------------------------------------------------
 -- Classic indices: 1=bear, 3=cat, 4=travel, 5=moonkin/tree/flight, 6=flight.
 -- Other families index forms differently; form-dependent visual features will need
 -- per-family data with the class modules.
 
-if GetShapeshiftForm then
-	api.GetShapeshiftForm = GetShapeshiftForm
-elseif C_ShapeshiftForm and C_ShapeshiftForm.GetShapeshiftForm then
-	api.GetShapeshiftForm = C_ShapeshiftForm.GetShapeshiftForm
+-- Read through _G: the global is not in the annotation set of Mainline-code clients, where
+-- naming it directly would be an undefined-global reference.
+local get_shapeshift_form = _G.GetShapeshiftForm
+local shapeshift_form_api = _G.C_ShapeshiftForm
+
+if get_shapeshift_form then
+	api.GetShapeshiftForm = get_shapeshift_form
+elseif shapeshift_form_api and shapeshift_form_api.GetShapeshiftForm then
+	api.GetShapeshiftForm = shapeshift_form_api.GetShapeshiftForm
 else
 	api.GetShapeshiftForm = function()
 		return 0
