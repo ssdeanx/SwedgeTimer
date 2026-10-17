@@ -113,6 +113,10 @@ check(#tocs > 0, "repo root has SwedgeTimer*.toc files")
 -- Per-toc checks
 -- ---------------------------------------------------------------------------
 
+-- Captured per toc so the matrix-level family invariants after the loop can be checked:
+-- toc_values[toc] = set of ## Interface values; toc_lists[toc] = set of listed paths.
+local toc_values, toc_lists = {}, {}
+
 for _, toc in ipairs(tocs) do
     local entries, interface_text = {}, nil
     local file = io.open(ROOT .. toc, "r")
@@ -152,6 +156,14 @@ for _, toc in ipairs(tocs) do
         end
         check(interface_ok, interface_label)
 
+        local interface_values = {}
+        if interface_text then
+            for value in interface_text:gmatch("[^,]+") do
+                interface_values[value:match("^%s*(.-)%s*$")] = true
+            end
+        end
+        toc_values[toc] = interface_values
+
         -- every listed path exists, case-sensitively
         for _, entry in ipairs(entries) do
             local problem = path_problem(entry)
@@ -170,6 +182,7 @@ for _, toc in ipairs(tocs) do
         check(#duplicates == 0,
             toc .. ": no duplicate entries" ..
             (#duplicates > 0 and (" (duplicates: " .. table.concat(duplicates, ", ") .. ")") or ""))
+        toc_lists[toc] = seen
 
         -- compat.lua before main.lua (covers that both are listed)
         local compat_index, main_index
@@ -206,6 +219,93 @@ for _, toc in ipairs(tocs) do
         for _, module_path in ipairs(class_modules) do
             check(seen[module_path] == true, toc .. ": lists " .. module_path)
         end
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- Family invariants: pin the intended per-flavour divergence
+-- ---------------------------------------------------------------------------
+-- The universal build branches on family at runtime; what actually differs per toc is
+-- which files load and which clients it advertises (see AGENTS.md "Cross-engine"). A
+-- wrong engine library or a dropped module line is a silent runtime no-op, so both
+-- directions are pinned here.
+
+local LCTA = "Libs\\LibClassicSwingTimerAPI\\LibClassicSwingTimerAPI.lua"
+
+-- LibClassicSwingTimerAPI: classic-line engines only. Its spell tables stay nil on
+-- Cata/Mists and Mainline has no classic combat log at all (swing_source.lua on Forever,
+-- the inert stand-in on Retail), so shipping it there - or dropping it from a classic-line
+-- toc - is wrong in both directions.
+local LCTA_TOCS = {
+    ["SwedgeTimer_Vanilla.toc"] = true,
+    ["SwedgeTimer_TBC.toc"] = true,
+    ["SwedgeTimer_Wrath.toc"] = true,
+}
+local FLAVOR_TOCS = {
+    "SwedgeTimer_Vanilla.toc", "SwedgeTimer_TBC.toc", "SwedgeTimer_Wrath.toc",
+    "SwedgeTimer_Mainline.toc", "SwedgeTimer_Cata.toc", "SwedgeTimer_Mists.toc",
+}
+for _, toc in ipairs(FLAVOR_TOCS) do
+    check(toc_lists[toc] ~= nil, toc .. ": exists and was checked")
+    local ships = toc_lists[toc] ~= nil and toc_lists[toc][LCTA] == true
+    local should_ship = LCTA_TOCS[toc] == true
+    check(ships == should_ship, toc .. (should_ship
+        and ": ships LibClassicSwingTimerAPI (classic swing engine)"
+        or ": does not ship LibClassicSwingTimerAPI (Mainline stand-in / Cata-Mists nil tables)"))
+end
+
+-- ## Interface matrix: each flavour advertises exactly its client, Mainline and the base
+-- toc must cover every supported Interface number, and WotLK Classic (30401) is not a
+-- supported target.
+local INTERFACE_EXACT = {
+    { toc = "SwedgeTimer_Vanilla.toc", values = { "11509" } },
+    { toc = "SwedgeTimer_TBC.toc", values = { "20506" } },
+    { toc = "SwedgeTimer_Wrath.toc", values = { "38002" } },
+}
+local INTERFACE_CONTAINS = {
+    { toc = "SwedgeTimer_Mainline.toc", values = { "120100", "16001" } },
+    { toc = "SwedgeTimer.toc", values = { "11509", "20506", "38002", "16001", "120100" } },
+}
+local function interface_list(toc)
+    local values = {}
+    for value in pairs(toc_values[toc] or {}) do values[#values + 1] = value end
+    table.sort(values)
+    return (#values > 0) and table.concat(values, ", ") or "(missing/unparsable)"
+end
+for _, spec in ipairs(INTERFACE_EXACT) do
+    local want, got = {}, toc_values[spec.toc] or {}
+    local same, seen_count = true, 0
+    for i = 1, #spec.values do want[spec.values[i]] = true end
+    for value in pairs(got) do
+        seen_count = seen_count + 1
+        if not want[value] then same = false end
+    end
+    if seen_count ~= #spec.values then same = false end
+    check(same, spec.toc .. ": ## Interface is exactly " .. table.concat(spec.values, ", ")
+        .. " (got: " .. interface_list(spec.toc) .. ")")
+end
+for _, spec in ipairs(INTERFACE_CONTAINS) do
+    local got = toc_values[spec.toc] or {}
+    local missing = {}
+    for i = 1, #spec.values do
+        if not got[spec.values[i]] then missing[#missing + 1] = spec.values[i] end
+    end
+    check(#missing == 0, spec.toc .. ": ## Interface advertises " .. table.concat(spec.values, ", ")
+        .. " (missing: " .. ((#missing > 0) and table.concat(missing, ", ") or "none") .. ")")
+end
+for _, toc in ipairs(tocs) do
+    check(not (toc_values[toc] and toc_values[toc]["30401"]),
+        toc .. ": does not advertise Interface 30401 (WotLK Classic is not a supported target)")
+end
+
+-- Newest standalone modules: a missing toc line is a silent no-op at runtime, and
+-- removing module and line together would slip past the disk-completeness check above,
+-- so the names are pinned explicitly on every toc.
+local REQUIRED_MODULES = { "diag.lua", "hunter_window.lua" }
+for _, toc in ipairs(tocs) do
+    for _, module_path in ipairs(REQUIRED_MODULES) do
+        check(toc_lists[toc] ~= nil and toc_lists[toc][module_path] == true,
+            toc .. ": lists " .. module_path .. " (newest module, required)")
     end
 end
 

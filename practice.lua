@@ -56,8 +56,9 @@
 --     abacus). NOT cleared by reset(): the archive keeps the lock as a practice setting.
 --
 -- Deferred to later phases (deliberately NOT simulated here):
---   * the AW combos practice_aw_includes_pot / practice_aw_includes_sob (archive 3198-3208)
---   * UI side effects (sounds, glow, result text, timeline rendering, bar overlays)
+--   * the AW combos practice_aw_includes_pot / practice_aw_includes_sob (archive 3198-3208;
+--     needs new options, out of the practice lane's scope)
+--   * UI side effects (sounds, glow, result text, timeline frame rendering, bar overlays)
 --   * the in-real-combat scoring pause (archive sim_on_swing 3434-3441): the caller decides
 --     whether to call on_swing while in real combat.
 --
@@ -105,6 +106,113 @@ st.practice.PRESETS = {
     ["2/3"] = { speed = 2.3, gcd = 1.15 },
     ["2/4"] = { speed = 1.8, gcd = 1.15 },
 }
+
+-- Session-local default keybinds (archive reset_all_mappings 3952-3956): the practice
+-- UI copies this into its own table at session start. Persistence (the archived
+-- practice_key_* db keys) needs new options and is deliberately not wired here.
+st.practice.DEFAULT_KEYBINDS = {
+    soc = "1", sob = "2", cs = "3", judge = "4", sotc = "5",
+    consec = "6", aw = "7", hpot = "8", abacus = "9", stop = "",
+}
+
+-- Timeline lane definitions (archive 148-160, minus the spell-id/texture lookups the
+-- caller resolves: the pure engine only maps ability keys to lane keys).
+st.practice.TIMELINE_LANES = {
+    { key = "sob",    name = "SoB" },
+    { key = "melee",  name = "Melee" },
+    { key = "cs",     name = "CS" },
+    { key = "consec", name = "Consec" },
+    { key = "soc",    name = "SoC" },
+    { key = "judge",  name = "Judge" },
+}
+
+st.practice.TIMELINE_LANE_INDEX = {
+    sob = 1, melee = 2, cs = 3, consec = 4, soc = 5, judge = 6,
+}
+
+-- Seal label -> timeline lane (archive 160); crusader has no lane (never logged).
+st.practice.SEAL_LABEL_TO_LANE = { blood = "sob", command = "soc" }
+
+-- Melee swing icon (archive sim_on_swing 3457).
+st.practice.MELEE_TEXTURE = "Interface\\Icons\\INV_Sword_04"
+
+-- Human-readable labels for grading tooltips (archive 1682-1690).
+st.practice.SWING_ACTION_LABELS = {
+    blood_auto = "Seal of Blood auto",
+    cmd_auto = "Seal of Command auto",
+    twist = "Twist",
+    no_seal = "Auto (no seal)",
+    cs = "Crusader Strike + SoB auto",
+    judge_blood = "Judge (Seal of Blood)",
+    judge_command = "Judge (Seal of Command)",
+}
+
+-- Abbreviate a keybind string to max 3 characters for icon labels (archive
+-- shorten_keybind 183-225, verbatim logic). Pure: no WoW API.
+function st.practice.shorten_keybind(key)
+    if not key or key == "" then return "" end
+
+    local mods = ""
+    local base = key
+    if base:find("^CTRL%-") then mods = "C"; base = base:sub(6) end
+    if base:find("^SHIFT%-") then mods = "S"; base = base:sub(7) end
+    if base:find("^ALT%-") then mods = "A"; base = base:sub(5) end
+
+    local np = base:match("^NUMPAD(.+)")
+    if np then
+        local np_map = {
+            DECIMAL = ".", PLUS = "+", MINUS = "-", MULTIPLY = "*", DIVIDE = "/",
+        }
+        base = "N" .. (np_map[np] or np)
+    end
+
+    if base == "MOUSEWHEELUP" then base = "MU"
+    elseif base == "MOUSEWHEELDOWN" then base = "MD"
+    elseif base:match("^BUTTON(%d)") then base = "M" .. base:match("^BUTTON(%d)")
+    end
+
+    local pad_map = {
+        PAD1 = "P1", PAD2 = "P2", PAD3 = "P3", PAD4 = "P4",
+        PADLSHOULDER = "LB", PADRSHOULDER = "RB",
+        PADLTRIGGER = "LT", PADRTRIGGER = "RT",
+        PADLSTICK = "LS", PADRSTICK = "RS",
+        PADDUP = "DU", PADDDOWN = "DD", PADDLEFT = "DL", PADDRIGHT = "DR",
+        PADFORWARD = "FW", PADBACK = "BK",
+        PADLSTICKUP = "LU", PADLSTICKDOWN = "LD",
+        PADLSTICKLEFT = "LL", PADLSTICKRIGHT = "LR",
+        PADRSTICKUP = "RU", PADRSTICKDOWN = "RD",
+        PADRSTICKLEFT = "RL", PADRSTICKRIGHT = "RR",
+    }
+    if pad_map[base] then base = pad_map[base] end
+
+    local result = mods .. base
+    return result:sub(1, 3)
+end
+
+-- Fight clock label for the panel (archive sim_update 3393: "Fight: m:ss").
+-- Negative inputs clamp to 0.
+function st.practice.format_fight_time(elapsed)
+    if type(elapsed) ~= "number" or elapsed < 0 then
+        elapsed = 0
+    end
+    local mins = math.floor(elapsed / 60)
+    local secs = math.floor(elapsed % 60)
+    return string.format("Fight: %d:%02d", mins, secs)
+end
+
+-- Timeline lane for a cast ability (archive sim_cast_seal 3087-3093 +
+-- sim_cast_ability 3165-3168): seals log on their seal lane, cs/judge/consec on
+-- their own lane, everything else (aw/hpot/abacus/stop/sotc) logs nothing.
+function st.practice.cast_timeline_lane(ability_key)
+    if ability_key == "cs" or ability_key == "judge" or ability_key == "consec" then
+        return ability_key
+    end
+    local ab = st.practice.ABILITIES[ability_key]
+    if ab and ab.type == "seal" and st.practice.SEAL_LABEL_TO_LANE[ab.seal_label] then
+        return st.practice.SEAL_LABEL_TO_LANE[ab.seal_label]
+    end
+    return nil
+end
 
 --=========================================================================================
 -- Sim state
@@ -284,6 +392,95 @@ function st.practice.determine_rotation(sim, locked_rotation)
     return nil
 end
 
+-- Direct haste setters for the panel toggle buttons (archive activate/deactivate
+-- 2592-2690, minus UI/sound). Unlike cast("hpot") these start no GCD, matching the
+-- archive's button paths. Guarded against redundant activation (the original expiry
+-- is kept); clearing is unconditional. The caller re-runs apply_haste() afterwards.
+function st.practice.set_bloodlust(sim, now, on)
+    if on then
+        if sim.has_bloodlust then return false end
+        if sim.locked_rotation then return false end
+        sim.has_bloodlust = true
+        sim.bl_buff_expires = now + 40
+        return true
+    end
+    sim.has_bloodlust = false
+    sim.bl_buff_expires = 0
+    return true
+end
+
+function st.practice.set_haste_pot(sim, now, on)
+    if on then
+        if sim.has_haste_pot then return false end
+        if sim.locked_rotation then return false end
+        sim.has_haste_pot = true
+        sim.haste_pot_buff_expires = now + 15
+        return true
+    end
+    sim.has_haste_pot = false
+    sim.haste_pot_buff_expires = 0
+    return true
+end
+
+--=========================================================================================
+-- Fight timeline data (pure; the frame rendering lives in practice_ui.lua)
+--=========================================================================================
+
+-- Append a timeline event (archive log_timeline_event 1881-1898): no-op while no
+-- fight runs. `time` is fight-relative. Returns the new count.
+function st.practice.push_timeline_event(events, count, sim, now, lane, texture, result, seal_active)
+    if not sim.fight_active then
+        return count
+    end
+    local next_count = (count or 0) + 1
+    events[next_count] = {
+        time = now - sim.fight_start_time,
+        lane = lane,
+        texture = texture,
+        result = result,
+        seal_active = seal_active,
+    }
+    return next_count
+end
+
+-- Latest event time (archive timeline_max_time, computed on demand).
+function st.practice.timeline_max_time(events, count)
+    local max_time = 0
+    for i = 1, (count or 0) do
+        local event = events[i]
+        if event and event.time and event.time > max_time then
+            max_time = event.time
+        end
+    end
+    return max_time
+end
+
+-- Opening rotation band for a fight (archive start_fight 2866-2876): one band at
+-- time 0 when the rotation resolves, none when it does not.
+function st.practice.bands_for_fight(rotation)
+    if not rotation then
+        return {}, 0
+    end
+    return { { start_time = 0, rotation = rotation } }, 1
+end
+
+-- Record a rotation change as a timeline band (archive update_rotation_tracking
+-- 1557-1579, minus the display/HUD half which lives in practice_ui.lua). Appends
+-- only when the rotation differs from the last band. Returns the new band count.
+function st.practice.track_rotation_band(bands, band_count, rotation, fight_time)
+    if not rotation then
+        return band_count
+    end
+    band_count = band_count or 0
+    local last = bands[band_count]
+    if last and last.rotation == rotation then
+        return band_count
+    end
+    local next_count = band_count + 1
+    bands[next_count] = { start_time = fight_time, rotation = rotation }
+    return next_count
+end
+
 --=========================================================================================
 -- Fight lifecycle
 --=========================================================================================
@@ -306,7 +503,14 @@ function st.practice.begin_fight(sim, now, opts)
     sim.fight_active = true
     sim.fight_start_time = now
     sim.fight_bl_delay = opts.bl_delay or 0
-    sim.locked_rotation = opts.locked_rotation
+    -- A stop-and-restart inside a swap fade window must not leak the pending twist into
+    -- the next fight (the first swing would grade a spurious MISS).
+    sim.twist_attempted = false
+    -- A locked rotation survives across fights (archive keeps the lock): only an explicit
+    -- non-nil argument changes it, so an empty opts table cannot silently clear it.
+    if opts.locked_rotation ~= nil then
+        sim.locked_rotation = opts.locked_rotation
+    end
 
     if sim.locked_rotation then
         sim.fight_bl_fired = true      -- locked rotations never auto-Bloodlust
@@ -807,6 +1011,38 @@ function st.practice.on_swing(sim, now, out)
         seal_active = seal,
     }
 
+    -- Twist timing: ms between the arming seal swap and this swing landing. The swap
+    -- armed the fade window (cast() sets fading_seal_expires = swap_time +
+    -- SEAL_FADE_SECONDS), so the swap time is recoverable without new sim state. Nil
+    -- when the attempt has no measurable swap (the fade already expired before this
+    -- call, or dual seals with no fade window such as a resume-swapped pair);
+    -- clamped at 0 against clock skew.
+    local lead_ms = nil
+    if sim.twist_attempted and sim.fading_seal_label and sim.fading_seal_expires
+            and sim.fading_seal_expires > 0 then
+        lead_ms = (now - (sim.fading_seal_expires - st.practice.SEAL_FADE_SECONDS)) * 1000
+        if lead_ms < 0 then
+            lead_ms = 0
+        end
+        -- Round to 0.001 ms: the fade arithmetic rides binary floating point
+        -- (2.4 - 0.4 is a hair above 2.0), and an unrounded 200.0000004 ms lead
+        -- would grade B against an exact 200 ms cutoff.
+        lead_ms = math.floor(lead_ms * 1000 + 0.5) / 1000
+    end
+    out.lead_ms = lead_ms
+
+    -- Per-attempt grade: nil when no twist was attempted (not an attempt), "F" for an
+    -- armed attempt that missed, otherwise the S/A/B/C/D timing grade below.
+    local grade = nil
+    if sim.twist_attempted then
+        if result == "twist" then
+            grade = st.practice.grade_twist(lead_ms)
+        else
+            grade = "F"
+        end
+    end
+    out.grade = grade
+
     if sim.twist_attempted then
         if sim.n_active_seals >= 2 then
             out.feedback = "TWIST!"
@@ -1076,4 +1312,137 @@ end
 -- Grading entry point used by the tests and phase 2 (see the input contract above).
 function st.practice.analyze(events, count, bands, band_count)
     return analyze_events(events, count, bands, band_count)
+end
+
+--=========================================================================================
+-- Practice scoring: per-attempt grades, session score, personal bests (new design, no
+-- archive source - the archived build graded TWIST!/MISS only and kept no score).
+--
+-- Timing model: a twist attempt is a seal swap, and the swing must land inside the
+-- SEAL_FADE_SECONDS window the swap opens. The swap lead time (ms from the arming swap
+-- to the swing landing, reported as on_swing's out.lead_ms) is the timing error: a
+-- smaller lead is a tighter twist, because an early swap risks the fade expiring while
+-- a late swap risks landing after the swing. Grades are monotonic in the lead.
+--=========================================================================================
+
+-- Grade cutoffs in ms of swap lead time, as fractions of the 400 ms twist window:
+-- S/A/B split the window into quarters (tight/half/three-quarter window), C is a
+-- success with margin, and anything slower is D (the twist held, but only just -
+-- inside the fade with less than 50 ms to spare).
+st.practice.GRADE_LEAD_MS_S = 100
+st.practice.GRADE_LEAD_MS_A = 200
+st.practice.GRADE_LEAD_MS_B = 300
+st.practice.GRADE_LEAD_MS_C = 350
+
+-- Grade points (0-100 scale): every attempt contributes, so a missed attempt (F = 0)
+-- drags the session score exactly like a wrong answer on a test.
+st.practice.GRADE_POINTS = { S = 100, A = 80, B = 60, C = 40, D = 20, F = 0 }
+
+-- Grade rank for best-grade comparison (higher is better; F is the floor).
+st.practice.GRADE_RANK = { S = 6, A = 5, B = 4, C = 3, D = 2, F = 1 }
+
+-- Rolling window in attempts: the consistency readouts (rolling hit-rate / rolling
+-- points) cover the last SCORE_WINDOW attempts, so early-session mistakes age out.
+st.practice.SCORE_WINDOW = 20
+
+-- Grade one successful twist by its swap lead time (ms). A nil/non-number lead means
+-- the success has no measurable swap (dual seals with no fade window); it grades C,
+-- the neutral middle, rather than rewarding or punishing an unmeasured attempt.
+function st.practice.grade_twist(lead_ms)
+    if type(lead_ms) ~= "number" then
+        return "C"
+    end
+    if lead_ms <= st.practice.GRADE_LEAD_MS_S then
+        return "S"
+    elseif lead_ms <= st.practice.GRADE_LEAD_MS_A then
+        return "A"
+    elseif lead_ms <= st.practice.GRADE_LEAD_MS_B then
+        return "B"
+    elseif lead_ms <= st.practice.GRADE_LEAD_MS_C then
+        return "C"
+    end
+    return "D"
+end
+
+-- Fresh session score accumulator (pure data; the caller owns it, typically one per
+-- practice session on the UI side).
+function st.practice.new_score()
+    return {
+        attempts = 0,      -- twist attempts recorded (swings with no attempt are not attempts)
+        hits = 0,          -- successful twists (any grade but F)
+        total_points = 0,   -- sum of GRADE_POINTS over all attempts
+        error_sum_ms = 0,   -- sum of measured leads over successful twists
+        error_count = 0,    -- successful twists with a measured lead
+        best_grade = nil,   -- best single-attempt grade by GRADE_RANK
+        last_grade = nil,   -- most recent attempt grade
+        recent_points = {}, -- ring of the last SCORE_WINDOW attempt point values
+        recent_hits = 0,    -- hits inside recent_points (F is the only 0-point grade)
+    }
+end
+
+-- Record one graded attempt. A nil grade means "no attempt" and records nothing.
+-- Deterministic: no clock, no randomness; repeated sequences give identical states.
+function st.practice.record_attempt(score, grade, lead_ms)
+    if not score or not grade then
+        return score
+    end
+    local points = st.practice.GRADE_POINTS[grade] or 0
+    score.attempts = score.attempts + 1
+    score.total_points = score.total_points + points
+    score.last_grade = grade
+    local hit = grade ~= "F"
+    if hit then
+        score.hits = score.hits + 1
+        score.recent_hits = score.recent_hits + 1
+        if type(lead_ms) == "number" then
+            score.error_sum_ms = score.error_sum_ms + lead_ms
+            score.error_count = score.error_count + 1
+        end
+    end
+    local rank = st.practice.GRADE_RANK[grade] or 0
+    if not score.best_grade or rank > (st.practice.GRADE_RANK[score.best_grade] or 0) then
+        score.best_grade = grade
+    end
+    local recent = score.recent_points
+    recent[#recent + 1] = points
+    if #recent > st.practice.SCORE_WINDOW then
+        -- Evict the oldest attempt; only F carries 0 points, so a positive eviction
+        -- was a hit and the rolling hit count drops by one.
+        if table.remove(recent, 1) > 0 then
+            score.recent_hits = score.recent_hits - 1
+        end
+    end
+    return score
+end
+
+-- Summarize a score accumulator. The session score (0-100, rounded half up) is the
+-- mean grade points per attempt: accuracy is in it (every F contributes 0) and so is
+-- consistency (every attempt counts equally, so scattered misses drag the mean).
+-- The rolling hit-rate / rolling points (last SCORE_WINDOW attempts) and the mean
+-- timing error ride alongside it as the accuracy + consistency readouts. An empty
+-- accumulator scores 0 with zero rates and a nil mean error.
+function st.practice.score_summary(score)
+    local s = score or st.practice.new_score()
+    local attempts = s.attempts or 0
+    local hits = s.hits or 0
+    local recent = s.recent_points or {}
+    local recent_n = #recent
+    local recent_points = 0
+    for i = 1, recent_n do
+        recent_points = recent_points + recent[i]
+    end
+    local summary = {
+        attempts = attempts,
+        hits = hits,
+        hit_rate = (attempts > 0) and (hits / attempts) or 0,
+        mean_points = (attempts > 0) and ((s.total_points or 0) / attempts) or 0,
+        rolling_hit_rate = (recent_n > 0) and ((s.recent_hits or 0) / recent_n) or 0,
+        rolling_points = (recent_n > 0) and (recent_points / recent_n) or 0,
+        mean_error_ms = ((s.error_count or 0) > 0)
+            and (s.error_sum_ms / s.error_count) or nil,
+        best_grade = s.best_grade,
+        last_grade = s.last_grade,
+    }
+    summary.score = (attempts > 0) and math.floor(summary.mean_points + 0.5) or 0
+    return summary
 end

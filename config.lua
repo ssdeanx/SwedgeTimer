@@ -7,6 +7,12 @@ local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 -- local print = st.utils.print_msg
 local LWIN = LibStub("LibWindow-1.1")
 
+---@class AceAddon
+---@field defaults? table
+local _ST = ST
+---@type AceAddon
+ST = _ST
+
 ------------------------------------------------------------------------------------
 -- Default settings for the addon.
 ST.defaults = {

@@ -1,6 +1,6 @@
 # SwedgeTimer
 
-WoW addon (Lua) shipping one universal build for WotLK Classic and the other classic-line and Mainline clients (see the Cross-engine section for the target matrix). Vendored Ace3 and other libs. There is no build step; offline checks live in `tests/` (`bash tests/run.sh`), and the real check for API behaviour is loading the addon in a client.
+WoW addon (Lua) shipping one universal build for the classic-line and Mainline client families (see the Cross-engine section for the target matrix). Vendored Ace3 and other libs. There is no build step; offline checks live in `tests/` (`bash tests/run.sh`), and the real check for API behaviour is loading the addon in a client.
 
 ## Layout
 
@@ -41,7 +41,7 @@ WoW addon (Lua) shipping one universal build for WotLK Classic and the other cla
 
 ## Cross-engine (universal single build)
 
-- Goal: one addon build runs on every WoW engine family with no per-client download. Do not create client-specific file trees; the only per-flavor artifacts are the toc variants (which files load), everything else branches in Lua at runtime. Target matrix: Classic Era 1.15.9 → `_Vanilla` (11509); TBC Anniversary 2.5.6 → `_TBC` (20506); WotLK Classic 3.4.1 → base (30401); Titanforge 3.80.2 → `_Wrath` (30401, 38002); Retail 12.1.0 and WoW Forever 1.60.1 → `_Mainline` (120100, 120105, 16001).
+- Goal: one addon build runs on every WoW engine family with no per-client download. Do not create client-specific file trees; the only per-flavor artifacts are the toc variants (which files load), everything else branches in Lua at runtime. Target matrix: Classic Era / SoD 1.15.9 → `_Vanilla` (11509); TBC Anniversary 2.5.6 → `_TBC` (20506); WotLK Titanforge 3.80.2 → `_Wrath` (38002); Retail 12.1.0 and WoW Forever 1.60.1 → `_Mainline` (120100, 120105, 16001); the base `SwedgeTimer.toc` advertises the whole matrix (11509, 20506, 38002, 16001, 120100).
 - `## Interface` can be a comma-separated list of target Interface numbers; supported references and game-type gating live in `/home/sam/wow-ui-source` (see SKILL.md § 10).
 - Detect family/API with `WOW_PROJECT_ID` constants — including `WOW_PROJECT_CAMELOT` = 18 on WoW Forever — and feature probes (`C_Spell`, `C_Container`, `C_ClassTalents`, `UnitClass` return arity) rather than hard-coded version strings.
 - Mainline-code clients (Retail, WoW Forever) have no classic combat log. WoW Forever instead exposes the native `PLAYER_SWING` event family: `swing_source.lua` provides a `LibClassicSwingTimerAPI`-compatible engine there (Forever only, probe-gated via `C_EventUtils.IsEventValid`). Retail keeps the inert stand-in: `_Mainline.toc` ships no `LibClassicSwingTimerAPI`, and `main.lua` substitutes the stand-in so `init_libs`/options/range/GCD stay alive and the user gets a one-time notice. `main.lua` also arms a 5s post-init deadline: if a library never reports ready (e.g. `LibRangeCheck` on an incompatible client), init proceeds anyway with that feature disabled for the session and a one-time notice.

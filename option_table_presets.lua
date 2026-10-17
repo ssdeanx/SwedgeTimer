@@ -2,6 +2,8 @@
 -- Module to contain presets for the options table generation
 --=========================================================================================
 local addon_name, st = ...
+---@class AceAddon
+---@field valid_anchor_points table
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LSM = LibStub("LibSharedMedia-3.0")
 
@@ -117,8 +119,8 @@ function ST:construct_latency_settings_table()
             min = 0, max = 200, step = 1,
             get = "getter",
             set = "latency_setter",
-            disabled = function()
-                local db = ST:get_profile_table()
+            disabled = function(panel)
+                local db = panel.db.profile
                 local is_fixed = db.gcd_marker_offset_mode == "Fixed"
                 local is_calibrated = db.gcd_marker_offset_mode == "Calibrated"
                 return not (is_fixed or is_calibrated)
@@ -934,7 +936,7 @@ function ST:construct_info_panel()
         desc1 = {
             type = "description",
             order = 1.1,
-            name = "SwedgeTimer is a general-purpose Swing Timer addon for Wrath of the Lich King Classic. "..
+            name = "SwedgeTimer is a general-purpose Swing Timer addon for Titanforge (WotLK 3.80) and all supported Classic clients. "..
                 "It aims to be a one-stop-shop for swing timers, supporting independent and feature-rich "..
                 "timer configurations for each class in the game."
                 -- "SwedgeTimer is powered by LibClassicSwingTimerAPI and accounts for the many "..
@@ -997,17 +999,19 @@ function ST:construct_info_panel()
 end
 
 function ST:construct_class_info_panel()
+    local player_class = select(2, UnitClass("player"))
+
     ST.class_info_panel = {
         header = {
             type = "header",
-            name = string.format("Default Settings", self.player_class_pretty),
+            name = string.format("Default Settings (%s)", player_class or "Unknown"),
             order = 1.0,
         },
     }
 
     -- Generate the per-class settings.
     local per_class = {}
-    if self.player_class == "DEATHKNIGHT" then
+    if player_class == "DEATHKNIGHT" then
         per_class = {
             d1 = {
                 type = "description",
@@ -1035,7 +1039,7 @@ function ST:construct_class_info_panel()
                 "and offhand timers together, accessible from the relevant panel on the left."
             },
         }
-    elseif self.player_class == "DRUID" then
+    elseif player_class == "DRUID" then
        per_class = {
         d1 = {
             type = "description",
@@ -1076,7 +1080,7 @@ function ST:construct_class_info_panel()
             "takes them below the rage threshold to cast Maul."
         },
     }
-    elseif self.player_class == "HUNTER" then
+    elseif player_class == "HUNTER" then
         per_class = {
             d1 = {
                 type = "description",
@@ -1103,18 +1107,18 @@ function ST:construct_class_info_panel()
                 "queued for their next attack."
             },
         }
-    elseif self.player_class == "MAGE" then
+    elseif player_class == "MAGE" then
         per_class = {
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Mages, like all other casters, have less of a need for a swing timer in WotLK, "..
+                name = "Mages, like all other casters, have less of a need for a swing timer on Titanforge, "..
                 "and so Swedgetimer is globally disabled for the class by default.\n\n"..
                 "If the player enables the addon for Mages, then the ranged timer will be used for wand shooting progress"..
                 " and the mainhand timer will be disabled by default."
            }
         }
-    elseif self.player_class == "PALADIN" then
+    elseif player_class == "PALADIN" then
         per_class = {
             d1 = {
                 type = "description",
@@ -1156,18 +1160,18 @@ function ST:construct_class_info_panel()
                 "for Rets who want to optimise their Flash of Light casts.",
         }
     }
-    elseif self.player_class == "PRIEST" then
+    elseif player_class == "PRIEST" then
         per_class = {
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Priests, like all other casters, have less of a need for a swing timer in WotLK, "..
+                name = "Priests, like all other casters, have less of a need for a swing timer on Titanforge, "..
                 "and so Swedgetimer is globally disabled for the class by default.\n\n"..
                 "If the player enables the addon for Priests, then the ranged timer will be used for wand shooting progress"..
                 " and the mainhand timer will be disabled by default."
            }
         }
-    elseif self.player_class == "ROGUE" then
+    elseif player_class == "ROGUE" then
         per_class = {
             d1 = {
                 type = "description",
@@ -1194,7 +1198,7 @@ function ST:construct_class_info_panel()
                 " together."
             },
         }
-    elseif self.player_class == "SHAMAN" then
+    elseif player_class == "SHAMAN" then
         per_class = {
             d1 = {
                 type = "description",
@@ -1222,18 +1226,18 @@ function ST:construct_class_info_panel()
                 "and offhand timers together, accessible from the relevant panel on the left."
             },
         }
-    elseif self.player_class == "WARLOCK" then
+    elseif player_class == "WARLOCK" then
         per_class = {
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Warlocks, like all other casters, have less of a need for a swing timer in WotLK, "..
+                name = "Warlocks, like all other casters, have less of a need for a swing timer on Titanforge, "..
                 "and so Swedgetimer is globally disabled for the class by default.\n\n"..
                 "If the player enables the addon for Warlocks, then the ranged timer will be used for wand shooting progress"..
                 " and the mainhand timer will be disabled by default."
            }
         }
-    elseif self.player_class == "WARRIOR" then
+    elseif player_class == "WARRIOR" then
         per_class = {
             d1 = {
                 type = "description",

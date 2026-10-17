@@ -1,14 +1,85 @@
 --=========================================================================================
--- Next Action Guide display: the on-screen rotation prompt (Crusader Strike / Seal of
--- Command / Seal of Blood / twist icon, HOLD / RIDE overlay, Judgement cue, filler
--- icons and the optional rotation text below the frame).
+-- Next Action Guide display: the on-screen rotation prompt, generalised behind a
+-- per-class provider so any class module can drive it (the paladin ships the first
+-- provider: ST.PALADIN.guide in classes/paladin.lua).
 -- Port of the archived build's nextaction.lua display half
 -- (docs/swedge/SwedgeTimer_Forever/nextaction.lua 590-1011), minus practice mode and
 -- edit mode. The decision engine lives in the pure st.nextaction module
--- (nextaction.lua); this file only builds the frame, feeds it the gathered inputs and
--- maps the engine output onto the widgets.
+-- (nextaction.lua); this file builds the frame from the provider's slot set, feeds it
+-- the gathered inputs and maps the provider output onto the widgets.
 -- The guide never gates on st.is_mainline (the Forever client is Mainline-code but must
 -- show it); swing activity decides instead.
+--
+-- FROZEN PROVIDER CONTRACT - ST.<CLASS>.guide = { ... }:
+--
+--   slots = { { key = "cs", spell_id = 35395, cooldown_key = "cs" }, ... }
+--     Ordered set of the displayable slots. `key` is the slot identity: out.action,
+--     out.filler_slot and out.judge_slot name a slot by this key. `spell_id` supplies
+--     the icon texture. `cooldown_key` (optional) names the slot's swipe source in the
+--     gather inputs: inputs[cooldown_key .. "_remaining"] (seconds),
+--     inputs[cooldown_key .. "_duration"] (full swipe length; falls back to the slot's
+--     swipe_duration below) and inputs[cooldown_key .. "_expires"] (an absolute expiry
+--     in the api.get_time() domain, preferred when present - the seal-aura shape).
+--     The shipped paladin set has eight entries (the composite twist icon plus the
+--     judgement cue and the three fillers); other classes are expected to stay at six
+--     or fewer.
+--
+--   gather = function(self, out) ... return out end
+--     Writes the live inputs into the caller-owned reused table (or into the module's
+--     own reused table) and returns it. Inputs are the engine's frozen name set
+--     (nextaction.lua header) plus the display-only fields the slots' cooldown_keys
+--     name above. Must not allocate per call.
+--
+--   evaluate = function(inputs, out) ... return out end
+--     Pure. Writes the frozen display fields into the caller-owned reused table and
+--     returns it. The table is reused, so every field must be written on every tick:
+--       out.action            slot key or nil - the action icon to show
+--       out.hold              bool - show the HOLD/RIDE overlay
+--       out.hold_text         string or nil - the overlay text; nil falls back to the
+--                             labels below
+--       out.filler_slot       slot key or nil - shown over the action icon
+--       out.judge_slot        slot key or nil - shown low-left unless a filler shows
+--       out.rotation_key      string or nil - the rotation pattern key painted this
+--                             tick (rotation_key() below is the live text source)
+--       out.waiting_judgement bool - judgement-cue carry (paladin; others may ignore)
+--     out.riding (the engine's optional field) selects the ride label when
+--     out.hold_text is nil.
+--
+--   rotation_key = function(inputs) return key or nil end   -- optional
+--     Live rotation-pattern key for the text below the icons. Absent -> the in-guide
+--     rotation text is never shown.
+--   rotation_names = { [key] = display_text, ... }          -- optional display map
+--     Resolves a rotation key to its display text (default: the key itself).
+--   labels = { next_action = "Next action:", hold = "HOLD", ride = "RIDE" } -- optional
+--     Static captions: next_action is the text above the icons; hold/ride supply the
+--     overlay text when out.hold_text is nil.
+--
+-- OPTIONAL SLOT DISPLAY FIELDS - every default reproduces the archive's plain 45x45
+-- centre icon; the paladin provider exercises each one:
+--   name_suffix      frame-name suffix (default: the slot key)
+--   size = {w, h}    icon size (default 45x45)
+--   level            Z level within the guide group, relative to the group frame
+--                    (default 1)
+--   offset = {x, y}  centre offset from the group centre (default 0, 0)
+--   zoom             texture crop (the WA's zoom, default none)
+--   keep_aspect      centre-crop for non-square icons
+--   border_size      border edge size (default 2)
+--   overlay = { spell_id=..., name_suffix=..., size=..., offset=..., level=...,
+--               zoom=..., keep_aspect=..., border_size=... }
+--                    a second icon drawn over the first (the paladin twist
+--                    composite); its `level` is relative to the slot's icon (default 1)
+--   label            caption fontstring drawn centred over the icon (e.g. "FILLER")
+--   swipe_always     drive the cooldown swipe even while the icon is faded out
+--                    (default: only while the icon is shown)
+--   swipe_duration   fallback full swipe length in seconds when the inputs give none
+--   idle_alpha       out-of-combat idle alpha for the slot (default 0 = hidden)
+--   glow             Pixel-glow the icon while it is shown (the paladin judge cue)
+--   glow_key         glow pairing key (default: "NextAction" .. key)
+--
+-- NO provider -> the UI is inert: no frame is created, nothing ticks, nothing errors
+-- and ui.should_show() is false. classes/paladin.lua's post_init drives ui.init(self)
+-- and the options panel / design mode keep driving the live frame through the
+-- nextaction_* db keys and ui.apply_settings.
 --=========================================================================================
 local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
@@ -27,20 +98,12 @@ local ui = st.nextaction_ui
 local FADE_DURATION = 0.2               -- the WA's preset fade in/out time
 local BASE_ICON_SIZE = 45               -- everything is authored at WA scale
 local UPDATE_INTERVAL = 0.05            -- engine tick, matches the WA's aura poll cadence
--- Fallback swipe lengths, used only while no real duration has been observed yet (the
--- paladin module latches the length the client reported for each spell cooldown in
--- get_guide_cooldown_remaining and hands it over as inputs.cs_duration /
--- inputs.judge_duration; LibClassicDurations is aura-based and knows nothing about spell
--- cooldowns, so the latch is the only real source here).
-local CS_COOLDOWN = 6                   -- fallback full CS cooldown (swipe duration), seconds
-local JUDGEMENT_COOLDOWN = 8            -- fallback full Judgement cooldown (swipe duration)
--- Fallback seal swipe length: the vanilla/TBC seal duration the archived build used
--- (docs/swedge/SwedgeTimer_TBC/player.lua seal_1_duration). When LibClassicDurations
--- exists AND tracks the seal's aura (Classic Era / TBC Anniversary only, see the header
--- block in classes/paladin.lua), the paladin module latches that length into
--- self.soc_duration / self.sob_duration and that value is used instead; untracked auras,
--- Seal of Blood everywhere, and every other client family land on this constant.
-local SEAL_DURATION = 30
+-- Cooldown swipe lengths are slot data now (slot.swipe_duration): the paladin provider
+-- carries the archive's fallbacks (CS 6 s, Judgement 8 s, seals 30 s) and the real
+-- length the client reported rides in the gather inputs (<cooldown_key>_duration,
+-- latched by classes/paladin.lua's get_guide_cooldown_remaining and by the seal mirror
+-- for the LibClassicDurations tear-down on Era/TBC). A slot with neither falls back to
+-- the remaining time itself, which degrades gracefully.
 -- Crisp circle texture ported from the archive's Images/ (shipped as
 -- Media/Textures/circle_smooth.tga). The plain-texture fallback below stays for
 -- profiles where the asset is missing; a missing texture file never raises.
@@ -48,6 +111,22 @@ local HOLD_CIRCLE_ASSET = true
 local HOLD_CIRCLE_TEXTURE = "Interface\\AddOns\\SwedgeTimer\\Media\\Textures\\circle_smooth.tga"
 local HOLD_CIRCLE_COLOR = {0.090, 0.067, 0.039, 0.45}
 local HOLD_CIRCLE_SIZE = 40
+
+--=========================================================================================
+-- Provider dispatch (the frozen contract is documented in the header)
+--=========================================================================================
+-- The class module's ST.<CLASS>.guide table, or nil. Read at init and on every tick;
+-- the reader never allocates. A class without a guide table (or a module without the
+-- two contract functions) leaves the whole UI inert: no frame ever exists.
+function ui.get_provider(self)
+    local class_module = self[self.player_class or ""]
+    local guide = class_module and class_module.guide
+    if type(guide) == "table" and type(guide.gather) == "function"
+        and type(guide.evaluate) == "function" then
+        return guide
+    end
+    return nil
+end
 
 --=========================================================================================
 -- Icon helpers (archive create_wa_icon; icons come from compat's GetSpellInfo so both
@@ -115,6 +194,54 @@ local function create_wa_icon(parent, name_suffix, width, height, spell_id, opts
     return icon
 end
 
+-- One slot's icon from its descriptor (see the optional display fields in the header):
+-- a plain centred icon by default, with an optional overlay icon (the twist composite)
+-- and an optional caption fontstring (the filler icons).
+local function build_slot_icon(frame, slot)
+    local size = slot.size
+    local width = (size and size[1]) or BASE_ICON_SIZE
+    local height = (size and size[2]) or BASE_ICON_SIZE
+    local icon = create_wa_icon(frame, slot.name_suffix or slot.key, width, height,
+        slot.spell_id, {
+            cooldown = slot.cooldown_key ~= nil,
+            level = slot.level or 1,
+            zoom = slot.zoom,
+            keep_aspect = slot.keep_aspect,
+            border_size = slot.border_size,
+        })
+    local offset = slot.offset
+    icon:SetPoint("CENTER", frame, "CENTER", (offset and offset[1]) or 0,
+        (offset and offset[2]) or 0)
+
+    local overlay = slot.overlay
+    if type(overlay) == "table" then
+        local o_size = overlay.size
+        local overlay_icon = create_wa_icon(icon,
+            overlay.name_suffix or ((slot.name_suffix or slot.key) .. "Overlay"),
+            (o_size and o_size[1]) or width, (o_size and o_size[2]) or height,
+            overlay.spell_id, {
+                level = overlay.level or 1,
+                zoom = overlay.zoom,
+                keep_aspect = overlay.keep_aspect,
+                border_size = overlay.border_size,
+            })
+        local o_offset = overlay.offset
+        overlay_icon:SetPoint("CENTER", icon, "CENTER", (o_offset and o_offset[1]) or 0,
+            (o_offset and o_offset[2]) or 0)
+        overlay_icon:SetAlpha(1)
+        icon.overlay = overlay_icon
+    end
+
+    if slot.label then
+        local caption = icon:CreateFontString(nil, "OVERLAY")
+        caption:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
+        caption:SetPoint("CENTER", icon, "CENTER", 0, 0)
+        caption:SetTextColor(1, 1, 1, 1)
+        caption:SetText(slot.label)
+    end
+    return icon
+end
+
 --=========================================================================================
 -- Fade system: elements animate their alpha toward a target, replicating the WA's fade
 -- in/out preset animations (HOLD is instant, matching the WA)
@@ -150,18 +277,6 @@ local function animate(elapsed)
     end
 end
 
-local function set_element_targets(frame, cs_target, command_target, blood_target,
-        twist_target, judge_target, hold_target, consec_target, exo_target)
-    set_fade_target(frame.icon_cs.fade, cs_target)
-    set_fade_target(frame.icon_command.fade, command_target)
-    set_fade_target(frame.icon_blood.fade, blood_target)
-    set_fade_target(frame.icon_twist.fade, twist_target)
-    set_fade_target(frame.icon_judge.fade, judge_target)
-    set_fade_target(frame.hold.fade, hold_target)
-    set_fade_target(frame.filler_consec.fade, consec_target)
-    set_fade_target(frame.filler_exo.fade, exo_target)
-end
-
 --=========================================================================================
 -- Frame construction (archive geometry; practice and edit-mode couplings removed)
 --=========================================================================================
@@ -169,11 +284,31 @@ function ui.init(self)
     if ui.frame then
         return
     end
-    local na = st.nextaction
-    if not na then
-        -- The pure engine module is not loaded on this flavor: nothing to display.
+    local provider = ui.get_provider(self)
+    if not provider then
+        -- No class provider on this flavor/class: nothing to display, never a tick.
+        ui.inert = true
         return
     end
+    -- Collect the keyed slots first: a provider with nothing usable stays inert
+    -- without creating a single frame.
+    local slots = {}
+    local n = 0
+    local raw_slots = provider.slots
+    if type(raw_slots) == "table" then
+        for i = 1, #raw_slots do
+            local slot = raw_slots[i]
+            if type(slot) == "table" and type(slot.key) == "string" and slot.key ~= "" then
+                n = n + 1
+                slots[n] = slot
+            end
+        end
+    end
+    if n == 0 then
+        ui.inert = true
+        return
+    end
+    ui.inert = false
     local db = self:get_class_table()
 
     local frame = CreateFrame("Frame", addon_name .. "NextActionFrame", UIParent)
@@ -199,41 +334,35 @@ function ui.init(self)
         class_db.nextaction_y = math.floor(cy * s - uy + 0.5)
     end)
 
-    -- Action icons, all stacked on the frame's center like the WA group; only one
-    -- is faded in at a time.
-    frame.icon_cs = create_wa_icon(frame, "IconCS", 45, 45, na.CS_SPELL_ID,
-        { cooldown = true, level = 1 })
-    frame.icon_cs:SetPoint("CENTER", frame, "CENTER", 0, 0)
-
-    frame.icon_command = create_wa_icon(frame, "IconCommand", 45, 45, na.SOC_ID,
-        { cooldown = true, level = 3 })
-    frame.icon_command:SetPoint("CENTER", frame, "CENTER", 0, 0)
-
-    frame.icon_blood = create_wa_icon(frame, "IconBlood", 45, 45, na.SOB_ID,
-        { cooldown = true, level = 5 })
-    frame.icon_blood:SetPoint("CENTER", frame, "CENTER", 0, 0)
-
-    -- Twist: full Command icon with a half-width, center-cropped Blood icon over
-    -- its right half (the WA's 'twist 1/2' + 'twist 2/2' pair).
-    frame.icon_twist = CreateFrame("Frame", addon_name .. "NextActionTwist", frame)
-    frame.icon_twist:SetSize(45, 45)
-    frame.icon_twist:SetPoint("CENTER", frame, "CENTER", 0, 0)
-    frame.icon_twist:SetFrameLevel(frame:GetFrameLevel() + 7)
-    frame.icon_twist.left = create_wa_icon(frame.icon_twist, "TwistLeft", 45, 45,
-        na.SOC_ID, { level = 1 })
-    frame.icon_twist.left:SetPoint("CENTER", frame.icon_twist, "CENTER", 0, 0)
-    frame.icon_twist.left:SetAlpha(1)
-    frame.icon_twist.right = create_wa_icon(frame.icon_twist, "TwistRight", 22.5, 45,
-        na.SOB_ID, { keep_aspect = true, level = 2 })
-    frame.icon_twist.right:SetPoint("CENTER", frame.icon_twist, "CENTER", 11.25, 0)
-    frame.icon_twist.right:SetAlpha(1)
-    frame.icon_twist:SetAlpha(0)
-
-    -- Judgement cue: small icon low-left over the action icon (WA: 22.5x24.9 at
-    -- (-9,-10), 1px border, inverse cooldown swipe, Pixel glow while shown).
-    frame.icon_judge = create_wa_icon(frame, "JudgeTime", 22.5, 24.9, na.JUDGEMENT_SPELL_ID,
-        { cooldown = true, keep_aspect = true, border_size = 1, level = 9 })
-    frame.icon_judge:SetPoint("CENTER", frame, "CENTER", -9, -10)
+    -- One icon per slot, in provider order, all stacked on the frame's center like the
+    -- WA group; only the one the provider targets is faded in at a time. The per-slot
+    -- derived fields (cooldown field names, glow key) are built once here, so the
+    -- per-frame path does no string work and allocates nothing.
+    ui.icons = {}
+    ui.slot_index = {}
+    ui.targets = {}
+    ui.inputs = ui.inputs or {}
+    for i = 1, n do
+        local slot = slots[i]
+        local icon = build_slot_icon(frame, slot)
+        local sf = {
+            slot = slot,
+            icon = icon,
+            fade = register_fade(icon),
+            glowing = false,
+        }
+        if slot.cooldown_key then
+            sf.remaining_key = slot.cooldown_key .. "_remaining"
+            sf.duration_key = slot.cooldown_key .. "_duration"
+            sf.expires_key = slot.cooldown_key .. "_expires"
+        end
+        if slot.glow then
+            sf.glow_key = slot.glow_key or ("NextAction" .. slot.key)
+        end
+        ui.icons[i] = sf
+        ui.slot_index[slot.key] = i
+        ui.targets[i] = 0
+    end
 
     -- HOLD / RIDE: dark translucent circle over the action icon with white text
     -- (the WA drew a near-black circle with Friz Quadrata 12 OUTLINE text).
@@ -254,24 +383,9 @@ function ui.init(self)
     frame.hold.text:SetFont("Fonts\\FRIZQT__.TTF", 12, "OUTLINE")
     frame.hold.text:SetPoint("CENTER", frame.hold, "CENTER", 0, 0)
     frame.hold.text:SetTextColor(1, 1, 1, 1)
-    frame.hold.text:SetText("HOLD")
+    frame.hold.text:SetText((provider.labels and provider.labels.hold) or "HOLD")
     frame.hold:SetAlpha(0)
-
-    -- Filler icons pop over everything in the same slot (WA: Consecration zoom 0.2,
-    -- Exorcism zoom 0.15, white FILLER label).
-    frame.filler_consec = create_wa_icon(frame, "FillerC", 45, 45, na.CONSECRATION_SPELL_ID,
-        { zoom = 0.2, level = 13 })
-    frame.filler_consec:SetPoint("CENTER", frame, "CENTER", 0, 0)
-    frame.filler_exo = create_wa_icon(frame, "FillerE", 45, 45, na.EXORCISM_SPELL_ID,
-        { zoom = 0.15, level = 14 })
-    frame.filler_exo:SetPoint("CENTER", frame, "CENTER", 0, 0)
-    for _, filler in ipairs({ frame.filler_consec, frame.filler_exo }) do
-        filler.label = filler:CreateFontString(nil, "OVERLAY")
-        filler.label:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
-        filler.label:SetPoint("CENTER", filler, "CENTER", 0, 0)
-        filler.label:SetTextColor(1, 1, 1, 1)
-        filler.label:SetText("FILLER")
-    end
+    frame.hold.fade = register_fade(frame.hold, true)
 
     -- "Next action:" label above the icons (WA: Friz Quadrata 8 OUTLINE at (2,25)).
     frame.label = frame:CreateFontString(nil, "OVERLAY")
@@ -280,7 +394,7 @@ function ui.init(self)
     frame.label:SetTextColor(1, 1, 1, 1)
     frame.label:SetShadowColor(0, 0, 0, 1)
     frame.label:SetShadowOffset(1, -1)
-    frame.label:SetText("Next action:")
+    frame.label:SetText((provider.labels and provider.labels.next_action) or "Next action:")
 
     -- Rotation pattern text below the icons (WA: font "2002" size 12 OUTLINE,
     -- bottom-anchored 40px below center).
@@ -290,16 +404,6 @@ function ui.init(self)
     frame.rotation_text:SetTextColor(1, 1, 1, 1)
     frame.rotation_text:SetShadowColor(0, 0, 0, 1)
     frame.rotation_text:SetShadowOffset(1, -1)
-
-    -- Fade bookkeeping: HOLD shows/hides instantly like the WA; the rest fade.
-    frame.icon_cs.fade = register_fade(frame.icon_cs)
-    frame.icon_command.fade = register_fade(frame.icon_command)
-    frame.icon_blood.fade = register_fade(frame.icon_blood)
-    frame.icon_twist.fade = register_fade(frame.icon_twist)
-    frame.icon_judge.fade = register_fade(frame.icon_judge)
-    frame.hold.fade = register_fade(frame.hold, true)
-    frame.filler_consec.fade = register_fade(frame.filler_consec)
-    frame.filler_exo.fade = register_fade(frame.filler_exo)
 
     -- The guide must also hide and fade while the swing bars are hidden (the
     -- bar-driven class hook stops when a bar is hidden), so the frame ticks itself
@@ -316,11 +420,15 @@ end
 --=========================================================================================
 -- Display state
 --=========================================================================================
--- True when the guide may be shown: enabled, and either in combat or pinned always,
--- with a live swing to guide. This is deliberately NOT an st.is_mainline gate: the
--- Forever client is Mainline-code but must show the guide, and the Retail stand-in
--- never reports a swing start, so the swing state keeps it hidden there.
+-- True when the guide may be shown: a class provider exists, the guide is enabled, and
+-- either in combat or pinned always, with a live swing to guide. This is deliberately
+-- NOT an st.is_mainline gate: the Forever client is Mainline-code but must show the
+-- guide, and the Retail stand-in never reports a swing start, so the swing state keeps
+-- it hidden there.
 function ui.should_show(self)
+    if not ui.get_provider(self) then
+        return false
+    end
     local db = self:get_class_table()
     if db.nextaction_enabled == false then
         return false
@@ -361,14 +469,14 @@ local function set_icon_cooldown(icon, remaining, full_duration)
     end
 end
 
--- Seal swipe, same inverse swizzle and same "set once per cooldown" pattern as the
--- spell icons: expires is the seal aura's expirationTime, latched by the paladin module
+-- Seal swipe: the same inverse swipe and the same "set once per cooldown" pattern as the
+-- spell icons. expires is the seal aura's expirationTime, latched by the paladin module
 -- in the same GetTime() domain as api.get_time(), so the remaining time is exact and
 -- needs no per-frame state of its own. It is only ever non-zero while the aura is up (a
 -- dropped seal clears the expiry, and the practice mirror supplies no expiry at all),
 -- which is what keeps the swipe from appearing on a seal that is not there. full_duration
 -- is the length LibClassicDurations reported for this aura (Era/TBC only) or nil, in
--- which case the archived vanilla/TBC constant applies — identical behaviour on every
+-- which case the slot's own swipe_duration applies — identical behaviour on every
 -- family where the library does not load.
 local function set_seal_icon_cooldown(icon, expires, full_duration)
     local remaining = 0
@@ -378,20 +486,21 @@ local function set_seal_icon_cooldown(icon, expires, full_duration)
             remaining = 0
         end
     end
-    set_icon_cooldown(icon, remaining, full_duration or SEAL_DURATION)
+    set_icon_cooldown(icon, remaining, full_duration or 30)
 end
 
--- Rotation text (the engine's pattern key resolved through its display names) and
+-- Rotation text (the provider's pattern key resolved through its display map) and
 -- the static "Next action:" label.
-local function update_texts(self, na, inputs)
+local function update_texts(self, provider, inputs)
     local frame = ui.frame
     local db = self:get_class_table()
     local rotation_key
-    if na.calculate_rotation then
-        rotation_key = na.calculate_rotation(inputs.speed, inputs.G)
+    if provider.rotation_key then
+        rotation_key = provider.rotation_key(inputs)
     end
     if db.nextaction_show_rotation_text ~= false and rotation_key then
-        local display = na.display_names and na.display_names[rotation_key] or rotation_key
+        local names = provider.rotation_names
+        local display = (names and names[rotation_key]) or rotation_key
         frame.rotation_text:SetText(display)
         frame.rotation_text:Show()
     else
@@ -404,100 +513,139 @@ local function update_texts(self, na, inputs)
     end
 end
 
--- Active guidance: map the engine output onto the widgets (archive 896-926, minus
--- the design-mode preview branches).
-local function display_active(self, inputs, out)
+-- Active guidance: map the provider output onto the widgets (archive 896-926, minus
+-- the design-mode preview branches). out.action / out.filler_slot / out.judge_slot are
+-- the provider's slot keys; each one maps to that slot's icon.
+local function display_active(self, provider, inputs, out)
     local frame = ui.frame
     local db = self:get_class_table()
-    local cs_target, command_target, blood_target, twist_target = 0, 0, 0, 0
-    local judge_target, hold_target, consec_target, exo_target = 0, 0, 0, 0
+    local icons = ui.icons
+    local targets = ui.targets
+    for i = 1, #icons do
+        targets[i] = 0
+    end
 
-    if out.riding then
-        -- Riding the active Seal of Blood (blood auto): show the Blood icon with
-        -- the RIDE overlay until it is safe to reseal Command.
-        blood_target = 1
-    elseif out.action == "cs" then
-        cs_target = 1
-    elseif out.action == "soc" then
-        command_target = 1
-    elseif out.action == "twist" then
-        twist_target = 1
-    else
-        blood_target = 1
+    local action_index = out.action and ui.slot_index[out.action]
+    if action_index then
+        targets[action_index] = 1
     end
-    if out.hold and db.nextaction_hold_enabled ~= false then
-        hold_target = 1
-        frame.hold.text:SetText(out.riding and "RIDE" or "HOLD")
-    end
-    if out.filler_kind and db.nextaction_show_fillers ~= false then
-        if out.filler_kind == "exorcism" then
-            exo_target = 1
-        else
-            consec_target = 1
+
+    local filler_index
+    if out.filler_slot and db.nextaction_show_fillers ~= false then
+        filler_index = ui.slot_index[out.filler_slot]
+        if filler_index then
+            targets[filler_index] = 1
         end
     end
-    -- The filler pops over the whole slot; suppress the judgement cue (and its
-    -- glow, which would otherwise render through the filler icon) while it shows.
-    if out.judge_call and db.nextaction_show_judgement ~= false
-        and consec_target == 0 and exo_target == 0 then
-        judge_target = 1
+
+    -- The filler pops over the whole slot; suppress the judgement cue (and its glow,
+    -- which would otherwise render through the filler icon) while it shows.
+    if out.judge_slot and db.nextaction_show_judgement ~= false then
+        local judge_index = ui.slot_index[out.judge_slot]
+        if judge_index and not (filler_index and targets[filler_index] > 0) then
+            targets[judge_index] = 1
+        end
     end
 
-    set_element_targets(frame, cs_target, command_target, blood_target, twist_target,
-        judge_target, hold_target, consec_target, exo_target)
-
-    -- Cooldown swipes on the CS, Judgement and seal icons (inverse, like the WA). The
-    -- remaining times are the same latched reads the engine consumed this tick; the swipe
-    -- lengths prefer what the client actually reported (inputs.cs_duration /
-    -- inputs.judge_duration, latched by the paladin module) and fall back to the
-    -- constants. The seal swipes are driven from the seal mirror rather than the engine's
-    -- pick, so they are correct on whichever seal icon is the one on screen.
-    local cs_remaining = inputs.cs_remaining or out.cs_remaining or 0
-    local judge_remaining = inputs.judge_remaining or out.judge_remaining or 0
-    set_icon_cooldown(frame.icon_cs, cs_target > 0 and cs_remaining or 0,
-        inputs.cs_duration or CS_COOLDOWN)
-    set_icon_cooldown(frame.icon_judge, judge_target > 0 and judge_remaining or 0,
-        inputs.judge_duration or JUDGEMENT_COOLDOWN)
-    set_seal_icon_cooldown(frame.icon_command, self.soc_expires, self.soc_duration)
-    set_seal_icon_cooldown(frame.icon_blood, self.sob_expires, self.sob_duration)
-
-    -- Pixel glow on the Judgement cue (WA subglow: Pixel, 8 lines, 0.25 frequency,
-    -- length 10, thickness 1).
-    if judge_target > 0 and not ui.judge_glowing then
-        ui.judge_glowing = true
-        LCG.PixelGlow_Start(frame.icon_judge, nil, 8, 0.25, 10, 1, 0, 0, false, "NextActionJudge")
-    elseif judge_target == 0 and ui.judge_glowing then
-        ui.judge_glowing = false
-        LCG.PixelGlow_Stop(frame.icon_judge, "NextActionJudge")
+    local hold_target = 0
+    if out.hold and db.nextaction_hold_enabled ~= false then
+        hold_target = 1
+        local text = out.hold_text
+        if text == nil then
+            local labels = provider.labels
+            if out.riding then
+                text = (labels and labels.ride) or "RIDE"
+            else
+                text = (labels and labels.hold) or "HOLD"
+            end
+        end
+        frame.hold.text:SetText(text)
     end
 
-    update_texts(self, st.nextaction, inputs)
+    for i = 1, #icons do
+        set_fade_target(icons[i].fade, targets[i])
+    end
+    set_fade_target(frame.hold.fade, hold_target)
+
+    -- Cooldown swipes on the slots that name a cooldown_key (inverse, like the WA):
+    -- an expiry takes the seal-aura path (recomputed against the clock, exactly like
+    -- the old seal swipe), otherwise the remaining/duration inputs drive it. A slot
+    -- without swipe_always only swipes while its icon is faded in; the set-once latch
+    -- lives in set_icon_cooldown.
+    for i = 1, #icons do
+        local sf = icons[i]
+        if sf.remaining_key then
+            local full = inputs[sf.duration_key] or sf.slot.swipe_duration
+            local expires = inputs[sf.expires_key]
+            if expires ~= nil then
+                set_seal_icon_cooldown(sf.icon, expires, full)
+            else
+                local remaining = inputs[sf.remaining_key] or 0
+                if targets[i] == 0 and not sf.slot.swipe_always then
+                    remaining = 0
+                end
+                set_icon_cooldown(sf.icon, remaining, full)
+            end
+        end
+    end
+
+    -- Pixel glow on a glow slot while it shows (WA subglow: Pixel, 8 lines, 0.25
+    -- frequency, length 10, thickness 1; the paladin judgement cue).
+    for i = 1, #icons do
+        local sf = icons[i]
+        if sf.glow_key then
+            local on = targets[i] > 0
+            if on and not sf.glowing then
+                sf.glowing = true
+                LCG.PixelGlow_Start(sf.icon, nil, 8, 0.25, 10, 1, 0, 0, false, sf.glow_key)
+            elseif not on and sf.glowing then
+                sf.glowing = false
+                LCG.PixelGlow_Stop(sf.icon, sf.glow_key)
+            end
+        end
+    end
+
+    update_texts(self, provider, inputs)
 end
 
 -- Idle: no active guidance (reachable only with the "always" visibility key). The
--- archive shows the Seal of Blood opener dimmed, with no swipes or glow.
-local function display_idle(self, inputs)
+-- archive shows the seal opener dimmed (the paladin slot declares idle_alpha 0.5),
+-- with no swipes or glow.
+local function display_idle(self, provider, inputs)
     local frame = ui.frame
-    set_element_targets(frame, 0, 0, 0.5, 0, 0, 0, 0, 0)
-    set_icon_cooldown(frame.icon_cs, 0, CS_COOLDOWN)
-    set_icon_cooldown(frame.icon_judge, 0, JUDGEMENT_COOLDOWN)
-    -- Archive parity: the idle opener carries no swipes, so the seal swipes are cleared
-    -- here too (out of combat the engine is not consulted at all).
-    set_icon_cooldown(frame.icon_command, 0, SEAL_DURATION)
-    set_icon_cooldown(frame.icon_blood, 0, SEAL_DURATION)
-    if ui.judge_glowing then
-        ui.judge_glowing = false
-        LCG.PixelGlow_Stop(frame.icon_judge, "NextActionJudge")
+    local icons = ui.icons
+    local targets = ui.targets
+    for i = 1, #icons do
+        local sf = icons[i]
+        targets[i] = sf.slot.idle_alpha or 0
+        set_fade_target(sf.fade, targets[i])
     end
-    update_texts(self, st.nextaction, inputs)
+    set_fade_target(frame.hold.fade, 0)
+    -- Archive parity: the idle opener carries no swipes, so every slot swipe is
+    -- cleared here too (out of combat the engine is not consulted at all).
+    for i = 1, #icons do
+        local sf = icons[i]
+        if sf.remaining_key then
+            set_icon_cooldown(sf.icon, 0, inputs[sf.duration_key] or sf.slot.swipe_duration)
+        end
+        if sf.glow_key and sf.glowing then
+            sf.glowing = false
+            LCG.PixelGlow_Stop(sf.icon, sf.glow_key)
+        end
+    end
+    update_texts(self, provider, inputs)
 end
 
 --=========================================================================================
--- Per-frame update (driven by the paladin class hook and by the frame's own OnUpdate)
+-- Per-frame update (driven by the class hook and by the frame's own OnUpdate)
 --=========================================================================================
 function ui.update(self)
     local frame = ui.frame
     if not frame then
+        return
+    end
+    local provider = ui.get_provider(self)
+    if not provider then
         return
     end
     local now = api.get_time()
@@ -529,11 +677,11 @@ function ui.update(self)
         frame:Show()
     end
 
-    local na = st.nextaction
-    if not na then
-        return
+    -- The provider owns the reused inputs table; the UI owns the reused output table.
+    local inputs = provider.gather(self, ui.inputs)
+    if type(inputs) ~= "table" then
+        inputs = ui.inputs
     end
-    local inputs = self.PALADIN.gather_guide_inputs(self)
     if self.in_combat then
         -- Active guidance: one reused output table, no per-frame allocations.
         local out = ui.out
@@ -541,22 +689,22 @@ function ui.update(self)
             out = {}
             ui.out = out
         end
-        na.evaluate(inputs, out)
+        provider.evaluate(inputs, out)
         -- The waiting-judgement state is a carry: this tick's output seeds the
         -- next tick's input.
         self.guide_waiting_judgement = out.waiting_judgement and true or false
-        display_active(self, inputs, out)
+        display_active(self, provider, inputs, out)
     else
         -- Idle: a finished fight must not carry its swing count or judgement wait
         -- into the next one.
         self.guide_melee_count = 0
         self.guide_waiting_judgement = false
-        display_idle(self, inputs)
+        display_idle(self, provider, inputs)
     end
 end
 
 function ui.on_bar_update(self, hand)
-    -- Driven from the paladin class hook for the mainhand bar (the archive drove the
+    -- Driven from the class hook for the mainhand bar (the archive drove the
     -- guide from the player module's per-frame update).
     if hand ~= "mainhand" then
         return

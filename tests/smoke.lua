@@ -485,6 +485,63 @@ do
 end
 
 do
+    -- Forever: the classic Righteousness id still latches (unchanged), but a
+    -- hypothetical new Forever Righteousness id stays silent until it is
+    -- confirmed into sor_forever_ids (empty + UNCONFIRMED, never guessed).
+    local ST = { PALADIN = {} }
+    local _, fst = build_profile({
+        project = 18,
+        globals = {
+            UnitAura = aura_stub({ 21084 }),
+            GetSpellBaseCooldown = function() return 15000 end,
+        },
+        ST = ST,
+        module = "classes/paladin.lua",
+    })
+    eq(fst.family, "FOREVER", "paladin(forever): project 18 reports FOREVER")
+    local self = paladin_self()
+    self.PALADIN = ST.PALADIN
+    ST.PALADIN.on_aura_change(self)
+    eq(self.has_sor, true, "paladin(forever): the classic Righteousness id (21084) still latches")
+end
+
+do
+    -- Forever with a new (unconfirmed) Righteousness id: silent, never latched.
+    local ST = { PALADIN = {} }
+    build_profile({
+        project = 18,
+        globals = {
+            UnitAura = aura_stub({ 123456 }),
+            GetSpellBaseCooldown = function() return 15000 end,
+        },
+        ST = ST,
+        module = "classes/paladin.lua",
+    })
+    local self = paladin_self()
+    self.PALADIN = ST.PALADIN
+    ST.PALADIN.on_aura_change(self)
+    eq(self.has_sor, false, "paladin(forever): an unconfirmed Righteousness id stays silent")
+end
+
+do
+    -- Control: the same unknown id stays silent off Forever too (family gate).
+    local ST = { PALADIN = {} }
+    build_profile({
+        project = 2,
+        globals = {
+            UnitAura = aura_stub({ 123456 }),
+            GetSpellBaseCooldown = function() return 15000 end,
+        },
+        ST = ST,
+        module = "classes/paladin.lua",
+    })
+    local self = paladin_self()
+    self.PALADIN = ST.PALADIN
+    ST.PALADIN.on_aura_change(self)
+    eq(self.has_sor, false, "paladin(era): the unknown id stays silent off Forever")
+end
+
+do
     -- TBC Anniversary: every id in the Blood/Martyr and Crusader seal tables must
     -- be recognized on its own.
     local cases = {

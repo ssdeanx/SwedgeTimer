@@ -29,7 +29,14 @@ st.twist.SOC_PROC_IDS = {
 }
 
 -- Twist window constants (see docs/swedge/.../bar.lua:1917-1927).
+-- TBC calibration (docs/research/tbc_minmax.md, paladin): Seal of Command
+-- procs ~0.5 s after the white hit lands, so the twist (second seal) goes in
+-- during the swing's last ~0.4 s (Warmane forum, Wowhead SoD guide,
+-- TheRealBlayst). The 0.4 s baseline below already matches that model;
+-- SOC_PROC_DELAY_SECONDS records the proc delay it sits inside (documentary:
+-- not wired into get_window_seconds, whose math is unchanged).
 st.twist.BASE_WINDOW_SECONDS = 0.4
+st.twist.SOC_PROC_DELAY_SECONDS = 0.5
 
 -- Pure helper: is twisting even possible right now?
 -- twisting requires a Command-style seal or Righteousness-style seal up (the seal

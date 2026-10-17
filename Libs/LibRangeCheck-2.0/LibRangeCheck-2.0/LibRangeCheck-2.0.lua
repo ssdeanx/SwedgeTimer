@@ -427,6 +427,11 @@ local GetTime = GetTime
 local HandSlotId = GetInventorySlotInfo("HANDSSLOT")
 local math_floor = math.floor
 local UnitIsVisible = UnitIsVisible
+-- Secret values (Mainline-code clients): a restricted reading still reports "number" to
+-- type(), so the spell-range checkers below must also reject it. The lib loads before
+-- compat.lua, so probe the global here; on every classic client it is absent and the
+-- guards below are exact no-ops.
+local issecretvalue = rawget(_G, "issecretvalue")
 
 -- temporary stuff
 
@@ -439,12 +444,27 @@ local harmItemRequests
 local lastUpdate = 0
 
 -- minRangeCheck is a function to check if spells with minimum range are really out of range, or fail due to range < minRange. See :init() for its setup
-local minRangeCheck = function(unit) return CheckInteractDistance(unit, 2) end
+local minRangeCheck = function(unit)
+  if type(CheckInteractDistance) ~= "function" then
+    return nil
+  end
+  return CheckInteractDistance(unit, 2)
+end
 
 local checkers_Spell = setmetatable({}, {
   __index = function(t, spellIdx)
     local func = function(unit)
-      if IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit) == 1 then
+      -- IsSpellInRange was removed on Mainline-code clients (C_Spell.IsSpellInRange
+      -- replaces it): report "unknown" (nil) instead of calling a missing global, and
+      -- reject a restricted reading the same way.
+      if type(IsSpellInRange) ~= "function" then
+        return nil
+      end
+      local r = IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit)
+      if type(r) ~= "number" or (issecretvalue and issecretvalue(r)) then
+        return nil
+      end
+      if r == 1 then
          return true
       end
     end
@@ -455,7 +475,14 @@ local checkers_Spell = setmetatable({}, {
 local checkers_SpellWithMin = setmetatable({}, {
   __index = function(t, spellIdx)
     local func = function(unit)
-      if IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit) == 1 then
+      if type(IsSpellInRange) ~= "function" then
+        return nil
+      end
+      local r = IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit)
+      if type(r) ~= "number" or (issecretvalue and issecretvalue(r)) then
+        return nil
+      end
+      if r == 1 then
         return true
       elseif minRangeCheck(unit) then
         return true, true
@@ -477,6 +504,9 @@ local checkers_Item = setmetatable({}, {
 local checkers_Interact = setmetatable({}, {
   __index = function(t, index)
     local func = function(unit)
+      if type(CheckInteractDistance) ~= "function" then
+        return nil
+      end
       if CheckInteractDistance(unit, index) then
          return true
       end
@@ -510,6 +540,12 @@ local function initItemRequests(cacheAll)
 end
 
 local function getNumSpells()
+  -- GetNumSpellTabs/GetSpellTabInfo were removed on Mainline-code clients
+  -- (C_SpellBook.GetNumSpellBookSkillLines/GetSpellBookSkillLineInfo replace them).
+  -- Report an empty spellbook so findSpellIdx's loop no-ops instead of throwing.
+  if type(GetSpellTabInfo) ~= "function" or type(GetNumSpellTabs) ~= "function" then
+    return 0
+  end
   local _, _, offset, numSpells = GetSpellTabInfo(GetNumSpellTabs())
   return offset + numSpells
 end
@@ -765,7 +801,14 @@ function lib:init(forced)
       local spellIdx = findSpellIdx(name)
       if spellIdx then
         minRangeCheck = function(unit)
-          return (IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit) == 1)
+          if type(IsSpellInRange) ~= "function" then
+            return nil
+          end
+          local r = IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit)
+          if type(r) ~= "number" or (issecretvalue and issecretvalue(r)) then
+            return nil
+          end
+          return r == 1
         end
       end
     elseif playerClass == "ROGUE" then
@@ -774,7 +817,14 @@ function lib:init(forced)
       local spellIdx = findSpellIdx(name)
       if spellIdx then
         minRangeCheck = function(unit)
-          return (IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit) == 1)
+          if type(IsSpellInRange) ~= "function" then
+            return nil
+          end
+          local r = IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit)
+          if type(r) ~= "number" or (issecretvalue and issecretvalue(r)) then
+            return nil
+          end
+          return r == 1
         end
       end
     end
@@ -1088,10 +1138,19 @@ function lib:activate()
   if not self.frame then
     local frame = CreateFrame("Frame")
     self.frame = frame
-    frame:RegisterEvent("LEARNED_SPELL_IN_TAB")
+    -- LEARNED_SPELL_IN_TAB was removed from modern clients; registering an unknown
+    -- event throws and would abort activate() before the scripts are installed below,
+    -- killing range checking silently. This guard mirrors the maintained fork
+    -- (LibRangeCheck-3.0, WeakAuras); clients without C_EventUtils keep the old
+    -- unconditional registration.
+    if not C_EventUtils or C_EventUtils.IsEventValid("LEARNED_SPELL_IN_TAB") then
+      frame:RegisterEvent("LEARNED_SPELL_IN_TAB")
+    end
     frame:RegisterEvent("CHARACTER_POINTS_CHANGED")
     if IsMainline or IsClassicWrath then
-      frame:RegisterEvent("PLAYER_TALENT_UPDATE")
+      if not C_EventUtils or C_EventUtils.IsEventValid("PLAYER_TALENT_UPDATE") then
+        frame:RegisterEvent("PLAYER_TALENT_UPDATE")
+      end
     end
     frame:RegisterEvent("SPELLS_CHANGED")
     local _, playerClass = UnitClass("player")

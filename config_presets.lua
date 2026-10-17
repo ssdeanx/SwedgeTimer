@@ -3,6 +3,20 @@
 ------------------------------------------------------------------------------------
 local addon_name, st = ...
 local LSM = LibStub("LibSharedMedia-3.0")
+---@type AceAddon
+---@class AceAddon
+---@field class_defaults table
+---@field bar_defaults table
+---@field DEATHKNIGHT table
+---@field DRUID table
+---@field HUNTER table
+---@field MAGE table
+---@field PALADIN table
+---@field PRIEST table
+---@field ROGUE table
+---@field SHAMAN table
+---@field WARLOCK table
+---@field WARRIOR table
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 
 
@@ -14,6 +28,71 @@ ST.class_defaults = {
     bar_movement_mode = "all",
     enable_spec1 = true,
     enable_spec2 = true,
+
+    -- Cooldown HUD (hud.lua): shared defaults for every class. The per-slot toggles
+    -- (hud_show_<key>) and any class-specific descriptors live in the class's own
+    -- defaults - ST.PALADIN.defaults below for the paladin slot set. Off by default
+    -- so nothing new appears until it is enabled.
+    hud_enabled = false,
+    hud_visibility_key = "always",
+    hud_locked = true,
+    hud_x = 0,
+    hud_y = -236,
+    hud_scale = 1,
+    hud_icon_size = 36,
+    hud_match_bar_width = false,
+    hud_spacing = 2,
+    hud_orientation = "horizontal",
+    hud_show_text = true,
+    hud_font = "Expressway",
+    hud_text_size = 16,
+    hud_text_outline = "outline",
+    -- Text/border colours follow the addon's 0-255 storage convention (so the standard
+    -- color_getter/color_setter option widgets apply); hud.lua converts through
+    -- convert_color. Defaults are the archive's (hud.lua:567-570) converted up.
+    hud_text_color = {250, 255, 0, 1},
+    hud_text_warn_color = {255, 102, 107, 1},
+    hud_border_size = 2,
+    hud_border_color = {0, 0, 0, 1},
+    hud_glow_enabled = true,
+    hud_desaturate = true,
+    hud_mana_tint = true,
+    hud_range_tint = true,
+
+    -- Rotation label (rotationtext.lua): shared defaults for every class - the module
+    -- stays inert for classes that do not provide get_rotation_key, so the keys are
+    -- harmless there. Off by default; the paladin's options section edits them.
+    -- rotation_label_x/y are the offsets of the label's anchor point (its left, centre
+    -- or right edge, per rotation_label_align) from the screen centre, in screen pixels.
+    rotation_label_enabled = false,
+    rotation_label_visibility_key = "always",
+    rotation_label_format = "key",
+    rotation_label_align = "center",
+    rotation_label_x = 0,
+    rotation_label_y = -150,
+    rotation_label_scale = 1,
+    rotation_label_locked = true,
+    rotation_label_font = "Expressway",
+    rotation_label_size = 16,
+    rotation_label_outline = "outline",
+    -- 0-255 RGB + 0-1 alpha (the addon's storage convention, so the standard
+    -- color_getter/color_setter widgets apply); the archive's {1.0, 0.82, 0.0, 1.0}
+    -- converted up.
+    rotation_label_color = {255, 209, 0, 1},
+
+    -- Design mode (designmode.lua): the persisted grid / snap settings, shared for every
+    -- class. The enabled state is a session state and is deliberately NOT stored. The
+    -- grid step treats anything below 8 px as off (design.MIN_GRID - the archive rule);
+    -- snap_threshold is the alignment magnet in pixels (the archive's CENTER_MAGNET).
+    design_grid_enabled = true,
+    design_grid = 24,
+    design_snap = true,
+    design_snap_threshold = 8,
+
+    -- Melee-weave proximity bar (weave_range.lua): shared default for every class, off
+    -- by default. The top-level options toggle edits it; the module hides its frame
+    -- whenever it is off.
+    weave_range_enabled = false,
 }
 
 -- This table is used by AceDB's smart defaults feature
@@ -140,6 +219,50 @@ ST.DRUID.defaults = {
     maul_color = {112, 19, 189, 1.0},
     insufficient_rage_color = {140, 140, 140, 1.0},
 
+    -- Druid trackers (reference SuperSwingTimer_ClassMods.lua druid block 4514-5524):
+    -- the cat-form energy tick bar, the mainhand form label and the Mangle/Rip/Rake
+    -- target debuff bars. All default on. Colours are 0-255 RGB + 0-1 alpha like the
+    -- other class colours (converted through the same convert_color path); the tree
+    -- defaults mirror the reference's fills (ClassMods.lua:4814, 4946, 5091 and the
+    -- druidEnergyTick colour, Constants.lua:982).
+    show_druid_energy_tick = true,
+    druid_energy_tick_color = {255, 209, 46, 1.0},
+    show_druid_form_label = true,
+    show_druid_mangle_bar = true,
+    druid_mangle_bar_color = {230, 153, 26, 0.90},
+    show_druid_rip_bar = true,
+    druid_rip_bar_color = {51, 191, 51, 0.90},
+    show_druid_rake_bar = true,
+    druid_rake_bar_color = {217, 102, 26, 0.90},
+
+    -- Next Action Guide (the shared nextaction_ui frame driven by ST.DRUID.guide in
+    -- classes/druid.lua; the decision model is the pure druid_guide.lua). Default OFF:
+    -- a wrong prompt is worse than none, so the owner enables it after in-client
+    -- verification. Key names match the paladin's/warrior's so the shared frame reads
+    -- them unchanged; guide_rip_refresh/guide_rake_refresh are the druid-only debuff
+    -- refresh thresholds (seconds).
+    nextaction_enabled = false,
+    nextaction_locked = true,
+    nextaction_visibility_key = "in_combat",
+    nextaction_icon_size = 45,
+    nextaction_x = 0,
+    nextaction_y = -180,
+    guide_rip_refresh = 4,
+    guide_rake_refresh = 4,
+
+    -- Cooldown HUD: the druid slot toggles (the shared hud_* keys live in
+    -- ST.class_defaults; the descriptors they gate are ST.DRUID.HUD_SLOTS in
+    -- classes/druid.lua). Slot toggles ship on: the HUD master hud_enabled
+    -- ships off in the shared defaults, so nothing surfaces until enabled.
+    hud_show_maul = true,
+    hud_show_mangle = true,
+    hud_show_rip = true,
+    hud_show_rake = true,
+    hud_show_bite = true,
+    hud_show_shred = true,
+    hud_show_trinket1 = true,
+    hud_show_trinket2 = true,
+
     -- Form-dependent visibility defaults
     form_vis_normal = true,
     form_vis_bear = true,
@@ -180,6 +303,49 @@ ST.HUNTER.defaults = {
 
     enable_raptor_strike_color = true,
     raptor_strike_color = {207, 58, 83, 1.0},
+
+    -- Steady Shot queueing colour. Off by default: the detection is opt-in until
+    -- the Steady Shot rank ids have been confirmed in-client.
+    enable_steady_shot_color = false,
+    steady_shot_color = {211, 145, 12, 1.0},
+
+    -- Hunter visual set (hunter_ui.lua): the cast bar above the ranged bar, the 4-state
+    -- range helper strip, the Rapid Fire aura bar and the aspect icon. All enabled by
+    -- default; the widgets only appear while the ranged bar is usable (never on clients
+    -- without a ranged swing, e.g. Retail). The cast-bar colour is stored as 0-1 floats
+    -- (it feeds SetVertexColor directly, unlike the 0-255 class colours).
+    hunter_cast_bar_enabled = true,
+    hunter_cast_bar_height = 15,
+    hunter_cast_bar_color = {0.35, 0.65, 0.95, 1.0},
+    hunter_range_helper_enabled = true,
+    hunter_rapid_fire_bar_enabled = true,
+    hunter_aspect_icon_enabled = true,
+
+    -- Next Action Guide (the shared nextaction_ui frame driven by ST.HUNTER.guide in
+    -- classes/hunter.lua; the decision model is the pure hunter_guide.lua). Default OFF:
+    -- a wrong prompt is worse than none, so the owner enables it after in-client
+    -- verification. Key names match the paladin's so the shared frame reads them
+    -- unchanged; the hunter guide carries no class-specific thresholds.
+    nextaction_enabled = false,
+    nextaction_locked = true,
+    nextaction_visibility_key = "in_combat",
+    nextaction_icon_size = 45,
+    nextaction_x = 0,
+    nextaction_y = -180,
+
+    -- Cooldown HUD: the hunter slot toggles (the shared hud_* keys live in
+    -- ST.class_defaults; the descriptors they gate are ST.HUNTER.HUD_SLOTS in
+    -- classes/hunter.lua). Slot toggles ship on: the HUD master hud_enabled
+    -- ships off in the shared defaults, so nothing surfaces until enabled.
+    hud_show_steady = true,
+    hud_show_raptor = true,
+    hud_show_kill_command = true,
+    hud_show_multi = true,
+    hud_show_bestial_wrath = true,
+    hud_show_rapid_fire = true,
+    hud_show_aimed = true,
+    hud_show_trinket1 = true,
+    hud_show_trinket2 = true,
 
     -- Bar options
     ['**'] = ST.bar_defaults,
@@ -279,6 +445,20 @@ ST.PALADIN.defaults = {
     twist_success_text_size = 24,
     twist_success_text_duration = 1.5,
 
+    -- Judgement marker line + standalone seal icons (archived TBC bar visuals,
+    -- docs/swedge/SwedgeTimer_TBC/bar.lua:270-272/1750-1786 and 826-910). Core
+    -- rotation feedback, so all default on; the colours/sizes are constants in
+    -- classes/paladin.lua (only the enables are options).
+    judgement_marker_enabled = true,
+    seal_icons_enabled = true,
+
+    -- Twist-success glow (archived bar.lua:551-616, Pixel at minimum). Fires on
+    -- the twist attempt like the archive; the lines/frequency/thickness are
+    -- constants in classes/paladin.lua (the HUD's Pixel parameters).
+    twist_success_glow_enabled = true,
+    twist_success_glow_color = {0, 255, 0, 0.8},
+    twist_success_glow_duration = 0.4,
+
     -- Twist feedback sounds (ported from the archived build; all off by default).
     twist_sound_enabled = false,
     twist_sound_choice = "pop",
@@ -294,7 +474,10 @@ ST.PALADIN.defaults = {
     nextaction_x = 0,
     nextaction_y = -180,
     nextaction_reaction_time_ms = 100,
-    nextaction_cs_max_delay_ms = 1700,
+    -- TBC: researched CS delay is under 1 s (was 1700). CONFLICT: Wrath wants
+    -- ~0 (no twist to protect); revisit with a family branch if needed. The
+    -- option range is unchanged.
+    nextaction_cs_max_delay_ms = 900,
     nextaction_hold_enabled = true,
     nextaction_show_rotation_text = true,
     nextaction_show_label = true,
@@ -321,6 +504,18 @@ ST.PALADIN.defaults = {
     practice_weapon_speed = 0,
     practice_panel_x = 0,
     practice_panel_y = 0,
+
+    -- Cooldown HUD: the paladin slot toggles (the shared hud_* keys live in
+    -- ST.class_defaults above; the descriptors they gate are ST.PALADIN.HUD_SLOTS in
+    -- classes/paladin.lua). Other classes add their own hud_show_<key> keys here in
+    -- their own defaults when they declare slots.
+    hud_show_cs = true,
+    hud_show_judgement = true,
+    hud_show_consecration = true,
+    hud_show_exorcism = true,
+    hud_show_trinket1 = true,
+    hud_show_trinket2 = true,
+    hud_show_wings = true,
 
     -- Bar options
     ['**'] = ST.bar_defaults,
@@ -415,6 +610,42 @@ ST.SHAMAN.defaults = {
         CH = true,
     },
 
+    -- Enhancement trackers (ported from the reference's shaman block): the reference
+    -- breakpoint markers + offhand spark mirror, the Windfury Weapon ICD strip, the
+    -- Flame Shock target bar, the Stormstrike / Shamanistic Rage badges and the shield
+    -- charge row. All default on.
+    show_shaman_breakpoint_markers = true,
+    show_shaman_windfury_icd = true,
+    show_shaman_flame_shock_bar = true,
+    show_shaman_cooldown_badges = true,
+    show_shaman_shield_charges = true,
+
+    -- Next Action Guide (the shared nextaction_ui frame driven by ST.SHAMAN.guide in
+    -- classes/shaman.lua; the decision model is the pure shaman_guide.lua). Default
+    -- OFF: a wrong prompt is worse than none, so the owner enables it after in-client
+    -- verification. Key names match the paladin's/warrior's so the shared frame reads
+    -- them unchanged; guide_flameshock_refresh is the shaman-only refresh threshold.
+    nextaction_enabled = false,
+    nextaction_locked = true,
+    nextaction_visibility_key = "in_combat",
+    nextaction_icon_size = 45,
+    nextaction_x = 0,
+    nextaction_y = -180,
+    guide_flameshock_refresh = 3,
+
+    -- Cooldown HUD: the shaman slot toggles (the shared hud_* keys live in
+    -- ST.class_defaults; the descriptors they gate are ST.SHAMAN.HUD_SLOTS in
+    -- classes/shaman.lua). Slot toggles ship on: the HUD master hud_enabled
+    -- ships off in the shared defaults, so nothing surfaces until enabled.
+    hud_show_stormstrike = true,
+    hud_show_flameshock = true,
+    hud_show_weave = true,
+    hud_show_firenova = true,
+    hud_show_earthshock = true,
+    hud_show_twist = true,
+    hud_show_trinket1 = true,
+    hud_show_trinket2 = true,
+
     -- Bar options
     ['**'] = ST.bar_defaults,
 	mainhand = {
@@ -471,8 +702,59 @@ ST.WARRIOR.defaults = {
     bloodsurge_glow_freq = 0.1,
     bloodsurge_glow_line_length = 12,
 
+    -- Warrior trackers (reference SuperSwingTimer_ClassMods.lua warrior block 1689-3333):
+    -- the Shield Block bar, the Slam cast bar, the Overpower proc flash and the Deep
+    -- Wounds / Sunder Armor / Rend / Thunder Clap / Demo Shout target debuff bars. All
+    -- default on. Colours are 0-255 RGB + 0-1 alpha like the other class colours
+    -- (converted through the same convert_color path); the fills mirror the reference's
+    -- (ClassMods.lua:2273, 2413, 2565, 2705, 2844 and the shieldBlockBar colour,
+    -- Constants.lua:1006).
+    show_warrior_deep_wounds_bar = true,
+    warrior_deep_wounds_bar_color = {179, 38, 38, 0.90},
+    show_warrior_sunder_armor_bar = true,
+    warrior_sunder_armor_bar_color = {140, 89, 38, 0.90},
+    show_warrior_rend_bar = true,
+    warrior_rend_bar_color = {217, 38, 26, 0.90},
+    show_warrior_thunder_clap_bar = true,
+    warrior_thunder_clap_bar_color = {89, 140, 191, 0.90},
+    show_warrior_demo_shout_bar = true,
+    warrior_demo_shout_bar_color = {166, 128, 77, 0.90},
+    show_warrior_shield_block_bar = true,
+    warrior_shield_block_bar_color = {51, 140, 255, 0.90},
+    show_warrior_slam_cast_bar = true,
+    show_warrior_overpower_flash = true,
+    show_warrior_rampage_badge = true,
+
+    -- Next Action Guide (the shared nextaction_ui frame driven by ST.WARRIOR.guide in
+    -- classes/warrior.lua; the decision model is the pure warrior_guide.lua). Default
+    -- OFF: a wrong prompt is worse than none, so the owner enables it after in-client
+    -- verification. Key names match the paladin's so the shared frame reads them
+    -- unchanged; guide_execute_pct is the warrior-only Execute-range threshold.
+    nextaction_enabled = false,
+    nextaction_locked = true,
+    nextaction_visibility_key = "in_combat",
+    nextaction_icon_size = 45,
+    nextaction_x = 0,
+    nextaction_y = -180,
+    guide_execute_pct = 20,
+
     hide_in_tank_spec = false,
     hide_in_arms_spec = false,
+
+    -- Cooldown HUD: the warrior slot toggles (the shared hud_* keys live in
+    -- ST.class_defaults; the descriptors they gate are ST.WARRIOR.HUD_SLOTS in
+    -- classes/warrior.lua). The union of both family sets ships on (cleave is
+    -- the non-TBC slot, bt/ww the TBC ones): the HUD master hud_enabled ships
+    -- off in the shared defaults, so nothing surfaces until enabled.
+    hud_show_op = true,
+    hud_show_execute = true,
+    hud_show_slam = true,
+    hud_show_hs = true,
+    hud_show_cleave = true,
+    hud_show_bt = true,
+    hud_show_ww = true,
+    hud_show_trinket1 = true,
+    hud_show_trinket2 = true,
 
     -- Bar options
     ['**'] = ST.bar_defaults,

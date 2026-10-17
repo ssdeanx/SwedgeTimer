@@ -5,6 +5,9 @@ local addon_name, st = ...
 local version = "2.0.8"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
+-- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
+-- header in every toc.
+ST.addon_version = version
 local LSM = LibStub("LibSharedMedia-3.0")
 local STL = LibStub("LibClassicSwingTimerAPI", true)
 -- The swing library is only shipped on clients with a classic combat log (see the
@@ -25,13 +28,17 @@ local function make_swing_stub()
 end
 -- The vendored library always wins when it is present (the classic client line);
 -- st.swing_source only reports itself available on the FOREVER family.
+-- ST.swing_engine records which of the three modes is live, for the diagnostic report.
 local SWING_ENGINE_AVAILABLE = STL ~= nil
-if not SWING_ENGINE_AVAILABLE and st.swing_source and st.swing_source.available then
+if SWING_ENGINE_AVAILABLE then
+	ST.swing_engine = "vendored-lib"
+elseif st.swing_source and st.swing_source.available then
 	STL = st.swing_source
 	SWING_ENGINE_AVAILABLE = true
-end
-if not SWING_ENGINE_AVAILABLE then
+	ST.swing_engine = "forever-source"
+else
 	STL = make_swing_stub()
+	ST.swing_engine = "inert-standin"
 end
 local LRC = LibStub("LibRangeCheck-2.0")
 local LLM = LibStub("LibLatencyMonitor")
@@ -84,10 +91,22 @@ ST.class_hands = {
 	WARRIOR = {"mainhand", "offhand", "ranged"},
 }
 
+-- Hands for the player's class. `class_hands` is keyed by the uppercase class token
+-- (UnitClass's second return); a lowercase spelling is tolerated defensively, because a
+-- legacy option-table definition used to clobber this table with lowercase keys - which
+-- made iter_hands() index nil during OnInitialize and aborted the rest of init at login.
+function ST:get_class_hands()
+	local hands = self.class_hands[self.player_class]
+	if hands == nil and type(self.player_class) == "string" then
+		hands = self.class_hands[string.upper(self.player_class)]
+	end
+	return hands or {}
+end
+
 function ST:iter_hands()
 	-- Iterates over melee/ranged/offhand 
 	local i = 0
-	local hands = self.class_hands[self.player_class]
+	local hands = self:get_class_hands()
 	local n = #hands
 	return function ()
 		i = i + 1
@@ -313,6 +332,7 @@ function ST:OnInitialize()
 	-- init_libs has a check to ensure this only happens once per reload
 	self.lrc_ready = false
 	self.lrc_unavailable = false -- set by the init deadline if LRC never reports ready
+	self.lrc_unavailable_notice_shown = false -- the one-time range-disable notice
 	self.stl_ready = not SWING_ENGINE_AVAILABLE -- inert stand-in counts as ready
 	self.llm_ready = false
 	LRC.RegisterCallback(self, LRC.CHECKERS_CHANGED, function()
@@ -342,6 +362,9 @@ function ST:OnInitialize()
 			if self.interfaces_are_initialised then
 				return
 			end
+			-- Recorded for the diagnostic report: a library never reported ready in
+			-- time, so this deadline had to finish the initialisation.
+			self.init_deadline_fired = true
 			if not self.lrc_ready then
 				self.lrc_unavailable = true
 				self.lrc_ready = true
@@ -349,6 +372,7 @@ function ST:OnInitialize()
 			if not self.stl_ready then
 				STL = make_swing_stub()
 				SWING_ENGINE_AVAILABLE = false
+				ST.swing_engine = "inert-standin"
 				self.stl_ready = true
 			end
 			self:init_libs()
@@ -385,6 +409,12 @@ function ST:OnInitialize()
 	self.is_melee_attacking = false
 	self.has_target = false
 	self.has_attackable_target = false
+	-- Movement state for the hunter ranged cast-window safety check (phase 1):
+	-- PLAYER_STARTED_MOVING / PLAYER_STOPPED_MOVING keep api.get_time()-domain stamps,
+	-- and classes/hunter.lua consumes them through
+	-- hunter_window.is_stopped_position_safe.
+	self.is_moving = false
+	self.last_stopped_moving_at = nil
 
 	-- Next-action guide (paladin): landed melee swings this fight; incremented on
 	-- swing start in combat, reset by the guide display when guidance stops.
@@ -429,6 +459,20 @@ function ST:OnInitialize()
 	self.ranged.inactive_timer = nil
 	self.ranged.has_weapon = false
 	self.ranged.is_full = false
+	-- Auto Shot sync state (hunter phase 1; the maths live in hunter_window.lua):
+	--   synced_duration     - the auto-shot cycle length last read from
+	--                         GetSpellCooldown(75), api.get_time()-domain seconds
+	--   hidden_window_start / hidden_window_duration
+	--                       - cached hidden cast-window bounds (phase 2 render consumes
+	--                         them); nil means "recompute"
+	--   auto_repeat_active  - last IsAutoRepeatSpell(75) reading (mounted hunters
+	--                         always read false)
+	--   last_restart_at     - clock stamp of the last deduped ranged start
+	self.ranged.synced_duration = nil
+	self.ranged.hidden_window_start = nil
+	self.ranged.hidden_window_duration = nil
+	self.ranged.auto_repeat_active = false
+	self.ranged.last_restart_at = nil
 
 	-- GCD info containers
 	self.gcd = {}
@@ -463,6 +507,27 @@ function ST:OnInitialize()
 	self:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 	self:RegisterEvent("PLAYER_ENTERING_WORLD")
 	self:RegisterEvent("PLAYER_REGEN_ENABLED")
+	-- Movement state and Auto Shot sync signals for the hunter ranged feature (phase 1).
+	-- The movement events and SPELL_UPDATE_COOLDOWN are valid on every supported
+	-- family; START_AUTOREPEAT_SPELL / STOP_AUTOREPEAT_SPELL are registered only where
+	-- the client's event-validity probe accepts them (the same pattern as
+	-- PLAYER_TARGET_SET_ATTACKING just below) - registering an unknown event throws.
+	-- Without a probe, the family decides: the classic client line keeps them (the
+	-- live clients expose them too; the probe governs wherever it exists).
+	self:RegisterEvent("PLAYER_STARTED_MOVING")
+	self:RegisterEvent("PLAYER_STOPPED_MOVING")
+	self:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+	local autorepeat_events_valid = true
+	if C_EventUtils and C_EventUtils.IsEventValid then
+		autorepeat_events_valid = C_EventUtils.IsEventValid("START_AUTOREPEAT_SPELL")
+			and C_EventUtils.IsEventValid("STOP_AUTOREPEAT_SPELL")
+	elseif st.is_mainline then
+		autorepeat_events_valid = false
+	end
+	if autorepeat_events_valid then
+		self:RegisterEvent("START_AUTOREPEAT_SPELL")
+		self:RegisterEvent("STOP_AUTOREPEAT_SPELL")
+	end
 	-- PLAYER_TARGET_SET_ATTACKING exists on the classic client line only, and
 	-- registering an unknown event throws, so gate it by family and probe where
 	-- the event-validity API is available.
@@ -473,7 +538,6 @@ function ST:OnInitialize()
 	if target_attacking_valid then
 		self:RegisterEvent("PLAYER_TARGET_SET_ATTACKING")
 	end
-	self:RegisterEvent("PLAYER_REGEN_ENABLED")
 	self:RegisterEvent("PLAYER_REGEN_DISABLED")
 	self:RegisterEvent("PLAYER_ENTER_COMBAT")
 	self:RegisterEvent("PLAYER_LEAVE_COMBAT")
@@ -482,7 +546,11 @@ function ST:OnInitialize()
 	-- handler (ST:UNIT_POWER_FREQUENT) already exists; without this registration the
 	-- entire rage feature was unreachable.
 	self:RegisterEvent("UNIT_POWER_FREQUENT")
-	if self.player_class == "PALADIN" and not st.is_mainline then
+	-- The classic combat log feeds the paladin twist state machine and the warrior
+	-- Overpower dodge-proc window (reference State.lua:1315-1321/1340-1349). Only the
+	-- classic client line has it; Mainline-code clients (Retail, Forever) have no
+	-- classic combat log, so no window can ever arm there.
+	if (self.player_class == "PALADIN" or self.player_class == "WARRIOR") and not st.is_mainline then
 		self:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 	end
 	self:RegisterEvent("UNIT_SPELLCAST_FAILED_QUIET")
@@ -537,9 +605,16 @@ function ST:init_libs()
 	end
 
 	-- If the init deadline ran before LibRangeCheck was ready, range checking
-	-- is disabled for the session: say so once as well.
+	-- is disabled for the session: say so once as well (rf_update's dead-man shares
+	-- the one-time notice through the same path).
 	if self.lrc_unavailable then
-		self:Print("Range checking is unavailable on this client; the range display is disabled.")
+		self:disable_range_checking()
+	end
+
+	-- One-line readiness self-report for the owner's test session; /st diag prints
+	-- the verbose form. Print-only, pcall-guarded end to end (see diag.lua).
+	if st.diag then
+		st.diag.report(self)
 	end
 end
 
@@ -612,6 +687,13 @@ function ST:post_init()
 		self[self.player_class].post_init(self)
 	end
 
+	-- Melee-weave proximity bar (weave_range.lua): creates its hidden frame and driver
+	-- here; the bar itself stays invisible until the class's weave_range_enabled toggle
+	-- is on (off by default). Absent module (harness sandboxes) stays a no-op.
+	if st.weave_range then
+		st.weave_range.init(self)
+	end
+
 	-- Set frames to locked or unlocked based on settings.
 	local db_class = self:get_class_table()
 	if db_class.timers_locked then
@@ -622,6 +704,52 @@ function ST:post_init()
 	for hand in self:iter_hands() do
 		self:show_bar(hand)
 	end
+
+	-- TBC Anniversary: UNIT_AURA does not fire reliably there, so start the 0.05 s
+	-- aura re-parse loop (TBC family only; a no-op everywhere else).
+	self:start_aura_poll()
+end
+
+--=========================================================================================
+-- TBC player-aura poll (UNIT_AURA does not fire reliably on TBC)
+--=========================================================================================
+-- Archive docs/swedge/SwedgeTimer_TBC/player.lua:913-918 re-runs
+-- st.player.on_player_aura_change() every 0.05 s from the OnUpdate accumulator, so
+-- seal changes are never missed. This is the same path through the rf_update-style
+-- C_Timer loop: the tick re-runs the UNIT_AURA handler's exact parse path
+-- (ST:class_on_aura_change, with its interfaces_are_initialised guard) on the same
+-- 0.05 s cadence, on TBC-family clients only. Every other family returns before
+-- arming anything, so those clients are byte-identical.
+-- Archive parity: the archive poll is unconditional -- no combat gate and no
+-- out-of-combat state-change skip -- so this loop is unconditional too; the only
+-- throttle besides the cadence is the shared init guard. Deviation: the archive
+-- accumulates frame elapsed time while this loop re-arms a C_Timer (the pattern
+-- rf_update already uses), because main.lua has no per-frame OnUpdate.
+local AURA_POLL_INTERVAL = 0.05
+
+function ST:start_aura_poll()
+	if st.family ~= "TBC" then
+		return
+	end
+	if self.aura_poll_running then
+		return
+	end
+	self.aura_poll_running = true
+	self.aura_poll_interval = AURA_POLL_INTERVAL
+	C_Timer.After(AURA_POLL_INTERVAL, function() self:aura_poll_tick() end)
+end
+
+function ST:aura_poll_tick()
+	if st.family ~= "TBC" then
+		return
+	end
+	-- The loop is armed once from post_init and must outlive the init window: gate
+	-- only the work, exactly like ST:UNIT_AURA does, and always re-arm so a tick
+	-- that fires before the libraries report never kills the loop.
+	if self.interfaces_are_initialised then
+		self:class_on_aura_change()
+	end
+	C_Timer.After(AURA_POLL_INTERVAL, function() self:aura_poll_tick() end)
 end
 
 --=========================================================================================
@@ -629,9 +757,15 @@ end
 --=========================================================================================
 function ST:COMBAT_LOG_EVENT_UNFILTERED(event, ...)
 	-- AceEvent dispatches handlers as (event, ...): keep the event name in the
-	-- forwarded arguments so the paladin module's signature lines up.
-	if self.player_class == "PALADIN" and self.interfaces_are_initialised then
+	-- forwarded arguments so each class module's signature lines up (the paladin
+	-- twist chain and the warrior Overpower proc both read it).
+	if not self.interfaces_are_initialised then
+		return
+	end
+	if self.player_class == "PALADIN" then
 		self.PALADIN.on_combat_log_unfiltered(self, event, ...)
+	elseif self.player_class == "WARRIOR" then
+		self.WARRIOR.on_combat_log_unfiltered(self, event, ...)
 	end
 end
 
@@ -658,6 +792,11 @@ function ST:GCD_STARTED(_, duration, expires)
 end
 
 function ST:GCD_OVER()
+	-- Registered in OnInitialize, so this can fire inside the ~5s init window; the
+	-- visuals frames do not exist yet and indexing them used to crash.
+	if not self.interfaces_are_initialised then
+		return
+	end
 	self.gcd.expires = nil
 	for hand in self:iter_hands() do
 		self:get_visuals_frame(hand).gcd_bar:Hide()
@@ -699,6 +838,11 @@ end
 function ST:LATENCY_CHANGED(_, home, world)
 	self.latency.home_ms = home
 	self.latency.world_ms = world
+	-- The latency monitor has produced a real measurement. `llm_ready` gates nothing;
+	-- /st diag reports it so a dead monitor is visible instead of assumed working.
+	if type(world) == "number" then
+		self.llm_ready = true
+	end
 	self:set_adjusted_latencies()
 	if self.interfaces_are_initialised then
 		self:set_gcd_times_before_swing_seconds()
@@ -809,6 +953,11 @@ end
 
 function ST:PLAYER_EQUIPMENT_CHANGED(event, slot, has_current)
 	assert(event == event and has_current == has_current)
+	-- Registered in OnInitialize; on_attack_speed_change reaches the visuals frames
+	-- (deadzone width), which do not exist inside the init window.
+	if not self.interfaces_are_initialised then
+		return
+	end
 	if slot == 16 or slot == 17 or slot == 18 then
 		self:check_weapons()
 		for hand in self:iter_hands() do
@@ -830,6 +979,12 @@ end
 
 function ST:PLAYER_REGEN_DISABLED()
 	self.in_combat = true
+	-- Design mode is cosmetic only (no protected calls anywhere in its teardown): drop
+	-- its chrome when a fight starts. Routed through this already-registered handler so
+	-- no new event is needed.
+	if st.designmode and st.designmode.on_combat_start then
+		st.designmode.on_combat_start()
+	end
 end
 
 function ST:PLAYER_ENTER_COMBAT()
@@ -840,9 +995,21 @@ function ST:PLAYER_LEAVE_COMBAT()
 	self.is_melee_attacking = false
 end
 
+function ST:PLAYER_STARTED_MOVING()
+	-- Hunter ranged cast-window safety input: whether the player is moving right now
+	-- (one component of hunter_window.is_stopped_position_safe).
+	self.is_moving = true
+end
+
+function ST:PLAYER_STOPPED_MOVING()
+	self.is_moving = false
+	self.last_stopped_moving_at = api.get_time()
+end
+
 function ST:PLAYER_TARGET_SET_ATTACKING()
 	-- Required to set the offhand timer delay when startattack or when
 	-- target is changed (both fire this event).
+	if not self.interfaces_are_initialised then return end
 	if not self.has_oh then return end
 	local t = GetTime()
 	local old_start = self.offhand.start
@@ -977,6 +1144,32 @@ function ST:UPDATE_SHAPESHIFT_FORM()
 	end
 end
 
+function ST:SPELL_UPDATE_COOLDOWN()
+	-- Auto Shot cooldown refresh for the hunter ranged sync. State-only in phase 1:
+	-- the hook updates self.ranged and never touches a frame.
+	local class = self[self.player_class]
+	if class and class.on_cooldown_update then
+		class.on_cooldown_update(self)
+	end
+end
+
+function ST:START_AUTOREPEAT_SPELL()
+	-- Auto Shot auto-repeat started (hunter): refresh the cached auto-repeat state
+	-- and seed a deduped ranged cycle anchor. State-only in phase 1.
+	local class = self[self.player_class]
+	if class and class.on_autorrepeat_event then
+		class.on_autorrepeat_event(self, true)
+	end
+end
+
+function ST:STOP_AUTOREPEAT_SPELL()
+	-- Auto Shot auto-repeat stopped (hunter): refresh the cached auto-repeat state.
+	local class = self[self.player_class]
+	if class and class.on_autorrepeat_event then
+		class.on_autorrepeat_event(self, false)
+	end
+end
+
 function ST:determine_form_visibility_flag()
 	-- function called on form or settings change to 
 	-- set the form visibility flag
@@ -1014,6 +1207,12 @@ function ST:ACTIVE_TALENT_GROUP_CHANGED(event, group)
 	elseif self.player_class == "WARRIOR" then
 		self:get_warrior_talent_info()
 	end
+	local class = self[self.player_class]
+	-- Class modules may cache client-specific data that a respec invalidates (the
+	-- shaman weave catalogue caches rank cast times resolved at post_init).
+	if class and class.on_talents_changed then
+		class.on_talents_changed(self)
+	end
 end
 
 function ST:CHARACTER_POINTS_CHANGED(event)
@@ -1023,6 +1222,12 @@ function ST:CHARACTER_POINTS_CHANGED(event)
 		self:determine_form_visibility_flag()
 	elseif self.player_class == "WARRIOR" then
 		self:get_warrior_talent_info()
+	end
+	local class = self[self.player_class]
+	-- Class modules may cache client-specific data that a respec invalidates (the
+	-- shaman weave catalogue caches rank cast times resolved at post_init).
+	if class and class.on_talents_changed then
+		class.on_talents_changed(self)
 	end
 end
 
@@ -1101,9 +1306,13 @@ function ST:get_gcd_marker_time_offset_seconds()
 end
 
 function ST:set_gcd_times_before_swing_seconds()
-	-- Set all of the calculated times before our next swing.
-	local base_phys = self.gcd.phys_length
-	local base_spell = self.gcd.spell_length
+	-- Set all of the calculated times before our next swing. The bases fall back to
+	-- the documented 1.5 s pre-report default (the same one get_spell_gcd_duration
+	-- applies): init_libs can complete without LibGlobalCooldown ever reporting (a
+	-- broken library, or the init deadline), and nil arithmetic here used to crash
+	-- post_init after interfaces_are_initialised was already set.
+	local base_phys = self.gcd.phys_length or 1.5
+	local base_spell = self.gcd.spell_length or 1.5
 	local offset = self:get_gcd_marker_time_offset_seconds()
 	self.gcd.gcd1_phys_time_before_swing = base_phys + offset
 	self.gcd.gcd1_spell_time_before_swing = base_spell + offset
@@ -1114,6 +1323,17 @@ end
 ------------------------------------------------------------------------------------
 -- Range finding
 ------------------------------------------------------------------------------------
+function ST:disable_range_checking()
+	-- One-time range-checking disable. The init deadline sets lrc_unavailable before
+	-- post_init prints; rf_update's dead-man calls this at runtime. Both paths set the
+	-- state and print the same notice exactly once per session.
+	self.lrc_unavailable = true
+	if not self.lrc_unavailable_notice_shown then
+		self.lrc_unavailable_notice_shown = true
+		self:Print("Range checking is unavailable on this client; the range display is disabled.")
+	end
+end
+
 function ST:init_range_finders()
 	-- With the range library unavailable (see the init deadline in
 	-- OnInitialize) leave the fields empty: nothing retries and the bars'
@@ -1143,7 +1363,8 @@ end
 
 function ST:rf_update()
 	if self.lrc_unavailable then
-		-- Range checking was disabled by the init deadline: stop the retry loop.
+		-- Range checking was disabled by the init deadline (or an earlier poll
+		-- failure): stop the retry loop.
 		return
 	end
 	-- On the very first load of the game, CHECKERS_CHANGED can get a callback
@@ -1168,17 +1389,29 @@ function ST:rf_update()
 		)
 		return
 	end
-	self.in_melee_range = self.melee_range_checker_func("target")
-	-- print(self.melee_result)
-	-- The ranged checker can still be nil on clients whose checkers resolve later than
-	-- the melee one (or where no harm checker exists at all): never dereference it
-	-- unguarded, that was a live nil-index crash.
-	local ranged_checker = self.ranged_range_checker_func
-	self.in_ranged_range = (ranged_checker ~= nil and ranged_checker("target"))
-		and not self.in_melee_range
-	self.target_min_range, self.target_max_range = LRC:GetRange("target")
-	-- print('minrange = '..tostring(self.target_min_range))
-	-- print(self.target_max_range)
+	-- The vendored LibRangeCheck-2.0 is maintained for classic-line clients; the
+	-- just-landed IsEventValid event guards let its internals run on Retail/WoW
+	-- Forever for the first time, where a classic-only global can still make a poll
+	-- throw. Dead-man: a throwing poll disables range checking for the session and
+	-- stops the retry loop instead of erroring every interval. On success the state
+	-- writes below and the reschedule are exactly as before.
+	local ok = pcall(function()
+		self.in_melee_range = self.melee_range_checker_func("target")
+		-- print(self.melee_result)
+		-- The ranged checker can still be nil on clients whose checkers resolve later than
+		-- the melee one (or where no harm checker exists at all): never dereference it
+		-- unguarded, that was a live nil-index crash.
+		local ranged_checker = self.ranged_range_checker_func
+		self.in_ranged_range = (ranged_checker ~= nil and ranged_checker("target"))
+			and not self.in_melee_range
+		self.target_min_range, self.target_max_range = LRC:GetRange("target")
+		-- print('minrange = '..tostring(self.target_min_range))
+		-- print(self.target_max_range)
+	end)
+	if not ok then
+		self:disable_range_checking()
+		return
+	end
 	self:set_bar_visibilities()
 	self:handle_oor()
 	C_Timer.After(self.rangefinder_interval, function() self:rf_update() end)
@@ -1339,7 +1572,8 @@ end
 
 function ST:open_menu(input)
 	-- AceConsole passes the raw input: no argument opens the options menu,
-	-- "practice" toggles the Twist Practice session, anything else prints usage.
+	-- "practice" toggles the Twist Practice session, "design" toggles design mode,
+	-- "diag" prints the verbose diagnostic report, anything else prints usage.
 	local arg = input and input:match("^%s*(.-)%s*$") or ""
 	arg = arg:lower()
 	if arg == "" then
@@ -1351,8 +1585,22 @@ function ST:open_menu(input)
 		else
 			self:Print("Practice mode is not available on this client.")
 		end
+	elseif arg == "design" then
+		if st.designmode then
+			-- Never in combat: design mode refuses under lockdown itself (no protected
+			-- calls anywhere in its path).
+			st.designmode.toggle(self)
+		else
+			self:Print("Design mode is not available on this client.")
+		end
+	elseif arg == "diag" then
+		if st.diag then
+			st.diag.report(self, true)
+		else
+			self:Print("Diagnostics are not available on this client.")
+		end
 	else
-		self:Print("Unknown argument '" .. arg .. "'. Usage: /st practice to toggle practice mode, /st to open options.")
+		self:Print("Unknown argument '" .. arg .. "'. Usage: /st practice to toggle practice mode, /st design to toggle design mode, /st diag for a diagnostic report, /st to open options.")
 	end
 end
 

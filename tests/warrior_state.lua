@@ -2,7 +2,11 @@
 -- over the real compat.lua + utils.lua in a sandbox.
 -- Pins the pre-init guards, the rage-cost evaluation and its colour reset, the negative
 -- rank latch, Heroic Strike / Cleave spell-table hygiene, the Cleave option gate, the
--- Blood Surge glow state-change guard and the on-next-attack colour matrix.
+-- Blood Surge glow state-change guard, the on-next-attack colour matrix, and the warrior
+-- tracker set: the target debuff bars (id / localized-name / literal-name matching, the
+-- caster filter, throttled merged scan, cached restack, glow and stack-count rendering),
+-- the Shield Block bar, the Slam cast bar and the Overpower proc window (pure helpers,
+-- CLEU arming, clear-on-cast, option gates and absent-data inertness).
 local script_dir = (arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
 local ROOT = script_dir .. "/../"
 
@@ -58,7 +62,9 @@ local function build(opts)
         rage_cost = nil,          -- what GetSpellPowerCost returns (nil = no cost data)
         known = opts.known or {}, -- spell ids this client knows
         current_spell = opts.current_spell, -- the only id IsCurrentSpell answers true for
-        auras = {},               -- [{ name, id }] returned by UnitAura
+        auras = {},               -- [{ name, id }] returned by UnitAura for "player"
+        target_auras = {},        -- [{ name, id, count, duration, expiration, source }] for "target"
+        cast_live = nil,          -- { name, spell_id, start_ms, end_ms } for UnitCastingInfo
         -- call counters
         get_family_spell_id_calls = 0,
         get_spell_info_calls = 0,
@@ -67,6 +73,10 @@ local function build(opts)
         bar_color_calls = 0,
         set_vertex_calls = 0,
         aura_scans = 0,
+        unit_aura_calls = 0,
+        target_aura_calls = 0,
+        unit_casting_info_calls = 0,
+        unit_channel_info_calls = 0,
         -- last observed values
         last_cost_id = nil,
         last_aura_filter = nil,
@@ -105,22 +115,51 @@ local function build(opts)
         sb.is_current_spell_calls = sb.is_current_spell_calls + 1
         return id == sb.current_spell
     end
+    -- Spell knowledge for the spec/rune/talent probes (Mortal Strike = arms,
+    -- Raging Blow / Consumed by Rage = SoD, Bladestorm talented): the same
+    -- known set that answers GetSpellInfo above, so the two never disagree.
+    -- Mirrored into _G with the other stubs for the duration of the compat
+    -- load (compat resolves IsSpellKnown dynamically through _G).
+    env.IsSpellKnown = function(id)
+        return sb.known[id] == true
+    end
     env.UnitAura = function(unit, index, filter)
         sb.last_aura_filter = filter
         sb.aura_scans = sb.aura_scans + 1
-        local entry = sb.auras[index]
+        local entry
+        if unit == "target" then
+            sb.target_aura_calls = sb.target_aura_calls + 1
+            entry = sb.target_auras[index]
+        else
+            sb.unit_aura_calls = sb.unit_aura_calls + 1
+            entry = sb.auras[index]
+        end
         if not entry then return nil end
-        return entry.name, nil, entry.count, nil, nil, nil, nil, nil, nil, entry.id
+        return entry.name, nil, entry.count, nil, entry.duration, entry.expiration,
+            entry.source, nil, nil, entry.id
+    end
+    -- Classic payloads: UnitCastingInfo -> name, text, texture, startTimeMs, endTimeMs,
+    -- isTradeSkill, castID, notInterruptible, spellID; UnitChannelInfo lacks castID.
+    env.UnitCastingInfo = function(unit)
+        sb.unit_casting_info_calls = sb.unit_casting_info_calls + 1
+        if unit ~= "player" or not sb.cast_live then return nil end
+        return sb.cast_live.name, nil, nil, sb.cast_live.start_ms, sb.cast_live.end_ms,
+            false, 1, false, sb.cast_live.spell_id
+    end
+    env.UnitChannelInfo = function(unit)
+        sb.unit_channel_info_calls = sb.unit_channel_info_calls + 1
+        if unit ~= "player" then return nil end
+        return nil
     end
 
-    -- compat.lua reads some legacy globals through _G (annotation-safe on Mainline-code
-    -- clients); mirror the stubs for the duration of its load, then restore _G exactly.
+    -- compat.lua reads several legacy globals through _G (annotation-safe on
+    -- Mainline-code clients); mirror EVERY sandbox stub for the duration of its load,
+    -- then restore _G exactly. A hardcoded name list goes stale the moment compat adds
+    -- another _G read - that is exactly how GetSpellInfo broke these suites.
     local mirrored = {}
-    for _, name in ipairs({ "GetSpellPowerCost", "IsCurrentSpell", "UnitPower" }) do
-        if env[name] ~= nil then
-            mirrored[name] = rawget(_G, name)
-            _G[name] = env[name]
-        end
+    for name, value in pairs(env) do
+        mirrored[name] = rawget(_G, name)
+        _G[name] = value
     end
 
     local st = {}
@@ -147,8 +186,64 @@ local function build(opts)
         bloodsurge_glow_nlines = 12,
         bloodsurge_glow_freq = 0.1,
         bloodsurge_glow_line_length = 12,
+        -- The real WARRIOR tracker defaults (config_presets.lua), so a wrong colour or a
+        -- missing option key is a module bug and not a fixture bug.
+        show_warrior_deep_wounds_bar = true,
+        warrior_deep_wounds_bar_color = { 179, 38, 38, 0.90 },
+        show_warrior_sunder_armor_bar = true,
+        warrior_sunder_armor_bar_color = { 140, 89, 38, 0.90 },
+        show_warrior_rend_bar = true,
+        warrior_rend_bar_color = { 217, 38, 26, 0.90 },
+        show_warrior_thunder_clap_bar = true,
+        warrior_thunder_clap_bar_color = { 89, 140, 191, 0.90 },
+        show_warrior_demo_shout_bar = true,
+        warrior_demo_shout_bar_color = { 166, 128, 77, 0.90 },
+        show_warrior_shield_block_bar = true,
+        warrior_shield_block_bar_color = { 51, 140, 255, 0.90 },
+        show_warrior_slam_cast_bar = true,
+        show_warrior_overpower_flash = true,
         mainhand = { border_width = 2 },
     }
+    -- Texture/fontstring stubs recording what the tracker widgets draw, so positions,
+    -- sizes, colours, textures and visibility can be asserted without a real frame. The
+    -- point/text-set counters make the cached-restack and label-write guards observable.
+    local function make_texture()
+        local t = { hidden = true, point_sets = 0 }
+        function t:SetDrawLayer() end
+        function t:SetColorTexture(r, g, b, a) t.base_color = { r, g, b, a } end
+        function t:SetWidth(w) t.width = w end
+        function t:SetHeight(h) t.height = h end
+        function t:SetSize(w, h) t.width, t.height = w, h end
+        function t:SetPoint(point, anchor, rel_point, x, y)
+            t.point_sets = t.point_sets + 1
+            t.point, t.anchor, t.rel_point, t.offset, t.offset_y = point, anchor, rel_point, x, y
+        end
+        function t:ClearAllPoints()
+            t.point, t.anchor, t.rel_point, t.offset, t.offset_y = nil, nil, nil, nil, nil
+        end
+        function t:SetVertexColor(r, g, b, a) t.color = { r, g, b, a } end
+        function t:SetTexture(texture) t.texture = texture end
+        function t:SetTexCoord(...) t.texcoord = { ... } end
+        function t:Hide() t.hidden = true end
+        function t:Show() t.hidden = false end
+        function t:IsShown() return not t.hidden end
+        return t
+    end
+    local function make_fontstring()
+        local f = { hidden = true, text_sets = 0 }
+        function f:SetPoint(...) f.point = { ... } end
+        function f:SetJustifyH() end
+        function f:SetFont(font_path, size, flags) f.font = { font_path, size, flags } end
+        function f:SetText(text)
+            f.text_sets = f.text_sets + 1
+            f.text = text
+        end
+        function f:SetTextColor(r, g, b, a) f.color = { r, g, b, a } end
+        function f:Hide() f.hidden = true end
+        function f:Show() f.hidden = false end
+        function f:IsShown() return not f.hidden end
+        return f
+    end
     local visuals = {
         bar = {
             SetVertexColor = function(_, r, g, b, a)
@@ -156,15 +251,20 @@ local function build(opts)
                 sb.vertex = { r, g, b, a }
             end,
         },
+        CreateTexture = function() return make_texture() end,
+        CreateFontString = function() return make_fontstring() end,
     }
     local bar_frame = { name = "fake_bar_frame" }
     ST.interfaces_are_initialised = false
+    ST.player_guid = "Player-1"
     ST.get_class_table = function() return class_db end
     ST.get_hand_table = function() return class_db.mainhand end
     ST.get_visuals_frame = function()
         if opts.no_visuals then return nil end
         return visuals
     end
+    -- bars.lua's accessor, mirrored: the tracker widgets size against the live bar.
+    ST.get_bar_visuals_width_and_height = function() return 100, 20 end
     ST.get_bar_frame = function() return bar_frame end
     -- main.lua declares this as a method (ST:convert_color), so the leading self must be
     -- swallowed here too.
@@ -208,6 +308,13 @@ local function build(opts)
     setfenv(utils, env)
     utils("SwedgeTimer", st)
 
+    -- The pure guide engine (the Slam safe-window verdict lives there; the
+    -- widget calls it through a nil-guard so a flavor without this module
+    -- keeps the white fill).
+    local guide = assert(loadfile(ROOT .. "warrior_guide.lua"))
+    setfenv(guide, env)
+    guide("SwedgeTimer", st)
+
     -- Count resolver calls: the module calls api.get_family_spell_id through the api table,
     -- so wrapping the table entry after load is enough.
     local real_resolver = st.api.get_family_spell_id
@@ -237,6 +344,7 @@ local function build(opts)
     sb.ST = ST
     sb.class_db = class_db
     sb.bar_frame = bar_frame
+    sb.visuals = visuals
     return sb
 end
 
@@ -249,6 +357,9 @@ for _, hook in ipairs({
     "on_rage_update", "on_spellcast_failed_quiet", "on_spellcast_succeeded",
     "on_current_spell_cast_changed", "on_aura_change", "process_bloodsurge",
     "glow_start", "glow_stop", "on_combat_exit", "set_bar_color",
+    "on_bar_update", "on_spellcast_event", "on_combat_log_unfiltered",
+    "setup_warrior_visuals", "get_debuff_remaining", "should_debuff_glow",
+    "get_overpower_remaining", "get_rampage_display", "is_overpower_cast",
 }) do
     check(type(base.ST.WARRIOR[hook]) == "function", "WARRIOR." .. hook .. " is defined")
 end
@@ -759,6 +870,1068 @@ do
     ST.WARRIOR.on_spellcast_failed_quiet(ST, "target", nil, nil)
     eq(ST.hs_queued, true, "a nil spell id is ignored")
     eq(sb.bar_color_calls, 0, "a nil spell id does not recolour")
+end
+
+--=========================================================================================
+-- 12) Pre-init safety for the tracker hooks
+--=========================================================================================
+do
+    local sb = build({ no_visuals = true })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = false
+    eq(ST.warrior_overpower_proc_until, nil, "the pre-init sandbox starts with no proc window")
+
+    local hooks = {
+        { "on_bar_update", { "mainhand" } },
+        { "on_spellcast_event", { "UNIT_SPELLCAST_START", "player", "cast-1", 47475 } },
+        { "on_combat_log_unfiltered", { "COMBAT_LOG_EVENT_UNFILTERED", 100, "SWING_MISSED",
+            false, "Player-1", "Player", 0, 0, "Target-1", "Target", 0, 0, "DODGE" } },
+        { "setup_warrior_visuals", {} },
+    }
+    for _, entry in ipairs(hooks) do
+        for pass = 1, 2 do
+            local ok, err = pcall(ST.WARRIOR[entry[1]], ST, unpack(entry[2]))
+            check(ok, "pre-init " .. entry[1] .. " (pass " .. pass .. ") does not error ("
+                .. tostring(err) .. ")")
+        end
+    end
+    eq(ST.warrior_overpower_proc_until, nil, "a pre-init CLEU dodge does not arm the proc window")
+    check(not ST.warrior_slam_casting, "a pre-init START does not begin a Slam cast")
+    eq(sb.unit_casting_info_calls, 0, "pre-init spellcast events perform no cast reads")
+end
+
+--=========================================================================================
+-- 13) Tracker options all off: no reads at all and every widget hidden
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local vf = sb.visuals
+    local db = sb.class_db
+    db.show_warrior_deep_wounds_bar = false
+    db.show_warrior_sunder_armor_bar = false
+    db.show_warrior_rend_bar = false
+    db.show_warrior_thunder_clap_bar = false
+    db.show_warrior_demo_shout_bar = false
+    db.show_warrior_shield_block_bar = false
+    db.show_warrior_slam_cast_bar = false
+    db.show_warrior_overpower_flash = false
+    check(vf.warrior_shield_block ~= nil, "post_init creates the Shield Block widgets")
+    check(vf.warrior_slam ~= nil, "post_init creates the Slam widgets")
+    check(vf.warrior_debuff ~= nil, "post_init creates the five debuff widget groups")
+    check(vf.warrior_overpower_edges ~= nil and #vf.warrior_overpower_edges == 4,
+        "post_init creates the four Overpower flash edges")
+
+    sb.clock = 100
+    sb.target_auras = {
+        { name = "Rend", id = 772, source = "player", duration = 9, expiration = 109 },
+    }
+    sb.auras = {
+        { name = "Shield Block", id = 2565, duration = 5, expiration = 105 },
+    }
+    sb.target_aura_calls = 0
+    sb.unit_aura_calls = 0
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(sb.target_aura_calls, 0, "all off: no target aura reads")
+    eq(sb.unit_aura_calls, 0, "all off: no player aura reads")
+    check(vf.warrior_shield_block.bg.hidden, "all off: the Shield Block bar hides")
+    check(vf.warrior_slam.bg.hidden, "all off: the Slam bar hides")
+    check(vf.warrior_overpower_text.hidden, "all off: the Overpower flash stays hidden")
+    for key in pairs(vf.warrior_debuff) do
+        local bar = vf.warrior_debuff[key]
+        check(bar.bg.hidden and bar.fill.hidden and bar.glow.hidden and bar.label.hidden,
+            "all off: the " .. key .. " debuff bar is hidden")
+    end
+end
+
+--=========================================================================================
+-- 14) Target debuff bars: id / localized-name / literal-name matching, the caster filter,
+-- expiry and the glow boundary
+--=========================================================================================
+do
+    local sb = build({ known = { [772] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local bars = sb.visuals.warrior_debuff
+
+    -- Id match at a clean remaining fraction.
+    sb.clock = 200
+    sb.target_auras = {
+        { name = "localized rend", id = 772, source = "player", duration = 9, expiration = 206 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bars.rend.bg.hidden, "the player's Rend shows its bar")
+    near(bars.rend.fill.width, 100 * (6 / 9), "the fill shows the remaining fraction")
+    eq(bars.rend.label.text, "6", "the label shows whole seconds")
+    check(bars.rend.glow.hidden, "no glow above the final 4 s")
+
+    -- The localized name resolved from the client's own spell data matches without an id.
+    sb.clock = 201
+    sb.target_auras = {
+        { name = "Spell 772", source = "player", duration = 9, expiration = 207 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bars.rend.bg.hidden, "the resolved localized name matches without an id")
+
+    -- The literal English fallback matches even with no spell data resolved yet.
+    sb.clock = 202
+    sb.target_auras = {
+        { name = "Deep Wound", source = "player", duration = 12, expiration = 208 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bars.deep_wounds.bg.hidden, "the literal English name matches as the fallback")
+    eq(bars.deep_wounds.label.text, "6", "Deep Wounds' label counts its own duration")
+
+    -- A foreign caster's debuff does not qualify.
+    sb.clock = 203
+    sb.target_auras = {
+        { name = "Rend", id = 772, source = "other", duration = 9, expiration = 215 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bars.rend.bg.hidden, "another caster's debuff does not show the bar")
+
+    -- Aura gone: every bar hides.
+    sb.clock = 204
+    sb.target_auras = {}
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bars.rend.bg.hidden and bars.deep_wounds.bg.hidden and bars.sunder_armor.bg.hidden
+        and bars.thunder_clap.bg.hidden and bars.demo_shout.bg.hidden,
+        "no matching auras: all debuff bars hide")
+
+    -- Still-listed but expired: remaining floors at 0 and the glow never shows there.
+    sb.clock = 205
+    sb.target_auras = {
+        { name = "Rend", id = 772, source = "player", duration = 9, expiration = 204 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bars.rend.bg.hidden, "an expired-but-listed aura still draws (the reference floors at 0)")
+    eq(bars.rend.label.text, "0", "the expired bar reads 0")
+    check(bars.rend.glow.hidden, "an expired bar does not glow")
+
+    -- Glow boundary: on at exactly 4 s remaining, off just above.
+    sb.clock = 206
+    sb.target_auras = {
+        { name = "Rend", id = 772, source = "player", duration = 9, expiration = 210 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bars.rend.glow.hidden, "the glow starts at exactly 4 s remaining")
+    sb.clock = 206.1
+    sb.target_auras[1].expiration = 210.4
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bars.rend.glow.hidden, "the glow stays off above 4 s")
+end
+
+--=========================================================================================
+-- 15) Sunder Armor stacks, the shared stack walk, throttling and the cached restack
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local bars = sb.visuals.warrior_debuff
+
+    sb.clock = 300
+    sb.target_auras = {
+        { name = "Deep Wound", source = "player", duration = 12, expiration = 312 },
+        { name = "Sunder Armor", source = "player", duration = 30, expiration = 330, count = 3 },
+        { name = "Rend", source = "player", duration = 9, expiration = 309 },
+    }
+    sb.target_aura_calls = 0
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not (bars.deep_wounds.bg.hidden or bars.sunder_armor.bg.hidden or bars.rend.bg.hidden),
+        "the visible debuffs draw through one merged scan")
+    eq(bars.deep_wounds.bg.offset_y, 2, "Deep Wounds occupies the bottom slot")
+    eq(bars.sunder_armor.bg.offset_y, 10, "Sunder Armor stacks above Deep Wounds (6 px + 2 px gap)")
+    eq(bars.rend.bg.offset_y, 18, "Rend stacks above Sunder Armor")
+    eq(bars.sunder_armor.label.text, "3", "Sunder Armor's label shows its stack count")
+
+    -- The merged scan is throttled to 0.05 s.
+    local calls_before = sb.target_aura_calls
+    sb.clock = 300.01
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(sb.target_aura_calls, calls_before, "the target scan is throttled to 0.05 s")
+
+    -- Cached restack: an unchanged slot performs no anchor writes at all.
+    local sets_before = bars.rend.bg.point_sets
+    sb.clock = 300.1
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(bars.rend.bg.point_sets, sets_before, "an unchanged slot performs no anchor writes")
+
+    -- Just one debuff up: it slides down to the bottom slot.
+    sb.clock = 301
+    sb.target_auras = {
+        { name = "Rend", source = "player", duration = 9, expiration = 310 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(bars.rend.bg.offset_y, 2, "an alone Rend takes the bottom slot")
+
+    -- A missing stack count still reads as one.
+    sb.clock = 302
+    sb.target_auras = {
+        { name = "Sunder Armor", source = "player", duration = 30, expiration = 332 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(bars.sunder_armor.label.text, "1", "a missing stack count reads as one stack")
+
+    -- One bar off: only that bar hides; the shared scan keeps feeding the others.
+    sb.class_db.show_warrior_sunder_armor_bar = false
+    sb.clock = 303
+    sb.target_auras = {
+        { name = "Deep Wound", source = "player", duration = 12, expiration = 315 },
+        { name = "Sunder Armor", source = "player", duration = 30, expiration = 333, count = 2 },
+    }
+    calls_before = sb.target_aura_calls
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bars.sunder_armor.bg.hidden, "a disabled bar hides even while the debuff is up")
+    check(not bars.deep_wounds.bg.hidden, "its enabled neighbour keeps drawing")
+    check(sb.target_aura_calls > calls_before, "the shared scan still runs for the enabled bar")
+    sb.class_db.show_warrior_sunder_armor_bar = true
+
+    -- Colours: the configured table wins; the reference fallback covers a missing key.
+    sb.clock = 304
+    sb.target_auras = {
+        { name = "Thunder Clap", source = "player", duration = 30, expiration = 334 },
+    }
+    sb.class_db.warrior_thunder_clap_bar_color = { 10, 20, 30, 0.4 }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    colour_eq(bars.thunder_clap.fill.color, { 10, 20, 30, 0.4 },
+        "the configured Thunder Clap colour fills the bar")
+    colour_eq(bars.thunder_clap.glow.color, { 10, 20, 30, 0.4 }, "the glow shares the fill colour")
+    sb.class_db.warrior_thunder_clap_bar_color = nil
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    colour_eq(bars.thunder_clap.fill.color, { 89, 140, 191, 0.90 },
+        "the reference fallback covers a missing db colour")
+end
+
+--=========================================================================================
+-- 16) Shield Block bar: show/hide, icon, colour, option gate and the shared stack
+--=========================================================================================
+do
+    local sb = build({ known = { [2565] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local bar = sb.visuals.warrior_shield_block
+
+    sb.clock = 400
+    sb.auras = {
+        { name = "Battle Shout", id = 6673, duration = 120, expiration = 520 },
+        { name = "Shield Block", id = 2565, duration = 5, expiration = 403 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bar.bg.hidden, "the Shield Block buff shows its bar")
+    near(bar.fill.width, 100 * (3 / 5), "the fill shows the remaining fraction")
+    eq(bar.bg.offset_y, 2, "Shield Block occupies the bottom slot")
+    check(not bar.icon.hidden and bar.icon.texture ~= nil,
+        "the spell icon shows once the client's spell data answered")
+
+    -- The resolved localized name matches without an id; the colour is configurable.
+    sb.clock = 401
+    sb.auras = { { name = "Spell 2565", duration = 5, expiration = 405 } }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bar.bg.hidden, "the resolved localized name matches without an id")
+    sb.class_db.warrior_shield_block_bar_color = { 7, 8, 9, 0.5 }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    colour_eq(bar.fill.color, { 7, 8, 9, 0.5 }, "the configured Shield Block colour fills the bar")
+
+    -- The buff gone: the bar and the icon hide.
+    sb.clock = 402
+    sb.auras = { { name = "Battle Shout", id = 6673, duration = 120, expiration = 520 } }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bar.bg.hidden, "the bar hides when the aura is absent")
+    check(bar.icon.hidden, "the icon hides with it")
+
+    -- A listed aura without a usable duration never shows (the reference guard).
+    sb.clock = 403
+    sb.auras = { { name = "Shield Block", id = 2565 } }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bar.bg.hidden, "an aura without a duration never shows the bar")
+
+    -- Option off: hidden and not a single player aura read.
+    sb.class_db.show_warrior_shield_block_bar = false
+    sb.auras = { { name = "Shield Block", id = 2565, duration = 5, expiration = 410 } }
+    sb.unit_aura_calls = 0
+    sb.clock = 404
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bar.bg.hidden, "the option off hides the bar")
+    eq(sb.unit_aura_calls, 0, "the option off performs no player aura reads")
+
+    -- Re-enabling scans again and shows the buff.
+    sb.class_db.show_warrior_shield_block_bar = true
+    sb.clock = 404.5
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bar.bg.hidden, "re-enabling the option shows the bar on the next tick")
+
+    -- With only Shield Block on, the target scan is skipped entirely.
+    sb.class_db.show_warrior_deep_wounds_bar = false
+    sb.class_db.show_warrior_sunder_armor_bar = false
+    sb.class_db.show_warrior_rend_bar = false
+    sb.class_db.show_warrior_thunder_clap_bar = false
+    sb.class_db.show_warrior_demo_shout_bar = false
+    sb.target_aura_calls = 0
+    sb.clock = 405
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(sb.target_aura_calls, 0, "only Shield Block on: no target aura reads")
+end
+
+--=========================================================================================
+-- 17) Slam cast bar: tracking, progress, label, re-anchor and the option gate
+--=========================================================================================
+do
+    local sb = build({ known = { [1464] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local bar = sb.visuals.warrior_slam
+
+    -- START with a live window: start 100.0 s, end 102.5 s.
+    sb.clock = 100
+    sb.cast_live = { name = "Slam", spell_id = 47475, start_ms = 100000, end_ms = 102500 }
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "cast-1", 47475)
+    eq(ST.warrior_slam_casting, true, "a Slam cast start is tracked")
+    near(ST.warrior_slam_cast_start, 100, "the live window's start is honoured")
+    near(ST.warrior_slam_cast_duration, 2.5, "the live window's duration is honoured")
+
+    sb.clock = 101
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bar.bg.hidden, "the cast bar shows while casting")
+    near(bar.fill.width, 100 * 0.4, "the fill grows with the cast progress")
+    eq(bar.label.text, "SLAM 1.5s", "the label shows the remaining time")
+
+    -- The label only re-formats when its tenth-of-a-second readout changes.
+    local sets_before = bar.label.text_sets
+    sb.clock = 101.01
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(bar.label.text_sets, sets_before, "an unchanged tenth performs no label write")
+    sb.clock = 101.5
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(bar.label.text_sets, sets_before + 1, "a changed tenth writes the label once")
+    eq(bar.label.text, "SLAM 1.0s", "the label follows the countdown")
+
+    -- DELAYED re-anchors the window without starting a new cast.
+    sb.clock = 102
+    sb.cast_live = { name = "Slam", spell_id = 47475, start_ms = 101500, end_ms = 104000 }
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_DELAYED", "player", "cast-1", 47475)
+    near(ST.warrior_slam_cast_start, 101.5, "DELAYED re-anchors the cast start")
+    near(ST.warrior_slam_cast_duration, 2.5, "DELAYED re-anchors the duration")
+    sb.clock = 102.5
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    near(bar.fill.width, 100 * 0.4, "progress is measured against the re-anchored window")
+
+    -- STOP hides the bar.
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_STOP", "player", nil, nil)
+    eq(ST.warrior_slam_casting, false, "the STOP event ends the cast")
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bar.bg.hidden, "the cast bar hides when the cast ends")
+
+    -- No live window: the resolved rank's cast time falls back (the fixture's spell data
+    -- carries no cast time, so the reference's 1.5 s default is used).
+    sb.cast_live = nil
+    sb.clock = 200
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "cast-2", 1464)
+    near(ST.warrior_slam_cast_duration, 1.5, "the fallback duration is the reference's 1.5 s")
+    check(sb.unit_channel_info_calls > 0, "the live-window read falls through to the channel probe")
+    sb.clock = 200.75
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    near(bar.fill.width, 50, "the fallback window drives the same progress fill")
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_INTERRUPTED", "player", nil, nil)
+    eq(ST.warrior_slam_casting, false, "an interrupted cast ends the tracking")
+
+    -- Name tokens match through the literal fallback and the resolved names.
+    sb.clock = 300
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "Slam", nil)
+    eq(ST.warrior_slam_casting, true, "a literal Slam name token is matched")
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_STOP", "player", nil, nil)
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "Spell 1464", nil)
+    eq(ST.warrior_slam_casting, true, "a resolved localized name token is matched")
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_STOP", "player", nil, nil)
+
+    -- An unrelated cast does not arm the bar.
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "cast-9", 12345)
+    eq(ST.warrior_slam_casting, false, "an unrelated cast is not tracked")
+
+    -- Option off: the START performs no cast reads and the bar stays hidden.
+    sb.class_db.show_warrior_slam_cast_bar = false
+    sb.unit_casting_info_calls = 0
+    sb.clock = 400
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "cast-1", 47475)
+    eq(ST.warrior_slam_casting, false, "the option off ignores a Slam start")
+    eq(sb.unit_casting_info_calls, 0, "the option off performs no cast reads")
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bar.bg.hidden, "the option off keeps the cast bar hidden")
+end
+
+--=========================================================================================
+-- 17b) The shared stack: Shield Block, Slam and the debuffs slide together
+--=========================================================================================
+do
+    local sb = build({ known = { [2565] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local vf = sb.visuals
+
+    sb.clock = 600
+    sb.cast_live = { name = "Slam", spell_id = 47475, start_ms = 600000, end_ms = 601500 }
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "cast-1", 47475)
+    sb.auras = { { name = "Shield Block", id = 2565, duration = 5, expiration = 604 } }
+    sb.target_auras = {
+        { name = "Deep Wound", source = "player", duration = 12, expiration = 612 },
+        { name = "Rend", source = "player", duration = 9, expiration = 609 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(vf.warrior_shield_block.bg.offset_y, 2, "Shield Block holds the slot closest to the bar")
+    eq(vf.warrior_slam.bg.offset_y, 8, "the Slam bar stacks above Shield Block")
+    eq(vf.warrior_debuff.deep_wounds.bg.offset_y, 14, "Deep Wounds stacks above the Slam bar")
+    eq(vf.warrior_debuff.rend.bg.offset_y, 22, "Rend stacks above Deep Wounds")
+
+    -- The Shield Block aura fades while the cast is still tracked: that slot collapses
+    -- and everything above it slides down.
+    sb.clock = 610
+    sb.auras = {}
+    sb.target_auras = {
+        { name = "Deep Wound", source = "player", duration = 12, expiration = 622 },
+        { name = "Rend", source = "player", duration = 9, expiration = 619 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(vf.warrior_shield_block.bg.hidden, "the faded Shield Block hides")
+    eq(vf.warrior_slam.bg.offset_y, 2, "the tracked Slam bar slides into the bottom slot")
+    eq(vf.warrior_debuff.deep_wounds.bg.offset_y, 8, "Deep Wounds slides down behind it")
+    eq(vf.warrior_debuff.rend.bg.offset_y, 16, "Rend follows the slide")
+
+    -- The cast ends: the debuffs slide back to the bar.
+    ST.WARRIOR.on_spellcast_event(ST, "UNIT_SPELLCAST_STOP", "player", nil, nil)
+    sb.clock = 611
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(vf.warrior_slam.bg.hidden, "the ended cast hides the Slam bar")
+    eq(vf.warrior_debuff.deep_wounds.bg.offset_y, 2, "Deep Wounds returns to the bottom slot")
+    eq(vf.warrior_debuff.rend.bg.offset_y, 10, "Rend stacks above it again")
+end
+
+--=========================================================================================
+-- 18) Overpower proc window: pure helpers, CLEU arming, clear-on-cast, option gate
+--=========================================================================================
+do
+    local sb = build({ known = { [7384] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local vf = sb.visuals
+
+    -- Pure countdown helper.
+    eq(ST.WARRIOR.get_overpower_remaining(nil, 100), nil, "an unset window has no remaining time")
+    near(ST.WARRIOR.get_overpower_remaining(105, 100), 5, "an armed window counts down")
+    eq(ST.WARRIOR.get_overpower_remaining(100, 100), nil, "a window at its end is over")
+    eq(ST.WARRIOR.get_overpower_remaining(99, 100), nil, "an elapsed window is over")
+
+    -- Pure matcher: ids, name tokens and resolved names.
+    eq(ST.WARRIOR.is_overpower_cast(7384, nil, 100), true, "the rank-1 id matches")
+    eq(ST.WARRIOR.is_overpower_cast(nil, "Overpower", 100), true, "the literal name token matches")
+    eq(ST.WARRIOR.is_overpower_cast(nil, "Spell 7384", 100), true, "the resolved localized name matches")
+    eq(ST.WARRIOR.is_overpower_cast(12345, "cast-1", 100), false, "an unrelated cast does not match")
+
+    local function cleu(subevent, ...)
+        ST.WARRIOR.on_combat_log_unfiltered(ST, "COMBAT_LOG_EVENT_UNFILTERED", 100, subevent,
+            false, "Player-1", "Player", 0, 0, "Target-1", "Target", 0, 0, ...)
+    end
+
+    -- A dodged swing arms the 5 s window and the flash appears.
+    sb.clock = 100
+    cleu("SWING_MISSED", "DODGE", false)
+    near(ST.warrior_overpower_proc_until, 105, "a dodged swing arms the 5 s window")
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not vf.warrior_overpower_text.hidden, "the OP marker shows while the window is live")
+    check(not vf.warrior_overpower_edges[1].hidden, "the flash edges show too")
+    local alpha = vf.warrior_overpower_edges[1].base_color
+        and vf.warrior_overpower_edges[1].base_color[4]
+    check(type(alpha) == "number" and alpha >= 0.25 and alpha <= 0.7,
+        "the edge pulse stays inside the reference's alpha band")
+
+    -- Countdown: still shown just before the end, hidden at the end.
+    sb.clock = 104.9
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not vf.warrior_overpower_text.hidden, "the flash holds until the window ends")
+    sb.clock = 105
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(vf.warrior_overpower_text.hidden, "the flash hides when the window elapses")
+    check(vf.warrior_overpower_edges[2].hidden, "every edge hides with it")
+
+    -- A landed Overpower closes the window immediately (by id and by name token).
+    sb.clock = 200
+    cleu("SWING_MISSED", "DODGE", false)
+    near(ST.warrior_overpower_proc_until, 205, "the window re-arms")
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", nil, 7384)
+    eq(ST.warrior_overpower_proc_until, nil, "a landed Overpower clears the window")
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(vf.warrior_overpower_text.hidden, "the flash is gone after the cast")
+
+    cleu("SWING_MISSED", "DODGE", false)
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "Overpower", nil)
+    eq(ST.warrior_overpower_proc_until, nil, "a name-token Overpower cast clears the window")
+
+    -- Foreign sources, non-dodges and unrelated spells never arm the window.
+    ST.WARRIOR.on_combat_log_unfiltered(ST, "COMBAT_LOG_EVENT_UNFILTERED", 210,
+        "SWING_MISSED", false, "Other-1", "Other", 0, 0, "Target-1", "Target", 0, 0, "DODGE", false)
+    eq(ST.warrior_overpower_proc_until, nil, "another unit's dodge does not arm the window")
+    cleu("SWING_MISSED", "PARRY", false)
+    eq(ST.warrior_overpower_proc_until, nil, "a parried swing does not arm the window")
+
+    -- The queued melee abilities arm through SPELL_MISSED; anything else does not.
+    sb.clock = 210
+    cleu("SPELL_MISSED", 25286, "Heroic Strike", 1, "DODGE")
+    near(ST.warrior_overpower_proc_until, 215, "a dodged Heroic Strike arms the window")
+    ST.warrior_overpower_proc_until = nil
+    cleu("SPELL_MISSED", 25231, "Cleave", 1, "BLOCK")
+    eq(ST.warrior_overpower_proc_until, nil, "a blocked Cleave does not arm the window")
+    cleu("SPELL_MISSED", 12345, "Something", 1, "DODGE")
+    eq(ST.warrior_overpower_proc_until, nil, "an unrelated dodged spell does not arm the window")
+
+    -- Combat exit clears an armed window.
+    cleu("SWING_MISSED", "DODGE", false)
+    check(ST.warrior_overpower_proc_until ~= nil, "the window is armed before the exit")
+    ST.WARRIOR.on_combat_exit(ST)
+    eq(ST.warrior_overpower_proc_until, nil, "combat exit clears the window")
+
+    -- Option off mid-window: the next tick hides the flash.
+    sb.clock = 300
+    cleu("SWING_MISSED", "DODGE", false)
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not vf.warrior_overpower_text.hidden, "the flash shows before the option is disabled")
+    sb.class_db.show_warrior_overpower_flash = false
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(vf.warrior_overpower_text.hidden, "the option off hides the flash")
+    check(vf.warrior_overpower_edges[1].hidden, "the option off hides the edges")
+    sb.class_db.show_warrior_overpower_flash = true
+end
+
+--=========================================================================================
+-- 19) Absent spell data (Retail profile): nothing draws, nothing errors
+--=========================================================================================
+do
+    local sb = build({ project = 1 })
+    local ST = sb.ST
+    eq(sb.st.family, "RETAIL", "the sandbox profiles the Retail family")
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local vf = sb.visuals
+
+    sb.clock = 500
+    sb.target_auras = {
+        { name = "Some Buff", id = 1234, source = "player", duration = 9, expiration = 509 },
+    }
+    sb.auras = { { name = "Some Aura", id = 4321, duration = 5, expiration = 505 } }
+    local ok, err = pcall(ST.WARRIOR.on_bar_update, ST, "mainhand")
+    check(ok, "the Retail profile draws without error (" .. tostring(err) .. ")")
+    for key in pairs(vf.warrior_debuff) do
+        check(vf.warrior_debuff[key].bg.hidden, "no spell data: the " .. key .. " bar stays hidden")
+    end
+    check(vf.warrior_shield_block.bg.hidden, "no spell data: the Shield Block bar stays hidden")
+    check(vf.warrior_slam.bg.hidden, "no spell data: the Slam bar stays hidden")
+    check(vf.warrior_overpower_text.hidden, "no spell data: the Overpower flash stays hidden")
+
+    -- The proc window is only ever armed by the classic-line CLEU dispatch, which
+    -- main.lua never registers on a Mainline-code client (pinned in the source check
+    -- below): with no dispatch the flash can never appear.
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(vf.warrior_overpower_text.hidden, "with no dispatch the flash never appears")
+
+    -- The hook itself is nil-safe on a Mainline-code profile: a payload that never
+    -- arrives cannot error, and the call shape is tolerated if it ever is reached.
+    local ok2, err2 = pcall(ST.WARRIOR.on_combat_log_unfiltered, ST,
+        "COMBAT_LOG_EVENT_UNFILTERED", 500, "SWING_MISSED", false, "Player-1", "Player",
+        0, 0, "Target-1", "Target", 0, 0, "DODGE", false)
+    check(ok2, "an absent-data CLEU-shaped call does not error (" .. tostring(err2) .. ")")
+    check((ST.warrior_overpower_proc_until or 0) == 0
+        or ST.warrior_overpower_proc_until > 500,
+        "a manual CLEU-shaped call cannot leave a stale past window")
+end
+
+--=========================================================================================
+-- 20) Config/options parity and the main.lua combat-log wiring
+--=========================================================================================
+do
+    local function read(path)
+        local f = assert(io.open(ROOT .. path, "r"))
+        local text = f:read("*a")
+        f:close()
+        return text
+    end
+
+    local new_toggle_keys = {
+        "show_warrior_deep_wounds_bar", "show_warrior_sunder_armor_bar",
+        "show_warrior_rend_bar", "show_warrior_thunder_clap_bar",
+        "show_warrior_demo_shout_bar", "show_warrior_shield_block_bar",
+        "show_warrior_slam_cast_bar", "show_warrior_overpower_flash",
+    }
+    local new_colour_keys = {
+        "warrior_deep_wounds_bar_color", "warrior_sunder_armor_bar_color",
+        "warrior_rend_bar_color", "warrior_thunder_clap_bar_color",
+        "warrior_demo_shout_bar_color", "warrior_shield_block_bar_color",
+    }
+
+    local presets = read("config_presets.lua")
+    local warrior_defaults = presets:match("ST%.WARRIOR%.defaults%s*=%s*%{(.-)$")
+    check(warrior_defaults ~= nil, "the WARRIOR defaults block is found in config_presets.lua")
+    warrior_defaults = warrior_defaults or ""
+    local options = read("option_tables.lua")
+    local warrior_opts = options:match("function ST%.class_opts_funcs%.WARRIOR%((.*)$")
+    check(warrior_opts ~= nil, "the WARRIOR options function is found in option_tables.lua")
+    warrior_opts = warrior_opts or ""
+    for i = 1, #new_toggle_keys do
+        local key = new_toggle_keys[i]
+        check(warrior_defaults:find("%f[%a_]" .. key .. "%s*=%s*true") ~= nil,
+            key .. " ships true in the WARRIOR defaults")
+        local widget = warrior_opts:match("%f[%a_]" .. key .. "%s*=%s*{(.-)\n%s*}")
+        check(widget ~= nil and widget:find("type%s*=%s*\"toggle\"") ~= nil,
+            key .. " has a toggle widget in the WARRIOR options section")
+    end
+    for i = 1, #new_colour_keys do
+        local key = new_colour_keys[i]
+        check(warrior_defaults:find("%f[%a_]" .. key .. "%s*=%s*{") ~= nil,
+            key .. " has a colour default in the WARRIOR defaults")
+        local widget = warrior_opts:match("%f[%a_]" .. key .. "%s*=%s*{(.-)\n%s*}")
+        check(widget ~= nil and widget:find("type%s*=%s*\"color\"") ~= nil,
+            key .. " has a colour widget in the WARRIOR options section")
+    end
+
+    -- The classic-line combat log gate covers PALADIN + WARRIOR and the handler keeps
+    -- both dispatch chains, with the init guard intact.
+    local main_src = read("main.lua")
+    local gate = main_src:match(
+        "if %(self%.player_class == \"PALADIN\" or self%.player_class == \"WARRIOR\"%)[^\n]*")
+    check(gate ~= nil and gate:find("not st%.is_mainline") ~= nil,
+        "the CLEU registration gate covers PALADIN + WARRIOR on the classic line only")
+
+    local handler_lines = {}
+    local in_handler = false
+    for line in (main_src .. "\n"):gmatch("[^\n]+") do
+        if line:find("function ST:COMBAT_LOG_EVENT_UNFILTERED", 1, true) then
+            in_handler = true
+        end
+        if in_handler then
+            handler_lines[#handler_lines + 1] = line
+            if line:match("^end") then
+                break
+            end
+        end
+    end
+    local handler = table.concat(handler_lines, "\n")
+    check(handler:find("self%.PALADIN%.on_combat_log_unfiltered%(self, event, %.%.%.%)") ~= nil,
+        "the combat-log handler dispatches the paladin chain")
+    check(handler:find("self%.WARRIOR%.on_combat_log_unfiltered%(self, event, %.%.%.%)") ~= nil,
+        "the combat-log handler dispatches the warrior hook")
+    check(handler:find("interfaces_are_initialised", 1, true) ~= nil,
+        "the combat-log handler keeps the init guard")
+end
+
+--=========================================================================================
+-- 21) Rampage upkeep badge: pure display, aura plumbing, badge drawing, Retail inertness
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+
+    -- Pure display helper: stacks + refresh window, or nil when the badge hides.
+    eq(ST.WARRIOR.get_rampage_display(nil, nil, 100), nil, "no stacks: the badge hides")
+    eq(ST.WARRIOR.get_rampage_display("3", 130, 100), nil, "a non-numeric stack count hides the badge")
+    eq(ST.WARRIOR.get_rampage_display(0, 130, 100), nil, "zero stacks hide the badge")
+    eq(ST.WARRIOR.get_rampage_display(-2, 130, 100), nil, "a negative stack count hides the badge")
+    eq(ST.WARRIOR.get_rampage_display(5, 112, 100), "RAMPAGE x5 12s",
+        "five stacks with 12 s left read RAMPAGE x5 12s")
+    eq(ST.WARRIOR.get_rampage_display(5, 112.4, 100), "RAMPAGE x5 12s",
+        "the countdown rounds to whole seconds")
+    eq(ST.WARRIOR.get_rampage_display(5, 100, 100), nil, "an exactly elapsed window hides the badge")
+    eq(ST.WARRIOR.get_rampage_display(5, 99, 100), nil, "an elapsed window hides the badge")
+    eq(ST.WARRIOR.get_rampage_display(3, nil, 100), "RAMPAGE x3",
+        "no expiration degrades to the stacks-only form")
+    eq(ST.WARRIOR.get_rampage_display(3, 0, 100), "RAMPAGE x3",
+        "a zero expiration degrades to the stacks-only form")
+
+    -- Aura plumbing: one walk feeds Blood Surge and Rampage together.
+    sb.clock = 100
+    sb.auras = {
+        { name = "Blood Surge", id = 46916, count = 1 },
+        { name = "Rampage", id = 29838, count = 3, duration = 30, expiration = 130 },
+    }
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.has_bloodsurge, true, "the shared walk still detects Blood Surge")
+    eq(ST.warrior_rampage_stacks, 3, "the shared walk reads the Rampage stack count")
+    eq(ST.warrior_rampage_expires, 130, "the shared walk reads the Rampage expiration")
+    eq(sb.last_aura_filter, "HELPFUL", "the Rampage read uses the typed HELPFUL filter")
+
+    -- Overcapped counts clamp to the 5-stack cap.
+    sb.auras = {
+        { name = "Rampage", id = 29838, count = 9, duration = 30, expiration = 130 },
+    }
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_rampage_stacks, 5, "a 9-stack reading clamps to the 5-stack cap")
+
+    -- A missing count still means one stack; the literal name matches without an id.
+    sb.auras = {
+        { name = "Rampage", duration = 30, expiration = 130 },
+    }
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_rampage_stacks, 1, "a missing stack count reads as one stack")
+
+    -- Aura gone: the state clears.
+    sb.auras = {}
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_rampage_stacks, nil, "a faded buff clears the stack count")
+    eq(ST.warrior_rampage_expires, nil, "a faded buff clears the expiration")
+
+    -- Badge drawing through the real per-frame hook.
+    ST.WARRIOR.post_init(ST)
+    local badge = sb.visuals.warrior_rampage_text
+    check(badge ~= nil, "post_init creates the Rampage badge widget")
+    check(badge.hidden, "the badge starts hidden")
+    sb.auras = {
+        { name = "Rampage", id = 29838, count = 5, duration = 30, expiration = 112 },
+    }
+    ST.WARRIOR.on_aura_change(ST)
+    sb.clock = 100
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not badge.hidden, "five live stacks show the badge")
+    eq(badge.text, "RAMPAGE x5 12s", "the badge shows stacks + refresh window")
+    near(badge.color[1], 255 / 255, "the badge colour converts red")
+    near(badge.color[2], 140 / 255, "the badge colour converts green")
+    near(badge.color[3], 26 / 255, "the badge colour converts blue")
+    near(badge.color[4], 0.95, "the badge colour keeps its alpha")
+
+    -- The text is only re-set when the readout changes.
+    local sets_before = badge.text_sets
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(badge.text_sets, sets_before, "an unchanged readout performs no text write")
+    sb.clock = 101
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(badge.text, "RAMPAGE x5 11s", "the countdown follows the refresh window")
+    eq(badge.text_sets, sets_before + 1, "a changed readout writes the text once")
+
+    -- A lost stack re-formats; the option off hides; expiry hides without an event.
+    sb.auras = {
+        { name = "Rampage", id = 29838, count = 4, duration = 30, expiration = 131 },
+    }
+    ST.WARRIOR.on_aura_change(ST)
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(badge.text, "RAMPAGE x4 30s", "a lost stack re-formats the badge")
+    sb.class_db.show_warrior_rampage_badge = false
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(badge.hidden, "the option off hides the badge")
+    sb.class_db.show_warrior_rampage_badge = true
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not badge.hidden, "re-enabling the option shows the badge again")
+    sb.clock = 200
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(badge.hidden, "an elapsed window hides the badge without a new aura event")
+    sb.auras = {}
+    ST.WARRIOR.on_aura_change(ST)
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(badge.hidden, "a faded buff hides the badge")
+
+    -- The badge adds no client reads on the frame path: the aura event owns the state.
+    sb.class_db.show_warrior_deep_wounds_bar = false
+    sb.class_db.show_warrior_sunder_armor_bar = false
+    sb.class_db.show_warrior_rend_bar = false
+    sb.class_db.show_warrior_thunder_clap_bar = false
+    sb.class_db.show_warrior_demo_shout_bar = false
+    sb.class_db.show_warrior_shield_block_bar = false
+    sb.class_db.show_warrior_overpower_flash = false
+    ST.warrior_rampage_stacks = 5
+    ST.warrior_rampage_expires = 312
+    sb.clock = 300
+    sb.unit_aura_calls = 0
+    sb.target_aura_calls = 0
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(sb.unit_aura_calls, 0, "the badge performs no player aura reads on the frame path")
+    eq(sb.target_aura_calls, 0, "the badge performs no target aura reads on the frame path")
+    eq(badge.text, "RAMPAGE x5 12s", "the read-free tick still draws the badge")
+end
+
+--=========================================================================================
+-- 22) Rampage on the Retail profile: no aura, no badge, no error
+--=========================================================================================
+do
+    local sb = build({ project = 1 })
+    local ST = sb.ST
+    eq(sb.st.family, "RETAIL", "the sandbox profiles the Retail family")
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+
+    sb.clock = 500
+    sb.auras = { { name = "Some Aura", id = 4321, duration = 5, expiration = 505 } }
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_rampage_stacks, nil, "no Rampage aura: no stacks on Retail either")
+    local ok, err = pcall(ST.WARRIOR.on_bar_update, ST, "mainhand")
+    check(ok, "the Retail profile draws the badge path without error (" .. tostring(err) .. ")")
+    check(sb.visuals.warrior_rampage_text.hidden, "no Rampage aura: the badge stays hidden on Retail")
+end
+
+--=========================================================================================
+-- 23) Spec / SoD probes, Sudden Death / Taste for Blood aura plumbing, the WotLK
+-- Rend rank and the arms/SoD gather flags
+--=========================================================================================
+do
+    -- Spec rule (documented): Mortal Strike known = arms. Each rank answers the
+    -- probe on its own; no Mortal Strike id sits in the HS table (section 6).
+    for _, ms_id in ipairs({ 12294, 21551, 21552, 21553, 25248, 30330, 47485, 47486 }) do
+        local sb = build({ known = { [ms_id] = true } })
+        local ST = sb.ST
+        ST.interfaces_are_initialised = true
+        ST.WARRIOR.post_init(ST)
+        eq(ST.warrior_is_arms, true,
+            "Mortal Strike " .. ms_id .. " known freezes the arms branch")
+        eq(ST.WARRIOR.guide.slots[4].key, "ms",
+            "the arms slot set carries the ms slot")
+    end
+    do
+        local sb = build({ known = { [47450] = true } })
+        local ST = sb.ST
+        ST.interfaces_are_initialised = true
+        ST.WARRIOR.post_init(ST)
+        eq(ST.warrior_is_arms, false,
+            "no Mortal Strike known freezes the fury branch")
+        eq(ST.WARRIOR.guide.slots[5].key, "bt",
+            "the fury slot set carries the BT slot")
+        eq(ST.warrior_is_sod, false, "no runes freezes no SoD flag on Wrath")
+    end
+
+    -- SoD rule (documented): ERA family + Raging Blow or Consumed by Rage known.
+    -- Either rune answers on its own; Era-base (neither) stays off; a Wrath
+    -- client never reports SoD (the probe requires the ERA token).
+    for _, rune_id in ipairs({ 402911, 425440 }) do
+        local sb = build({ project = 2, known = { [rune_id] = true } })
+        local ST = sb.ST
+        eq(sb.st.family, "ERA", "the SoD probe sandbox runs the ERA family")
+        ST.interfaces_are_initialised = true
+        ST.WARRIOR.post_init(ST)
+        eq(ST.warrior_is_sod, true,
+            "rune " .. rune_id .. " known freezes the SoD branch")
+        eq(ST.WARRIOR.guide.slots[6].key, "raging_blow",
+            "the SoD slot set carries the raging_blow slot")
+    end
+    do
+        local sb = build({ project = 2, known = {} })
+        local ST = sb.ST
+        ST.interfaces_are_initialised = true
+        ST.WARRIOR.post_init(ST)
+        eq(ST.warrior_is_sod, false, "Era-base (no runes) freezes no SoD flag")
+        eq(ST.WARRIOR.guide.slots[1].key, "op", "Era-base keeps the op slot")
+    end
+    do
+        local sb = build({ known = { [402911] = true } })
+        local ST = sb.ST
+        ST.interfaces_are_initialised = true
+        ST.WARRIOR.post_init(ST)
+        eq(ST.warrior_is_sod, false,
+            "the rune probe requires the ERA token (silent on Wrath)")
+    end
+
+    -- Sudden Death / Taste for Blood ride the shared aura walk (no extra reads).
+    do
+        local sb = build()
+        local ST = sb.ST
+        ST.interfaces_are_initialised = true
+        ST.WARRIOR.post_init(ST)
+        eq(ST.has_sudden_death, false, "post_init starts with no SD proc")
+        eq(ST.has_tfb, false, "post_init starts with no TfB proc")
+        sb.auras = {
+            { name = "Sudden Death", id = 52437, count = 1 },
+            { name = "Taste for Blood", id = 60503, count = 1 },
+        }
+        ST.WARRIOR.on_aura_change(ST)
+        eq(ST.has_sudden_death, true, "the shared walk detects the SD proc aura")
+        eq(ST.has_tfb, true, "the shared walk detects the TfB proc aura")
+        eq(ST.has_bloodsurge, false, "the proc auras are not a Blood Surge proc")
+        -- The literal English fallback matches without an id.
+        sb.auras = { { name = "Sudden Death" }, { name = "Taste for Blood" } }
+        ST.WARRIOR.on_aura_change(ST)
+        eq(ST.has_sudden_death, true, "the literal SD name matches as the fallback")
+        eq(ST.has_tfb, true, "the literal TfB name matches as the fallback")
+        -- The SoD SD aura id matches too (in-game to confirm which id fires).
+        sb.auras = { { name = "Sudden Death", id = 440495, count = 1 } }
+        ST.WARRIOR.on_aura_change(ST)
+        eq(ST.has_sudden_death, true, "the SoD SD aura id matches")
+        -- Aura gone: both flags clear with the walk.
+        sb.auras = {}
+        ST.WARRIOR.on_aura_change(ST)
+        eq(ST.has_sudden_death, false, "a faded SD proc clears the flag")
+        eq(ST.has_tfb, false, "a faded TfB proc clears the flag")
+    end
+
+    -- The WotLK Rend rank (47465) matches the Rend tracker by id.
+    do
+        local sb = build()
+        local ST = sb.ST
+        ST.interfaces_are_initialised = true
+        ST.WARRIOR.post_init(ST)
+        local bars = sb.visuals.warrior_debuff
+        sb.clock = 600
+        sb.target_auras = {
+            { name = "Rend", id = 47465, source = "player", duration = 15,
+                expiration = 609 },
+        }
+        ST.WARRIOR.on_bar_update(ST, "mainhand")
+        check(not bars.rend.bg.hidden, "the WotLK Rend rank shows its bar by id")
+        eq(bars.rend.label.text, "9", "the WotLK Rend label counts its own duration")
+    end
+
+    -- The arms gather flags (frozen arms, live procs, nil core readers).
+    do
+        local sb = build({ known = { [47486] = true, [63784] = true } })
+        local ST = sb.ST
+        ST.interfaces_are_initialised = true
+        ST.WARRIOR.post_init(ST)
+        sb.auras = {
+            { name = "Sudden Death", id = 52437, count = 1 },
+            { name = "Taste for Blood", id = 60503, count = 1 },
+        }
+        ST.WARRIOR.on_aura_change(ST)
+        local inputs = ST.WARRIOR.gather_guide_inputs(ST, {})
+        eq(inputs.wrath_arms, true, "arms gather: the frozen arms flag")
+        eq(inputs.wrath_fury, nil, "arms gather: no fury flag")
+        eq(inputs.bt_remaining, nil, "arms gather: no BT reader")
+        eq(inputs.ww_remaining, nil, "arms gather: no WW reader")
+        eq(inputs.hs_rage_floor, 50, "arms gather: the 50-rage dump floor")
+        eq(inputs.sudden_death, true, "arms gather: the live SD proc")
+        eq(inputs.tfb, true, "arms gather: the live TfB proc")
+        eq(inputs.bladestorm_known, true, "arms gather: the live talent probe")
+        eq(inputs.rend_remaining, nil, "arms gather: no target Rend reads as nil")
+        eq(inputs.hs_cancel_cue, nil, "arms gather: no TBC HS-cancel cue")
+        eq(inputs.victory_rush, nil, "arms gather: no Forever Victory Rush")
+        -- Every action the arms branch can return names a declared slot.
+        for _, action in ipairs({ "op", "execute", "rend", "ms",
+            "bladestorm", "hs" }) do
+            local found = false
+            for i = 1, #ST.WARRIOR.guide.slots do
+                if ST.WARRIOR.guide.slots[i].key == action then found = true end
+            end
+            check(found, "the arms slot set names " .. action)
+        end
+    end
+end
+
+--=========================================================================================
+-- 24) Forever Bloodthrill: the aura arms the Overpower window (the second OP
+-- source alongside the dodge window, which can never arm on Mainline clients)
+--=========================================================================================
+do
+    local sb = build({ project = 18 })
+    eq(sb.st.family, "FOREVER", "project 18 maps to FOREVER")
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    eq(ST.warrior_overpower_proc_until, nil, "post_init starts with no OP window")
+
+    -- The UNCONFIRMED literal name arms the 5 s window on Forever.
+    sb.clock = 500
+    sb.auras = { { name = "Bloodthrill", count = 1 } }
+    ST.WARRIOR.on_aura_change(ST)
+    near(ST.warrior_overpower_proc_until, 505,
+        "Bloodthrill arms the 5 s OP window on Forever")
+    near(ST.WARRIOR.get_overpower_remaining(ST.warrior_overpower_proc_until, 502), 3,
+        "the armed window counts down")
+    eq(ST.has_bloodsurge, false, "Bloodthrill is not a Blood Surge proc")
+    eq(ST.has_tfb, false, "Bloodthrill is not a Taste for Blood proc")
+
+    -- The flash draws through the real per-frame hook while the window is live.
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not sb.visuals.warrior_overpower_text.hidden,
+        "the Bloodthrill window shows the OP flash on Forever")
+    eq(sb.visuals.warrior_overpower_text.text, "OP",
+        "the Forever flash centres the OP marker")
+
+    -- Aura gone: the stamp is left to lapse, like the dodge window.
+    sb.auras = {}
+    ST.WARRIOR.on_aura_change(ST)
+    near(ST.warrior_overpower_proc_until, 505,
+        "a faded Bloodthrill leaves the stamp to lapse")
+    eq(ST.WARRIOR.get_overpower_remaining(ST.warrior_overpower_proc_until, 506), nil,
+        "the lapsed window reads nil")
+
+    -- The same aura on a non-Forever client arms nothing.
+    local wrath = build()
+    eq(wrath.st.family, "WRATH", "the default sandbox runs the Wrath family")
+    local WST = wrath.ST
+    WST.interfaces_are_initialised = true
+    WST.WARRIOR.post_init(WST)
+    wrath.clock = 500
+    wrath.auras = { { name = "Bloodthrill", count = 1 } }
+    WST.WARRIOR.on_aura_change(WST)
+    eq(WST.warrior_overpower_proc_until, nil,
+        "Bloodthrill arms nothing outside Forever")
+    WST.WARRIOR.on_bar_update(WST, "mainhand")
+    check(wrath.visuals.warrior_overpower_text.hidden,
+        "no window, no OP flash outside Forever")
+end
+
+--=========================================================================================
+-- 25) Slam safe-window band: green when the cast lands before the next swing,
+-- red when the swing lands mid-cast; Forever always reads clean (no swing reset)
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local bar = sb.visuals.warrior_slam
+    ST.warrior_slam_casting = true
+    ST.warrior_slam_cast_start = 100
+    ST.warrior_slam_cast_duration = 1.5
+    sb.clock = 100
+
+    -- Cast completes (101.5) before the swing (110): clean, green.
+    ST.mainhand = { ends_at = 110 }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bar.bg.hidden, "the Slam bar draws while casting")
+    colour_eq(bar.fill.color, { 46, 204, 113, 1.0 },
+        "cast lands before the swing -> green")
+
+    -- Swing (100.5) lands mid-cast: clash, red.
+    ST.mainhand = { ends_at = 100.5 }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    colour_eq(bar.fill.color, { 217, 38, 26, 0.90 },
+        "swing lands mid-cast -> red")
+
+    -- No swing data (no mainhand yet): the verdict answers nil and the fill is
+    -- left untouched instead of erroring.
+    local nb = build()
+    local NST = nb.ST
+    NST.interfaces_are_initialised = true
+    NST.WARRIOR.post_init(NST)
+    local nbar = nb.visuals.warrior_slam
+    NST.warrior_slam_casting = true
+    NST.warrior_slam_cast_start = 100
+    NST.warrior_slam_cast_duration = 1.5
+    nb.clock = 100
+    NST.WARRIOR.on_bar_update(NST, "mainhand")
+    check(not nbar.bg.hidden, "the Slam bar still draws without swing data")
+    eq(nbar.fill.color, nil, "an unknown swing leaves the fill untouched")
+
+    -- A flavor without the guide module: the nil-guard keeps the white fill
+    -- instead of erroring.
+    nb.st.warrior_guide = nil
+    NST.mainhand = { ends_at = 100.5 }
+    NST.WARRIOR.on_bar_update(NST, "mainhand")
+    eq(nbar.fill.color, nil, "a missing guide module leaves the fill untouched")
+
+    -- Forever: the same clash numbers read clean (Slam never resets the swing).
+    local fsb = build({ project = 18 })
+    local FST = fsb.ST
+    FST.interfaces_are_initialised = true
+    FST.WARRIOR.post_init(FST)
+    local fbar = fsb.visuals.warrior_slam
+    FST.warrior_slam_casting = true
+    FST.warrior_slam_cast_start = 100
+    FST.warrior_slam_cast_duration = 1.5
+    FST.mainhand = { ends_at = 100.5 }
+    fsb.clock = 100
+    FST.WARRIOR.on_bar_update(FST, "mainhand")
+    colour_eq(fbar.fill.color, { 46, 204, 113, 1.0 },
+        "Forever: no swing reset -> always green")
 end
 
 if failures == 0 then

@@ -12,8 +12,24 @@
 local addon_name, st = ...
 local print = st.utils.print_msg
 local LSM = LibStub("LibSharedMedia-3.0")
+---@class ST
+---@field get_hand_table fun(self: ST, hand: string): table
+---@field get_class_table fun(self: ST): table
+---@field options_table_name string
+---@field player_class string
+---@field target_min_range any
+---@field target_max_range any
+---@field db table
+---@field latency table
+---@field gcd table
+---@field is_cat_or_bear boolean
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LWIN = LibStub("LibWindow-1.1")
+
+-- Initialize hand tables
+ST.mainhand = {}
+ST.offhand = {}
+ST.ranged = {}
 
 --=========================================================================================
 -- Intialisation func (called once relevant libs are loaded once per hand)
@@ -21,6 +37,20 @@ local LWIN = LibStub("LibWindow-1.1")
 function ST:init_visuals_template(hand)
     -- Get the relevant db table.
     local db = self:get_hand_table(hand)
+
+    -- Initialize GCD state table if not already present.
+    if not self.gcd then
+        self.gcd = {
+            expires = 0,
+            gcd1_phys_time_before_swing = 0,
+            gcd1_spell_time_before_swing = 0,
+        }
+    end
+
+    -- Initialize form tracking field if not already present.
+    if self.is_cat_or_bear == nil then
+        self.is_cat_or_bear = false
+    end
 
     -- Make the anchor frame, which is the top-level parent of the bar
     -- visual frames in our addon, and set its initial size/position properties.
@@ -123,7 +153,7 @@ end
 
 function ST:configure_bar_size_and_positions(hand)
     local db = self:get_hand_table(hand)
-	
+
     -- First set the anchor frame and bar frames
     -- to the full size in the settings, and restore their
     -- positions with LibWindow
@@ -178,6 +208,12 @@ end
 
 function ST:configure_frame_strata(hand)
     local frame = self:get_bar_frame(hand)
+    -- Draw level and frame strata are profile-wide settings: config.lua ships both in
+    -- ST.defaults.profile and the strata option setter writes them through
+    -- get_profile_table. They are not per-hand keys (AceDB expands the hand tables from
+    -- ST.bar_defaults, which carries neither), so reading them off the hand table made
+    -- db.draw_level nil here - a nil-arithmetic crash in init_timers -> init_libs on
+    -- every fresh profile (see tests/bars_state.lua, which reproduces it).
     local db = self:get_profile_table()
     frame:SetFrameLevel(db.draw_level+1)
     frame:SetFrameStrata(db.frame_strata)
@@ -227,7 +263,13 @@ function ST:configure_texts(hand)
     local db = self:get_hand_table(hand)
 	local frame = self:get_visuals_frame(hand)
 	local font_path = LSM:Fetch('font', db.text_font)
-	local opt_string = self.outlines[db.text_outline_key]
+    local outlines = {
+        none = "",
+        outline = "OUTLINE",
+        thickoutline = "THICKOUTLINE",
+        monochrome = "MONOCHROME",
+    }
+	local opt_string = outlines[db.text_outline_key]
     local w, h = self:get_bar_visuals_width_and_height(hand)
 
     -------------------------------------
@@ -264,7 +306,7 @@ function ST:configure_texts(hand)
     )
     frame.center_text:SetFont(font_path, db.text_size, opt_string)
     frame.center_text:SetTextColor(
-        self:convert_color(db.text_color)
+        select(1, self:convert_color(db.text_color))
     )
     if db.center_text_enabled then
         frame.center_text:Show()
@@ -326,11 +368,34 @@ function ST:configure_gcd_underlay(hand)
     frame.gcd_bar:SetDrawLayer("ARTWORK", -2)
 end
 
+-- ST:convert_color is defined once, in main.lua (array input, 0-255 -> 0-1 scale, optional
+-- alpha override). A second definition used to live HERE, reading {r=, g=, b=, a=} keys
+-- instead; bars.lua loads after main.lua on every toc, so it won and every caller - all of
+-- which pass 0-255 arrays - silently got 0, 0, 0, 0 for every bar/text/border/glow colour
+-- (see tests/bars_state.lua). Do not re-add it: never call a cross-module colour converter
+-- anything but main.lua's array contract.
+
 --=========================================================================================
 -- Property funcs
 --=========================================================================================
 function ST:get_bar_visuals_width_and_height(hand)
     return self[hand].vf_width, self[hand].vf_height
+end
+
+function ST:get_anchor_frame(hand)
+    return self[hand].anchor_frame
+end
+
+function ST:get_hiding_anchor_frame(hand)
+    return self[hand].anchor_frame.hiding_anchor_frame
+end
+
+function ST:get_visuals_frame(hand)
+    return self[hand].anchor_frame.bar_frame.visuals_frame
+end
+
+function ST:get_bar_frame(hand)
+    return self[hand].anchor_frame.bar_frame
 end
 
 --=========================================================================================
@@ -422,6 +487,13 @@ function ST:onupdate_common(hand, elapsed)
     if class and class.on_bar_update then
         class.on_bar_update(self, hand)
     end
+
+    -- LibDataBroker feed (mainhand only, see ldb.lua): the broker object is created on
+    -- the first tick and throttled internally, so this stays free on the offhand/ranged
+    -- bars and when no broker display is installed.
+    if st.ldb and hand == "mainhand" then
+        st.ldb.update(self, hand)
+    end
 end
 
 ST.mainhand.onupdate = function(elapsed)
@@ -441,6 +513,10 @@ end
 -- Some operate generally, others on a given hand.
 --=========================================================================================
 function ST:on_latency_update()
+    -- Only the player's own hands have frames: init_timers builds iter_hands(), and the
+    -- single-hand classes (PALADIN, DRUID) have no offhand/ranged anchor frame, so the
+    -- old hardcoded three-hand list made post_init index a nil anchor_frame and crash on
+    -- every login (see tests/bars_state.lua). Mirrors option_tables.lua's latency_setter.
     for hand in self:iter_hands() do
         self:set_deadzone_width(hand)
     end
@@ -449,6 +525,7 @@ end
 function ST:on_gcd_length_change()
     -- This function fires when the *predicted length* of a GCD
     -- changes, and doesn't refer to any active GCD.
+    -- Same frame set as on_latency_update: iterate the hands that exist.
     for hand in self:iter_hands() do
         self:set_gcd_marker_positions(hand)
     end

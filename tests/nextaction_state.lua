@@ -409,6 +409,584 @@ eq(r.hold, true, "negative gcd_remaining keeps the twist hold")
 r = ev({ seal = nil })
 eq(r.action, "soc", "nil seal behaves like no seal")
 
+-- TBC CS-delay default: the fallback is 0.9, not the archived 1.7 ------------
+-- (cs_remaining 3.0 flips to cs under 0.9 but keeps twisting under 1.7).
+local nodefault = {
+    speed = 3.0, swing_remaining = 3.0, G = 1.5, gcd_remaining = 0,
+    twist_window = 0.4, reaction = 0.1, cs_remaining = 3.0, judge_remaining = 6,
+    seal = "soc", waiting_judgement = false,
+    melee_count = 0, mana_pct = 50, creature_type = nil, filler_remaining = 0,
+}
+r = fresh(nodefault)
+eq(r.action, "cs", "omitted cs_delay_max falls back to the TBC 0.9 s budget")
+eq(r.hold, true, "fallback-budget cs holds while CS remaining > 0.1")
+nodefault.cs_delay_max = 1.7
+r = fresh(nodefault)
+eq(r.action, "twist", "explicit 1.7 keeps the archived delay budget")
+
+-- TBC judge-feasibility gate (judge_require_fit) ------------------------------
+-- Absent flag keeps the archived cue (pinned above); the live provider sets it.
+r = ev({ seal = "sob", swing_remaining = 3.0, gcd_remaining = 0, cs_remaining = 6,
+    judge_remaining = 0.5, judge_require_fit = true })
+eq(r.judge_call, true, "fit gate: slow weapon still cues (judge + reseal fits)")
+eq(r.hold, true, "fit gate: the fitting cue holds the reseal")
+eq(r.waiting_judgement, true, "fit gate: the fitting cue sets the latch")
+
+r = ev({ seal = "sob", swing_remaining = 2.2, speed = 2.0, gcd_remaining = 0,
+    cs_remaining = 6, judge_remaining = 0.2, judge_require_fit = true })
+eq(r.judge_call, false, "fit gate: fast weapon keeps twisting (reseal misses)")
+eq(r.action, "soc", "fit gate: the reseal action stands without the cue")
+eq(r.riding, false, "fit gate: no ride on the reseal-now branch")
+eq(r.waiting_judgement, false, "fit gate: no latch without a cue")
+
+r = ev({ seal = "sob", swing_remaining = 2.2, speed = 2.0, gcd_remaining = 0,
+    cs_remaining = 6, judge_remaining = 0.2 })
+eq(r.judge_call, true, "no fit flag: the same tick keeps the archived cue")
+eq(r.hold, false, "no fit flag: fast weapons never held for judgement")
+
+r = ev({ seal = "sob", swing_remaining = 0.3, gcd_remaining = 0, cs_remaining = 6,
+    judge_remaining = 1.0, judge_require_fit = true })
+eq(r.judge_call, false, "fit gate: window-open judge that misses the next gap stays quiet")
+
+-- Crusader priority (jotc_remaining): an expiring JotC outranks Blood --------
+r = ev({ seal = "sob", swing_remaining = 3.0, gcd_remaining = 0, cs_remaining = 6,
+    judge_remaining = 2.0, jotc_remaining = 1.0 })
+eq(r.judge_call, true, "crusader: expiring JotC cues where Blood would not")
+eq(r.hold, true, "crusader: the cue holds the reseal")
+eq(r.waiting_judgement, true, "crusader: the cue sets the latch")
+
+r = ev({ seal = "sob", swing_remaining = 3.0, gcd_remaining = 0, cs_remaining = 6,
+    judge_remaining = 2.0, jotc_remaining = 9.0 })
+eq(r.judge_call, false, "crusader: a fresh JotC leaves the Blood rule alone")
+
+r = ev({ seal = "sob", swing_remaining = 3.0, gcd_remaining = 0, cs_remaining = 6,
+    judge_remaining = 2.0 })
+eq(r.judge_call, false, "crusader: untracked JotC keeps the archived Blood-only cue")
+
+r = ev({ seal = "sob", swing_remaining = 1.0, gcd_remaining = 0.5, cs_remaining = 6,
+    melee_count = 3, jotc_remaining = 1.0 })
+eq(r.judge_call, false, "crusader: never cues mid-ride")
+eq(r.riding, true, "crusader: the ride stands through an expiring JotC")
+
+r = ev({ seal = "sob", swing_remaining = 2.2, speed = 2.0, gcd_remaining = 0,
+    cs_remaining = 6, judge_remaining = 0.2, judge_require_fit = true,
+    jotc_remaining = 1.0 })
+eq(r.judge_call, true, "crusader: debuff uptime bypasses the fit gate")
+
+r = ev({ seal = "sob", swing_remaining = 3.0, gcd_remaining = 0, cs_remaining = 0,
+    jotc_remaining = 1.0 })
+eq(r.action, "cs", "crusader: CS still wins over an expiring JotC")
+eq(r.judge_call, false, "crusader: no cue once CS takes the action")
+
+-- Consecration is AoE-only (target_count); Exorcism is untouched -------------
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 3.0, melee_count = 3,
+    target_count = 1 })
+eq(r.action, "twist", "single-target keeps the twist action")
+eq(r.filler_kind, nil, "single-target withholds Consecration")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 3.0, melee_count = 3,
+    target_count = 0 })
+eq(r.filler_kind, nil, "no target withholds Consecration")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 3.0, melee_count = 3,
+    target_count = 2 })
+eq(r.filler_kind, "consecration", "two targets keep the Consecration suggestion")
+
+r = ev({ seal = "soc", gcd_remaining = 1.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 40, creature_type = "Undead", target_count = 1 })
+eq(r.filler_kind, "exorcism", "single-target Exorcism vs Undead still fires")
+
+-- Era branch (Era 1.15.9 ret): no Crusader Strike, SoC/SoR twist on the same
+-- landmarks, single-target Consecration, HoW execute -------------------------
+-- cs_known=false disables the CS override; every no-seal reseal tiebreak falls
+-- back to Command (there is no CS timing to wait for).
+r = ev({ cs_remaining = 2.0, cs_known = false })
+eq(r.action, "soc", "era: unknown CS never overrides the reseal")
+eq(r.hold, false, "era: the reseal carries no CS hold")
+eq(r.judge_call, false, "era: no judgement cue without the twist seal")
+
+r = ev({ cs_remaining = 2.0, cs_known = true })
+eq(r.action, "cs", "cs_known=true keeps the archived override")
+
+r = ev({ cs_remaining = 2.0, era = true, cs_known = true })
+eq(r.action, "cs", "era: a client that knows CS still prompts it")
+
+-- No-seal reseal choices with unknown CS (the archive picks "sob" in all four
+-- spots; without CS the main seal is re-established instead).
+r = ev({ swing_remaining = 0.3, cs_remaining = 6, cs_known = false })
+eq(r.action, "soc", "era: in-twist with no seal reseals Command")
+
+r = ev({ swing_remaining = 1.0, cs_remaining = 6, cs_known = false })
+eq(r.action, "soc", "era: after-div with no seal reseals Command")
+
+r = ev({ swing_remaining = 1.0, gcd_remaining = 0.7, cs_remaining = 6, cs_known = false })
+eq(r.action, "soc", "era: B2 with no seal reseals Command")
+
+r = ev({ swing_remaining = 1.0, gcd_remaining = 0.5, cs_remaining = 6, cs_known = false })
+eq(r.action, "soc", "era: B3 with no seal reseals Command")
+
+-- The twist landmarks are reused untouched: SoC up still twists on time.
+r = ev({ seal = "soc", swing_remaining = 0.3, cs_remaining = 6, cs_known = false, era = true })
+eq(r.action, "twist", "era: in-twist + soc still twists now")
+eq(r.hold, false, "era: in-twist keeps no hold")
+near(r.prediction_hold, 0, "era: in-twist prediction_hold still floors from -1")
+
+r = ev({ seal = "sob", swing_remaining = 1.0, gcd_remaining = 0.5, cs_remaining = 6,
+    melee_count = 3, cs_known = false, era = true })
+eq(r.action, "soc", "era: the twist-seal ride still reseals Command")
+eq(r.riding, true, "era: the ride overlay survives without CS")
+eq(r.filler_kind, "consecration", "era: the ride still allows a filler")
+
+-- Consecration is a mana-permitting single-target filler on Era.
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    target_count = 1, era = true, cs_known = false })
+eq(r.action, "twist", "era: single-target keeps the twist action")
+eq(r.filler_kind, "consecration", "era: single-target keeps the Consecration suggestion")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 35, target_count = 1, era = true, cs_known = false })
+eq(r.filler_kind, nil, "era: Consecration stays mana-gated (35 is not above 35)")
+
+-- Exorcism vs Undead/Demon is unchanged on Era.
+r = ev({ seal = "soc", gcd_remaining = 1.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 40, creature_type = "Undead", era = true, cs_known = false })
+eq(r.filler_kind, "exorcism", "era: Exorcism vs Undead still fires")
+
+-- Hammer of Wrath execute: below 20% target health with HoW ready.
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, era = true, cs_known = false,
+    target_health_pct = 19, how_remaining = 0 })
+eq(r.action, "twist", "era: the execute keeps the twist action")
+eq(r.filler_kind, "how", "era: HoW below 20% with HoW ready")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, era = true, cs_known = false,
+    target_health_pct = 20, how_remaining = 0 })
+eq(r.filler_kind, "consecration", "era: 20% is not below the execute window")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, era = true, cs_known = false, how_remaining = 0 })
+eq(r.filler_kind, "consecration", "era: unknown target health never cues HoW")
+
+local nohow = inp({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, era = true, cs_known = false, target_health_pct = 19 })
+nohow.how_remaining = nil
+r = fresh(nohow)
+eq(r.filler_kind, "consecration", "era: unknown HoW cooldown never cues HoW")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, era = true, cs_known = false,
+    target_health_pct = 19, how_remaining = 999 })
+eq(r.filler_kind, "consecration", "era: HoW 999 means the spell is unavailable")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, era = true, cs_known = false,
+    target_health_pct = 19, how_remaining = 2.0 })
+eq(r.filler_kind, "consecration", "era: HoW back after the GCD end never cues HoW")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, target_health_pct = 19, how_remaining = 0 })
+eq(r.filler_kind, "consecration", "non-era ignores the execute inputs (archived suggestion)")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 40, creature_type = "Undead", era = true, cs_known = false,
+    target_health_pct = 19, how_remaining = 0 })
+eq(r.filler_kind, "how", "era: the execute outranks Exorcism")
+
+-- Era judge-feasibility costs a single reseal (Judgement + SoR->SoC): the fast
+-- weapon below misses under the TBC double-reseal cost but fits on Era.
+r = ev({ seal = "sob", swing_remaining = 2.2, speed = 2.0, gcd_remaining = 0,
+    cs_remaining = 6, judge_remaining = 0.2, judge_require_fit = true,
+    era = true, cs_known = false })
+eq(r.judge_call, true, "era: single-reseal fit cues where TBC keeps twisting")
+eq(r.hold, false, "era: fast weapons never held for judgement")
+eq(r.waiting_judgement, false, "era: no hold means no latch")
+
+r = ev({ seal = "sob", swing_remaining = 1.0, gcd_remaining = 0.5, cs_remaining = 6,
+    melee_count = 3, jotc_remaining = 1.0, era = true, cs_known = false })
+eq(r.judge_call, false, "era: never cues mid-ride")
+eq(r.riding, true, "era: the ride stands through an expiring JotC")
+
+-- Retail (12.x) inertness: the stand-in never swings, but seals, cooldowns, mana
+-- and creature type all answer on Retail - every such shape must stay empty. --
+local saved_family_retail = st.family
+st.family = "RETAIL"
+-- The reseal tick (no seal, full swing) prompts nothing.
+r = ev({})
+eq(r.action, nil, "retail: the reseal tick never prompts")
+eq(r.hold, false, "retail: the reseal tick never holds")
+-- Blood up prompts nothing (no reseal, no ride, no judgement cue).
+r = ev({ seal = "sob", swing_remaining = 3.0, gcd_remaining = 0, cs_remaining = 6,
+    judge_remaining = 0.5 })
+eq(r.action, nil, "retail: blood up never prompts")
+eq(r.riding, false, "retail: blood up never rides")
+eq(r.judge_call, false, "retail: blood up never cues judgement")
+-- The CS override never fires.
+r = ev({ cs_remaining = 0 })
+eq(r.action, nil, "retail: the CS override never fires")
+eq(r.hold, false, "retail: the CS override never holds")
+-- No filler is ever suggested, even with melees + mana + an exorcisable target.
+r = ev({ seal = "soc", gcd_remaining = 1.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 40, creature_type = "Undead" })
+eq(r.action, nil, "retail: a filler setup never prompts")
+eq(r.filler_kind, nil, "retail: no filler is ever suggested")
+eq(r.prediction_hold, 0, "retail: the prediction hold is neutral")
+eq(r.waiting_judgement, false, "retail: the judgement latch stays clear")
+-- A stale out table is fully overwritten (no result field survives).
+local stale_na = { action = "soc", hold = true, riding = true, judge_call = true,
+    filler_kind = "exorcism", prediction_hold = 2.5, waiting_judgement = true }
+check(na.evaluate(inp({ seal = "sob" }), stale_na) == stale_na,
+    "retail: evaluate returns the caller's out table")
+eq(stale_na.action, nil, "retail: a stale action is cleared")
+eq(stale_na.hold, false, "retail: a stale hold is cleared")
+eq(stale_na.riding, false, "retail: a stale ride is cleared")
+eq(stale_na.judge_call, false, "retail: a stale judgement cue is cleared")
+eq(stale_na.filler_kind, nil, "retail: a stale filler is cleared")
+eq(stale_na.prediction_hold, 0, "retail: a stale prediction hold is neutralised")
+eq(stale_na.waiting_judgement, false, "retail: a stale judgement latch is cleared")
+-- The gate is Retail-specific: any other family still prompts.
+st.family = "TBC"
+r = ev({})
+eq(r.action, "soc", "non-retail family: the reseal tick still prompts")
+st.family = saved_family_retail
+
+-- Wrath FCFS + SoD Exodin (evaluate_fcfs) ---------------------------------------
+-- Pure priority-winner branches; the archived tree above is untouched. finputs
+-- defaults to everything ready (mana 100, Undead, AoW up) so each case isolates
+-- by putting higher-priority abilities on cooldown.
+local function finputs(overrides)
+    local t = {
+        fcfs_mode = "wrath", G = 1.5, gcd_remaining = 0,
+        cs_known = true, cs_remaining = 0, judge_remaining = 0,
+        ds_remaining = 0, cons_remaining = 0, exo_remaining = 0,
+        hw_remaining = 0, how_remaining = 0,
+        mana_pct = 100, creature_type = "Undead",
+        target_count = nil, target_health_pct = 100, has_aow = true,
+    }
+    for k, v in pairs(overrides or {}) do t[k] = v end
+    return t
+end
+local function fev(overrides)
+    for k in pairs(out) do out[k] = nil end
+    return na.evaluate_fcfs(finputs(overrides), out)
+end
+-- finputs defaults fcfs_mode to "wrath" (a nil constructor value is a no-op in
+-- Lua), so mode-less cases strip it explicitly after construction.
+local function fev_nomode(overrides)
+    local t = finputs(overrides)
+    t.fcfs_mode = nil
+    for k in pairs(out) do out[k] = nil end
+    return na.evaluate_fcfs(t, out)
+end
+
+-- Unknown / non-FCFS modes yield the empty display shape.
+r = fev_nomode({})
+eq(r.action, nil, "fcfs: no mode prompts nothing")
+eq(r.hold, false, "fcfs: no mode holds nothing")
+eq(r.riding, false, "fcfs: no mode never rides")
+eq(r.judge_call, false, "fcfs: no mode never cues judgement")
+eq(r.filler_kind, nil, "fcfs: no mode suggests no filler")
+eq(r.waiting_judgement, false, "fcfs: no mode keeps the latch clear")
+
+r = fev({ fcfs_mode = "bogus" })
+eq(r.action, nil, "fcfs: an unknown mode prompts nothing")
+eq(r.filler_kind, nil, "fcfs: an unknown mode suggests no filler")
+
+local saved_family_fcfs = st.family
+st.family = "RETAIL"
+r = fev({})
+eq(r.action, nil, "fcfs: Retail stays inert even in wrath mode")
+eq(r.filler_kind, nil, "fcfs: Retail suggests no filler even in wrath mode")
+eq(r.judge_call, false, "fcfs: Retail never cues judgement even in wrath mode")
+st.family = "SOD-PLACEHOLDER"
+r = fev({ fcfs_mode = "sod" })
+eq(r.filler_kind, "exorcism", "fcfs: a non-Retail family runs the sod table")
+st.family = saved_family_fcfs
+
+-- Wrath order: CS > Judge > DS > Cons > AoW-Exo > HW --------------------------
+r = fev({})
+eq(r.action, "cs", "wrath: all ready -> Crusader Strike")
+eq(r.hold, false, "wrath: the winner needs no hold")
+eq(r.riding, false, "wrath: FCFS never rides")
+eq(r.judge_call, false, "wrath: CS wins without a judgement cue")
+eq(r.filler_kind, nil, "wrath: CS wins without a filler")
+eq(r.prediction_hold, 0, "wrath: the prediction hold is neutral")
+eq(r.waiting_judgement, false, "wrath: no judgement latch in FCFS")
+
+r = fev({ cs_remaining = 6 })
+eq(r.action, nil, "wrath: Judge wins through the cue, not the action icon")
+eq(r.judge_call, true, "wrath: CS on CD -> Judgement cue")
+
+r = fev({ cs_remaining = 6, judge_remaining = 6 })
+eq(r.action, "sob", "wrath: CS + Judge on CD -> Divine Storm on the sob channel")
+
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8 })
+eq(r.filler_kind, "consecration", "wrath: next -> Consecration")
+
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8, cons_remaining = 8 })
+eq(r.filler_kind, "exorcism", "wrath: next -> Exorcism under Art of War")
+
+-- AoW gate: Exorcism without the proc is skipped, Holy Wrath takes the tick.
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8,
+    cons_remaining = 8, has_aow = false })
+eq(r.filler_kind, "how", "wrath: Exorcism without AoW is skipped (Holy Wrath wins)")
+
+-- Holy Wrath eligibility: Undead/Demon only; ineligible falls to the wait.
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8,
+    cons_remaining = 8, exo_remaining = 8, creature_type = "Beast" })
+eq(r.filler_kind, nil, "wrath: Holy Wrath vs Beast is withheld")
+eq(r.action, "cs", "wrath: nothing castable waits on Crusader Strike")
+eq(r.hold, true, "wrath: the wait holds")
+
+-- Never-wait: a ready Exorcism beats waiting 0.5 s on Crusader Strike.
+r = fev({ cs_remaining = 0.5, judge_remaining = 6, ds_remaining = 8, cons_remaining = 8 })
+eq(r.filler_kind, "exorcism", "wrath: never wait on CS while Exorcism is ready")
+
+-- Priority still respected when the top spell IS ready.
+r = fev({ cs_remaining = 0 })
+eq(r.action, "cs", "wrath: a ready CS beats a ready Exorcism")
+
+-- Mana gates: 35/30 are not above their thresholds.
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8,
+    mana_pct = 35 })
+eq(r.filler_kind, "exorcism", "wrath: Consecration at 35 is mana-withheld")
+
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8,
+    mana_pct = 36 })
+eq(r.filler_kind, "consecration", "wrath: Consecration at 36 fires")
+
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8,
+    cons_remaining = 8, mana_pct = 30 })
+eq(r.filler_kind, "how", "wrath: Exorcism at 30 is mana-withheld (HW wins)")
+
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8,
+    cons_remaining = 8, mana_pct = 30, creature_type = "Beast" })
+eq(r.action, "cs", "wrath: mana-starved with no eligible target waits on CS")
+eq(r.hold, true, "wrath: the mana-starved wait holds")
+
+-- Readiness is measured against the GCD end (castable when the GCD frees).
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 0.01,
+    gcd_remaining = 0 })
+eq(r.filler_kind, "consecration", "wrath: DS 0.01 s out with a free GCD is not ready")
+
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 0.01,
+    gcd_remaining = 0.5 })
+eq(r.action, "sob", "wrath: DS 0.01 s out with 0.5 s of GCD left is ready")
+
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 0.5,
+    gcd_remaining = 0.5 })
+eq(r.action, "sob", "wrath: remaining == GCD reads as ready")
+
+-- Unknown spells (nil / 999) are withheld, never prompted.
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 999 })
+eq(r.filler_kind, "consecration", "wrath: DS 999 means unknown (withheld)")
+
+local nonil = finputs({ cs_remaining = 6, judge_remaining = 6 })
+nonil.ds_remaining = nil
+for k in pairs(out) do out[k] = nil end
+r = na.evaluate_fcfs(nonil, out)
+eq(r.filler_kind, "consecration", "wrath: nil DS remaining means unknown (withheld)")
+
+-- Nothing ready: wait on the top priority; nothing known at all: stay empty.
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8,
+    cons_remaining = 8, exo_remaining = 8, hw_remaining = 8 })
+eq(r.action, "cs", "wrath: all on CD waits on Crusader Strike")
+eq(r.hold, true, "wrath: the all-on-CD wait holds")
+eq(r.filler_kind, nil, "wrath: the all-on-CD wait suggests no filler")
+
+local noinfo = finputs({})
+noinfo.cs_remaining, noinfo.judge_remaining, noinfo.ds_remaining = nil, nil, nil
+noinfo.cons_remaining, noinfo.exo_remaining, noinfo.hw_remaining = nil, nil, nil
+for k in pairs(out) do out[k] = nil end
+r = na.evaluate_fcfs(noinfo, out)
+eq(r.action, nil, "wrath: no known ability prompts nothing")
+eq(r.hold, false, "wrath: no known ability holds nothing")
+
+-- An unknown Crusader Strike is never prompted (SoD rune missing / low level).
+r = fev({ cs_remaining = 0, ds_remaining = 0, judge_remaining = 6,
+    cons_remaining = 8, exo_remaining = 8, hw_remaining = 8, cs_known = false })
+eq(r.action, "sob", "wrath: unknown CS is skipped (DS wins)")
+
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8,
+    cons_remaining = 8, exo_remaining = 8, hw_remaining = 8, cs_known = false })
+eq(r.action, nil, "wrath: the wait skips unknown CS for soonest-known Judge")
+eq(r.judge_call, true, "wrath: the wait cues Judge")
+eq(r.hold, true, "wrath: the wait on Judge holds")
+
+-- 2pc-T10: the order is stable with and without it (resets surface as live
+-- readiness, which the walk already elevates); explicit set detection deferred.
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_2pc = true })
+eq(r.action, "sob", "wrath: 2pc-T10 keeps DS above Cons/Exorcism")
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_2pc = false })
+eq(r.action, "sob", "wrath: base order matches the 2pc order")
+
+-- Latch hygiene: a stale carry never survives an FCFS tick.
+r = fev({ waiting_judgement = true })
+eq(r.waiting_judgement, false, "wrath: FCFS clears a stale judgement latch")
+
+-- Holy Wrath carries no mana gate (documented choice: eligibility is the gate).
+r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 8,
+    cons_remaining = 8, exo_remaining = 8, mana_pct = 5 })
+eq(r.filler_kind, "how", "wrath: eligible Holy Wrath fires even nearly oom")
+
+-- Out-table contract: the caller's table is reused and fully overwritten.
+local stale_fcfs = { action = "cs", hold = true, riding = true, judge_call = true,
+    filler_kind = "exorcism", prediction_hold = 2.5, waiting_judgement = true }
+local stale_inputs = finputs({})
+stale_inputs.fcfs_mode = nil
+check(na.evaluate_fcfs(stale_inputs, stale_fcfs) == stale_fcfs,
+    "fcfs: evaluate returns the caller's out table")
+eq(stale_fcfs.action, nil, "fcfs: a stale action is cleared")
+eq(stale_fcfs.hold, false, "fcfs: a stale hold is cleared")
+eq(stale_fcfs.riding, false, "fcfs: a stale ride is cleared")
+eq(stale_fcfs.judge_call, false, "fcfs: a stale judgement cue is cleared")
+eq(stale_fcfs.filler_kind, nil, "fcfs: a stale filler is cleared")
+eq(stale_fcfs.prediction_hold, 0, "fcfs: a stale prediction hold is neutralised")
+eq(stale_fcfs.waiting_judgement, false, "fcfs: a stale judgement latch is cleared")
+
+-- SoD Exodin: Exo (core) > CS > DS > Judge > Cons > HoW ----------------------
+r = fev({ fcfs_mode = "sod" })
+eq(r.filler_kind, "exorcism", "sod: all ready -> Exorcism first (core button)")
+eq(r.action, nil, "sod: the Exorcism winner needs no action icon")
+
+r = fev({ fcfs_mode = "sod", exo_remaining = 6 })
+eq(r.action, "cs", "sod: Exorcism on CD -> Crusader Strike")
+
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6 })
+eq(r.action, "sob", "sod: next -> Divine Storm on the sob channel")
+
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6, ds_remaining = 8 })
+eq(r.judge_call, true, "sod: next -> Judgement cue")
+
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6 })
+eq(r.filler_kind, "consecration", "sod: next -> Consecration (target unknown)")
+
+-- Consecration is cleave-gated: single-target withholds, 3+ keeps.
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, target_count = 1,
+    target_health_pct = 100 })
+eq(r.filler_kind, "exorcism", "sod: single-target withholds Consecration")
+eq(r.hold, true, "sod: the withheld tick waits on Exorcism (soonest known)")
+
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, target_count = 3 })
+eq(r.filler_kind, "consecration", "sod: three targets keep Consecration")
+
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, mana_pct = 35 })
+eq(r.hold, true, "sod: Consecration at 35 is mana-withheld (waits on Exorcism)")
+
+-- Exodin Exorcism is the core vs EVERY target with no AoW gate (unlike Wrath).
+r = fev({ fcfs_mode = "sod", creature_type = "Beast" })
+eq(r.filler_kind, "exorcism", "sod: Exorcism fires vs Beast (no creature gate)")
+
+r = fev({ fcfs_mode = "sod", has_aow = false })
+eq(r.filler_kind, "exorcism", "sod: Exorcism fires without Art of War")
+
+r = fev({ fcfs_mode = "sod", mana_pct = 30, cs_remaining = 0 })
+eq(r.action, "cs", "sod: Exorcism at 30 is mana-withheld (CS wins)")
+
+-- Hammer of Wrath below 20%, own cooldown; 20%+ / unknown never cues.
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, cons_remaining = 8,
+    target_health_pct = 19, how_remaining = 0 })
+eq(r.filler_kind, "how", "sod: HoW below 20% with HoW ready")
+
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, cons_remaining = 8,
+    target_health_pct = 20, how_remaining = 0 })
+eq(r.hold, true, "sod: 20% is not below the execute window (waits on Exorcism)")
+
+local nohow_sod = finputs({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, cons_remaining = 8,
+    target_health_pct = 19 })
+nohow_sod.how_remaining = nil
+for k in pairs(out) do out[k] = nil end
+r = na.evaluate_fcfs(nohow_sod, out)
+eq(r.hold, true, "sod: unknown HoW cooldown never cues HoW")
+
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, cons_remaining = 8,
+    target_health_pct = 19, how_remaining = 999 })
+eq(r.hold, true, "sod: HoW 999 means unavailable (waits on Exorcism)")
+
+-- A DS-only rune set (CS unknown) never prompts Crusader Strike.
+r = fev({ fcfs_mode = "sod", cs_remaining = 0, ds_remaining = 0,
+    judge_remaining = 6, cons_remaining = 8, exo_remaining = 8,
+    how_remaining = 8, cs_known = false })
+eq(r.action, "sob", "sod: unknown CS is skipped (DS wins)")
+
+-- FCFS ignores the twist-only inputs (fit gate, JotC, seals, swing landmarks,
+-- the mirrored filler reading): the branch stands on its own inputs.
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_require_fit = true, jotc_remaining = 1.0,
+    seal = "sob", swing_remaining = 0.3, cs_delay_max = 1.7,
+    filler_remaining = 999, melee_count = 5 })
+eq(r.judge_call, true, "sod: twist-only inputs do not disturb the order")
+
+-- TBC micro: twist-weapon suitability labels ----------------------------------
+-- (sourced TBC 2.5.6 ret; docs/research/tbc_minmax.md: slow >= 3.0 twists,
+-- 3.8 the best-proc-rate speed, 3.6 the common raid speed).
+eq(na.TBC_TWIST_MIN_SPEED, 3.0, "tbc: twist floor is the 3.0 slow-weapon minimum")
+eq(na.TBC_TWIST_BEST_SPEED, 3.8, "tbc: best speed is the 3.8 SoC optimum")
+eq(na.TBC_SOC_PROC_DELAY, 0.5, "tbc: SoC proc delay documents the 0.5 s model")
+eq(na.classify_twist_weapon(3.8), "optimal", "tbc: 3.8 -> optimal")
+eq(na.classify_twist_weapon(4.0), "optimal", "tbc: above 3.8 stays optimal")
+eq(na.classify_twist_weapon(3.6), "slow", "tbc: 3.6 common raid speed -> slow")
+eq(na.classify_twist_weapon(3.0), "slow", "tbc: 3.0 floor -> slow")
+eq(na.classify_twist_weapon(2.9), "fast", "tbc: below 3.0 -> fast")
+eq(na.classify_twist_weapon(2.0), "fast", "tbc: fast weapon -> fast")
+eq(na.classify_twist_weapon(nil), "slow", "tbc: unknown speed defaults to 3.0 -> slow")
+-- The labels never move the rotation thresholds above.
+eq(na.calculate_rotation(3.8, 1.5), "1/2", "tbc: 3.8 still cadences 1/2")
+eq(na.calculate_rotation(3.6, 1.5), "1/2", "tbc: 3.6 still cadences 1/2")
+
+-- Forever adaptation (UNCONFIRMED beta; docs/research/forever_beta.md) --------
+-- An absent/false flag keeps the archived behaviour (pinned by every check
+-- above); the landmarks below reuse the 0.4 s window (optimal window unknown).
+r = ev({ seal = "sob", swing_remaining = 2.2, speed = 2.0, gcd_remaining = 0,
+    cs_remaining = 6, judge_remaining = 0.2, judge_require_fit = true,
+    forever = true })
+eq(r.judge_call, true, "forever: no-reseal fit cues where TBC keeps twisting")
+eq(r.action, "soc", "forever: the reseal action stands with the cue")
+eq(r.hold, false, "forever: judging costs no hold without a reseal")
+eq(r.waiting_judgement, false, "forever: no hold means no latch")
+
+r = ev({ seal = "sob", swing_remaining = 2.2, speed = 2.0, gcd_remaining = 0,
+    cs_remaining = 6, judge_remaining = 0.2, judge_require_fit = true,
+    forever = false })
+eq(r.judge_call, false, "forever=false keeps the archived fit gate")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    target_count = 1, forever = true })
+eq(r.action, "twist", "forever: single-target keeps the twist action")
+eq(r.filler_kind, "consecration", "forever: single-target keeps Consecration (beta Ret ST)")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, forever = true, target_health_pct = 19, how_remaining = 0 })
+eq(r.action, "twist", "forever: the execute keeps the twist action")
+eq(r.filler_kind, "how", "forever: HoW below 20% with HoW ready (beta Ret ST)")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, forever = true, target_health_pct = 20, how_remaining = 0 })
+eq(r.filler_kind, "consecration", "forever: 20% is not below the execute window")
+
+local nohow_fw = inp({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, forever = true, target_health_pct = 19 })
+nohow_fw.how_remaining = nil
+r = fresh(nohow_fw)
+eq(r.filler_kind, "consecration", "forever: unknown HoW cooldown never cues HoW")
+
+r = ev({ seal = "soc", swing_remaining = 0.3, cs_remaining = 6, forever = true })
+eq(r.action, "twist", "forever: in-twist + soc still twists now")
+near(r.prediction_hold, 0, "forever: the 0.4 s landmarks stand (window UNCONFIRMED)")
+
+r = ev({ seal = "sob", swing_remaining = 1.0, gcd_remaining = 0.5, cs_remaining = 6,
+    melee_count = 3, forever = true })
+eq(r.action, "soc", "forever: the twist-seal ride still reseals Command")
+eq(r.riding, true, "forever: the ride overlay survives (SoR in the twist position)")
+
 if failures == 0 then
     print("PASS  nextaction_state.lua (" .. tostring(checks) .. " checks)")
 else

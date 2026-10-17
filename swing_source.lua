@@ -28,6 +28,13 @@ local _, st = ...
 local swing_source = {}
 st.swing_source = swing_source
 
+-- See compat.lua: a restricted (secret) attack-speed read must degrade to "no update"
+-- with the in-flight cycles keeping their schedules, never to an error. Exact no-op
+-- where the probe is absent (every non-Mainline client, where this module is inert).
+local is_secret = issecretvalue or function()
+	return false
+end
+
 -- Same callback mechanics as the library: LibClassicSwingTimerAPI embeds
 -- LibStub("CallbackHandler-1.0"):New(lib), and the registry fires a function callback
 -- as method(eventname, ...) - exactly the shape main.lua's callback_event_handler
@@ -165,8 +172,20 @@ end
 local function on_unit_attack_speed()
 	-- WoW Forever returns mainhand, offhand and ranged speeds from UnitAttackSpeed
 	-- (Blizzard_SwingTimer.lua reads all three via GetEquippedSwingDuration). Re-read
-	-- and update every in-flight cycle whose speed moved.
-	local main_speed, off_speed, ranged_speed = UnitAttackSpeed("player")
+	-- and update every in-flight cycle whose speed moved. A missing or throwing reader
+	-- keeps every cycle on its scheduled speed, like a secret reading does below.
+	if type(UnitAttackSpeed) ~= "function" then
+		return
+	end
+	local ok, main_speed, off_speed, ranged_speed = pcall(UnitAttackSpeed, "player")
+	if not ok then
+		return
+	end
+	-- A restricted reading keeps every cycle on its scheduled speed: an opaque value
+	-- must never reach the rescale arithmetic below.
+	if is_secret(main_speed) or is_secret(off_speed) or is_secret(ranged_speed) then
+		return
+	end
 	local speeds = {
 		mainhand = main_speed,
 		offhand = off_speed,

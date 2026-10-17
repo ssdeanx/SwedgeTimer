@@ -10,10 +10,20 @@ end
 local _, st = ...
 local api = st.api
 
+-- See compat.lua: a restricted (secret) stat/cooldown reading must degrade to "skip this
+-- update", never to an error. Exact no-op where the probe is absent (classic clients).
+local is_secret = issecretvalue or function()
+    return false
+end
+
 local CreateFrame = CreateFrame
 local C_Timer = C_Timer
 local GetCombatRating = api.GetCombatRating
 local GetCombatRatingBonus = api.GetCombatRatingBonus
+-- Secret-safe for the reads below: compat's GetSpellCooldown reports a restricted
+-- (secret) reading as 0/0/0/0, the same shape as a cleared cooldown, which the == 0
+-- early-outs in poll_gcd / UNIT_SPELLCAST_INTERRUPTED already handle. No arithmetic
+-- below ever sees a secret cooldown value.
 local GetSpellCooldown = api.GetSpellCooldown
 local GetSpellInfo = api.GetSpellInfo
 local GetTime = GetTime
@@ -69,6 +79,11 @@ end
 function lib:calculate_expected_spell_gcd()
     -- First try to calc the expected GCD from first principles
     local rating_percent_reduction = GetCombatRatingBonus(20)
+    if is_secret(rating_percent_reduction) then
+        -- Restricted stat read: keep the previous estimate instead of folding in a
+        -- value we cannot see (the wrapper would otherwise raise on the arithmetic).
+        return
+    end
     local spell_gcd = self.base_spell_gcd
     local reduction_from_haste_rating = 100 / (100 + rating_percent_reduction)
     local current = spell_gcd * reduction_from_haste_rating
@@ -141,6 +156,11 @@ end
 -----------------------------------------------------------
 function lib:COMBAT_RATING_UPDATE()
     local new_spell_haste = GetCombatRating(CR_HASTE_SPELL)
+    if is_secret(new_spell_haste) then
+        -- Restricted stat read: keep the previous estimate, never compare or store an
+        -- opaque value.
+        return
+    end
     -- print(new_spell_haste)
     if new_spell_haste ~= self.current_spell_haste then
         -- print('spell haste changed')
