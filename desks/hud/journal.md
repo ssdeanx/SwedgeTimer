@@ -1,0 +1,19 @@
+# hud — Journal
+
+## 2026-10-17 — Desk opened
+- **Purpose:** enterprise-grade HUD pass — every slot for all 5 classes shows/hides/updates correctly; no dead frames; prior-pass features (Aimed slot, totem-twist, Rampage, HoW, bear chain) verified live.
+- **Scope:** hud.lua, rotationtext.lua, tests/rotationtext_state.lua only. tests/hud_state.lua is FORBIDDEN (reconcile wave owns it — report count deltas instead).
+- **Next step:** execute bench/briefs/brief_hud-grade_2026-10-17.md. luacheck reports zero warnings in this scope — the job is completeness, not wiring.
+
+## 2026-10-17 — hud-grade executed (done, offline-verified)
+- **Fix (hud.lua, update_display):** provider-hidden slots now hide their icon + stop a stale PixelGlow, and re-show on revive. Before: druid Mangle (runeless Era) / TF / Berserk (spell data lacking the spell) kept their last paint drawn — a dead icon for a nonexistent spell. paint's hidden early-return stays as defense.
+- **Audit result:** post_init ordering correct all 5 classes (rank re-point before hud.init); no is_mainline gates in scope; no stale-value paths (every provider resets the reused state table first). rotationtext.lua needed no change (gates, boot, alignment all pinned green).
+- **Out-of-scope findings (report only):** warrior arms/SoD HUD keys (rend, ms, bladestorm, raging_blow) have no hud_show_* toggles/defaults — always drawn, no toggle; provider-hidden icons still reserve row width (gap until a settings change reflows) — reconcile-wave item; in-client behavior UNCONFIRMED throughout.
+- **Evidence:** rotationtext_state 218 PASS; hud_state 401 checks with ONLY the 4 known druid count pins (10 vs 8 slots, 302 vs 226 width); class suites green read-only (warrior 620, druid 415, hunter 448, paladin 165, shaman 378, weave 417, nextaction 443, twist 39); luacheck scope 0/0; full harness 35 steps, 3 failed (bars_state 12 + hud_state 4 count pins + one other-lane toc Interface edit in flight). Mutation proof on /tmp/opencode/mut_hud: reverted fix → scratch 4 FAILs; restored → 8 PASS, copy byte-identical.
+- **Deliverables:** this entry · desks/hud/.signals/20261017T*.json · bench/buildout_hud-grade_2026-10-17.md. Residual: provider-hidden row gap (reconcile wave); warrior arms/SoD toggle gap (options wave).
+
+## 2026-10-17 — hud-reflow executed (done, offline-verified)
+- **Fix (hud.lua only):** provider-hidden slots no longer reserve row width. `update_display` tracks `icon.last_hidden` per slot (baselined `false` at creation, first observation free); on flip it reflows after the loop. New `HUD.reflow_row` is layout-only (no provider calls → HS §5 exactly-once pin holds; no `update_display` recursion → at-most-once-per-tick holds). Combat: a flip under lockdown sets `pending_apply` only; the `on_update` pending branch applies it (via `apply_settings`, same `icon_effective` liveness) on exit. `apply_settings` counts/positions by `icon_effective` (toggle want × liveness) instead of want alone.
+- **Pin surprise (owned, not a violation):** the creation paint (`apply_settings`' trailing `update_display`) already observes liveness, so the druid row is 6-wide from first paint — no separate tick needed. §15 width pin moved 302 → 226 with rationale comment; no other existing pin changed (paladin/hunter/warrior/shaman providers never hide in-sandbox).
+- **Evidence:** hud_state 424 PASS (was 401); full harness 35 steps, 0 failed; luacheck scope 0/0 (tree 2 warnings are other lanes' in-flight files, same as baseline). CRLF preserved on hud.lua (1149/1149 CR). Mutation proofs on /tmp/opencode copy (removed after): reflow-suppression → 5 FAILs (gap 302 returns); combat-bypass → 2 FAILs (mid-fight shift); restored byte-identical, 424 PASS.
+- **Deliverables:** this entry · `desks/hud/.signals/20261017T152131Z.json` · `bench/buildout_hud-reflow_2026-10-17.md`. Residual: in-client behavior UNCONFIRMED.

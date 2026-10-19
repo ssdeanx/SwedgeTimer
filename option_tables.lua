@@ -3,7 +3,7 @@
 --
 -- The module's purpose is to dynamically generate any options tables
 -- depending on player class that the addon needs. So for example,
--- a Paladin will only ever see the mainhand options, and the Paladin-specific 
+-- a Paladin will only ever see the mainhand options, and the Paladin-specific
 -- class options.
 ------------------------------------------------------------------------------------
 local addon_name, st = ...
@@ -48,7 +48,8 @@ local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LSM = LibStub("LibSharedMedia-3.0")
 local LWIN = LibStub("LibWindow-1.1")
-local print = st.utils.print_msg
+-- NOTE: no `print` alias here (was: local print = st.utils.print_msg): the only
+-- references were two commented-out debug lines, and st stays reachable directly.
 
 -- This object will eventually be passed to AceConfig as the options
 -- table for the addon. We'll build it dynamically upon addon init.
@@ -93,8 +94,8 @@ ST.opts_funcs.global = {}
 -- Retrieve the localized class name of the player (e.g., "Paladin"),
 -- used for class-specific labels in the options table.
 ST.opts_funcs.global.get_player_class_pretty = function()
-    local _, english_class = UnitClass("player")
-    return english_class or "Player"
+    local _, pretty_class = UnitClass("player")
+    return pretty_class or "Player"
 end
 ST.opts_funcs.global.getter = function(_, info)
     local db = ST:get_profile_table()
@@ -215,6 +216,29 @@ function ST:generate_top_level_options_table()
         get = "getter",
         set = "setter",
     }
+    -- Diagnostics (diag.lua): per-tick budget counters. Off by default; the gate is
+    -- decided at init, so the toggle applies at the next login/reload (see diag.lua's
+    -- wrap_onupdate).
+    self.opts_table.args.diag_tick_counters = {
+        type = "toggle",
+        order = 1.31,
+        name = "Diagnostic tick counters",
+        desc = "Count the hand-bar OnUpdate ticks and measure their CPU time for /st diag. "..
+            "Applies at the next login or reload; off by default.",
+        get = "getter",
+        set = "setter",
+    }
+    -- Enemy swing bar (enemy_swing.lua): the hostile-target swing bar, classic-line
+    -- families only. Off by default; the driver reads the toggle live on its events.
+    self.opts_table.args.enemy_swing_enabled = {
+        type = "toggle",
+        order = 1.32,
+        name = "Enemy swing bar",
+        desc = "Track your hostile target's mainhand swing with a bar under the mainhand "..
+            "timer (classic-line clients only). Off by default.",
+        get = "getter",
+        set = "setter",
+    }
 
     -- Add behaviour panel
     ST.behaviour_group = {
@@ -320,6 +344,19 @@ function ST:generate_top_level_options_table()
                 end,
                 disabled = function()
                     return ST:get_class_table().design_snap == false
+                end,
+            },
+            design_mouse_anchor = {
+                type = "toggle",
+                order = 1.55,
+                name = "Mouse-anchored dragging",
+                desc = "Centre the dragged element on the cursor instead of preserving the grab "..
+                    "offset; snapping still applies (Shift places it freely).",
+                get = function()
+                    return ST:get_class_table().design_mouse_anchor == true
+                end,
+                set = function(_, value)
+                    ST:get_class_table().design_mouse_anchor = value
                 end,
             },
             design_note = {
@@ -454,7 +491,7 @@ function ST:set_opts_funcs()
             end
         end
 
-        -- A getter for colors. Colors are stored in SwedgeTimer's 
+        -- A getter for colors. Colors are stored in SwedgeTimer's
         -- db as 0-255 ranges, and need converted to the expected
         -- 0-1 ranges for the client.
         if hand == "mainhand" or hand == "offhand" or hand == "ranged" then
@@ -641,13 +678,13 @@ function ST:generate_class_getters_setters()
         end
     end
 
-    ST.class_getsetters.color_getter = function(self, info)
+    ST.class_getsetters.color_getter = function(_, info)
         local db = ST:get_class_table()
         local color_table = db[info[#info]]
         return ST:convert_color(color_table)
     end
 
-    ST.class_getsetters.color_setter = function(self, info, r, g, b, a)
+    ST.class_getsetters.color_setter = function(_, info, r, g, b, a)
         local db = ST:get_class_table()
         local color_table = {ST:convert_color_up({r, g, b, a})}
         db[info[#info]] = color_table
@@ -1354,6 +1391,15 @@ function ST.class_opts_funcs.PALADIN(self)
             get = "getter",
             set = "setter",
         },
+        aow_exo_pulse_enabled = {
+            type = "toggle",
+            order = 2.22,
+            name = "AoW+Exo overlap pulse",
+            desc = "Pulse the bar on each transition to Art of War up with Exorcism ready "..
+                "(the Require Exorcism Ready gate applies).",
+            get = "getter",
+            set = "setter",
+        },
         aow_glow_color = {
             order=2.3,
             type="color",
@@ -1407,6 +1453,36 @@ function ST.class_opts_funcs.PALADIN(self)
                 return not db.use_aow_glow
             end,
         },
+        tracker_header = {
+            type = "header",
+            order = 2.7,
+            name = "Judgement & Cooldowns",
+        },
+        tracker_desc = {
+            order = 2.71,
+            type = "description",
+            name = "Target and cooldown trackers: the target's Judgement of the Crusader "..
+                "remaining time and a row of your own cooldowns beside the bar.",
+        },
+        jotc_bar_enabled = {
+            type = "toggle",
+            order = 2.72,
+            name = "Judgement of the Crusader bar",
+            desc = "Show a mini-bar with the target's Judgement of the Crusader remaining "..
+                "time (your melee swings refresh the max rank).",
+            get = "getter",
+            set = "setter",
+        },
+        cd_icons_enabled = {
+            type = "toggle",
+            order = 2.73,
+            name = "Cooldown icon row",
+            desc = "Show your cooldowns (Avenging Wrath, Divine Shield, Hammer of Justice, "..
+                "Hand of Protection, Holy Wrath, Lay on Hands, racial) beside the bar, "..
+                "glowing in the final 4 seconds.",
+            get = "getter",
+            set = "setter",
+        },
         twist_header = {
             type = "header",
             order = 3.0,
@@ -1456,6 +1532,35 @@ function ST.class_opts_funcs.PALADIN(self)
             order = 3.4,
             name = "Twist attempt feedback",
             desc = "Shows attempt feedback on the timer bar, and the success text when that is enabled.",
+            get = "getter",
+            set = "setter",
+        },
+        twist_score_enabled = {
+            type = "toggle",
+            order = 3.41,
+            name = "Twist hit-rate badge",
+            desc = "Show your twist hit rate (N% (S/A)) below the bar in combat.",
+            get = "getter",
+            set = "setter",
+        },
+        twist_score_persist = {
+            type = "toggle",
+            order = 3.42,
+            name = "Keep hit rate across sessions",
+            desc = "Restore and mirror the twist hit-rate counts in your profile instead "..
+                "of resetting them each session.",
+            get = "getter",
+            set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.twist_score_enabled
+            end,
+        },
+        twist_lust_override_enabled = {
+            type = "toggle",
+            order = 3.43,
+            name = "Narrow window during Bloodlust/Heroism",
+            desc = "Narrow the twist window while Bloodlust or Heroism is up (TBC and later).",
             get = "getter",
             set = "setter",
         },
@@ -1991,6 +2096,12 @@ function ST.class_opts_funcs.PALADIN(self)
                 local db = ST:get_class_table()
                 db.practice_panel_x = 0
                 db.practice_panel_y = 0
+                -- Re-anchor through the panel's own position applier (practice_ui.lua
+                -- apply_settings re-reads the offsets above; combat-lockdown defers
+                -- it internally), mirroring the update_result_font seam above.
+                if st.practice_ui and st.practice_ui.apply_settings then
+                    st.practice_ui.apply_settings(ST)
+                end
             end,
         },
 
@@ -2837,6 +2948,23 @@ function ST.class_opts_funcs.WARRIOR(self)
             get = "getter",
             set = "setter",
         },
+        show_warrior_bank_cue = {
+            type = "toggle",
+            order = 3.16,
+            name = "BANK cue",
+            desc = "Show an amber edge and a centred BANK label while a queued "..
+                "on-next-attack ability is unaffordable in combat.",
+            get = "getter",
+            set = "setter",
+        },
+        show_warrior_battle_shout_badge = {
+            type = "toggle",
+            order = 3.17,
+            name = "Battle Shout badge",
+            desc = "Show your Battle Shout's remaining time beside the bar.",
+            get = "getter",
+            set = "setter",
+        },
         nag_header = {
             type = "header",
             order = 4.0,
@@ -2936,6 +3064,10 @@ function ST.class_opts_funcs.WARRIOR(self)
         { key = "hud_show_cleave", name = "Cleave", desc = "Show the Cleave icon (with its GCD swipe)." },
         { key = "hud_show_bt", name = "Bloodthirst", desc = "Show the Bloodthirst icon." },
         { key = "hud_show_ww", name = "Whirlwind", desc = "Show the Whirlwind icon." },
+        { key = "hud_show_rend", name = "Rend", desc = "Show the Rend icon (with its GCD swipe)." },
+        { key = "hud_show_ms", name = "Mortal Strike", desc = "Show the Mortal Strike icon (with its GCD swipe)." },
+        { key = "hud_show_bladestorm", name = "Bladestorm", desc = "Show the Bladestorm icon." },
+        { key = "hud_show_raging_blow", name = "Raging Blow", desc = "Show the Raging Blow icon." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
     },
@@ -3068,6 +3200,15 @@ function ST.class_opts_funcs.HUNTER(self)
                 return not db.hunter_cast_bar_enabled
             end,
         },
+        hunter_cast_zone_enabled = {
+            type = "toggle",
+            order = 3.4,
+            name = "Movement-safe cast zone",
+            desc = "Show a safe-to-move zone on the ranged bar while casting (green when "..
+                "stopping is safe, red when it is not).",
+            get = "getter",
+            set = "setter",
+        },
         hunter_range_helper_header = {
             type = "header",
             order = 4.0,
@@ -3125,6 +3266,34 @@ function ST.class_opts_funcs.HUNTER(self)
             get = "getter",
             set = "setter",
         },
+        pet_badges_header = {
+            type = "header",
+            order = 6.5,
+            name = "Pet Badges",
+        },
+        pet_badges_desc = {
+            order = 6.51,
+            type = "description",
+            name = "Aura badges for the pet fight: Bestial Wrath's duration and the "..
+                "pet's Frenzy stack count.",
+        },
+        hunter_bw_badge_enabled = {
+            type = "toggle",
+            order = 6.52,
+            name = "Bestial Wrath badge",
+            desc = "Show the Bestial Wrath duration with a countdown, glowing in the "..
+                "final 4 seconds.",
+            get = "getter",
+            set = "setter",
+        },
+        hunter_frenzy_stacks_enabled = {
+            type = "toggle",
+            order = 6.53,
+            name = "Pet Frenzy stacks",
+            desc = "Show the pet's Frenzy Effect stack count.",
+            get = "getter",
+            set = "setter",
+        },
 
         -- Next Action Guide (shared nextaction_ui frame; provider ST.HUNTER.guide).
         nag_header = {
@@ -3145,6 +3314,16 @@ function ST.class_opts_funcs.HUNTER(self)
             order = 7.1,
             name = "Enable",
             desc = "Show the next action guide.",
+            get = "getter",
+            set = "setter",
+        },
+        hunter_multi_target = {
+            type = "toggle",
+            order = 7.2,
+            name = "Multi-target mode (manual) (future)",
+            desc = "Treat the fight as 2+ targets: the guide prefers Multi-Shot over the "..
+                "single-target filler. Manual because automatic target counting is "..
+                "unreliable in raids.",
             get = "getter",
             set = "setter",
         },
@@ -3557,6 +3736,48 @@ function ST.class_opts_funcs.DRUID(self)
                 return db.show_druid_rake_bar == false
             end,
         },
+        show_druid_pips = {
+            type = "toggle",
+            order = 13.11,
+            name = "Combo points",
+            desc = "Show combo points as pips under the bar in cat form (the row glows at 5).",
+            get = "getter",
+            set = "setter",
+        },
+        show_druid_shred_countdown = {
+            type = "toggle",
+            order = 13.12,
+            name = "Shred countdown",
+            desc = "Show \"Shred in Xs\" below the bar until the next energy tick can afford "..
+                "a Shred (TBC/Wrath only).",
+            get = "getter",
+            set = "setter",
+        },
+        show_druid_maul_badge = {
+            type = "toggle",
+            order = 13.13,
+            name = "Maul cap badge",
+            desc = "Show the at-cap time (\"Cap Ns\") in bear form while rage is capped.",
+            get = "getter",
+            set = "setter",
+        },
+        show_druid_omen_glow = {
+            type = "toggle",
+            order = 13.14,
+            name = "Omen glow",
+            desc = "Glow the energy bar while the Omen of Clarity proc is up.",
+            get = "getter",
+            set = "setter",
+        },
+        show_druid_gcd_tick = {
+            type = "toggle",
+            order = 13.15,
+            name = "GCD tick marker",
+            desc = "Show a marker on the energy bar for the global cooldown's position "..
+                "in the energy cycle.",
+            get = "getter",
+            set = "setter",
+        },
 
         -- Next Action Guide (shared nextaction_ui frame; provider ST.DRUID.guide).
         nag_header = {
@@ -3660,7 +3881,7 @@ function ST.class_opts_funcs.DRUID(self)
     -- Cooldown HUD + Rotation Text (shared hud_rotation_widgets builder: the same
     -- 8.x/9.x structure as the paladin's sections; the slot toggles mirror
     -- ST.DRUID.HUD_SLOTS). The Maul slot greys while a queued Maul is
-    -- unaffordable; no druid icon glows, so the glow toggle below has no effect.
+    -- unaffordable; Tiger's Fury and Berserk glow in combat once ready.
     for k, v in pairs(hud_rotation_widgets({
         { key = "hud_show_maul", name = "Maul", desc = "Show the Maul icon (greys while a queued Maul is unaffordable)." },
         { key = "hud_show_mangle", name = "Mangle", desc = "Show the Mangle icon (with its GCD swipe)." },
@@ -3668,14 +3889,17 @@ function ST.class_opts_funcs.DRUID(self)
         { key = "hud_show_rake", name = "Rake", desc = "Show the Rake icon (with its GCD swipe)." },
         { key = "hud_show_bite", name = "Ferocious Bite", desc = "Show the Ferocious Bite icon (with its GCD swipe)." },
         { key = "hud_show_shred", name = "Shred", desc = "Show the Shred icon (with its GCD swipe)." },
+        { key = "hud_show_tf", name = "Tiger's Fury", desc = "Show the Tiger's Fury icon (glows in combat once it is ready)." },
+        { key = "hud_show_berserk", name = "Berserk", desc = "Show the Berserk icon (glows in combat once it is ready)." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
     },
         "A row of ability icons with cooldown swipes and remaining-time text. Icons grey out "..
             "while on cooldown (Maul also while a queued Maul is unaffordable), tint blue "..
-            "without mana and red out of range. No druid icon glows. Unlock the frame to drag "..
-            "it into place.",
-        "No druid icon ever glows, so this toggle has no effect on this class.",
+            "without mana and red out of range. Tiger's Fury and Berserk glow in combat "..
+            "once they are ready. Unlock the frame to drag it into place.",
+        "Tiger's Fury and Berserk glow in combat once they are ready, both only while "..
+            "the toggle is on. No other icon glows.",
         "What the label says: the rotation alone, with a prefix, its steps, or both.")) do
         opts_group[k] = v
     end
@@ -3879,6 +4103,50 @@ function ST.class_opts_funcs.SHAMAN(self)
             get = "getter",
             set = "setter",
         },
+        show_shaman_stormstrike_bar = {
+            type = "toggle",
+            order = 2.6,
+            name = "Stormstrike bar",
+            desc = "Show the target's Stormstrike nature-vulnerability remaining time "..
+                "above the Flame Shock bar, with a glow in the last 4 seconds.",
+            get = "getter",
+            set = "setter",
+        },
+        show_shaman_wf_hold_tint = {
+            type = "toggle",
+            order = 2.7,
+            name = "Windfury hold tint",
+            desc = "Wash the swing's final fraction amber while Stormstrike is held for "..
+                "the Windfury internal cooldown.",
+            get = "getter",
+            set = "setter",
+        },
+        show_shaman_rockbiter_badge = {
+            type = "toggle",
+            order = 2.8,
+            name = "Rockbiter badge",
+            desc = "Show the Rockbiter Weapon remaining time beside the bar.",
+            get = "getter",
+            set = "setter",
+        },
+        show_shaman_spell_positions = {
+            type = "toggle",
+            order = 2.9,
+            name = "Spell position row",
+            desc = "Show the cast-start zone, the per-spell icons at their latest safe "..
+                "starts and the effective cast times above the bar.",
+            get = "getter",
+            set = "setter",
+        },
+        show_shaman_dw_sync = {
+            type = "toggle",
+            order = 2.91,
+            name = "DW sync / Flurry readout",
+            desc = "Show the dual-wield sync readout and the live Flurry proc countdown "..
+                "beside the bar.",
+            get = "getter",
+            set = "setter",
+        },
 
         -- Next Action Guide (shared nextaction_ui frame; provider ST.SHAMAN.guide).
         nag_header = {
@@ -3987,6 +4255,299 @@ function ST.class_opts_funcs.SHAMAN(self)
             "once it is ready in combat. Unlock the frame to drag it into place.",
         "Stormstrike glows once it is ready in combat, only while the toggle is on. No other "..
             "icon glows.",
+        "What the label says: the rotation alone, with a prefix, its steps, or both.")) do
+        opts_group[k] = v
+    end
+    return opts_group
+end
+
+function ST.class_opts_funcs.ROGUE(self)
+    local opts_group = {
+        energy_header = {
+            type = "header",
+            order = 1.01,
+            name = "Energy / Pooling",
+        },
+        energy_desc = {
+            order = 1.02,
+            type = "description",
+            name = "Energy-tick and pooling cues (the controls ship now, the visuals land "..
+                "with the energy slice). Pooling bands are shown as energy thresholds: do "..
+                "not pool above the pre-tick / post-tick line. Both cues hide while the tick "..
+                "prediction is unknown (energy procs, missing reads) instead of drawing a "..
+                "guessed tick.",
+        },
+        show_rogue_energy_tick = {
+            type = "toggle",
+            order = 1.1,
+            name = "Energy tick marker",
+            desc = "Show the predicted energy tick position. Hidden while the tick prediction is unknown.",
+            get = "getter",
+            set = "setter",
+        },
+        rogue_energy_tick_color = {
+            order = 1.11,
+            type = "color",
+            name = "Tick marker color",
+            desc = "Color of the energy tick marker.",
+            hasAlpha = true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                return not ST:get_class_table().show_rogue_energy_tick
+            end,
+        },
+        show_rogue_pool_tint = {
+            type = "toggle",
+            order = 1.2,
+            name = "Pooling tint",
+            desc = "Tint the energy display while inside the pooling band. Hidden while the tick prediction is unknown.",
+            get = "getter",
+            set = "setter",
+        },
+        rogue_pool_tint_color = {
+            order = 1.21,
+            type = "color",
+            name = "Pooling tint color",
+            desc = "Color used for the pooling band tint.",
+            hasAlpha = true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                return not ST:get_class_table().show_rogue_pool_tint
+            end,
+        },
+        rogue_pool_band_pre = {
+            type = "range",
+            order = 1.3,
+            name = "Pre-tick band",
+            desc = "Energy threshold at or above which the next tick would cap the bar.",
+            min = 0, max = 100, step = 5,
+            get = "getter",
+            set = "setter",
+        },
+        rogue_pool_band_post = {
+            type = "range",
+            order = 1.31,
+            name = "Post-tick band",
+            desc = "Energy threshold to respect immediately after a tick.",
+            min = 0, max = 100, step = 5,
+            get = "getter",
+            set = "setter",
+        },
+
+        cues_header = {
+            type = "header",
+            order = 2.01,
+            name = "Finisher / Upkeep Cues",
+        },
+        cues_desc = {
+            order = 2.02,
+            type = "description",
+            name = "Slice and Dice, Rupture, Expose Armor, Shiv and Thistle Tea cues. "..
+                "Each toggle is nil-safe: with the key absent (or false) the cue stays off. "..
+                "A cue hides while its aura or combo-point read is unknown instead of "..
+                "showing a guessed state; the Classic Era SS-after-swing window appears "..
+                "only on Era clients with a readable mainhand swing record.",
+        },
+        show_rogue_snd_cue = {
+            type = "toggle",
+            order = 2.1,
+            name = "Slice and Dice",
+            desc = "Show the Slice and Dice upkeep cue.",
+            get = "getter",
+            set = "setter",
+        },
+        rogue_snd_color = {
+            order = 2.11,
+            type = "color",
+            name = "Slice and Dice color",
+            desc = "Color of the Slice and Dice cue.",
+            hasAlpha = true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                return not ST:get_class_table().show_rogue_snd_cue
+            end,
+        },
+        show_rogue_rupture_cue = {
+            type = "toggle",
+            order = 2.2,
+            name = "Rupture",
+            desc = "Show the Rupture upkeep cue.",
+            get = "getter",
+            set = "setter",
+        },
+        rogue_rupture_color = {
+            order = 2.21,
+            type = "color",
+            name = "Rupture color",
+            desc = "Color of the Rupture cue.",
+            hasAlpha = true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                return not ST:get_class_table().show_rogue_rupture_cue
+            end,
+        },
+        show_rogue_ea_cue = {
+            type = "toggle",
+            order = 2.3,
+            name = "Expose Armor duty",
+            desc = "Show the Expose Armor upkeep cue while the duty is active.",
+            get = "getter",
+            set = "setter",
+        },
+        rogue_ea_color = {
+            order = 2.31,
+            type = "color",
+            name = "Expose Armor color",
+            desc = "Color of the Expose Armor cue.",
+            hasAlpha = true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                return not ST:get_class_table().show_rogue_ea_cue
+            end,
+        },
+        show_rogue_shiv_cue = {
+            type = "toggle",
+            order = 2.4,
+            name = "Shiv",
+            desc = "Show the Shiv Deadly-poison upkeep cue.",
+            get = "getter",
+            set = "setter",
+        },
+        rogue_shiv_color = {
+            order = 2.41,
+            type = "color",
+            name = "Shiv color",
+            desc = "Color of the Shiv cue.",
+            hasAlpha = true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                return not ST:get_class_table().show_rogue_shiv_cue
+            end,
+        },
+        show_rogue_tea_cue = {
+            type = "toggle",
+            order = 2.5,
+            name = "Thistle Tea",
+            desc = "Show the Thistle Tea energy-deficit cue.",
+            get = "getter",
+            set = "setter",
+        },
+        rogue_tea_color = {
+            order = 2.51,
+            type = "color",
+            name = "Thistle Tea color",
+            desc = "Color of the Thistle Tea cue.",
+            hasAlpha = true,
+            get = "color_getter",
+            set = "color_setter",
+            disabled = function()
+                return not ST:get_class_table().show_rogue_tea_cue
+            end,
+        },
+
+        -- Next Action Guide (shared nextaction_ui frame; provider ST.ROGUE.guide).
+        nag_header = {
+            type = "header",
+            order = 3.0,
+            name = "Next Action Guide",
+        },
+        nag_desc = {
+            type = "description",
+            order = 3.05,
+            name = "On-screen rotation prompt (off by default). When the swing, energy or "..
+                "combo-point reads cannot be trusted the guide shows \"…\" instead of "..
+                "advice - no guessed prompt. Drag the frame while it is unlocked to "..
+                "position it.",
+        },
+        nextaction_enabled = {
+            type = "toggle",
+            order = 3.1,
+            name = "Enable",
+            desc = "Show the next action guide.",
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_locked = {
+            type = "toggle",
+            order = 3.11,
+            name = "Lock frame",
+            desc = "Prevent dragging the guide frame.",
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_visibility_key = {
+            type = "select",
+            order = 3.12,
+            name = "Show guide",
+            desc = "When the guide is visible.",
+            values = { always = "Always", in_combat = "In combat" },
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_icon_size = {
+            type = "range",
+            order = 3.13,
+            name = "Icon size",
+            desc = "Guide icon size in pixels.",
+            min = 20, max = 80, step = 1,
+            get = "getter",
+            set = "setter",
+        },
+        nextaction_x = {
+            type = "input",
+            order = 3.14,
+            name = "X position",
+            desc = "Horizontal screen position (dragging the frame also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().nextaction_x or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().nextaction_x = n
+                end
+            end,
+        },
+        nextaction_y = {
+            type = "input",
+            order = 3.15,
+            name = "Y position",
+            desc = "Vertical screen position (dragging the frame also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().nextaction_y or -180)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().nextaction_y = n
+                end
+            end,
+        },
+    }
+    -- Cooldown HUD + Rotation Text (shared hud_rotation_widgets builder: the same
+    -- 8.x/9.x structure as the other class sections; the slot toggles mirror
+    -- ST.ROGUE.HUD_SLOTS). Slice A ships no glow cue or rotation source yet.
+    for k, v in pairs(hud_rotation_widgets({
+        { key = "hud_show_snd", name = "Slice and Dice", desc = "Show the Slice and Dice icon." },
+        { key = "hud_show_rupture", name = "Rupture", desc = "Show the Rupture icon." },
+        { key = "hud_show_ea", name = "Expose Armor", desc = "Show the Expose Armor icon." },
+        { key = "hud_show_ar", name = "Adrenaline Rush", desc = "Show the Adrenaline Rush icon." },
+        { key = "hud_show_bf", name = "Blade Flurry", desc = "Show the Blade Flurry icon." },
+        { key = "hud_show_tea", name = "Thistle Tea", desc = "Show the Thistle Tea icon." },
+        { key = "hud_show_kick", name = "Kick", desc = "Show the Kick icon." },
+        { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
+        { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
+    },
+        "A row of ability icons with cooldown swipes and remaining-time text. Icons grey out "..
+            "while on cooldown and tint blue without energy or red out of range. Unlock the "..
+            "frame to drag it into place.",
+        "Slice A ships no rogue glow cue; the toggle applies once a later slice wires one.",
         "What the label says: the rotation alone, with a prefix, its steps, or both.")) do
         opts_group[k] = v
     end
@@ -4137,7 +4698,8 @@ function ST:generate_hand_options_table(hand)
     -- Function to generate an options table for a hand object.
     local settings = ST.opts_case_dict[hand]
     local offset = settings.order_offset
-    local title = settings.title
+    -- NOTE: no `title` local here: the group name comes from settings.panel_title
+    -- below; settings.title has no other reader, so fetching it was dead.
 
     -- print(hand_title)
     local opts_group = {
@@ -4396,7 +4958,7 @@ function ST:set_opts()
     -- Finally, a function to be run on init that will dynamically generate
     -- all the requested panel tables on a per-hand/per-class basis.
 
-    -- Sets a dict for hand/collection-based case switching. 
+    -- Sets a dict for hand/collection-based case switching.
     self:set_opts_case_dict()
 
     -- Generate the preset options tables that don't require special case switching.

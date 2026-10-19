@@ -22,6 +22,9 @@
 --     modifier exact-centre override, and the screen-centre test (editmode.lua 274-306)
 --   * normalise_descriptor / new_registry        - the element descriptor contract
 --     (editmode.lua 25-47 header, 311-539 registry)
+--   * row_boxes / normalise_template             - stacked-layout cells (row/column
+--     geometry shared by widgets and the C6 snap-to-row templates) and the template
+--     descriptor contract
 --
 -- Domain: every x/y here is an offset from UIParent's centre in UIParent units
 -- (designmode.lua's centre_offsets - the domain the elements' own db keys already use).
@@ -266,6 +269,41 @@ function D.centred(x, y, magnet)
 end
 
 --=========================================================================================
+-- Stacked-layout cells (C6 snap-to-row templates)
+--=========================================================================================
+-- The rects of a row/column of cells (editmode.lua's element groups, reduced to the
+-- geometry): cell i is centred on the first cell's centre, advanced by (size + gap)
+-- along `axis` - "x" rightwards (the default), "y" downwards - in the same
+-- offsets-from-centre domain as every other helper here. Each cell is { l, r, t, b }.
+-- nil for degenerate input (non-number size/origin, count below 1, non-number gap).
+-- Used both for widget geometry (the pips row) and for design-mode templates.
+function D.row_boxes(count, size, gap, x, y, axis)
+    if not (D.is_number(count) and D.is_number(size) and D.is_number(x) and D.is_number(y)) then
+        return nil
+    end
+    count = floor(count)
+    if count < 1 or size <= 0 then
+        return nil
+    end
+    gap = gap or 0
+    if not D.is_number(gap) then
+        return nil
+    end
+    local step = size + gap
+    local half = size / 2
+    local cells = {}
+    for i = 1, count do
+        local d = (i - 1) * step
+        if axis == "y" then
+            cells[i] = { l = x - half, r = x + half, t = y - d + half, b = y - d - half }
+        else
+            cells[i] = { l = x + d - half, r = x + d + half, t = y + half, b = y - half }
+        end
+    end
+    return cells
+end
+
+--=========================================================================================
 -- Element descriptors
 --=========================================================================================
 -- The registry is fed by other modules at file load - before their frames exist - so a
@@ -362,6 +400,37 @@ function D.new_registry()
         end
     end
     return reg
+end
+
+--=========================================================================================
+-- Snap-template descriptors (C6)
+--=========================================================================================
+-- A template describes a stacked layout the drag magnets can offer: designmode.lua
+-- registers these, validates them here, and reads the cells while a drag is active.
+--   id         non-empty string, unique among registered templates
+--   get_cells  function() -> array of { l, r, t, b } cell rects in the offsets-from-centre
+--              domain, or nil while the layout is not readable (hidden frame)
+--   border     optional number / function() -> the cells' drawn edge thickness (the
+--              abutting-border rule)
+-- Extra fields are kept by the shallow copy; the callbacks are never called here.
+function D.normalise_template(t)
+    if type(t) ~= "table" then
+        return nil, "template must be a table"
+    end
+    if type(t.id) ~= "string" or t.id == "" then
+        return nil, "template.id must be a non-empty string"
+    end
+    if type(t.get_cells) ~= "function" then
+        return nil, "template.get_cells must be a function returning cell rects"
+    end
+    if t.border ~= nil and type(t.border) ~= "number" and type(t.border) ~= "function" then
+        return nil, "template.border must be a number, a function() or nil"
+    end
+    local norm = {}
+    for k, v in pairs(t) do
+        norm[k] = v
+    end
+    return norm
 end
 
 --=========================================================================================

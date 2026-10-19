@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:27:15Z",
+  "run_id": "shaman-buildout-2026-10-17",
+  "agent_name": "shaman",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Lazy widget creation behind the new nil-off toggles kept bars_state's SHAMAN construction counts untouched (no reconcile debt for this class), and the mutation proofs immediately exposed two weak checks (an FS-guard-masked rune-gate assertion and a stale-text pin that post_init had silently reset) - both were tightened and re-proven.",
+    "what_was_hard": "S4's FS-collision guard can only act through the gather (the engine is frozen): the gather now narrows mw_available while FS < 2 s and the shock is ready, so the frozen rules fall through to the Flame Shock refresh. The guide slot's post_init LvB re-point keeps its client-data gate because its sibling suite (tests/shaman_guide_state.lua) is out of scope this round and pins that shape - the player-level rune gate lands on the assist's MW5 marker instead. Recorded, not hidden.",
+    "skill_gap": "Offline harness cannot load the addon: the guard's exact in-game feel, the option visuals and the new bar/wash layout need the owner's in-client pass."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/shaman/journal.md § 2026-10-17 build-out round 1 done"
+}

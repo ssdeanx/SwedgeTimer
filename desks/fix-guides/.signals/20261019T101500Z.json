@@ -1,0 +1,46 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T10:15:00Z",
+  "run_id": "fix-guides-weave-2026-10-19",
+  "agent_name": "fix-guides",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Enumerated the full context (journal, hunter+proctor audits, lessons, hands-up) before editing; every audit item mapped to one of the two brief-approved shapes (fix or cited justification). Mutation proofs ran on a /tmp/opencode copy with CRLF-aware patterns; all 15 bitten.",
+    "what_was_hard": "H4's nil signal rippled through the shaman position row (nil arithmetic), the practice grader (already nil-safe), and is_clipped (compare against nil); each consumer needed its own guard. paladin_state's texture stub had to record widths and honour convert_color(new_alpha) before the M4/G2 band pins were observable.",
+    "skill_gap": "None observed in this lane; the brief's file:line anchors were accurate."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "files_changed": [
+    "weave.lua",
+    "nextaction.lua",
+    "nextaction_ui.lua",
+    "compat.lua",
+    "classes/paladin.lua",
+    "classes/shaman.lua",
+    "tests/weave_state.lua",
+    "tests/nextaction_state.lua",
+    "tests/guide_contract.lua",
+    "tests/secret_guard_state.lua",
+    "tests/paladin_state.lua",
+    "tests/shaman_state.lua",
+    "tests/hunter_state.lua",
+    "tests/smoke.lua"
+  ],
+  "not_changed_justified": [
+    "classes/hunter.lua:1068 already reads st.lust_supported == true (pin added, no edit)",
+    "diag.lua out of scope: M3 counter / M5 regime flag are session state + visible affordance, not yet a /st diag line"
+  ],
+  "harness": "bash tests/run.sh -> 35 steps, 0 failed; luacheck 2 warnings / 0 errors (71 files)",
+  "mutation_proofs": "15/15 bitten on /tmp/opencode/mut_guides (script /tmp/opencode/muts_guides.py); post-restore copy all PASS",
+  "artifact": "bench/fix_guides_weave_2026-10-19.md"
+}

@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:46:17Z",
+  "run_id": "shaman-weave-r2-2026-10-17",
+  "agent_name": "shaman",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The operator's verbatim spec mapped cleanly onto pure weave.lua helpers (position state, zone bounds, ICD registry) with classes/shaman.lua only rendering - the mutation proofs (clip guard, 2-3 stack gate, Flurry ICD) all landed on the pure layer and were caught by both suites. Lazy widgets kept bars_state's SHAMAN construction counts untouched, so this lane adds zero reconcile debt.",
+    "what_was_hard": "The spec's visuals are screenshot-driven with the example link still pending: geometry (band at +18, icons 14px, numbers right of the icons) is constant-driven and documented as the refinement hook. The Flurry ICD (0.5 s) and the sync-threshold=ICD model are operator-provided - no primary source; the reference only tracks Flurry as a buff icon, so the model is marked UNCONFIRMED.",
+    "skill_gap": "Offline harness cannot load the addon: the ready/clip/wait feel at 2-3 stacks, the row layout vs the operator's screenshots, and the DW sync warning need the owner's in-client pass."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/shaman/journal.md § 2026-10-17 weave round 2 done"
+}

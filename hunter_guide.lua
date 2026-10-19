@@ -188,11 +188,20 @@
 --                                                  cooldown with Explosive)
 --   target_in_range                                ranged range probe of the Steady Shot
 --                                                  school; nil = unknown
+--   lust_remaining                                 remaining seconds of a live
+--                                                  Bloodlust/Heroism-family aura on the
+--                                                  player (the H2 suppression input for
+--                                                  rules 6a/6b; nil = none, never zero)
 --
 -- FROZEN SPEC - rule order (first match wins; exactly these rules):
 --   1. a live Steady Shot, Multi-Shot, Sniper Shot or (Era) Aimed Shot cast is in
 --      progress (steady_remaining, multi_remaining, sniper_remaining or
 --      aimed_remaining is a number) -> hold, hold_text = "RIDE".
+--   2b. the ranged range probe reads exactly 0 (target_in_range == 0, byte-exact: nil
+--      = unknown = allowed and boolean spellings are never treated) -> hold,
+--      hold_text = "HOLD", ahead of every cooldown priority - the wrath arms (W1-W6)
+--      included - and of rule 7's queued ride (conservative: out of range nothing
+--      fires). Rule 1 above it still wins: a live cast continues riding.
 --   W1-W6. Wrath only (st.family == "WRATH"): the WotLK cooldown priority, with
 --      no window hold and no clip check on any arm (Auto Shot fires during Steady
 --      Shot casts there, so every shot is cooldown-ready by definition):
@@ -265,6 +274,13 @@
 --         The known gate keeps Era (and any client without the spell) on the old
 --         silent behaviour instead of prompting the rank-1 fallback.
 --      Unknown ranged state (no ttl) is NOT clip-safe: the engine never guesses.
+--      H2 suppression: while a Bloodlust/Heroism aura is live on the player
+--      (inputs.lust_remaining a number > 0), the haste shortens every Auto Shot
+--      cycle and pushes both casts' clip maths off their modelled numbers, so
+--      rules 6a and 6b are suppressed for the window's duration; Steady Shot
+--      keeps flowing through 6c as the spam cue. Rules F1-F2 and the W-arms
+--      (Wrath) stay live, as do rules 1, 2, 2b and 7; nil and 0 (and an absent
+--      read on Era) read as "no window" - never suppressed on a maybe.
 --      Whenever Aimed Shot is clip-safe, Multi-Shot is clip-safe too (shorter cast,
 --      no grace), so a due Aimed Shot always shadows Multi-Shot while both are due;
 --      whenever Steady Shot is clip-safe, Multi-Shot is clip-safe too, so the
@@ -538,6 +554,11 @@ function st.hunter_guide.evaluate(inputs, out)
     -- so every other family runs the exact old chain below.
     local is_forever = st.family == "FOREVER"
 
+    -- H2: the Bloodlust/Heroism window, derived once from the gathered read.
+    -- A positive remaining is a live window (nil = no aura, never suppressed on
+    -- a maybe); only the 6a/6b weave arms read it (see the header's 6. block).
+    local lust_window = type(inputs.lust_remaining) == "number" and inputs.lust_remaining > 0
+
     if type(inputs.steady_remaining) == "number"
         or type(inputs.multi_remaining) == "number"
         or type(inputs.sniper_remaining) == "number"
@@ -546,6 +567,14 @@ function st.hunter_guide.evaluate(inputs, out)
         --    is in progress: ride it.
         hold = true
         hold_text = "RIDE"
+    elseif inputs.target_in_range == 0 then
+        -- 2b. The ranged range probe reads out of range: nothing prompts, ahead
+        --    of every cooldown priority - the wrath arms included - and of the
+        --    rule-7 queue ride. Byte-exact == 0 only (nil = unknown = allowed;
+        --    boolean spellings are never treated as hold), matching the gather's
+        --    raw IsSpellInRange shape on the shipped clients.
+        hold = true
+        hold_text = "HOLD"
     elseif is_wrath and inputs.killshot_known == true
         and is_off_cooldown(inputs.killshot_remaining_cd)
         and type(inputs.target_hp_frac) == "number"
@@ -611,12 +640,14 @@ function st.hunter_guide.evaluate(inputs, out)
         -- reach this arm through its own gather).
         action = "sniper"
     elseif inputs.aimed_known == true and is_off_cooldown(inputs.aimed_remaining_cd)
-        and aimed_is_clip_safe(inputs) then
+        and aimed_is_clip_safe(inputs) and not lust_window then
         -- 6a. Era: Aimed Shot is due and the 3 s cast fits before the next shot.
+        --    Suppressed while a Bloodlust/Heroism window is live (H2).
         action = "aimed"
     elseif inputs.multi_known == true and is_off_cooldown(inputs.multi_remaining_cd)
-        and multi_is_clip_safe(inputs) then
-        -- 6b. Era and TBC: Multi-Shot is due and the cast fits before the next shot.
+        and multi_is_clip_safe(inputs) and not lust_window then
+        -- 6b. Era and TBC: Multi-Shot is due and the cast fits before the next
+        --    shot. Suppressed while a Bloodlust/Heroism window is live (H2).
         action = "multi"
     elseif inputs.steady_known == true and is_off_cooldown(inputs.steady_remaining_cd)
         and cast_is_clip_safe(inputs) then

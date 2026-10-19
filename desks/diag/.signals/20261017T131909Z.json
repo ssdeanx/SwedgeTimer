@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T13:19:09Z",
+  "run_id": "diag-buildout-2026-10-17",
+  "agent_name": "diag",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Installing the counter through main.lua's single hook line kept the scope boundary exact and made the OFF path provably byte-identical (wrap_onupdate returns the original function object), so bars_state's script==onupdate pin and main_init_state stayed green without edits.",
+    "what_was_hard": "'Per-site' is bounded by what main.lua owns: only the three hand-bar OnUpdate hooks; sub-handler attribution (class hook vs GCD markers vs ldb) would need bars.lua edits, out of the brief. Attribution seconds render '?' (not a fake 0.00s) when no clock was captured.",
+    "skill_gap": "Offline harness cannot load the addon; in-client /st diag read and real attribution magnitudes stay UNCONFIRMED until the owner's test session."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/diag/journal.md § 2026-10-17 C4 build-out round 1 done"
+}

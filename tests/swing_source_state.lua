@@ -13,6 +13,8 @@
 --      unknown-id fallback behind the real compat.lua (highest known wins,
 --      all-unknown resolves nil so callers keep their rank-1 fallback).
 --  11. Enum-absent numeric fallback for the swing-type mapping.
+--  12. H5 observability: payload-reject / speed-read-keep counters, the one-time
+--      sustained-reject notice, and the /st diag text.
 local script_dir = (arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
 local ROOT = script_dir .. "/../"
 
@@ -94,9 +96,11 @@ env.Enum = { PlayerSwingType = { MainHand = 0, OffHand = 1, Ranged = 2 } }
 env.UnitAttackSpeed = function() return 2.6, nil, nil end
 env.GetTime = function() return clock end
 
+local notices = {}
 local st = {
     family = "FOREVER",
     api = { get_time = function() return clock end },
+    utils = { print_msg = function(message) notices[#notices + 1] = tostring(message) end },
 }
 
 local mod = assert(loadfile(ROOT .. "swing_source.lua"))
@@ -423,6 +427,52 @@ do
     fire("PLAYER_SWING", 2.0, "0")
     eq(#fired, before_fallback, "no Enum: non-numeric swing type is still ignored")
     env.Enum = enum_keep
+end
+
+-- 12) H5 observability: reject/speed-read counters + the one-time sustained notice -----
+-- The reject paths keep their existing behaviour (ignore the payload, keep the old
+-- cycle); these counters are the new, observable part, plus the /st diag text.
+do
+    local stats = src.stats
+    check(type(stats) == "table", "H5: the engine exposes its session counters")
+    local rejects_before = stats.payload_rejects
+    local unknown_before = stats.unknown_swing_type
+    local malformed_before = stats.malformed_duration
+    fire("PLAYER_SWING", 2.0, 9)
+    fire("PLAYER_SWING", 0, 0)
+    fire("PLAYER_SWING", "x", 0)
+    eq(stats.payload_rejects, rejects_before + 3, "H5: every rejected payload is counted")
+    eq(stats.unknown_swing_type, unknown_before + 1, "H5: unknown swing types are attributed")
+    eq(stats.malformed_duration, malformed_before + 2, "H5: malformed durations are attributed")
+
+    -- Sustained rejects in combat, with no valid swing for 5+ s: one chat notice ever.
+    fire("PLAYER_IN_COMBAT_CHANGED", true)
+    clock = clock + 10
+    local notices_before = #notices
+    fire("PLAYER_SWING", 2.0, 9)
+    eq(#notices, notices_before + 1, "H5: sustained combat rejects print one notice")
+    check(notices[#notices]:find("rejected PLAYER_SWING", 1, true) ~= nil,
+        "H5: the notice names the rejecting feed")
+    fire("PLAYER_SWING", 0, 0)
+    eq(#notices, notices_before + 1, "H5: the sustained-reject notice is one-time")
+    eq(stats.reject_notice_shown, true, "H5: the notice state is recorded")
+
+    -- Speed-read keeps are counted, and the old cycle keeps its schedule.
+    local keeps_before = stats.speed_read_keeps
+    local speed_before, expiration_before = src:SwingTimerInfo("mainhand")
+    env.UnitAttackSpeed = function() error("attack-speed reader threw") end
+    check(pcall(fire, "UNIT_ATTACK_SPEED"), "H5: a throwing speed read still does not throw")
+    eq(stats.speed_read_keeps, keeps_before + 1, "H5: the kept speed read is counted")
+    local speed_after, expiration_after = src:SwingTimerInfo("mainhand")
+    eq(speed_after, speed_before, "H5: a kept speed read leaves the cycle speed alone")
+    eq(expiration_after, expiration_before, "H5: a kept speed read leaves the expiration alone")
+    env.UnitAttackSpeed = function() return 2.6, nil, nil end
+
+    local text = src:diagnostic_text()
+    check(type(text) == "string" and text:find("payload_rejects=", 1, true) ~= nil
+        and text:find("speed_read_keeps=", 1, true) ~= nil
+        and text:find("valid_swings=", 1, true) ~= nil,
+        "H5: /st diag text reports payload, speed and valid-swing counters")
 end
 
 if failures == 0 then

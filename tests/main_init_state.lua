@@ -33,10 +33,14 @@
 --      reported its gcd lengths - the exact situation the deadline rescue documents
 --      ("a library that never reports ready"). The gcd bases now fall back to the
 --      documented 1.5 s pre-report default.
---  10. rf_update's pcall dead-man: a throwing LRC poll (checker call or GetRange)
---      disables range checking through the shared one-time notice and stops the retry
---      loop without erroring; a healthy poll stays byte-identical. Also covers the
---      init-poll failure, where the disable must not double-print the deadline notice.
+--  10. rf_update's bounded dead-man (M1/M2): a throwing LRC poll (checker call or
+--      GetRange) retries with backoff up to RF_MAX_POLL_FAILURES consecutive throws,
+--      then disables range checking through the shared one-time notice and stops the
+--      retry loop without erroring; a successful poll resets the streak; a checker that
+--      never resolves is capped instead of re-arming forever. Also covers the init-poll
+--      failure, where the disable must not double-print the deadline notice.
+--  4c. Callback fan-out isolation (H3): a throwing lib callback is contained, counted
+--      and reported once, and the handlers keep working after it.
 -- Run from the repo root: lua5.1 tests/main_init_state.lua  (any cwd works).
 
 local script_dir = (arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
@@ -580,8 +584,9 @@ do
         "the engine loss is reported first")
     eq(F.notices[2], "Range checking is unavailable on this client; the range display is disabled.",
         "the range loss is reported second")
-    near(T.mainhand.speed, 1, "init_timers reads the replacement stub (1 s full swing)")
-    near(T.mainhand.ends_at, F.clock + 1, "the stand-in timestamps come from the scripted clock")
+    eq(T.mainhand.speed, nil, "init_timers reads the replacement stub's unknown shape (no fake cycle)")
+    eq(T.mainhand.ends_at, nil, "the stand-in has no invented expiration")
+    eq(T.mainhand.engine_dead, true, "the stand-in marks the hand engine_dead for the bar render")
 
     -- A late report from the engine that never made it changes nothing now.
     fire_stl_ready(b)
@@ -746,6 +751,39 @@ do
 end
 
 --=========================================================================================
+-- 4c) Callback fan-out isolation (H3): one throwing handler is contained and counted
+--=========================================================================================
+do
+    local b = boot()
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    local notices_before = #F.notices
+
+    local original = T.GCD_STARTED
+    T.GCD_STARTED = function() error("handler exploded") end
+    local ok, err = pcall(T.callback_event_handler, "GCD_STARTED", 1.2, 101.2)
+    check(ok, "a throwing lib callback does not escape the fan-out (" .. tostring(err) .. ")")
+    eq(type(T.callback_errors), "table", "the fan-out keeps a per-event error counter")
+    eq(T.callback_errors.GCD_STARTED, 1, "the first throw is counted")
+    eq(#F.notices, notices_before + 1, "the first throw prints one chat notice")
+    contains(F.notices[#F.notices], "GCD_STARTED", "the notice names the failing callback")
+    check(T.gcd.duration == nil, "the throwing handler's own state change did not happen")
+
+    T.callback_event_handler("GCD_STARTED", 1.2, 101.2)
+    eq(T.callback_errors.GCD_STARTED, 2, "the second throw increments the same counter")
+    eq(#F.notices, notices_before + 1, "repeated throws do not spam the chat")
+
+    -- A missing handler is ignored (a stale registration must not throw into the
+    -- library's Fire), and the healthy handlers keep working afterwards.
+    local ok_missing = pcall(T.callback_event_handler, "NOT_A_HANDLER")
+    check(ok_missing, "a callback with no handler does not throw")
+    T.GCD_STARTED = original
+    T.callback_event_handler("GCD_STARTED", 1.5, 102.5)
+    eq(T.gcd.duration, 1.5, "the restored handler runs normally after the isolated throws")
+end
+
+--=========================================================================================
 -- 5) Init-order guards: pre-init handlers do nothing and touch nothing
 --=========================================================================================
 -- Phase A: before OnInitialize even ran (the worst case).
@@ -756,6 +794,13 @@ do
     local PRE = {
         { "UNIT_POWER_FREQUENT", { "UNIT_POWER_FREQUENT", "player", "RAGE" } },
         { "UNIT_SPELLCAST_SUCCEEDED", { "UNIT_SPELLCAST_SUCCEEDED", "player", "cast-1", 48996 } },
+        { "UNIT_SPELLCAST_START", { "UNIT_SPELLCAST_START", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_DELAYED", { "UNIT_SPELLCAST_DELAYED", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_STOP", { "UNIT_SPELLCAST_STOP", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_INTERRUPTED", { "UNIT_SPELLCAST_INTERRUPTED", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_FAILED", { "UNIT_SPELLCAST_FAILED", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_CHANNEL_START", { "UNIT_SPELLCAST_CHANNEL_START", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_CHANNEL_STOP", { "UNIT_SPELLCAST_CHANNEL_STOP", "player", "cast-2", 403 } },
         { "CURRENT_SPELL_CAST_CHANGED", { "CURRENT_SPELL_CAST_CHANGED", false } },
         { "PLAYER_EQUIPMENT_CHANGED", { "PLAYER_EQUIPMENT_CHANGED", 16, true } },
         { "PLAYER_TARGET_SET_ATTACKING", { "PLAYER_TARGET_SET_ATTACKING" } },
@@ -786,6 +831,13 @@ do
     local PRE = {
         { "UNIT_POWER_FREQUENT", { "UNIT_POWER_FREQUENT", "player", "RAGE" } },
         { "UNIT_SPELLCAST_SUCCEEDED", { "UNIT_SPELLCAST_SUCCEEDED", "player", "cast-1", 48996 } },
+        { "UNIT_SPELLCAST_START", { "UNIT_SPELLCAST_START", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_DELAYED", { "UNIT_SPELLCAST_DELAYED", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_STOP", { "UNIT_SPELLCAST_STOP", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_INTERRUPTED", { "UNIT_SPELLCAST_INTERRUPTED", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_FAILED", { "UNIT_SPELLCAST_FAILED", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_CHANNEL_START", { "UNIT_SPELLCAST_CHANNEL_START", "player", "cast-2", 403 } },
+        { "UNIT_SPELLCAST_CHANNEL_STOP", { "UNIT_SPELLCAST_CHANNEL_STOP", "player", "cast-2", 403 } },
         { "CURRENT_SPELL_CAST_CHANGED", { "CURRENT_SPELL_CAST_CHANGED", false } },
         { "PLAYER_EQUIPMENT_CHANGED", { "PLAYER_EQUIPMENT_CHANGED", 16, true } },
         { "PLAYER_TARGET_SET_ATTACKING", { "PLAYER_TARGET_SET_ATTACKING" } },
@@ -846,6 +898,15 @@ do
     eq(s[3], "cast-9", "the cast guid follows")
     eq(s[4], 48996, "the spell id follows")
 
+    -- The seven lifecycle handlers reach the same class hook once init is done: the
+    -- early return is the only gate (H6).
+    T:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-10", 403)
+    eq(F.hooks.on_spellcast_event, 1, "post-init START reaches the lifecycle class hook")
+    eq(F.hook_args.on_spellcast_event[2], "UNIT_SPELLCAST_START",
+        "the lifecycle hook still receives the event name first")
+    T:UNIT_SPELLCAST_CHANNEL_STOP("UNIT_SPELLCAST_CHANNEL_STOP", "player", "cast-10", nil)
+    eq(F.hooks.on_spellcast_event, 2, "post-init CHANNEL_STOP reaches the lifecycle class hook")
+
     T.has_oh = true
     T.offhand.speed = 3.6
     T.offhand.start = 0
@@ -897,7 +958,8 @@ do
     eq(#F.notices, 1, "the stand-in prints the engine notice once")
     eq(F.notices[1], "Swing timer bars are unavailable on this client; range and GCD features remain active.",
         "the engine notice explains the stand-in")
-    near(T.mainhand.speed, 1, "the stand-in serves a 1 s full swing")
+    eq(T.mainhand.speed, nil, "the stand-in reports unknown, never a plausible 1 s cycle")
+    eq(T.mainhand.engine_dead, true, "the stand-in marks the hand engine_dead")
 end
 do
     local b = boot({ engine = "absent", project = 1, interface = 120100 })
@@ -965,6 +1027,8 @@ do
     eq(F.diag.calls, diag_before + 1, "diag routes into st.diag.report")
     eq(F.diag.verbose_calls, 1, "the diag route asks for the verbose report")
     eq(F.diag.last_self, T, "the report receives the addon object")
+    contains(F.notices[#F.notices], "diag runtime",
+        "the verbose diag route prints the runtime error counters")
     local diag_stub = F.st.diag
     F.st.diag = nil
     run_cmd(b, "st", "diag")
@@ -1072,28 +1136,60 @@ do
     check(find_timer(b, 0.05) ~= nil, "the healthy poll armed the next interval")
     eq(#F.notices, 0, "the healthy poll printed nothing")
 
-    -- The checker call explodes: the dead-man catches it, disables, and stops the loop.
+    -- The checker call explodes: bounded retry with backoff (M1), then session-disable.
     local range_before = F.lrc_stats.range
     local timers_before = #F.after
     local touches_before = #F.touches
     T.melee_range_checker_func = function() error("LRC checker exploded") end
     local ok, err = pcall(T.rf_update, T)
     check(ok, "a throwing checker poll does not error (" .. tostring(err) .. ")")
-    eq(T.lrc_unavailable, true, "the dead-man disables range checking")
-    eq(#F.notices, 1, "the dead-man prints exactly one notice")
+    eq(T.lrc_unavailable, false, "the first throw retries instead of disabling")
+    eq(T.rf_failure_count, 1, "the first throw is counted")
+    eq(#F.notices, 0, "the retry path prints nothing yet")
+    eq(F.lrc_stats.range, range_before, "the throwing poll never reached the range read")
+    eq(#F.after, timers_before + 1, "the first throw arms a backoff retry")
+    eq(F.after[#F.after].delay, 0.05, "the first retry uses the base interval")
+
+    -- Second consecutive throw: longer backoff, still no disable.
+    F.after[#F.after].cb()
+    eq(T.lrc_unavailable, false, "the second throw still retries")
+    eq(T.rf_failure_count, 2, "the second throw is counted")
+    eq(#F.after, timers_before + 2, "the second throw arms another retry")
+    eq(F.after[#F.after].delay, 0.1, "the retry backs off exponentially (0.1 s)")
+
+    -- Third consecutive throw: the bounded retry exhausts and disables the session.
+    F.after[#F.after].cb()
+    eq(T.lrc_unavailable, true, "the third consecutive throw disables range checking")
+    eq(T.rf_failure_count, 3, "the exhausted retry keeps its count")
+    eq(T.rf_disabled_after_failures, true, "the failure path records its terminal state")
+    eq(#F.notices, 1, "the exhausted retry prints exactly one notice")
     eq(F.notices[1], "Range checking is unavailable on this client; the range display is disabled.",
-        "the dead-man notice is the range-checking disable")
-    eq(F.lrc_stats.range, range_before, "the dead-man never reached the range read")
-    eq(#F.after, timers_before, "the dead-man does not reschedule the retry loop")
-    eq(#F.touches, touches_before, "the dead-man touches no frames")
+        "the retry-exhaustion notice is the range-checking disable")
+    eq(#F.after, timers_before + 2, "the terminal failure does not arm another retry")
+    eq(#F.touches, touches_before, "the retry path touches no frames")
 
     -- Every later poll stops immediately: no library reads, no second notice.
     local calls_after_failure = F.checker_calls
     ok = pcall(T.rf_update, T)
     check(ok, "a poll after the disable still does not error")
     eq(F.checker_calls, calls_after_failure, "a disabled poll never calls a checker")
-    eq(#F.after, timers_before, "a disabled poll never reschedules")
+    eq(#F.after, timers_before + 2, "a disabled poll never reschedules")
     eq(#F.notices, 1, "the notice stays one-time")
+end
+do
+    -- A successful poll between throws resets the consecutive counter.
+    local b = boot()
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    local checker = T.melee_range_checker_func
+    T.melee_range_checker_func = function() error("transient") end
+    T.rf_update(T)
+    eq(T.rf_failure_count, 1, "the transient throw starts the streak")
+    T.melee_range_checker_func = checker
+    F.after[#F.after].cb() -- retry succeeds
+    eq(T.rf_failure_count, 0, "a successful retry resets the consecutive counter")
+    eq(T.lrc_unavailable, false, "range checking stays alive after a recovered poll")
 end
 do
     -- The range read itself throws (the lib's GetRange internals).
@@ -1105,9 +1201,12 @@ do
     local timers_before = #F.after
     local ok, err = pcall(T.rf_update, T)
     check(ok, "a throwing GetRange poll does not error (" .. tostring(err) .. ")")
-    eq(T.lrc_unavailable, true, "a GetRange throw disables range checking")
-    eq(#F.notices, 1, "a GetRange throw prints the one-time notice")
-    eq(#F.after, timers_before, "a GetRange throw does not reschedule")
+    eq(T.lrc_unavailable, false, "a GetRange throw retries first")
+    F.after[#F.after].cb()
+    F.after[#F.after].cb()
+    eq(T.lrc_unavailable, true, "a sustained GetRange throw disables range checking")
+    eq(#F.notices, 1, "a sustained GetRange throw prints the one-time notice")
+    eq(#F.after, timers_before + 2, "the terminal failure stops the retry loop")
 end
 do
     -- The same failure inside the init poll: the disable lands before post_init, so the
@@ -1118,12 +1217,32 @@ do
     F.LRC.GetHarmMaxChecker = function() return function() error("init poll exploded") end end
     fire_lrc_checkers(b)
     check(T.interfaces_are_initialised, "init completes despite the throwing first poll")
-    eq(T.lrc_unavailable, true, "the init poll failure disables range checking")
+    eq(T.lrc_unavailable, false, "the init poll retries first")
+    check(find_timer(b, 0.05) ~= nil, "the failing init poll arms its retry")
+    F.after[#F.after].cb()
+    F.after[#F.after].cb()
+    eq(T.lrc_unavailable, true, "the sustained init-poll failure disables range checking")
     eq(#F.notices, 1, "the init poll failure prints the notice exactly once")
     eq(F.notices[1], "Range checking is unavailable on this client; the range display is disabled.",
         "the init poll notice is the range-checking disable")
     eq(F.hooks.post_init, 1, "post_init still runs after the disable")
-    check(find_timer(b, 0.05) == nil, "the failed init poll does not arm the retry loop")
+end
+do
+    -- M2: a checker that never resolves is capped instead of re-arming forever.
+    local b = boot()
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    T.melee_range_checker_func = nil
+    T.rf_checker_laps = 99
+    local timers_before = #F.after
+    local ok, err = pcall(T.rf_update, T)
+    check(ok, "the capped checker loop does not error (" .. tostring(err) .. ")")
+    eq(T.rf_checker_laps, 100, "the checker loop counts its laps")
+    eq(T.rf_checker_exhausted, true, "reaching the cap records the terminal state")
+    eq(T.lrc_unavailable, true, "the cap folds into the range-disable state")
+    eq(#F.notices, 1, "the cap prints the shared one-time notice")
+    eq(#F.after, timers_before, "the cap arms no further checker lap")
 end
 
 --=========================================================================================

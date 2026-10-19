@@ -1,0 +1,16 @@
+# practice — Journal
+
+## 2026-10-17 — Desk opened
+- **Purpose:** C1 practice harness split + scenarios P5/H5/W6/D7/S7 + `ui.design_targets` handoff.
+- **Scope:** practice.lua, practice_ui.lua, tests/ only.
+- **Next step:** wait for dispatch brief in bench/briefs/; practice stays paladin-only until the harness split lands.
+
+## 2026-10-17 — [signal:done] C1 harness split + P5/H5/W6/D7/S7 shells + ui.design_targets
+- **Worked on:** appended the generic scenario harness to practice.lua (scenario registry/lifecycle, sessions, shared scoring entry points + grade_band, window model, P5 combo primitives; paladin_twist = consumer #1, paladin_aw_combo = P5, hunter_forced_move = H5, warrior_execute = W6, druid_powershift = D7, shaman_weave = S7); practice_ui.lua: session-local timeline position fields (defaults byte-identical) + `ui.design_targets` (3 descriptors, design.lua normaliser-verified); tests: weave/design sandbox loads + harness/section-21 blocks. Detail: `bench/buildout_practice_2026-10-17.md`.
+- **Current state:** practice_state 1069 checks PASS · practice_ui_state 790 PASS · luacheck 0 errors (my 4 files 0 warnings) · 2/2 mutation proofs caught and restored on /tmp/opencode/mut_practice. Full `tests/run.sh` was a moving target (4→7 failures as lanes landed mid-run; smoke/druid.lua:116, bars_state frame counts, hud_state druid slots, designmode_state bars.lua, weave_state+shaman_state shield counts, druid_guide_state D4, wiring_check shaman dead hook) — all outside scope, zero practice FAILs, practice suites green in every run. Existing S–F grades / session score / persistent bests unchanged; paladin equivalence pinned (38 fields + flags).
+- **Next step:** orchestrator reconcile (re-run the full suite once the other lanes land). Options pass: wire `practice_aw_includes_pot`/`practice_aw_includes_sob` for the P5 drill. C6: consume `ui.design_targets` into designmode.lua. Anything new is UNCONFIRMED in-client; the shells are not wired to any UI.
+
+## 2026-10-17 — [signal:done] practice enterprise review (grade round)
+- **Worked on:** wired every half-wired path in scope — 4 scenario `event` hooks (H5 cast-legality, W6 HP feed, D7 shift, S7 cast-grade) + re-begin resets (H5/W6 transient flags, D7 regen re-baseline) so all 5 shells dispatch tick *and* exact-time with no dead stubs; timeline close button labelled `X`; timeline drag now persists via `ui.save_timeline_position` (previously snapped back). Tests: 37 engine + 38 UI checks (event paths, re-begin, grade→record→summary per shell, close/drag/key-button/wheel, grade-only-keep, tiebreak, corrupted-db repair/fallbacks, reload re-read). Detail: `bench/buildout_practice-grade_2026-10-17.md`.
+- **Current state:** practice_state 1106 PASS · practice_ui_state 828 PASS · luacheck 0 warnings/0 errors in scope (repo 0 errors; 5 warnings all other lanes) · 3/3 mutation proofs caught and restored on /tmp/opencode/mut_pg · full `tests/run.sh` 35 steps: only bars_state + hud_state count pins (expected, later wave) + toc_check Interface 120105-vs-120100 (another lane's toc edit, out of scope). S–F grades / session score / persistent bests unchanged (equivalence + scoring pins green).
+- **Next step:** orchestrator reconcile after other lanes land; options pass still owns P5 pot/sob + scenario picker; in-client behaviour of everything new is UNCONFIRMED.

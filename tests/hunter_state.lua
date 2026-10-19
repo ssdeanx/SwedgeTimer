@@ -65,6 +65,8 @@ local function build(opts)
 
     -- Mutable fixture state, shared with the stub closures.
     local sb = {
+        clock = 0, -- suite time behind GetTime (the compat clock axis)
+        player_auras = {}, -- [{ name, id, count, duration, expiration }] for "player"
         current_spell = opts.current_spell, -- the only id IsCurrentSpell answers true for
         is_current_spell_calls = 0,
         channel_spell = opts.channel_spell, -- the spell id UnitChannelInfo reports, or nil
@@ -84,6 +86,16 @@ local function build(opts)
     env.WOW_PROJECT_MISTS_CLASSIC = 19
     env.WOW_PROJECT_MAINLINE = 1
     env.WOW_PROJECT_FOREVER = 18
+    -- Suite clock + player HELPFUL auras (R4 lust-gate pins drive gather through
+    -- the real compat scan; nothing else here reads them).
+    env.GetTime = function() return sb.clock end
+    env.UnitAura = function(unit, index, filter)
+        if unit ~= "player" or filter ~= "HELPFUL" then return nil end
+        local entry = sb.player_auras[index]
+        if not entry then return nil end
+        return entry.name, nil, entry.count, nil, entry.duration, entry.expiration,
+            nil, nil, nil, entry.id
+    end
     -- Minimal client spell data: the reference Multi-Shot ranks resolve their localized
     -- name (get_cast_grace's name fallback); everything else is unknown to this fixture.
     env.GetSpellInfo = opts.GetSpellInfo or function(id)
@@ -961,6 +973,57 @@ do
 end
 
 --=========================================================================================
+-- 13b) Feign Death ranged-state clear and the Readiness Rapid Fire refresh
+--=========================================================================================
+do
+    local refresh_calls = 0
+    local sb = build({ st_extras = { hunter_ui = {
+        force_rapid_fire_refresh = function() refresh_calls = refresh_calls + 1 end,
+    } } })
+    local ST = sb.ST
+
+    -- Feign Death (5384): the class-owned ranged display state is cleared; the
+    -- engine-owned fields are never touched (bars.lua's OnUpdate runs over them).
+    ST.ranged = {
+        auto_repeat_active = true,
+        hidden_window_start = 1.5,
+        hidden_window_duration = 0.55,
+        synced_duration = 2.4,
+        last_restart_at = 5,
+        start = 1.0, speed = 2.4, ends_at = 3.4,
+    }
+    ST.HUNTER.on_spellcast_succeeded(ST, "player", nil, 5384)
+    eq(ST.ranged.auto_repeat_active, false, "FD: the auto-repeat reading drops")
+    eq(ST.ranged.hidden_window_start, nil, "FD: the cached hidden window is dropped")
+    eq(ST.ranged.hidden_window_duration, nil, "FD: the cached window width is dropped")
+    eq(ST.ranged.synced_duration, nil, "FD: the synced cycle length is dropped")
+    eq(ST.ranged.last_restart_at, nil, "FD: the restart dedupe stamp is dropped")
+    eq(ST.ranged.start, 1.0, "FD: the engine-owned anchor is never touched")
+    eq(ST.ranged.speed, 2.4, "FD: the engine-owned speed is never touched")
+    eq(ST.ranged.ends_at, 3.4, "FD: the engine-owned ends_at is never touched")
+
+    -- Unrelated casts leave the ranged state alone.
+    ST.ranged.hidden_window_start = 1.5
+    ST.HUNTER.on_spellcast_succeeded(ST, "player", nil, 34120)
+    eq(ST.ranged.hidden_window_start, 1.5, "a Steady Shot cast never clears the window")
+    -- A nil ranged state is a safe no-op (pre-init).
+    local plain = build()
+    local ok, err = pcall(plain.ST.HUNTER.on_spellcast_succeeded, plain.ST, "player", nil, 5384)
+    check(ok, "FD without a ranged state does not error (" .. tostring(err) .. ")")
+
+    -- Readiness (23989) forces the Rapid Fire refresh through hunter_ui.
+    eq(refresh_calls, 0, "Readiness: no refresh before the cast")
+    ST.HUNTER.on_spellcast_succeeded(ST, "player", nil, 23989)
+    eq(refresh_calls, 1, "Readiness: the cast forces the Rapid Fire refresh")
+    ST.HUNTER.on_spellcast_succeeded(ST, "player", nil, 3045)
+    eq(refresh_calls, 1, "an unrelated cast never forces the refresh")
+    -- A flavor without hunter_ui stays inert.
+    local no_ui = build()
+    local ok2, err2 = pcall(no_ui.ST.HUNTER.on_spellcast_succeeded, no_ui.ST, "player", nil, 23989)
+    check(ok2, "Readiness without hunter_ui does not error (" .. tostring(err2) .. ")")
+end
+
+--=========================================================================================
 -- 14) hunter_ui sandbox: frames created, off-gates skip scans, inert paths
 --=========================================================================================
 -- A WoW-free region mock: only the members hunter_ui actually reads are real, every
@@ -1033,6 +1096,7 @@ do
             calls = { cast = 0, aura = 0, in_range = 0, interact = 0, restore = 0 },
             live_cast = opts.live_cast,
             auras = opts.auras,
+            pet_auras = opts.pet_auras,
             in_range = opts.in_range,
             sweet = opts.sweet,
             in_combat = opts.in_combat == true,
@@ -1068,6 +1132,7 @@ do
             [5118] = "Aspect of the Cheetah", [13163] = "Aspect of the Monkey",
             [13159] = "Aspect of the Pack", [20190] = "Aspect of the Wild",
             [34074] = "Aspect of the Viper", [13171] = "Aspect of the Beast",
+            [19574] = "Bestial Wrath", [19615] = "Frenzy Effect",
         }
         env.GetSpellInfo = function(id)
             local name = spell_data[id]
@@ -1088,7 +1153,11 @@ do
         env.UnitChannelInfo = function() return nil end
         env.UnitAura = function(unit, index, filter)
             sb.calls.aura = sb.calls.aura + 1
-            local aura = sb.auras and sb.auras[index]
+            local list = sb.auras
+            if unit ~= "player" then
+                list = sb.pet_auras
+            end
+            local aura = list and list[index]
             if not aura then
                 return nil
             end
@@ -1147,6 +1216,11 @@ do
         ranged_bar_frame.width = 275
         ranged_bar_frame.height = 20
         ranged_bar_frame.bottom = opts.ranged_bottom or -120
+        -- The bar's visuals frame is where bars.lua keeps the fill textures and the
+        -- paladin/hunter overlays draw (the hunter cast zone parents here).
+        ranged_bar_frame.visuals_frame = new_region("Frame", "RangedVisualsFrame", ranged_bar_frame)
+        ranged_bar_frame.visuals_frame.width = 273
+        ranged_bar_frame.visuals_frame.height = 18
         local ranged_anchor = new_region("Frame", "RangedAnchorFrame", env.UIParent)
         if not opts.no_ranged_frame then
             ranged_anchor.bar_frame = ranged_bar_frame
@@ -1266,6 +1340,9 @@ do
         sb.class_db.hunter_range_helper_enabled = false
         sb.class_db.hunter_rapid_fire_bar_enabled = false
         sb.class_db.hunter_aspect_icon_enabled = false
+        sb.class_db.hunter_cast_zone_enabled = false
+        sb.class_db.hunter_bw_badge_enabled = false
+        sb.class_db.hunter_frenzy_stacks_enabled = false
         sb.auras = {
             { name = "Rapid Fire", spell_id = 3045, duration = 15, expiration = 10 },
             { name = "Aspect of the Hawk", spell_id = 13165, duration = 60, expiration = 60 },
@@ -1410,6 +1487,142 @@ do
         eq(first_point and first_point.point, "CENTER",
             "the fallback cast bar anchors at the UIParent centre")
         check(sb.calls.in_range > 0, "the range helper still probes on the fallback path")
+    end
+
+    -- 14h) the movement-safe cast zone: geometry, the safe/unsafe colour ladder, the
+    -- threshold marker and the off-gate.
+    do
+        local sb = build_ui({ ranged_start = -1.6, ranged_speed = 2, world_ms = 100 })
+        sb.class_db.hunter_cast_zone_enabled = true
+        sb.ST.HUNTER.post_init(sb.ST)
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        local ui = sb.st.hunter_ui
+        check(ui.cast_zone ~= nil, "the cast zone texture is created on the visuals frame")
+        eq(ui.cast_zone.parent.name, "RangedVisualsFrame",
+            "the cast zone parents to the ranged visuals frame")
+        eq(ui.cast_zone.shown, true, "the cast zone shows with a live ranged cycle")
+        -- 0.5 base + 0.1 latency = 0.6 s window over a 2 s cycle on a 275 px bar.
+        near(ui.cast_zone.width, 0.3 * 275, "the zone width is the window fraction")
+        near(ui.cast_zone.color[1], 0.2,
+            "standing still with no stop stamp reads the safe green")
+        near(ui.cast_zone.color[2], 0.78, "the safe green's second channel")
+        eq(ui.cast_zone_marker.shown, true, "the threshold marker shows with the zone")
+        near(ui.cast_zone_marker.points[1].x, 275 - 0.3 * 275 - 1.5,
+            "the marker sits on the window boundary")
+
+        -- Still moving: unsafe red.
+        sb.ST.is_moving = true
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        near(ui.cast_zone.color[1], 1, "still moving reads the unsafe red")
+        near(ui.cast_zone.color[2], 0, "the unsafe red's second channel")
+        -- Stopped after the window opened (open = -1.6 + 2 - 0.6 = -0.2): still unsafe.
+        sb.ST.is_moving = false
+        sb.ST.last_stopped_moving_at = 0.5
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        near(ui.cast_zone.color[1], 1, "a late stop reads the unsafe red")
+        -- Stopped at or before the open: safe again.
+        sb.ST.last_stopped_moving_at = -0.3
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        near(ui.cast_zone.color[1], 0.2, "an early stop reads the safe green")
+
+        -- No live ranged cycle: the zone hides rather than guessing.
+        sb.ST.ranged.start = nil
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.cast_zone.shown, false, "no ranged cycle hides the zone")
+        eq(ui.cast_zone_marker.shown, false, "no ranged cycle hides the marker")
+        sb.ST.ranged.start = -1.6
+
+        -- The off-gate hides the zone again.
+        sb.class_db.hunter_cast_zone_enabled = false
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.cast_zone.shown, false, "the option off hides the zone")
+        eq(ui.cast_zone_marker.shown, false, "the option off hides the marker")
+    end
+
+    -- 14i) the H6 pet badges: BW duration + glow window, Frenzy stacks, the throttle
+    -- and the off-gates.
+    do
+        local sb = build_ui({
+            auras = { { name = "Bestial Wrath", spell_id = 19574, duration = 18, expiration = 18 } },
+            pet_auras = { { name = "Frenzy Effect", spell_id = 19615, count = 3, duration = 8, expiration = 8 } },
+        })
+        sb.class_db.hunter_bw_badge_enabled = true
+        sb.class_db.hunter_frenzy_stacks_enabled = true
+        sb.ST.HUNTER.post_init(sb.ST)
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        local ui = sb.st.hunter_ui
+        eq(ui.bw_badge.shown, true, "the BW badge shows with the aura")
+        eq(ui.bw_badge.tex.texture, "icon_19574", "the BW badge icon comes from the spell data")
+        eq(ui.bw_badge.text.text, "18", "the BW countdown reads whole seconds at/above 3 s")
+        eq(ui.bw_badge.glow.shown, false, "no glow outside the final 4 s")
+        eq(ui.frenzy_badge.shown, true, "the Frenzy badge shows with the pet aura")
+        eq(ui.frenzy_badge.tex.texture, "icon_19615", "the Frenzy badge icon from the spell data")
+        eq(ui.frenzy_badge.text.text, "3", "the Frenzy stack count")
+
+        -- Inside the final 4 s the glow shows; below 3 s the text switches to decimals.
+        sb.auras = { { name = "Bestial Wrath", spell_id = 19574, duration = 18, expiration = 3.4 } }
+        sb.now = 0.25
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.bw_badge.glow.shown, true, "the gold glow shows inside the final 4 s")
+        eq(ui.bw_badge.text.text, "3", "3.15 s remaining still reads whole seconds")
+        sb.auras = { { name = "Bestial Wrath", spell_id = 19574, duration = 18, expiration = 2.7 } }
+        sb.now = 0.5
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.bw_badge.text.text, "2.2", "below 3 s the countdown reads one decimal")
+
+        -- The 0.2 s throttle: a dropped aura is only seen on the next poll.
+        sb.auras = nil
+        sb.pet_auras = nil
+        sb.now = 0.55
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.bw_badge.shown, true, "the throttled tick keeps the stale badge")
+        eq(ui.frenzy_badge.shown, true, "the throttled tick keeps the stale Frenzy badge")
+        sb.now = 0.75
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.bw_badge.shown, false, "the next poll sees the dropped BW aura")
+        eq(ui.bw_badge.glow.shown, false, "a hidden BW badge hides its glow")
+        eq(ui.frenzy_badge.shown, false, "the next poll sees the dropped Frenzy aura")
+
+        -- A single stack reads its count; a client without a count shows no text.
+        sb.pet_auras = { { name = "Frenzy Effect", spell_id = 19615, count = 1, duration = 8, expiration = 9 } }
+        sb.now = 1.0
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.frenzy_badge.shown, true, "the Frenzy badge shows at one stack")
+        eq(ui.frenzy_badge.text.text, "1", "a single stack reads 1")
+        sb.pet_auras = { { name = "Frenzy Effect", spell_id = 19615, duration = 8, expiration = 9.2 } }
+        sb.now = 1.25
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.frenzy_badge.text.shown, false, "a client without a count shows no number")
+
+        -- Off-gates: neither badge scans (the 14c all-off tick already pins the zero
+        -- aura reads; this pins the per-widget hides).
+        sb.class_db.hunter_bw_badge_enabled = false
+        sb.class_db.hunter_frenzy_stacks_enabled = false
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.bw_badge.shown, false, "the BW option off hides the badge")
+        eq(ui.frenzy_badge.shown, false, "the Frenzy option off hides the badge")
+    end
+
+    -- 14j) Readiness forces the Rapid Fire scan throttle (the reference's
+    -- ForceHunterRapidFireRefresh translated to this architecture).
+    do
+        local sb = build_ui({
+            auras = { { name = "Rapid Fire", spell_id = 3045, duration = 15, expiration = 5 } },
+        })
+        sb.ST.HUNTER.post_init(sb.ST)
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        local ui = sb.st.hunter_ui
+        eq(ui.rapid_fire_bar.shown, true, "the Rapid Fire bar shows before the refresh")
+        -- The aura drops; inside the 0.1 s throttle the bar keeps its state.
+        sb.auras = nil
+        sb.now = 0.05
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.rapid_fire_bar.shown, true, "the throttled tick keeps the stale bar")
+        -- Readiness forces the next scan immediately.
+        ui.force_rapid_fire_refresh(sb.ST)
+        eq(ui.rf_scan_at, nil, "the forced refresh clears the scan throttle")
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.rapid_fire_bar.shown, false, "the forced tick sees the dropped aura")
     end
 end
 
@@ -1679,6 +1892,51 @@ do
             "steady,raptor,kill_command,multi,bestial_wrath,rapid_fire",
             "TBC never takes the SoD set even with the rune known")
     end
+end
+
+--=========================================================================================
+-- R4: lust-gate nil-semantics (closed-on-unknown) through the real gather
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    -- Bloodlust on the player with 30 s left on the suite clock.
+    sb.player_auras = { { name = "Bloodlust", id = 2825, duration = 40, expiration = 30 } }
+
+    -- Explicit true: the guide sees the lust window.
+    sb.st.lust_supported = true
+    local out = ST.HUNTER.gather_guide_inputs(ST, {})
+    eq(out.lust_remaining, 30, "R4: explicit true arms the lust scan")
+
+    -- nil (a pre-C2 compat) stays off even with the aura present.
+    sb.st.lust_supported = nil
+    ST.hunter_lust_at = nil
+    ST.hunter_lust_remaining = nil
+    out = ST.HUNTER.gather_guide_inputs(ST, {})
+    eq(out.lust_remaining, nil, "R4: nil lust_supported reports no window (closed-on-unknown)")
+
+    -- false stays off too.
+    sb.st.lust_supported = false
+    out = ST.HUNTER.gather_guide_inputs(ST, {})
+    eq(out.lust_remaining, nil, "R4: false lust_supported reports no window")
+
+    -- R4 standardisation: the hunter consumer is the closed-on-unknown spelling,
+    -- identical to the paladin's (classes/paladin.lua:1101). A truthy non-true value
+    -- must not arm the scan - that is the whole point of == true.
+    local src = (function()
+        local f = assert(io.open(ROOT .. "classes/hunter.lua", "r"))
+        local s = f:read("*a")
+        f:close()
+        return s
+    end)()
+    check(src:find("if st.lust_supported == true and lust_ids", 1, true) ~= nil,
+        "R4: the hunter lust gate is the closed-on-unknown (== true) spelling")
+    sb.st.lust_supported = 1
+    ST.hunter_lust_at = nil
+    ST.hunter_lust_remaining = nil
+    out = ST.HUNTER.gather_guide_inputs(ST, {})
+    eq(out.lust_remaining, nil, "R4: a truthy non-true gate never arms the scan")
 end
 
 if failures == 0 then

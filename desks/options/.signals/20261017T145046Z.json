@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:50:46Z",
+  "run_id": "options-closeout-2026-10-17",
+  "agent_name": "options",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Keeping every new key's effective default at its shipped round state (nil/absent = off, false for the two profile keys) made the wiring behaviour-neutral by construction: no class module was touched, the post-edit harness failure set is byte-identical to the shaman-weave round-2 baseline, and the new options_load_state section 6 turns 'no default-visible change' into a machine check - the M1 default flip is caught by exactly one new check in the full harness (3 failed vs 2 baseline). The shaman-weave round-2 addendum landed mid-pass and was read, wired (2 keys) and pinned before hand-off instead of being deferred.",
+    "what_was_hard": "Two report rows are not toggles and not reachable from this pass's writable scope: the druid pips position seam (druid_pips_x/y + save/reset) needs the pips factory (bars.lua) or the druid call site, and the practice aw_includes_pot/sob options have no engine/UI consumer yet. Both are recorded as gaps instead of shipping dead widgets. hud_show_tf/berserk are the hide-on-false shape, so 'nil = OFF' does not apply to them - shipped true like every sibling slot toggle (behaviour identical) and pinned as such.",
+    "skill_gap": "The suite pins widget presence, get/set resolution, getter key reads and default sources; it cannot prove a widget's key matches its consumer class-code read (that correspondence is grep-verified and tabled in the report). In-client rendering of the new options pages stays UNCONFIRMED (offline harness cannot open AceConfig)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/options/journal.md \u00a7 2026-10-17 round close-out done (27 toggles, shaman-weave addendum included)"
+}

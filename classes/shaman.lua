@@ -99,6 +99,25 @@ local WEAVE_STORMSTRIKE_SPELL_ID = 17364
 local WEAVE_SR_SPELL_ID = 30823
 local WEAVE_SR_NAME = "Shamanistic Rage"
 
+-- Rockbiter Weapon imbue badge (discover #6; reference
+-- SuperSwingTimer_ClassMods.lua:4217 tracks it as a buff icon with rank-1 id
+-- 8017). Ranks above 1 match by the English name only: their ids are UNCONFIRMED
+-- and never guessed (the WF-rank convention above). Guarded reads only - a nil
+-- or unconfirmed id can never light the badge.
+local WEAVE_ROCKBITER_IDS = {
+	[8017] = true,
+}
+local WEAVE_ROCKBITER_NAME = "Rockbiter Weapon"
+
+-- Flurry (16280; reference SuperSwingTimer_ClassMods.lua:4221) - the melee proc
+-- buff whose 0.5 s ICD drives the DW sync warning (round 2). The aura count is
+-- the remaining charges; a count INCREASE is a fresh proc (stamped in
+-- on_aura_change). Ids above the reference's are matched by name only.
+local WEAVE_FLURRY_IDS = {
+	[16280] = true,
+}
+local WEAVE_FLURRY_NAME = "Flurry"
+
 -- Next Action Guide shock/totem slots (TBC Enhancement): Fire Nova Totem rank 1 is
 -- 1535 (classicdb-confirmed rank 1; TBC top rank 25547) with a 15 s cooldown; Earth
 -- Shock rank 1 is 8042 (instant, no cooldown); the twist slot shows Windfury Totem
@@ -162,6 +181,20 @@ local WEAVE_FLAME_SHOCK_IDS = {
 local WEAVE_FLAME_SHOCK_NAME = "Flame Shock"
 -- Target-aura scan cadence: the reference throttles at 0.05 s (3993-3996).
 local WEAVE_FLAME_SHOCK_SCAN_INTERVAL = 0.05
+-- Rank-1 Flame Shock id, for rank-agnostic cooldown reads (the shock cooldown is
+-- shared with Earth Shock; the S4 FS-collision guard reads it by localized name).
+local WEAVE_FLAME_SHOCK_BASE_SPELL_ID = 8050
+
+-- Stormstrike nature-vulnerability debuff (S2 target bar): 17364 CONFIRMED
+-- (12 s, +20% nature damage taken - bench/verify_bank.md §2, Wowhead TBC
+-- spell=17364); the ability trigger id 32175 noted there is accepted defensively
+-- (its aura-id role is UNCONFIRMED). The name fallback covers ranks the id table
+-- does not list; reads stay guarded (id lookups and name compares are nil-safe).
+local WEAVE_STORMSTRIKE_DEBUFF_IDS = {
+	[17364] = true,
+	[32175] = true,
+}
+local WEAVE_STORMSTRIKE_DEBUFF_NAME = "Stormstrike"
 
 -- Lightning / Water Shield (charge row: 4058-4209; SuperSwingTimer_Constants.lua:208-258).
 local WEAVE_LIGHTNING_SHIELD_IDS = {
@@ -191,6 +224,19 @@ local WEAVE_FLAME_SHOCK_GLOW_COLOR = { 1.0, 0.45, 0.08, 0.85 } -- glow edge (391
 local WEAVE_FLAME_SHOCK_LABEL_COLOR = { 1.0, 0.85, 0.25, 0.95 } -- label (3957)
 local WEAVE_SS_BADGE_COLOR = { 0.25, 0.85, 1.0, 0.95 }  -- Stormstrike badge (3706)
 local WEAVE_SR_BADGE_COLOR = { 0.15, 0.85, 1.0, 0.95 }  -- Shamanistic Rage badge (3730)
+-- WF-fishing hold (S3): the SS badge flips amber and the bar's final fraction gets
+-- an amber wash while Stormstrike is held for the Windfury proc.
+local WEAVE_SS_HOLD_COLOR = { 1.0, 0.72, 0.15, 0.95 }
+local WEAVE_WF_HOLD_WASH_COLOR = { 1.0, 0.72, 0.15, 0.18 }
+-- Rockbiter Weapon badge (discover #6): stone-brown so it reads apart from the
+-- SS/SR blues and the amber hold tint.
+local WEAVE_RB_BADGE_COLOR = { 0.85, 0.62, 0.30, 0.95 }
+-- Stormstrike debuff target bar (S2): FS-bar clone styling, nature-teal.
+local WEAVE_STORMSTRIKE_BAR_HEIGHT = 6
+local WEAVE_STORMSTRIKE_COLOR = { 0.30, 0.80, 0.95, 0.90 }
+local WEAVE_STORMSTRIKE_BG_COLOR = { 0, 0, 0, 0.45 }
+local WEAVE_STORMSTRIKE_GLOW_COLOR = { 0.40, 0.88, 1.0, 0.85 }
+local WEAVE_STORMSTRIKE_LABEL_COLOR = { 0.75, 0.95, 1.0, 0.95 }
 local WEAVE_SHIELD_RECT_WIDTH = 5                       -- LIGHTNING_SHIELD_RECT_WIDTH (3512)
 local WEAVE_SHIELD_RECT_GAP = 1                         -- LIGHTNING_SHIELD_RECT_GAP (3513)
 local WEAVE_SHIELD_BAR_GAP = 6                          -- tracker gap default (3515)
@@ -202,6 +248,30 @@ local WEAVE_SHIELD_COLORS = {                           -- (4058, 4151-4155)
 -- One rect per possible shield charge slot: Lightning Shield can reach 4, Water Shield 3
 -- (mirrors weave.SHIELD_MAX_CHARGES; created once, the row shows `slots` of them).
 local WEAVE_SHIELD_MAX_SLOTS = 4
+
+-- Spell-position row (round 2, operator spec): the zone band + per-spell icons live
+-- in a strip above the bar, clear of the Flame Shock (+2..8) and Stormstrike
+-- (+10..16) bars; each icon sits at its spell's latest safe cast start and the
+-- zone spans the min..max of those starts. All geometry is constant here so the
+-- follow-up pass can refine the layout without touching the logic.
+local WEAVE_POSITION_SLOTS = { "LB", "CL" }
+local WEAVE_POSITION_LAVA_KEY = "LvB"
+local WEAVE_ZONE_LABEL = "Spells start cast range zone"
+local WEAVE_ZONE_BOTTOM = 18
+local WEAVE_ZONE_HEIGHT = 14
+local WEAVE_ZONE_LABEL_GAP = 2
+local WEAVE_ZONE_COLOR = { 0.45, 0.75, 1.0, 0.12 }
+local WEAVE_ZONE_LABEL_COLOR = { 0.75, 0.90, 1.0, 0.90 }
+local WEAVE_POSITION_ICON_SIZE = 14
+local WEAVE_POSITION_READY_ALPHA = 0.95
+local WEAVE_POSITION_CLIP_COLOR = { 1.0, 0.15, 0.15, 0.95 }
+local WEAVE_POSITION_WAIT_COLOR = { 0.6, 0.6, 0.6, 0.35 }
+
+-- DW / Flurry badges (round 2): sync + Flurry stacks/ICD, stacked under the
+-- Rockbiter badge on the mainhand column.
+local WEAVE_SYNC_COLOR = { 0.30, 1.0, 0.40, 0.95 }
+local WEAVE_DESYNC_COLOR = { 1.0, 0.72, 0.15, 0.95 }
+local WEAVE_FLURRY_COLOR = { 0.65, 0.85, 1.0, 0.95 }
 
 -- Badge/label font: the bar's configured font, with the client standard font as the
 -- fallback for sandboxes and stripped clients.
@@ -240,7 +310,12 @@ local function resolve_family_spell(group)
 end
 
 -- Resolve every family still missing a spell. Families that resolve to nothing are
--- retried at most once per WEAVE_CATALOG_RETRY_S.
+-- retried at most once per WEAVE_CATALOG_RETRY_S. CATALOGUE-RETRY OBSERVABILITY
+-- (H4 follow-up): a sustained miss stays hidden-with-retry by design - after the
+-- H4 split, an unresolved cast time is UNKNOWN and every weave widget hides/dims
+-- instead of rendering an instant-0 marker, so the safe direction is silence plus
+-- the throttled retry below. No chat/diag notice is added: a low-level character
+-- whose spell book cannot answer yet would trip it on every login.
 function ST.SHAMAN.resolve_weave_catalog(self)
 	local now = api.get_time()
 	for i = 1, #st.weave.SPELL_GROUPS do
@@ -274,6 +349,45 @@ function ST.SHAMAN.on_talents_changed(self)
 			self.weave_catalog_retry_at[family] = nil
 		end
 	end
+	-- The Lava Burst spender cache (S4) is talent/rune state too: drop it so the
+	-- next resolution pass re-reads the spellbook (a rune engraved mid-session
+	-- flips the MW5 choice without a reload).
+	self.weave_lava_burst = nil
+	self.weave_lava_burst_retry_at = nil
+end
+
+-- Resolve the Lava Burst (SoD rune) catalogue entry for the MW5 spender choice:
+-- name query -> id -> icon and cast time, cached like the weave catalogue (the id
+-- is never guessed - a client without the spell data leaves the cache empty and
+-- retries are throttled). The player-level rune/talent gate is applied by the
+-- caller through st.weave.get_mw5_spender (the SoD rune teaches the spell; an
+-- Era-base character without the rune fails it even though the client's spell
+-- data can resolve the name), so the choice follows the rune live.
+function ST.SHAMAN.resolve_lava_burst(self)
+	if st.family ~= "ERA" then
+		return nil
+	end
+	local entry = self.weave_lava_burst
+	if entry == nil then
+		local now = api.get_time()
+		if now < (self.weave_lava_burst_retry_at or 0) then
+			return nil
+		end
+		local name, _, icon, cast_ms, _, _, lava_id = api.GetSpellInfo("Lava Burst")
+		if type(lava_id) == "number" and name then
+			entry = {
+				spell_id = lava_id,
+				name = name,
+				icon = icon,
+				cast_seconds = (type(cast_ms) == "number" and cast_ms or 0) / 1000,
+			}
+			self.weave_lava_burst = entry
+		else
+			self.weave_lava_burst_retry_at = now + WEAVE_CATALOG_RETRY_S
+			return nil
+		end
+	end
+	return entry
 end
 
 -- Look up a family by a numeric spell id or a localized spell-name token.
@@ -310,68 +424,88 @@ end
 
 -- One walk of the player's auras for the weave inputs AND the tracker state: the
 -- Maelstrom Weapon stack count, the buff haste multiplier, whether Windfury Weapon is
--- active (ICD strip), Shamanistic Rage's expiry (SR badge) and the active shield's type
--- and charge count (charge row). An aura without a count still means one Maelstrom stack
--- (the reference's max(1, count) handling). The walk stops once every lookup is resolved,
--- so the early exits survive while costing at most one walk per aura change. The result
--- is handed back in a reused module-local table (no per-frame allocation); read it before
--- the next call.
+-- active (ICD strip), Shamanistic Rage's expiry (SR badge), whether Rockbiter Weapon is
+-- active and its expiry (RB badge), the Flurry stack count (DW/Flurry badge) and the
+-- active shield's type and charge count (charge row). An aura without a count still
+-- means one Maelstrom stack (the reference's max(1, count) handling). The walk stops
+-- once every lookup is resolved, so the early exits survive while costing at most one
+-- walk per aura change. The result is handed back in a reused module-local table (no
+-- per-frame allocation); read it before the next call.
 local weave_aura_scan = {
 	stacks = 0, buff_multiplier = 1, windfury = false,
-	sr_expires = nil, shield_type = nil, shield_charges = nil,
+	sr_expires = nil, rockbiter = false, rockbiter_expires = nil,
+	flurry = nil, shield_type = nil, shield_charges = nil,
 }
 local function scan_weave_auras()
 	local stacks, mw_found = 0, false
 	local bloodlust, berserking = false, false
 	local windfury, sr_found, sr_expires = false, false, nil
+	local rockbiter, rockbiter_expires = false, nil
+	local flurry_count = nil
 	local shield_type, shield_charges = nil, nil
 	local i = 1
 	while i <= 40 do
 		local name, _, count, _, _, expiration, _, _, _, spell_id = api.UnitAura("player", i, "HELPFUL")
-		if name == nil then break end
-		if not mw_found
-			and ((spell_id and WEAVE_MW_SPELL_IDS[spell_id]) or name == WEAVE_MW_NAME) then
-			local n = tonumber(count) or 1
-			if n > st.weave.MW_MAX_STACKS then
-				n = st.weave.MW_MAX_STACKS
-			elseif n < 1 then
-				n = 1
+		-- No early break (R2): nil is simply no match at this index.
+		if name ~= nil then
+			if not mw_found
+				and ((spell_id and WEAVE_MW_SPELL_IDS[spell_id]) or name == WEAVE_MW_NAME) then
+				local n = tonumber(count) or 1
+				if n > st.weave.MW_MAX_STACKS then
+					n = st.weave.MW_MAX_STACKS
+				elseif n < 1 then
+					n = 1
+				end
+				stacks = n
+				mw_found = true
 			end
-			stacks = n
-			mw_found = true
-		end
-		if not bloodlust and ((spell_id and WEAVE_BLOODLUST_IDS[spell_id]) or name == "Bloodlust" or name == "Heroism"
-			-- Rage of the Farseer (UNCONFIRMED, name-only: no spell id published,
-			-- so the literal name IS the probe - the only one Forever exposes).
-			or name == WEAVE_FARSEER_NAME) then
-			bloodlust = true
-		end
-		if not berserking and ((spell_id and WEAVE_BERSERKING_IDS[spell_id]) or name == "Berserking") then
-			berserking = true
-		end
-		if not windfury
-			and ((spell_id and WEAVE_WINDFURY_IDS[spell_id]) or WEAVE_WINDFURY_NAMES[name]) then
-			windfury = true
-		end
-		if not sr_found and ((spell_id and spell_id == WEAVE_SR_SPELL_ID) or name == WEAVE_SR_NAME) then
-			sr_found = true
-			if type(expiration) == "number" and expiration > 0 then
-				sr_expires = expiration
+			if not bloodlust and ((spell_id and WEAVE_BLOODLUST_IDS[spell_id]) or name == "Bloodlust" or name == "Heroism"
+				-- Rage of the Farseer (UNCONFIRMED, name-only: no spell id published,
+				-- so the literal name IS the probe - the only one Forever exposes).
+				or name == WEAVE_FARSEER_NAME) then
+				bloodlust = true
 			end
-		end
-		if not shield_type then
-			if (spell_id and WEAVE_LIGHTNING_SHIELD_IDS[spell_id])
-				or WEAVE_LIGHTNING_SHIELD_NAMES[name] then
-				shield_type = "lightning"
-				shield_charges = tonumber(count)
-			elseif (spell_id and WEAVE_WATER_SHIELD_IDS[spell_id])
-				or WEAVE_WATER_SHIELD_NAMES[name] then
-				shield_type = "water"
-				shield_charges = tonumber(count)
+			if not berserking and ((spell_id and WEAVE_BERSERKING_IDS[spell_id]) or name == "Berserking") then
+				berserking = true
 			end
-		end
-		if mw_found and bloodlust and berserking and windfury and sr_found and shield_type then
-			break
+			if not windfury
+				and ((spell_id and WEAVE_WINDFURY_IDS[spell_id]) or WEAVE_WINDFURY_NAMES[name]) then
+				windfury = true
+			end
+			if not sr_found and ((spell_id and spell_id == WEAVE_SR_SPELL_ID) or name == WEAVE_SR_NAME) then
+				sr_found = true
+				if type(expiration) == "number" and expiration > 0 then
+					sr_expires = expiration
+				end
+			end
+			if not rockbiter
+				and ((spell_id and WEAVE_ROCKBITER_IDS[spell_id]) or name == WEAVE_ROCKBITER_NAME) then
+				rockbiter = true
+				if type(expiration) == "number" and expiration > 0 then
+					rockbiter_expires = expiration
+				end
+			end
+			if flurry_count == nil
+				and ((spell_id and WEAVE_FLURRY_IDS[spell_id]) or name == WEAVE_FLURRY_NAME) then
+				local n = tonumber(count) or 1
+				if n < 1 then n = 1 end
+				flurry_count = n
+			end
+			if not shield_type then
+				if (spell_id and WEAVE_LIGHTNING_SHIELD_IDS[spell_id])
+					or WEAVE_LIGHTNING_SHIELD_NAMES[name] then
+					shield_type = "lightning"
+					shield_charges = tonumber(count)
+				elseif (spell_id and WEAVE_WATER_SHIELD_IDS[spell_id])
+					or WEAVE_WATER_SHIELD_NAMES[name] then
+					shield_type = "water"
+					shield_charges = tonumber(count)
+				end
+			end
+			if mw_found and bloodlust and berserking and windfury and sr_found
+				and rockbiter and flurry_count and shield_type then
+				break
+			end
 		end
 		i = i + 1
 	end
@@ -387,6 +521,9 @@ local function scan_weave_auras()
 	weave_aura_scan.buff_multiplier = mult
 	weave_aura_scan.windfury = windfury
 	weave_aura_scan.sr_expires = sr_expires
+	weave_aura_scan.rockbiter = rockbiter
+	weave_aura_scan.rockbiter_expires = rockbiter_expires
+	weave_aura_scan.flurry = flurry_count
 	weave_aura_scan.shield_type = shield_type
 	weave_aura_scan.shield_charges = shield_charges
 	return weave_aura_scan
@@ -707,13 +844,24 @@ end
 
 function ST.SHAMAN.on_aura_change(self)
 	-- Haste buffs, Maelstrom Weapon stacks and the tracker state (windfury, Shamanistic
-	-- Rage, shield charges) all change here and are read by the SAME auras, so one walk
-	-- feeds every refresh below. No widgets are touched: this hook runs from UNIT_AURA.
+	-- Rage, Rockbiter, Flurry, shield charges) all change here and are read by the SAME
+	-- auras, so one walk feeds every refresh below. No widgets are touched: this hook
+	-- runs from UNIT_AURA.
 	local scan = scan_weave_auras()
 	self.SHAMAN.refresh_weave_haste(self, scan.buff_multiplier)
 	self.SHAMAN.refresh_weave_mw_stacks(self, scan.stacks)
 	self.weave_windfury_active = scan.windfury
 	self.weave_sr_expires = scan.sr_expires
+	self.weave_rockbiter_active = scan.rockbiter
+	self.weave_rockbiter_expires = scan.rockbiter_expires
+	-- Flurry (round 2): the stack count feeds the DW/Flurry badge; a count INCREASE
+	-- (a fresh aura or a new proc while one is active) stamps the proc time the
+	-- 0.5 s ICD counts from. A decrease is a charge consumed - never a stamp.
+	local flurry_count = scan.flurry
+	if type(flurry_count) == "number" and flurry_count > (self.weave_flurry_stacks or 0) then
+		self.weave_flurry_proc_at = api.get_time()
+	end
+	self.weave_flurry_stacks = flurry_count
 	self.weave_shield_type = scan.shield_type
 	self.weave_shield_charges = scan.shield_charges
 end
@@ -744,8 +892,9 @@ function ST.SHAMAN.post_init(self)
 	self.weave_catalog = {}
 	self.weave_catalog_retry_at = {}
 
-	-- Tracker state (windfury ICD, Shamanistic Rage, flame shock, shields). The flame
-	-- shock cache is refreshed lazily by the throttled target scan in on_bar_update.
+	-- Tracker state (windfury ICD, Shamanistic Rage, flame shock, Stormstrike debuff,
+	-- Rockbiter, shields). The flame shock / Stormstrike caches are refreshed lazily
+	-- by the throttled target scan in on_bar_update.
 	self.weave_windfury_active = false
 	self.weave_windfury_bucket = nil
 	-- Totem-twist last-drop stamp (TBC): api.get_time() of the last Windfury/Grace
@@ -759,6 +908,10 @@ function ST.SHAMAN.post_init(self)
 	-- guess (see gather_guide_inputs).
 	self.weave_magma_last_drop = nil
 	self.weave_sr_expires = nil
+	self.weave_rockbiter_active = false
+	self.weave_rockbiter_expires = nil
+	self.weave_flurry_stacks = nil
+	self.weave_flurry_proc_at = nil
 	self.weave_shield_type = nil
 	self.weave_shield_charges = nil
 	self.weave_shield_layout_slots = nil
@@ -767,8 +920,19 @@ function ST.SHAMAN.post_init(self)
 	self.weave_fs_scan_at = nil
 	self.weave_fs_glow_on = false
 	self.weave_fs_label_seconds = nil
+	self.weave_storm_duration = nil
+	self.weave_storm_expires = nil
+	self.weave_storm_glow_on = false
+	self.weave_storm_label_seconds = nil
 	self.weave_ss_seconds = nil
+	self.weave_ss_badge_mode = nil
 	self.weave_sr_seconds = nil
+	self.weave_rb_seconds = nil
+	self.weave_sync_readout = nil
+	self.weave_flurry_readout = nil
+	-- Lava Burst spender cache (S4; resolved lazily on ERA clients) and its retry stamp.
+	self.weave_lava_burst = nil
+	self.weave_lava_burst_retry_at = nil
 
 	-- Haste/Maelstrom/tracker snapshot and the initial catalogue (also parses auras,
 	-- like the paladin does for seals).
@@ -939,11 +1103,34 @@ function ST.SHAMAN.setup_weave_visuals(self)
 	end
 end
 
--- The family the assist should draw right now: the cast in progress, else the last
--- resolved cast, else the first enabled family with a resolved spell. Returns the catalog
--- entry and its family, or nil when nothing is drawable.
+-- The family the assist should draw right now: at five Maelstrom Weapon stacks the
+-- chosen spender (S4 - Lava Burst only when the rune/talent is present and the
+-- FS-collision guard allows; see st.weave.get_mw5_spender / should_hold_mw5),
+-- otherwise the cast in progress, else the last resolved cast, else the first enabled
+-- family with a resolved spell. Returns the catalog entry and its family ("LvB" for
+-- the Lava Burst spender), or nil when nothing is drawable.
 function ST.SHAMAN.get_weave_visual_spell(self)
-	local families = self:get_class_table().weave_families
+	local db = self:get_class_table()
+	local families = db.weave_families
+	-- MW5 spender choice (S4). A held-back guard (FS inside its final 2 s with a
+	-- ready shock) or a disabled LB family falls through to the catalogue read
+	-- below, so the pre-S4 behaviour is the fallback everywhere.
+	if (not families or families.LB ~= false)
+		and is_weave_mw_active(db, self.weave_mw_observed)
+		and type(self.weave_mw_stacks) == "number"
+		and self.weave_mw_stacks >= st.weave.MW_MAX_STACKS then
+		local lava = self.SHAMAN.resolve_lava_burst(self)
+		if lava and st.weave.get_mw5_spender(api.is_spell_known(lava.spell_id)) == "lavaburst" then
+			local fs_remaining
+			if self.weave_fs_duration or self.weave_fs_expires then
+				fs_remaining = st.weave.get_flame_shock_remaining(
+					self.weave_fs_duration, self.weave_fs_expires, api.get_time())
+			end
+			if not st.weave.should_hold_mw5(fs_remaining, self.SHAMAN.is_shock_ready()) then
+				return lava, "LvB"
+			end
+		end
+	end
 	local last = self.weave_family
 	if last and self.weave_catalog[last] and (not families or families[last] ~= false) then
 		return self.weave_catalog[last], last
@@ -1067,26 +1254,69 @@ local function update_windfury_icd(self, vf, d, db, now, h)
 	fill:Show()
 end
 
--- Scan the TARGET's harmful auras for Flame Shock (id table + name fallback, caster must
--- be the player; reference SuperSwingTimer_ClassMods.lua:3966-3989). Returns the
--- duration and expiration stamps, or nil.
-local function scan_target_flame_shock()
+-- Scan the TARGET's harmful auras for the tracked debuffs: Flame Shock (always) and
+-- the Stormstrike nature-vulnerability debuff (only while its bar is enabled). Id
+-- table + name fallback, caster must be the player (reference
+-- SuperSwingTimer_ClassMods.lua:3966-3989; the Stormstrike leg mirrors the
+-- reference's caster == "player" rule with the port's nil-source allowance).
+-- Returns the Flame Shock duration/expiration then the Stormstrike
+-- duration/expiration; the walk stops once everything it was asked for is found.
+local function scan_target_debuffs(want_stormstrike)
+	local fs_found, fs_duration, fs_expiration = false, nil, nil
+	local ss_found, ss_duration, ss_expiration = false, nil, nil
 	local i = 1
 	while i <= 40 do
 		local name, _, _, _, duration, expiration, source, _, _, spell_id = api.UnitAura("target", i, "HARMFUL")
-		if name == nil then break end
-		if ((spell_id and WEAVE_FLAME_SHOCK_IDS[spell_id]) or name == WEAVE_FLAME_SHOCK_NAME)
-			and (source == "player" or source == nil) then
-			return duration, expiration
+		-- No early break (R2): nil is simply no match at this index.
+		if name ~= nil then
+			local mine = source == "player" or source == nil
+			if mine and not fs_found
+				and ((spell_id and WEAVE_FLAME_SHOCK_IDS[spell_id]) or name == WEAVE_FLAME_SHOCK_NAME) then
+				fs_found = true
+				fs_duration, fs_expiration = duration, expiration
+			end
+			if want_stormstrike and mine and not ss_found
+				and ((spell_id and WEAVE_STORMSTRIKE_DEBUFF_IDS[spell_id]) or name == WEAVE_STORMSTRIKE_DEBUFF_NAME) then
+				ss_found = true
+				ss_duration, ss_expiration = duration, expiration
+			end
+			if fs_found and (not want_stormstrike or ss_found) then
+				break
+			end
 		end
 		i = i + 1
 	end
-	return nil, nil
+	return fs_duration, fs_expiration, ss_duration, ss_expiration
+end
+
+-- Throttled target-debuff scan shared by the Flame Shock bar, the Stormstrike bar
+-- and the guide's frozen Flame Shock input (scan cadence: the reference's 0.05 s,
+-- SuperSwingTimer_ClassMods.lua:3991-3996). Only the debuffs someone will read are
+-- scanned; a tick nobody needs performs no aura work at all.
+local function refresh_target_debuffs(self, db, now)
+	local want_fs = db.show_shaman_flame_shock_bar ~= false or db.nextaction_enabled == true
+	local want_ss = db.show_shaman_stormstrike_bar == true
+	if not (want_fs or want_ss) then
+		return
+	end
+	if now < (self.weave_fs_scan_at or 0) then
+		return
+	end
+	self.weave_fs_scan_at = now + WEAVE_FLAME_SHOCK_SCAN_INTERVAL
+	local fs_duration, fs_expiration, ss_duration, ss_expiration = scan_target_debuffs(want_ss)
+	if want_fs then
+		self.weave_fs_duration = fs_duration
+		self.weave_fs_expires = fs_expiration
+	end
+	if want_ss then
+		self.weave_storm_duration = ss_duration
+		self.weave_storm_expires = ss_expiration
+	end
 end
 
 -- Flame Shock target bar: duration fill, seconds label and a glow outline in the final
--- seconds. The target scan is throttled (reference updates every 0.05 s,
--- SuperSwingTimer_ClassMods.lua:3991-3996); between scans the bar just counts down.
+-- seconds. The throttled target scan runs in refresh_target_debuffs (shared with the
+-- Stormstrike bar and the guide); between scans the bar just counts down.
 local function update_flame_shock_bar(self, vf, db, now, w)
 	local glow, bg, fill, label = vf.weave_fs_glow, vf.weave_fs_bg, vf.weave_fs_fill, vf.weave_fs_label
 	if not (glow and bg and fill and label) then return end
@@ -1098,14 +1328,6 @@ local function update_flame_shock_bar(self, vf, db, now, w)
 		fill:Hide()
 		label:Hide()
 		return
-	end
-	-- The throttled target scan also feeds the Next Action Guide's frozen Flame Shock
-	-- input, so it keeps running while the guide is enabled even with the bar off.
-	if now >= (self.weave_fs_scan_at or 0) then
-		self.weave_fs_scan_at = now + WEAVE_FLAME_SHOCK_SCAN_INTERVAL
-		local duration, expiration = scan_target_flame_shock()
-		self.weave_fs_duration = duration
-		self.weave_fs_expires = expiration
 	end
 	local duration, expires = self.weave_fs_duration, self.weave_fs_expires
 	if not show_bar or (not duration and not expires) then
@@ -1135,11 +1357,103 @@ local function update_flame_shock_bar(self, vf, db, now, w)
 	label:Show()
 end
 
+-- Stormstrike nature-vulnerability target bar (S2): an FS-bar clone stacked above
+-- the Flame Shock bar - duration fill, seconds label and a final-seconds glow -
+-- fed by the same throttled target scan (refresh_target_debuffs). The widgets are
+-- created lazily on the first tick with the option ON, so a default session (nil =
+-- off) creates nothing and the construction-time widget counts stay untouched.
+local function update_stormstrike_bar(self, vf, db, now, w)
+	local show_bar = db.show_shaman_stormstrike_bar == true
+	if not show_bar then
+		if vf.weave_storm_bg then
+			self.weave_storm_glow_on = false
+			vf.weave_storm_glow:Hide()
+			vf.weave_storm_bg:Hide()
+			vf.weave_storm_fill:Hide()
+			vf.weave_storm_label:Hide()
+		end
+		return
+	end
+	local bg = vf.weave_storm_bg
+	if not bg then
+		local fs_bg = vf.weave_fs_bg
+		bg = vf:CreateTexture(nil, "OVERLAY")
+		bg:SetDrawLayer("OVERLAY", -2)
+		bg:SetColorTexture(WEAVE_STORMSTRIKE_BG_COLOR[1], WEAVE_STORMSTRIKE_BG_COLOR[2],
+			WEAVE_STORMSTRIKE_BG_COLOR[3], WEAVE_STORMSTRIKE_BG_COLOR[4])
+		bg:SetHeight(WEAVE_STORMSTRIKE_BAR_HEIGHT)
+		if fs_bg then
+			bg:SetPoint("BOTTOMLEFT", fs_bg, "TOPLEFT", 0, 2)
+			bg:SetPoint("BOTTOMRIGHT", fs_bg, "TOPRIGHT", 0, 2)
+		else
+			bg:SetPoint("BOTTOMLEFT", vf, "TOPLEFT", 0, 2)
+			bg:SetPoint("BOTTOMRIGHT", vf, "TOPRIGHT", 0, 2)
+		end
+		bg:Hide()
+		vf.weave_storm_bg = bg
+
+		local fill = vf:CreateTexture(nil, "OVERLAY")
+		fill:SetDrawLayer("OVERLAY", -2)
+		fill:SetColorTexture(WEAVE_STORMSTRIKE_COLOR[1], WEAVE_STORMSTRIKE_COLOR[2],
+			WEAVE_STORMSTRIKE_COLOR[3], WEAVE_STORMSTRIKE_COLOR[4])
+		fill:SetHeight(WEAVE_STORMSTRIKE_BAR_HEIGHT)
+		fill:SetPoint("LEFT", bg, "LEFT", 0, 0)
+		fill:Hide()
+		vf.weave_storm_fill = fill
+
+		local glow = vf:CreateTexture(nil, "OVERLAY")
+		glow:SetDrawLayer("OVERLAY", -1)
+		glow:SetColorTexture(WEAVE_STORMSTRIKE_GLOW_COLOR[1], WEAVE_STORMSTRIKE_GLOW_COLOR[2],
+			WEAVE_STORMSTRIKE_GLOW_COLOR[3], WEAVE_STORMSTRIKE_GLOW_COLOR[4])
+		glow:SetPoint("BOTTOMLEFT", bg, "BOTTOMLEFT", -1, -1)
+		glow:SetPoint("TOPRIGHT", bg, "TOPRIGHT", 1, 1)
+		glow:Hide()
+		vf.weave_storm_glow = glow
+
+		local label = vf:CreateFontString(nil, "OVERLAY")
+		label:SetPoint("CENTER", bg, "CENTER", 0, 0)
+		label:SetJustifyH("CENTER")
+		label:SetFont(get_tracker_font_path(self), 8, "OUTLINE")
+		label:SetTextColor(WEAVE_STORMSTRIKE_LABEL_COLOR[1], WEAVE_STORMSTRIKE_LABEL_COLOR[2],
+			WEAVE_STORMSTRIKE_LABEL_COLOR[3], WEAVE_STORMSTRIKE_LABEL_COLOR[4])
+		label:Hide()
+		vf.weave_storm_label = label
+	end
+	local duration, expires = self.weave_storm_duration, self.weave_storm_expires
+	if not duration and not expires then
+		self.weave_storm_glow_on = false
+		vf.weave_storm_glow:Hide()
+		bg:Hide()
+		vf.weave_storm_fill:Hide()
+		vf.weave_storm_label:Hide()
+		return
+	end
+	local remaining, total = st.weave.get_stormstrike_remaining(duration, expires, now)
+	if type(w) == "number" and w > 0 then
+		vf.weave_storm_fill:SetWidth(w * st.weave.clamp_fraction(remaining / total))
+	end
+	local seconds = math.floor(remaining + 0.5)
+	if self.weave_storm_label_seconds ~= seconds then
+		self.weave_storm_label_seconds = seconds
+		vf.weave_storm_label:SetText(tostring(seconds))
+	end
+	local glow_on = st.weave.should_stormstrike_glow(remaining)
+	if glow_on ~= self.weave_storm_glow_on then
+		self.weave_storm_glow_on = glow_on
+		if glow_on then vf.weave_storm_glow:Show() else vf.weave_storm_glow:Hide() end
+	end
+	bg:Show()
+	vf.weave_storm_fill:Show()
+	vf.weave_storm_label:Show()
+end
+
 -- Stormstrike / Shamanistic Rage badges, stacked beside the bar's right edge. SS shows
 -- the cooldown; SR prefers the aura's remaining time and falls back to its cooldown
 -- (reference SuperSwingTimer_ClassMods.lua:3695-3748). Text is only re-set when the
--- whole-second readout changes, so the per-frame path allocates nothing.
-local function update_cooldown_badges(self, vf, db, now)
+-- whole-second readout changes, so the per-frame path allocates nothing. S3: while the
+-- WF-fishing hold is armed (option-gated) the SS badge flips to an amber "SS HOLD"
+-- instead of the cooldown text.
+local function update_cooldown_badges(self, vf, db, now, d)
 	local ss_text, sr_text = vf.weave_ss_text, vf.weave_sr_text
 	if not (ss_text and sr_text) then return end
 	if db.show_shaman_cooldown_badges == false then
@@ -1150,7 +1464,33 @@ local function update_cooldown_badges(self, vf, db, now)
 
 	local start_time, duration = api.GetSpellCooldown(WEAVE_STORMSTRIKE_SPELL_ID)
 	local ss_remaining = st.weave.get_cooldown_remaining(start_time, duration, now)
-	if ss_remaining then
+	-- WF-fishing hold (S3): Stormstrike ready + the Windfury ICD clearing inside this
+	-- swing -> hold it (delay-if-fishing-WF). Gated on the swing's own activity (no
+	-- family/mainline gate); the pure predicate lives in weave.lua.
+	local ss_hold = false
+	if db.show_shaman_wf_hold_tint == true and not ss_remaining
+		and self.weave_windfury_active and d
+		and type(d.start) == "number" and type(d.ends_at) == "number" then
+		ss_hold = st.weave.should_hold_stormstrike(
+			st.weave.get_windfury_icd_remaining(d.start, now), d.ends_at - now)
+	end
+	if ss_hold then
+		if self.weave_ss_badge_mode ~= "hold" then
+			self.weave_ss_badge_mode = "hold"
+			ss_text:SetText("SS HOLD")
+			ss_text:SetTextColor(WEAVE_SS_HOLD_COLOR[1], WEAVE_SS_HOLD_COLOR[2],
+				WEAVE_SS_HOLD_COLOR[3], WEAVE_SS_HOLD_COLOR[4])
+		end
+		ss_text:Show()
+	elseif ss_remaining then
+		if self.weave_ss_badge_mode ~= "cooldown" then
+			self.weave_ss_badge_mode = "cooldown"
+			-- Force the text refresh too: the cached whole-second readout can
+			-- survive a hold period, and the badge must never keep "SS HOLD".
+			self.weave_ss_seconds = nil
+			ss_text:SetTextColor(WEAVE_SS_BADGE_COLOR[1], WEAVE_SS_BADGE_COLOR[2],
+				WEAVE_SS_BADGE_COLOR[3], WEAVE_SS_BADGE_COLOR[4])
+		end
 		local seconds = math.floor(ss_remaining + 0.5)
 		if self.weave_ss_seconds ~= seconds then
 			self.weave_ss_seconds = seconds
@@ -1158,6 +1498,7 @@ local function update_cooldown_badges(self, vf, db, now)
 		end
 		ss_text:Show()
 	else
+		self.weave_ss_badge_mode = nil
 		ss_text:Hide()
 	end
 
@@ -1182,6 +1523,98 @@ local function update_cooldown_badges(self, vf, db, now)
 	else
 		sr_text:Hide()
 	end
+end
+
+-- WF-fishing hold wash (S3): while the hold is armed, an amber translucent overlay
+-- covers the swing's final fraction - from the point the Windfury ICD clears to the
+-- swing's end (the window where the held Stormstrike is safe to press). The widget
+-- is created lazily on the first armed tick with the option ON, so a default
+-- session (nil = off) creates nothing; the wash is drawn on the mainhand visuals
+-- frame under the marker/spark layers.
+local function update_wf_hold_wash(self, vf, db, now, d, w, h)
+	local wash = vf.weave_wf_wash
+	local armed = false
+	local wash_fraction
+	-- The hold only exists while Stormstrike is ready to be held (the engine's rule
+	-- 7 sits behind its off-cooldown check); the cooldown read runs only with the
+	-- option on, so the default path stays read-free.
+	if db.show_shaman_wf_hold_tint == true then
+		local ss_start, ss_duration = api.GetSpellCooldown(WEAVE_STORMSTRIKE_SPELL_ID)
+		local ss_remaining = st.weave.get_cooldown_remaining(ss_start, ss_duration, now)
+		if not ss_remaining and self.weave_windfury_active and d
+			and type(d.start) == "number" and type(d.ends_at) == "number"
+			and type(d.speed) == "number" and d.speed > 0 then
+			local icd_remaining = st.weave.get_windfury_icd_remaining(d.start, now)
+			if st.weave.should_hold_stormstrike(icd_remaining, d.ends_at - now) then
+				armed = true
+				wash_fraction = st.weave.get_wf_hold_wash_fraction(now - d.start, d.speed, icd_remaining)
+			end
+		end
+	end
+	if not wash then
+		if not armed then return end
+		wash = vf:CreateTexture(nil, "OVERLAY")
+		wash:SetDrawLayer("OVERLAY", -4)
+		wash:SetColorTexture(WEAVE_WF_HOLD_WASH_COLOR[1], WEAVE_WF_HOLD_WASH_COLOR[2],
+			WEAVE_WF_HOLD_WASH_COLOR[3], WEAVE_WF_HOLD_WASH_COLOR[4])
+		wash:Hide()
+		vf.weave_wf_wash = wash
+	end
+	if not armed or wash_fraction == nil or type(w) ~= "number" or w <= 0
+		or type(h) ~= "number" or h <= 0 then
+		wash:Hide()
+		return
+	end
+	local start = st.weave.clamp_fraction(wash_fraction)
+	wash:SetHeight(h)
+	wash:ClearAllPoints()
+	wash:SetPoint("BOTTOMLEFT", vf, "BOTTOMLEFT", start * w, 0)
+	wash:SetWidth((1 - start) * w)
+	wash:Show()
+end
+
+-- Rockbiter Weapon badge (discover #6): an "RB" readout with the imbue's remaining
+-- time while the buff is up, hidden otherwise. Option-gated (nil = off) and created
+-- lazily; a buff without a readable expiry still shows the bare "RB". Reads stay
+-- guarded (the aura scan owns id/name matching; this only renders its result).
+local function update_rockbiter_badge(self, vf, db, now)
+	local text = vf.weave_rb_text
+	if db.show_shaman_rockbiter_badge ~= true then
+		if text then text:Hide() end
+		return
+	end
+	if not text then
+		text = vf:CreateFontString(nil, "OVERLAY")
+		text:SetPoint("TOPLEFT", vf, "TOPRIGHT", 3, -18)
+		text:SetJustifyH("LEFT")
+		text:SetFont(get_tracker_font_path(self), 9, "OUTLINE")
+		text:SetTextColor(WEAVE_RB_BADGE_COLOR[1], WEAVE_RB_BADGE_COLOR[2],
+			WEAVE_RB_BADGE_COLOR[3], WEAVE_RB_BADGE_COLOR[4])
+		text:Hide()
+		vf.weave_rb_text = text
+	end
+	if not self.weave_rockbiter_active then
+		self.weave_rb_seconds = nil
+		text:Hide()
+		return
+	end
+	local expires = self.weave_rockbiter_expires
+	if type(expires) ~= "number" then
+		if self.weave_rb_seconds ~= -1 then
+			self.weave_rb_seconds = -1
+			text:SetText("RB")
+		end
+		text:Show()
+		return
+	end
+	local remaining = expires - now
+	if remaining < 0 then remaining = 0 end
+	local seconds = math.floor(remaining + 0.5)
+	if self.weave_rb_seconds ~= seconds then
+		self.weave_rb_seconds = seconds
+		text:SetText(string.format("RB %.0fs", remaining))
+	end
+	text:Show()
 end
 
 -- Shield charge row: one rect per charge slot, filled slots in the shield color and the
@@ -1230,6 +1663,246 @@ local function update_shield_charges(self, vf, db, h)
 	end
 	for i = slots + 1, #rects do
 		rects[i]:Hide()
+	end
+end
+
+-- Spell-position row (round 2, operator spec): for each shown weave spell (LB, CL;
+-- LvB when the rune/talent is present) the icon sits at the swing fraction where its
+-- cast must START to land just before the MH swing - the "spells start cast range
+-- zone". The zone band spans the min..max of those starts; icons, cast-time numbers
+-- and the zone update every tick (stacks/haste/swing changes move them, so every
+-- swing / LB / CL / weave event re-adjusts them). A spell whose safe start has
+-- passed reads as a clip (red) - casting now would overrun the swing; fewer than
+-- MW_MIN_WEAVE_STACKS stacks read as "wait" (dim). Option-gated (nil = off), all
+-- widgets created lazily on the first live tick with the option on.
+local weave_position_starts = {}
+-- Per-slot caches for the per-tick path: the icon texture and the cast-time value
+-- are re-set only when they change (no string/SetTexture churn on a stable swing).
+local weave_position_icon_texture = {}
+local weave_position_time_value = {}
+
+-- Hide every spell-position widget (created lazily; absent widgets are skipped).
+local function hide_spell_positions(vf)
+	if vf.weave_pos_zone then vf.weave_pos_zone:Hide() end
+	if vf.weave_pos_label then vf.weave_pos_label:Hide() end
+	local icons, times = vf.weave_pos_icons, vf.weave_pos_times
+	if icons then
+		for _, icon in pairs(icons) do icon:Hide() end
+	end
+	if times then
+		for _, time in pairs(times) do time:Hide() end
+	end
+end
+
+-- One state color for a position slot: family color when ready, red for a clip,
+-- dimmed grey while waiting for stacks.
+local function get_position_color(state, family)
+	if state == "clip" then
+		return WEAVE_POSITION_CLIP_COLOR
+	elseif state == "wait" then
+		return WEAVE_POSITION_WAIT_COLOR
+	end
+	if family == WEAVE_POSITION_LAVA_KEY then
+		return st.weave.LAVA_BURST_COLOR
+	end
+	return st.weave.FAMILY_COLORS[family]
+end
+
+local function update_spell_positions(self, vf, db, now, d, w)
+	if not (db.show_shaman_spell_positions == true and db.weave_enabled ~= false
+		and is_weave_mw_active(db, self.weave_mw_observed)
+		and d and type(d.speed) == "number" and d.speed > 0
+		and type(d.start) == "number" and type(d.ends_at) == "number" and not d.is_full) then
+		hide_spell_positions(vf)
+		return
+	end
+	if not vf.weave_pos_zone then
+		local zone = vf:CreateTexture(nil, "OVERLAY")
+		zone:SetDrawLayer("OVERLAY", -5)
+		zone:SetColorTexture(WEAVE_ZONE_COLOR[1], WEAVE_ZONE_COLOR[2],
+			WEAVE_ZONE_COLOR[3], WEAVE_ZONE_COLOR[4])
+		zone:SetHeight(WEAVE_ZONE_HEIGHT)
+		zone:Hide()
+		vf.weave_pos_zone = zone
+		local label = vf:CreateFontString(nil, "OVERLAY")
+		label:SetJustifyH("CENTER")
+		label:SetFont(get_tracker_font_path(self), 8, "OUTLINE")
+		label:SetTextColor(WEAVE_ZONE_LABEL_COLOR[1], WEAVE_ZONE_LABEL_COLOR[2],
+			WEAVE_ZONE_LABEL_COLOR[3], WEAVE_ZONE_LABEL_COLOR[4])
+		label:SetText(WEAVE_ZONE_LABEL)
+		label:Hide()
+		vf.weave_pos_label = label
+		local icons, times = {}, {}
+		local keys = {}
+		for i = 1, #WEAVE_POSITION_SLOTS do
+			keys[i] = WEAVE_POSITION_SLOTS[i]
+		end
+		keys[#keys + 1] = WEAVE_POSITION_LAVA_KEY
+		for i = 1, #keys do
+			local icon = vf:CreateTexture(nil, "OVERLAY")
+			icon:SetDrawLayer("OVERLAY", -3)
+			icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+			icon:SetWidth(WEAVE_POSITION_ICON_SIZE)
+			icon:SetHeight(WEAVE_POSITION_ICON_SIZE)
+			icon:Hide()
+			icons[keys[i]] = icon
+			local time = vf:CreateFontString(nil, "OVERLAY")
+			time:SetJustifyH("LEFT")
+			time:SetFont(get_tracker_font_path(self), 8, "OUTLINE")
+			time:SetPoint("LEFT", icon, "RIGHT", 1, 0)
+			time:Hide()
+			times[keys[i]] = time
+		end
+		vf.weave_pos_icons = icons
+		vf.weave_pos_times = times
+	end
+	local icons, times = vf.weave_pos_icons, vf.weave_pos_times
+	local duration = d.speed
+	local latency = ((self.latency and self.latency.world_ms) or 0) / 1000
+	local now_fraction = st.weave.clamp_fraction((now - d.start) / duration)
+	local stacks = self.weave_mw_stacks
+	if type(stacks) ~= "number" then
+		stacks = 0
+	end
+	local families = db.weave_families
+	local lava = self.SHAMAN.resolve_lava_burst(self)
+	local starts = weave_position_starts
+	local count = 0
+	local center_y = WEAVE_ZONE_BOTTOM + (WEAVE_ZONE_HEIGHT / 2)
+	for i = 1, #WEAVE_POSITION_SLOTS + 1 do
+		local key = (i <= #WEAVE_POSITION_SLOTS) and WEAVE_POSITION_SLOTS[i]
+			or WEAVE_POSITION_LAVA_KEY
+		local icon, time = icons[key], times[key]
+		local entry
+		if key == WEAVE_POSITION_LAVA_KEY then
+			if lava and st.weave.get_mw5_spender(api.is_spell_known(lava.spell_id)) == "lavaburst" then
+				entry = lava
+			end
+		elseif not families or families[key] ~= false then
+			entry = self.weave_catalog[key]
+		end
+		if entry and entry.icon then
+			local effective = self.SHAMAN.get_weave_effective_cast_time(self, entry)
+			local safe_start = effective ~= nil and st.weave.get_marker_fraction(duration, effective, latency) or nil
+			-- H4: an unresolvable cast time (nil effective) leaves the safe start
+			-- unknown; hide the slot instead of anchoring it at nil*width or printing
+			-- a fake 0.0 s cast. get_spell_position_state would read "wait" regardless.
+			if safe_start == nil then
+				icon:Hide()
+				time:Hide()
+			else
+				local state = st.weave.get_spell_position_state(stacks, now_fraction, safe_start)
+				count = count + 1
+				starts[count] = safe_start
+				local color = get_position_color(state, key)
+				icon:ClearAllPoints()
+				icon:SetPoint("CENTER", vf, "TOPLEFT", safe_start * w, center_y)
+				-- Cached per slot: the per-tick path re-sets only what changed, so a
+				-- stable swing allocates nothing (the codebase's marker discipline).
+				if weave_position_icon_texture[key] ~= entry.icon then
+					weave_position_icon_texture[key] = entry.icon
+					icon:SetTexture(entry.icon)
+				end
+				icon:SetVertexColor(color[1], color[2], color[3],
+					state == "ready" and WEAVE_POSITION_READY_ALPHA or color[4])
+				icon:Show()
+				if weave_position_time_value[key] ~= effective then
+					weave_position_time_value[key] = effective
+					time:SetText(string.format("%.1f", effective))
+				end
+				time:SetTextColor(color[1], color[2], color[3], 0.95)
+				time:Show()
+			end
+		else
+			icon:Hide()
+			time:Hide()
+		end
+	end
+	for i = count + 1, #starts do
+		starts[i] = nil
+	end
+	local min_start, max_start = st.weave.get_cast_zone_bounds(starts)
+	if min_start and max_start and max_start > min_start then
+		local zone = vf.weave_pos_zone
+		zone:ClearAllPoints()
+		zone:SetPoint("BOTTOMLEFT", vf, "TOPLEFT", min_start * w, WEAVE_ZONE_BOTTOM)
+		zone:SetWidth((max_start - min_start) * w)
+		zone:Show()
+		local label = vf.weave_pos_label
+		label:ClearAllPoints()
+		label:SetPoint("BOTTOM", vf, "TOPLEFT", ((min_start + max_start) / 2) * w,
+			WEAVE_ZONE_BOTTOM + WEAVE_ZONE_HEIGHT + WEAVE_ZONE_LABEL_GAP)
+		label:Show()
+	else
+		vf.weave_pos_zone:Hide()
+		vf.weave_pos_label:Hide()
+	end
+end
+
+-- DW sync + Flurry badges (round 2): the sync badge compares the MH/OH next
+-- landings against the Flurry ICD threshold and warns amber when they drift apart
+-- (desync burns extra Flurry charges); the Flurry badge shows the stack count and
+-- the live 0.5 s proc ICD. Option-gated (nil = off), created lazily, stacked in the
+-- mainhand badge column under Rockbiter. The sync half shows only while
+-- dual-wielding with both landings known; the Flurry half works for any setup.
+local function update_dw_badges(self, vf, db, now)
+	if db.show_shaman_dw_sync ~= true then
+		if vf.weave_sync_text then vf.weave_sync_text:Hide() end
+		if vf.weave_flurry_text then vf.weave_flurry_text:Hide() end
+		return
+	end
+	if not vf.weave_sync_text then
+		local sync_text = vf:CreateFontString(nil, "OVERLAY")
+		sync_text:SetPoint("TOPLEFT", vf, "TOPRIGHT", 3, -28)
+		sync_text:SetJustifyH("LEFT")
+		sync_text:SetFont(get_tracker_font_path(self), 9, "OUTLINE")
+		sync_text:Hide()
+		vf.weave_sync_text = sync_text
+		local flurry_text = vf:CreateFontString(nil, "OVERLAY")
+		flurry_text:SetPoint("TOPLEFT", vf, "TOPRIGHT", 3, -38)
+		flurry_text:SetJustifyH("LEFT")
+		flurry_text:SetFont(get_tracker_font_path(self), 9, "OUTLINE")
+		flurry_text:Hide()
+		vf.weave_flurry_text = flurry_text
+	end
+	local sync_text, flurry_text = vf.weave_sync_text, vf.weave_flurry_text
+	local oh = self.offhand
+	local mh = self.mainhand
+	local offset = st.weave.get_dw_sync_offset(mh and mh.ends_at, oh and oh.ends_at)
+	if oh and oh.has_weapon and offset then
+		local desynced = st.weave.is_dw_desynced(offset)
+		local color = desynced and WEAVE_DESYNC_COLOR or WEAVE_SYNC_COLOR
+		local readout = desynced and string.format("DW DESYNC %.1fs", offset)
+			or string.format("DW SYNC %.1fs", offset)
+		if self.weave_sync_readout ~= readout then
+			self.weave_sync_readout = readout
+			sync_text:SetText(readout)
+			sync_text:SetTextColor(color[1], color[2], color[3], color[4])
+		end
+		sync_text:Show()
+	else
+		self.weave_sync_readout = nil
+		sync_text:Hide()
+	end
+	local stacks = self.weave_flurry_stacks
+	if type(stacks) == "number" and stacks >= 1 then
+		local icd = st.weave.get_flurry_icd_remaining(self.weave_flurry_proc_at, now)
+		local readout
+		if icd and icd > 0 then
+			readout = string.format("FL %d %.1fs", stacks, icd)
+		else
+			readout = string.format("FL %d", stacks)
+		end
+		if self.weave_flurry_readout ~= readout then
+			self.weave_flurry_readout = readout
+			flurry_text:SetText(readout)
+			flurry_text:SetTextColor(WEAVE_FLURRY_COLOR[1], WEAVE_FLURRY_COLOR[2],
+				WEAVE_FLURRY_COLOR[3], WEAVE_FLURRY_COLOR[4])
+		end
+		flurry_text:Show()
+	else
+		self.weave_flurry_readout = nil
+		flurry_text:Hide()
 	end
 end
 
@@ -1346,11 +2019,19 @@ function ST.SHAMAN.on_bar_update(self, hand)
 
 	-- Trackers: each one gates on its own option and degrades when the spell/aura/API is
 	-- missing, independently of the swing-activity gate below, so a shield swap, badge
-	-- countdown or flame shock tick keeps updating while the swing bar is idle.
+	-- countdown or flame shock tick keeps updating while the swing bar is idle. The
+	-- shared target-debuff scan runs first (Flame Shock + Stormstrike, throttled); the
+	-- round-2 spell-position row and the DW/Flurry badges gate themselves.
+	refresh_target_debuffs(self, db, now)
 	update_windfury_icd(self, vf, d, db, now, h)
 	update_flame_shock_bar(self, vf, db, now, w)
-	update_cooldown_badges(self, vf, db, now)
+	update_stormstrike_bar(self, vf, db, now, w)
+	update_cooldown_badges(self, vf, db, now, d)
 	update_shield_charges(self, vf, db, h)
+	update_wf_hold_wash(self, vf, db, now, d, w, h)
+	update_rockbiter_badge(self, vf, db, now)
+	update_spell_positions(self, vf, db, now, d, w)
+	update_dw_badges(self, vf, db, now)
 
 	if db.weave_enabled == false
 		or not is_weave_mw_active(db, self.weave_mw_observed)
@@ -1371,54 +2052,61 @@ function ST.SHAMAN.on_bar_update(self, hand)
 	local spark_fraction, clipped, marker_fraction = get_weave_spark_display(self, d, entry, now, latency)
 
 	-- Marker: the spell icon sits at the latest safe cast start, in the family color.
+	-- H4: an unresolvable cast time makes get_marker_fraction return nil; hide the
+	-- whole marker trio instead of clamping nil to 0 and drawing a false breakpoint.
 	local marker_alpha = db.weave_marker_alpha or WEAVE_FALLBACK_MARKER_ALPHA
 	if clipped then
 		marker_alpha = marker_alpha * WEAVE_UNSAFE_ALPHA
 	end
 	local marker_size = db.weave_marker_size or WEAVE_FALLBACK_MARKER_SIZE
-	local marker_x = st.weave.clamp_fraction(marker_fraction) * w
 	local marker_top, marker_bottom = vf.weave_marker_top, vf.weave_marker_bottom
-	marker:SetWidth(marker_size)
-	marker:SetHeight(marker_size)
-	if entry.icon ~= self.weave_marker_icon then
-		self.weave_marker_icon = entry.icon
-		if entry.icon then
-			marker:SetTexture(entry.icon)
-			if marker_top then marker_top:SetTexture(entry.icon) end
-			if marker_bottom then marker_bottom:SetTexture(entry.icon) end
-		end
-	end
-	marker:ClearAllPoints()
-	marker:SetPoint("CENTER", vf, "LEFT", marker_x, 0)
-	local family_color = st.weave.FAMILY_COLORS[family]
-	local r, g, b = 1, 1, 1
-	if family_color then
-		r, g, b = family_color[1], family_color[2], family_color[3]
-	end
-	marker:SetVertexColor(r, g, b, marker_alpha)
-	marker:Show()
-
-	-- Reference top/bottom breakpoint icons (SuperSwingTimer_ClassMods.lua:3491-3506):
-	-- the same icon above the bar and below the bar stack, anchored at the marker
-	-- fraction. The pair hides with the option or without an icon texture.
-	if marker_top and marker_bottom and entry.icon and db.show_shaman_breakpoint_markers ~= false then
-		local bottom_anchor, bottom_width = get_weave_bottom_anchor(self, vf, w)
-		marker_top:SetWidth(marker_size)
-		marker_top:SetHeight(marker_size)
-		marker_top:ClearAllPoints()
-		marker_top:SetPoint("BOTTOM", vf, "TOPLEFT", marker_x, WEAVE_MARKER_GAP)
-		marker_top:SetVertexColor(r, g, b, marker_alpha)
-		marker_top:Show()
-		marker_bottom:SetWidth(marker_size)
-		marker_bottom:SetHeight(marker_size)
-		marker_bottom:ClearAllPoints()
-		marker_bottom:SetPoint("TOP", bottom_anchor, "BOTTOMLEFT",
-			st.weave.clamp_fraction(marker_fraction) * bottom_width, -WEAVE_MARKER_GAP)
-		marker_bottom:SetVertexColor(r, g, b, marker_alpha)
-		marker_bottom:Show()
+	if marker_fraction == nil then
+		hide_weave_markers(vf)
 	else
-		if marker_top then marker_top:Hide() end
-		if marker_bottom then marker_bottom:Hide() end
+		local marker_x = st.weave.clamp_fraction(marker_fraction) * w
+		marker:SetWidth(marker_size)
+		marker:SetHeight(marker_size)
+		if entry.icon ~= self.weave_marker_icon then
+			self.weave_marker_icon = entry.icon
+			if entry.icon then
+				marker:SetTexture(entry.icon)
+				if marker_top then marker_top:SetTexture(entry.icon) end
+				if marker_bottom then marker_bottom:SetTexture(entry.icon) end
+			end
+		end
+		marker:ClearAllPoints()
+		marker:SetPoint("CENTER", vf, "LEFT", marker_x, 0)
+		local family_color = st.weave.FAMILY_COLORS[family]
+			or (family == "LvB" and st.weave.LAVA_BURST_COLOR)
+		local r, g, b = 1, 1, 1
+		if family_color then
+			r, g, b = family_color[1], family_color[2], family_color[3]
+		end
+		marker:SetVertexColor(r, g, b, marker_alpha)
+		marker:Show()
+
+		-- Reference top/bottom breakpoint icons (SuperSwingTimer_ClassMods.lua:3491-3506):
+		-- the same icon above the bar and below the bar stack, anchored at the marker
+		-- fraction. The pair hides with the option or without an icon texture.
+		if marker_top and marker_bottom and entry.icon and db.show_shaman_breakpoint_markers ~= false then
+			local bottom_anchor, bottom_width = get_weave_bottom_anchor(self, vf, w)
+			marker_top:SetWidth(marker_size)
+			marker_top:SetHeight(marker_size)
+			marker_top:ClearAllPoints()
+			marker_top:SetPoint("BOTTOM", vf, "TOPLEFT", marker_x, WEAVE_MARKER_GAP)
+			marker_top:SetVertexColor(r, g, b, marker_alpha)
+			marker_top:Show()
+			marker_bottom:SetWidth(marker_size)
+			marker_bottom:SetHeight(marker_size)
+			marker_bottom:ClearAllPoints()
+			marker_bottom:SetPoint("TOP", bottom_anchor, "BOTTOMLEFT",
+				st.weave.clamp_fraction(marker_fraction) * bottom_width, -WEAVE_MARKER_GAP)
+			marker_bottom:SetVertexColor(r, g, b, marker_alpha)
+			marker_bottom:Show()
+		else
+			if marker_top then marker_top:Hide() end
+			if marker_bottom then marker_bottom:Hide() end
+		end
 	end
 
 	-- Spark: only while a tracked cast is active.
@@ -1505,6 +2193,21 @@ local function get_guide_cooldown_known(spell_id)
 	return get_guide_cooldown(spell_id)
 end
 
+-- Is the shock cooldown ready? (S4 FS-collision guard; the shock global is shared
+-- by Flame Shock and Earth Shock, so the Flame Shock read answers for the refresh
+-- the guard defers to.) Rank-agnostic localized-name read with the same GCD-echo
+-- filter as the guide cooldowns; the name is resolved lazily and retried until the
+-- spell data answers, mirroring hud_slot_name's convention. A client that cannot
+-- answer reports no cooldown - the guard's shock leg then reads ready.
+local weave_flameshock_query
+function ST.SHAMAN.is_shock_ready()
+	if weave_flameshock_query == nil then
+		weave_flameshock_query = api.GetSpellInfo(WEAVE_FLAME_SHOCK_BASE_SPELL_ID) or false
+	end
+	local remaining = get_guide_cooldown(weave_flameshock_query or WEAVE_FLAME_SHOCK_BASE_SPELL_ID)
+	return remaining <= 0
+end
+
 -- Slot descriptors: the rank-1 id ships as the fallback; resolve_guide_icons re-points
 -- the weave slot at the resolved catalogue entry once the spell data is live. The
 -- shock/totem slots keep their static rank-1 ids (icons are rank-invariant); the
@@ -1534,21 +2237,24 @@ local guide_slot_lavalash = { key = "lavalash", spell_id = WEAVE_LAVA_LASH_SPELL
 -- once from post_init, before the shared frame builds its icons. With no resolved
 -- family the slot keeps the Lightning Bolt rank-1 fallback above.
 -- SoD 5-stack spender choice (docs/research/rotations_sod.md): on ERA clients the
--- Lava Burst rune, when known, re-points the weave slot, so the MW5 prompt shows
--- the Lava Burst icon and label instead of Lightning Bolt. ERA-only: Wrath
--- enhancement never casts Lava Burst (Elemental-only there), so Wrath keeps the
--- catalogue icon. The classic GetSpellInfo answers a name query with the spell's
--- id in its 7th return, so no rune spell id is guessed here; unknown reads nil
--- and keeps the catalogue (Era-base byte-identical).
+-- Lava Burst rune, when the client's spell data resolves it, re-points the weave
+-- slot, so the MW5 prompt shows the Lava Burst icon and label instead of Lightning
+-- Bolt. ERA-only: Wrath enhancement never casts Lava Burst (Elemental-only there),
+-- so Wrath keeps the catalogue icon. The id comes from the shared Lava Burst cache
+-- (resolve_lava_burst; the classic GetSpellInfo answers a name query with the
+-- spell's id in its 7th return, so no rune spell id is guessed here); unknown reads
+-- nil and keeps the catalogue (Era-base byte-identical). The player-level
+-- rune/talent gate rides the assist's MW5 spender choice (get_weave_visual_spell);
+-- this post_init slot shape keeps its client-data gate, pinned by its own suite.
 function ST.SHAMAN.resolve_guide_icons(self)
 	local entry = self.SHAMAN.get_weave_visual_spell(self)
 	if entry and entry.spell_id then
 		guide_slot_weave.spell_id = entry.spell_id
 	end
 	if st.family == "ERA" then
-		local _, _, _, _, _, _, lava_id = api.GetSpellInfo("Lava Burst")
-		if type(lava_id) == "number" then
-			guide_slot_weave.spell_id = lava_id
+		local lava = self.SHAMAN.resolve_lava_burst(self)
+		if lava and type(lava.spell_id) == "number" then
+			guide_slot_weave.spell_id = lava.spell_id
 		end
 	end
 end
@@ -1571,11 +2277,13 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	-- The cast state, the Maelstrom stacks and the catalogue readiness the rules read.
 	-- (A gather before post_init finds no catalogue and simply answers unavailable.)
 	-- The stack count stays truthful (the aura scan owns it); mw_available carries the
-	-- family-plus-observed gate plus the option kill-switch, so the engine - never
-	-- the gather - decides whether MW rules may fire. On ERA the latch is the SoD
-	-- signal (observed MW aura => SoD rune client); Era-base never observes it.
+	-- family-plus-observed gate, the option kill-switch AND the S4 FS-collision guard
+	-- (see the Flame Shock block below), so the engine - never the gather - decides
+	-- whether MW rules may fire, from what the gather feeds. On ERA the latch is the
+	-- SoD signal (observed MW aura => SoD rune client); Era-base never observes it.
 	inputs.casting = self.weave_is_casting == true
-	inputs.mw_available = is_weave_mw_active(db, self.weave_mw_observed)
+	local mw_active = is_weave_mw_active(db, self.weave_mw_observed)
+	inputs.mw_available = mw_active
 	local stacks = self.weave_mw_stacks
 	if type(stacks) ~= "number" then
 		stacks = 0
@@ -1593,6 +2301,16 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	if self.weave_fs_duration or self.weave_fs_expires then
 		inputs.flameshock_remaining, inputs.flameshock_duration =
 			st.weave.get_flame_shock_remaining(self.weave_fs_duration, self.weave_fs_expires, now)
+	end
+
+	-- S4 FS-collision guard: while the target's Flame Shock is inside its final
+	-- MW5_FS_GUARD_SECONDS and the shock cooldown is ready, the five-stack weave is
+	-- held back so the FS refresh goes first (bank S4: "hold weave if FS < 2s and
+	-- shock ready"). The engine is frozen, so the gather - the only lever - narrows
+	-- the availability it feeds; the stack count stays truthful above.
+	if mw_active and st.weave.should_hold_mw5(inputs.flameshock_remaining,
+		self.SHAMAN.is_shock_ready()) then
+		inputs.mw_available = false
 	end
 
 	-- Stormstrike cooldown, GCD echo filtered (the rule matrix reads the remaining).

@@ -37,9 +37,11 @@
 --     with the under-TF snapshot preference, the Mangle/Rake order, the
 --     capped-CP Bite, the ungated Shred - and the strict
 --     sod_runes == true gate plus the SoD bear Mangle (never the Era wait),
---   * the gather writes the family plus the unknown-shaped finisher inputs
---     (time_to_die, target_short_lived) and the reserved can_powershift nil
---     (no rule reads it) with stale overwrites, plus the Wrath/SoD buff/cooldown inputs (sr_remaining,
+--   * the gather writes the family plus the finisher inputs - the D4 EMA-smoothed
+--     time_to_die (seeded, smoothed, throttled, reset per target/heal/death; nil
+--     whenever the target's health is unreadable) - and the explicit
+--     target_short_lived / reserved can_powershift nil (no rule reads it) with
+--     stale overwrites, plus the Wrath/SoD buff/cooldown inputs (sr_remaining,
 --     clearcast, tf_active, tf_ready, tf_cd_remaining, berserk_ready,
 --     sod_runes) with the knowledge-gated cooldowns and the session-latched
 --     SoD probe (id-first, locale-independent, with the name fallback),
@@ -412,6 +414,10 @@ local function build(opts)
         known_ids = opts.known_ids or {},
         -- Cooldown readings by query (id or name) -> { start, duration }.
         cooldowns_by_query = opts.cooldowns or {},
+        -- D4 time-to-die inputs: the target's identity and live health, as the
+        -- client would report them (nil = no target / unreadable health).
+        target_guid = opts.target_guid,
+        target_hp = opts.target_hp,
         hide_spells = false,
         get_spell_info_calls = 0,
         cost_queries = 0,
@@ -513,6 +519,17 @@ local function build(opts)
     env.GetShapeshiftForm = function() return sb.form end
     env.GetTalentInfo = function() return "Talent", nil, 1, 1, 0, 1 end
     env.InCombatLockdown = function() return false end
+    -- D4: the target identity and health the sampler reads (UnitHealth through
+    -- compat's wrapper, UnitGUID captured by the class module directly). Defaults
+    -- nil keep every pre-D4 test on the "no readable target" shape.
+    env.UnitHealth = function(unit)
+        if unit ~= "target" then return nil end
+        return sb.target_hp
+    end
+    env.UnitGUID = function(unit)
+        if unit ~= "target" then return "Player-1" end
+        return sb.target_guid
+    end
 
     local ST = {
         DRUID = {},
@@ -1743,7 +1760,7 @@ end
 do
     local g = ST.DRUID.guide.gather(ST, {})
     eq(g.family, "WRATH", "gather: the sandbox client family rides the inputs")
-    eq(g.time_to_die, nil, "gather: time-to-die has no client source yet -> nil")
+    eq(g.time_to_die, nil, "gather: no readable target health -> time-to-die nil")
     eq(g.target_short_lived, nil, "gather: the short-lived flag stays nil")
     eq(g.can_powershift, nil, "gather: shift feasibility stays nil (in-game to confirm)")
     -- Stale values on the reused table are overwritten, never kept.
@@ -1753,7 +1770,7 @@ do
     local g2 = ST.DRUID.guide.gather(ST, reused)
     eq(g2, reused, "the reused table is the same table")
     eq(g2.family, "WRATH", "the family overwrite wins over a stale TBC flag")
-    eq(g2.time_to_die, nil, "a stale time-to-die is cleared")
+    eq(g2.time_to_die, nil, "a stale time-to-die is cleared (no readable target)")
     eq(g2.target_short_lived, nil, "a stale short-lived flag is cleared")
     eq(g2.can_powershift, nil, "a stale shift flag is cleared")
 end
@@ -2716,6 +2733,111 @@ do
     local cleared = SST.DRUID.guide.gather(SST, { sp_ready = true, sp_cd_remaining = 0 })
     eq(cleared.sp_ready, nil, "a stale Shifting Power ready is cleared when unknown")
     eq(cleared.sp_cd_remaining, nil, "a stale Shifting Power cooldown is cleared when unknown")
+end
+
+--=========================================================================================
+-- 16) D4: the EMA-smoothed time-to-die feeds the gather's time_to_die
+--     (bench/verify_bank.md §4.1 - the velocity is smoothed, never raw)
+--=========================================================================================
+do
+    local t = build()
+    local TST = t.ST
+    TST.in_combat = true
+    TST.mainhand = { speed = 3.0, ends_at = 3.0, start = 0.0, is_full = false }
+    TST.gcd = { expires = 0 }
+    TST.DRUID.post_init(TST)
+    local function gather()
+        return TST.DRUID.guide.gather(TST, {})
+    end
+
+    -- No target at all.
+    eq(gather().time_to_die, nil, "D4: no target -> nil")
+
+    -- A target appears; the first sample seeds the baseline only.
+    t.target_guid = "Target-1"
+    t.target_hp = 1000
+    t.clock = 0
+    eq(gather().time_to_die, nil, "D4: the first sample seeds the baseline")
+    -- 0.5 s later, 100 hp lost: raw 200 HP/s -> 900 / 200 = 4.5 s.
+    t.clock = 0.5
+    t.target_hp = 900
+    near(gather().time_to_die, 4.5, 0.01, "D4: the second sample yields hp / velocity")
+    -- The same clock with fresh hp does not advance the baseline (the throttle).
+    t.target_hp = 850
+    near(gather().time_to_die, 4.25, 0.01, "D4: the 0.25 s throttle holds the baseline")
+    -- Too soon after: the estimate rides the EMA with the live hp.
+    t.clock = 0.6
+    t.target_hp = 800
+    near(gather().time_to_die, 4.0, 0.01, "D4: an early gather reuses the EMA")
+    -- A steady rate keeps the EMA at 200: 800 / 200 = 4.0 (the early 0.6 s read
+    -- never entered the baseline).
+    t.clock = 1.0
+    t.target_hp = 800
+    near(gather().time_to_die, 4.0, 0.01, "D4: a steady rate keeps the estimate")
+    -- A heal contributes zero velocity and decays the EMA to 150.
+    t.clock = 1.5
+    t.target_hp = 900
+    near(gather().time_to_die, 900 / 150, 0.01, "D4: a heal decays the EMA, never flips it")
+    -- A target switch resets the baseline.
+    t.target_guid = "Target-2"
+    t.target_hp = 500
+    eq(gather().time_to_die, nil, "D4: a new target re-seeds")
+    -- Dead health drops the baseline (a revive cannot diff against pre-death hp).
+    t.clock = 2.0
+    t.target_hp = 0
+    eq(gather().time_to_die, nil, "D4: dead health -> nil")
+    t.target_hp = 400
+    eq(gather().time_to_die, nil, "D4: the baseline was dropped with the death")
+    -- Unreadable health (a secret value degrades to nil in compat) drops it too.
+    t.clock = 2.5
+    t.target_hp = nil
+    eq(gather().time_to_die, nil, "D4: unreadable health -> nil")
+    t.target_hp = 350
+    eq(gather().time_to_die, nil, "D4: the baseline was dropped with the unreadable read")
+    -- Losing the target clears a stale estimate on the reused table.
+    local reused = { time_to_die = 5 }
+    t.target_guid = nil
+    eq(TST.DRUID.guide.gather(TST, reused).time_to_die, nil,
+        "D4: losing the target reads nil")
+    eq(reused.time_to_die, nil, "D4: the stale estimate is overwritten on the reused table")
+
+    -- End-to-end: the estimate drives the Wrath W8 execute Bite. The scans fill
+    -- through the real hooks (the ticks also run the sampler - the throttle keeps
+    -- that deterministic), then the engine reads the gathered input.
+    t.target_guid = "Target-3"
+    t.target_hp = 600
+    t.player_auras = {
+        { name = "Savage Roar", count = 1, duration = 34,
+            expiration = t.clock + 60, source = "player", spell_id = 52610 },
+    }
+    t.target_auras = {
+        { name = "Rip", count = 1, duration = 12, expiration = t.clock + 30,
+            source = "player", spell_id = 1079 },
+        { name = "Rake", count = 1, duration = 9, expiration = t.clock + 28,
+            source = "player", spell_id = 1822 },
+        { name = "Mangle", count = 1, duration = 12, expiration = t.clock + 30,
+            source = "player", spell_id = 33987 },
+    }
+    TST.form_index = 3
+    t.energy = 90
+    t.combo = 5
+    local function btick(advance)
+        TST.mainhand.ends_at = t.clock + 3.0
+        t.advance(advance or 0.1)
+        TST.DRUID.on_bar_update(TST, "mainhand")
+    end
+    btick()          -- scan pass 1 (baseline seeded)
+    t.target_hp = 500
+    btick(0.3)       -- scan pass 2 + sample 2
+    t.target_hp = 400
+    btick(0.3)       -- sample 3
+    local inputs = gather()
+    check(type(inputs.time_to_die) == "number" and inputs.time_to_die <= 10,
+        "D4: the gather carries the EMA estimate into the frozen input")
+    local out = {}
+    TST.DRUID.guide.evaluate(inputs, out)
+    eq(out.action, "bite", "D4: the estimate drives the Wrath W8 execute Bite")
+    eq(out.hold, false, "D4: the Bite carries no hold")
 end
 
 if failures == 0 then

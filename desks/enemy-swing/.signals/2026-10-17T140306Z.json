@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:03:06Z",
+  "run_id": "enemy-swing-buildout-2026-10-17",
+  "agent_name": "enemy-swing",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The brief's read-first chain plus the read-only SuperSwingTimer reference pinned every behaviour (off-hand arg positions 21/13, target tracking, speed precedence, rescale, combat-exit reset) so the port needed no guessing. Self-wiring the driver frame kept the no-main.lua-edits scope exact, and the family gate as a pure function made the whole matrix offline-testable (228 checks, two mutations caught).",
+    "what_was_hard": "run.sh duty counted 33 -> 35 steps while the brief's validation line said 37; resolved in favour of the explicit two-step duty and recorded the discrepancy. The full harness at exit carries two other-lane failures (paladin_state.lua not yet landed; bars_state paladin/warrior count pins mid-edit) - reported as observed in-flight state, not hidden.",
+    "skill_gap": "Offline harness cannot load the addon: bar placement/colours, UnitAttackSpeed('target') fidelity and enemy-haste UNIT_ATTACK_SPEED cadence stay in-client checks; Cata/Mists CLEU SWING_* presence is family-gate-assumed, UNCONFIRMED in-client."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/enemy-swing/journal.md § 2026-10-17 [signal:done] build-out round 1 complete"
+}

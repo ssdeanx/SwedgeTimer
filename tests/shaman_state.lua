@@ -45,6 +45,9 @@ local target_aura_calls = 0
 -- Spell cooldown fixture for the Stormstrike / Shamanistic Rage badges. compat.lua reads
 -- the classic GetSpellCooldown global at load, so this must exist before compat runs.
 local cooldowns = {}
+-- Spell usability fixture for the S5 HUD mana-tint verification: [spell] =
+-- { usable, insufficient }; an absent entry reads affordable.
+local spell_usable = {}
 local casting_impl = function() return nil end
 local channel_impl = function() return nil end
 
@@ -88,6 +91,9 @@ end
 -- Font string stub for the flame shock label and the cooldown badges.
 local function make_fontstring()
     local f = { hidden = true }
+    function f:ClearAllPoints()
+        f.point, f.anchor, f.rel_point, f.offset, f.offset_y = nil, nil, nil, nil, nil
+    end
     function f:SetPoint(point, anchor, rel_point, x, y)
         f.point, f.anchor, f.rel_point, f.offset, f.offset_y = point, anchor, rel_point, x, y
     end
@@ -130,6 +136,10 @@ env.GetSpellInfo = function(id)
     -- the addon's twist id table, so only the live-name resolution path stamps it.
     if id == 10613 then return "Windfury Totem", nil, "icon_wf", 0, 0, 0, 10613 end
     if id == 8512 then return "Windfury Totem", nil, "icon_wf", 0, 0, 0, 8512 end
+    -- SoD Lava Burst fixture (S4): the live resolver probes by NAME and expects the
+    -- spell's id in the 7th return; the id lookup covers direct reads.
+    if id == "Lava Burst" then return "Lava Burst", nil, "icon_lava", 2000, 0, 0, 51505 end
+    if id == 51505 then return "Lava Burst", nil, "icon_lava", 2000, 0, 0, 51505 end
     return nil
 end
 env.IsSpellKnown = function(id) return known_spells[id] == true end
@@ -152,6 +162,11 @@ env.GetSpellCooldown = function(id)
     local cd = cooldowns[id]
     if cd then return cd.start, cd.duration, 1, 1 end
     return 0, 0, 1, 1
+end
+env.IsSpellUsable = function(spell)
+    local entry = spell_usable[spell]
+    if entry then return entry[1], entry[2] end
+    return true, false
 end
 env.UnitCastingInfo = function() return casting_impl() end
 env.UnitChannelInfo = function() return channel_impl() end
@@ -313,8 +328,8 @@ class_db.weave_families = nil
 -- 7) One aura walk feeds both weave inputs ----------------------------------------------
 -- scan_weave_auras must serve BOTH the haste buffs and the Maelstrom stacks, so a change
 -- of auras costs one UnitAura walk. The fixture keeps a neutral aura last and omits
--- Berserking, so the walk cannot early-exit: exactly one read per aura plus the
--- terminating nil read (4 auras + terminator = 5 calls).
+-- Berserking, so the walk cannot early-exit: R2 walks the full 40-row cap (a nil
+-- row no longer terminates), so one change costs exactly 40 reads.
 aura_list = {
     { name = "Maelstrom Weapon", count = 3, spell_id = 408505 },
     { name = "Whirlwind" },
@@ -323,7 +338,7 @@ aura_list = {
 }
 aura_calls = 0
 ST.SHAMAN.on_aura_change(ST)
-eq(aura_calls, 5, "one on_aura_change walks the auras once (4 auras + terminator)")
+eq(aura_calls, 40, "one on_aura_change walks the full 40-row cap (R2: no nil terminator)")
 eq(ST.weave_mw_stacks, 3, "the single walk carries the Maelstrom stack count")
 near(ST.weave_haste_mult, 1.30, 1e-9, "the single walk carries the Bloodlust haste multiplier")
 
@@ -499,6 +514,57 @@ eq(ST.weave_catalog.LB and ST.weave_catalog.LB.spell_id, 25449, "re-resolution p
 eq(ST.weave_catalog.LB and ST.weave_catalog.LB.cast_seconds, 2.5, "the higher rank's cast time is re-read")
 eq(ST.weave_catalog.CL and ST.weave_catalog.CL.spell_id, 25442, "other families re-resolve unchanged")
 known_spells[25448] = nil              -- fixture restored: 25449 is the highest known rank
+
+-- 11b) H4: an unresolvable cast time hides the weave widgets (never renders instant)
+-- The resolver only stores entries with a positive cast time, but a partially
+-- populated client can still hand the math an entry whose cast_seconds is nil; the
+-- effective cast then reads UNKNOWN and every marker/position widget must hide
+-- instead of clamping nil to fraction 0 and painting a whole-swing-safe breakpoint.
+st.family = "WRATH"
+ST.weave_mw_observed = false
+aura_list = {}
+ST.SHAMAN.on_aura_change(ST)
+-- Keep the suite clock monotonic: this block runs before section 12's clock = 50, so
+-- the throttled target-debuff stamp it writes never out-runs the later fixtures.
+clock = 45
+set_scripted_swing(clock, 4.0)
+ST.weave_family = "LB"
+local h4_entry = ST.weave_catalog.LB
+ST.weave_catalog.LB = { spell_id = 25449, name = "Lightning Bolt", icon = "icon_lb", cast_seconds = nil }
+eq(ST.SHAMAN.get_weave_effective_cast_time(ST, ST.weave_catalog.LB), nil,
+    "H4: an entry without a cast time reads UNKNOWN (nil), not instant")
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_marker.hidden, "H4: the main marker hides on an unknown cast")
+check(visuals_frame.weave_marker_top.hidden, "H4: the top marker hides on an unknown cast")
+check(visuals_frame.weave_marker_bottom.hidden, "H4: the bottom marker hides on an unknown cast")
+
+class_db.show_shaman_spell_positions = true
+local ok_h4 = pcall(ST.SHAMAN.on_bar_update, ST, "mainhand")
+check(ok_h4, "H4: the position row does not error on an unknown cast")
+local h4_icons = visuals_frame.weave_pos_icons
+check(h4_icons.LB.hidden, "H4: the unresolved LB slot hides")
+check(visuals_frame.weave_pos_times.LB.hidden, "H4: the unresolved LB cast time hides")
+check(not h4_icons.CL.hidden, "H4: a resolved sibling (CL) still draws")
+near(h4_icons.CL.offset, (4.0 - 2.0) / 4.0 * BAR_WIDTH, 1e-6,
+    "H4: the resolved slot keeps its own safe start")
+class_db.show_shaman_spell_positions = nil
+ST.weave_catalog.LB = h4_entry
+-- Drop the lazily-created position widgets again: section 27 pins that they do not
+-- exist until the option first turns on.
+visuals_frame.weave_pos_icons, visuals_frame.weave_pos_times = nil, nil
+visuals_frame.weave_pos_zone, visuals_frame.weave_pos_label = nil, nil
+st.family = "TBC"
+
+-- 11c) Catalogue miss is hidden-with-retry by design (H4 follow-up)
+-- An unresolved family stays nil and only advances its throttled retry stamp; the
+-- hide comes from the H4 unknown path (11b), never a guess, and there is no chat or
+-- diag write to assert - the acceptance is that the miss is quiet and retried.
+ST.weave_catalog.HW = nil
+ST.weave_catalog_retry_at.HW = nil
+clock = 45.5
+ST.SHAMAN.resolve_weave_catalog(ST)
+eq(ST.weave_catalog.HW, nil, "catalogue miss: the family stays unresolved")
+eq(ST.weave_catalog_retry_at.HW, clock + 5, "catalogue miss: the retry is throttled, not spammed")
 
 -- 12) Tracker option gates: all five off -> nothing drawn, no scans -----------------------
 -- The gate contract for every new visual: an off option keeps the widgets hidden AND the
@@ -700,12 +766,15 @@ aura_list = { { name = "Water Shield (localized)", spell_id = 52127, count = 3 }
 ST.SHAMAN.on_aura_change(ST)
 eq(ST.weave_shield_type, "water", "shield detection falls back to the id table")
 
--- An unreadable count reads as the full row (reference fallback).
+-- An unreadable count reads as the 3-charge standard (reference
+-- SuperSwingTimer_ClassMods.lua:4141-4144), never the optimistic full row.
 aura_list = { { name = "Lightning Shield" } }
 ST.SHAMAN.on_aura_change(ST)
 ST.SHAMAN.on_bar_update(ST, "mainhand")
 eq(ST.weave_shield_charges, nil, "a shield aura without a count stores no count")
-near(rects[4].color[4], 0.9, 1e-9, "an unreadable charge count reads as full")
+near(rects[1].color[4], 0.9, 1e-9, "the 3-charge standard fills slot 1")
+near(rects[3].color[4], 0.9, 1e-9, "the 3-charge standard fills slot 3")
+near(rects[4].color[4], 0.2, 1e-9, "the 3-charge standard leaves the fourth slot dimmed")
 
 -- 17) Breakpoint markers and the offhand spark mirror ---------------------------------------
 -- Runs as a Wrath client (the markers only draw where Maelstrom exists); the TBC pin
@@ -985,7 +1054,7 @@ eq(ST.weave_is_casting, false, "twist commits leave no cast in flight")
 aura_list = { { name = "Rage of the Farseer" } }
 aura_calls = 0
 ST.SHAMAN.on_aura_change(ST)
-eq(aura_calls, 2, "farseer: the lust feeds through the same single walk (1 aura + terminator)")
+eq(aura_calls, 40, "farseer: the lust feeds through the same single walk (full 40-row cap, R2)")
 near(ST.weave_haste_mult, 1.30, 1e-9, "farseer: the personal lust reads as the 30% Bloodlust leg")
 eq(ST.SHAMAN.get_weave_effective_cast_time(ST, ST.weave_catalog.LB), 2.5 / 1.30, 1e-9, "TBC: the farseer haste shortens the base cast time")
 aura_list = { { name = "Rage of the Farseer" }, { name = "Bloodlust", spell_id = 2825 } }
@@ -1000,6 +1069,489 @@ aura_list = {}
 ST.SHAMAN.on_aura_change(ST)
 near(ST.weave_haste_mult, 1.0, 1e-9, "a dropped lust restores the neutral haste multiplier")
 casting_impl = function() return nil end
+
+-- 22) Stormstrike nature-vuln target bar (S2) -----------------------------------------
+-- Option-gated (nil = off, true = on); the widgets are created lazily on the first
+-- tick with the option on, so a default session creates nothing (the construction-
+-- time widget counts stay untouched) and a tick nobody needs performs no aura work.
+ST.interfaces_are_initialised = true
+st.family = "TBC"
+clock = 400
+set_scripted_swing(clock, 2.0)
+aura_list = {}
+ST.SHAMAN.on_aura_change(ST)
+class_db.show_shaman_flame_shock_bar = false
+class_db.show_shaman_stormstrike_bar = nil
+target_aura_list = {}
+target_aura_calls = 0
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_storm_bg == nil, "S2 off (nil): no widgets are created")
+eq(target_aura_calls, 0, "S2 off with every consumer off: no target scans")
+
+-- On: the scan runs, the widgets appear and the debuff draws.
+class_db.show_shaman_stormstrike_bar = true
+target_aura_list = {
+    { name = "Stormstrike", spell_id = 17364, source = "player", duration = 12, expiration = clock + 10 },
+}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_storm_bg ~= nil, "S2 on: the bar widgets are created lazily")
+check(not visuals_frame.weave_storm_bg.hidden, "S2: the bar shows for the player's Stormstrike debuff")
+near(visuals_frame.weave_storm_fill.width, BAR_WIDTH * (10 / 12), 1e-6, "S2: fill fraction is remaining/total")
+eq(visuals_frame.weave_storm_label.text, "10", "S2: the seconds label counts down")
+check(visuals_frame.weave_storm_glow.hidden, "S2: no glow above the final 4 s")
+clock = 407
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_storm_label.text, "3", "S2: the label keeps counting down")
+check(not visuals_frame.weave_storm_glow.hidden, "S2: glow inside the final 4 s")
+
+-- Another caster's debuff does not qualify.
+clock = 420
+target_aura_list = {
+    { name = "Stormstrike", spell_id = 17364, source = "other", duration = 12, expiration = clock + 8 },
+}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_storm_bg.hidden, "S2: a debuff from another caster does not show the bar")
+
+-- The trigger id noted in verify_bank (32175) and a localized name still match
+-- through the guarded id/name reads; an unknown pair never lights the bar.
+clock = 421
+target_aura_list = {
+    { name = "Stormstrike (localized)", spell_id = 32175, source = "player", duration = 12, expiration = clock + 8 },
+}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(not visuals_frame.weave_storm_bg.hidden, "S2: the trigger id 32175 with a localized name still matches")
+clock = 422
+target_aura_list = {
+    { name = "Something Else", spell_id = 99999, source = "player", duration = 12, expiration = clock + 8 },
+}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_storm_bg.hidden, "S2: an unknown id/name pair never lights the bar")
+
+-- A dropped debuff hides the bar and clears the glow cache.
+target_aura_list = {}
+clock = 423
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_storm_bg.hidden, "S2: the bar hides when the debuff is gone")
+check(visuals_frame.weave_storm_glow.hidden, "S2: the glow hides when the debuff is gone")
+class_db.show_shaman_stormstrike_bar = nil
+class_db.show_shaman_flame_shock_bar = nil
+
+-- 23) WF-fishing HOLD tint (S3) --------------------------------------------------------
+-- Option-gated (nil = off): while Stormstrike is ready and the Windfury ICD clears
+-- inside the current swing, the SS badge flips to an amber "SS HOLD" and the bar's
+-- final fraction (from the ICD clear point to the swing end) gets an amber wash.
+clock = 498.5
+set_scripted_swing(clock, 4.0)          -- swing 496 -> 500; ICD clears at 499 (0.5 s left)
+aura_list = { { name = "Windfury Weapon" } }
+ST.SHAMAN.on_aura_change(ST)
+class_db.show_shaman_wf_hold_tint = nil
+-- Prime the whole-second cache (6 s) so the hold -> cooldown switch below is a true
+-- same-second transition; a stale "SS HOLD" must never survive into it.
+cooldowns[17364] = { start = clock - 2, duration = 8 }
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_ss_text.text, "SS 6s", "S3 setup: the cooldown text primes the cache")
+cooldowns[17364] = nil
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_ss_text.hidden, "S3 off (nil): the ready SS badge stays hidden")
+check(visuals_frame.weave_wf_wash == nil, "S3 off (nil): no wash widget is created")
+
+class_db.show_shaman_wf_hold_tint = true
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_ss_text.text, "SS HOLD", "S3: the ready SS badge reads SS HOLD while fishing")
+check(not visuals_frame.weave_ss_text.hidden, "S3: the hold badge shows")
+near(visuals_frame.weave_ss_text.color[1], 1.0, 1e-9, "S3: the hold badge is amber (red channel)")
+near(visuals_frame.weave_ss_text.color[2], 0.72, 1e-9, "S3: the hold badge is amber (green channel)")
+check(visuals_frame.weave_wf_wash ~= nil, "S3: the wash widget is created lazily")
+check(not visuals_frame.weave_wf_wash.hidden, "S3: the wash shows while holding")
+near(visuals_frame.weave_wf_wash.offset, 0.75 * BAR_WIDTH, 1e-6,
+    "S3: the wash starts at the ICD-clear fraction (elapsed + ICD / speed)")
+near(visuals_frame.weave_wf_wash.width, 0.25 * BAR_WIDTH, 1e-6,
+    "S3: the wash covers the swing's final fraction")
+near(visuals_frame.weave_wf_wash.base_color[4], 0.18, 1e-9, "S3: the wash is translucent amber")
+
+-- The ICD elapsing ends the hold (a ready Stormstrike is no longer delayed).
+clock = 499.5
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_ss_text.hidden, "S3: an elapsed ICD ends the hold")
+check(visuals_frame.weave_wf_wash.hidden, "S3: the wash hides once the ICD has cleared")
+
+-- The ICD outlasting the swing never holds (a short swing, e.g. under haste).
+clock = 500
+set_scripted_swing(clock, 2.0)          -- swing 500 -> 502; ICD until 503
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_ss_text.hidden, "S3: an ICD beyond the swing end never holds")
+check(visuals_frame.weave_wf_wash.hidden, "S3: no wash when the ICD outlasts the swing")
+
+-- A running Stormstrike cooldown wins the badge (the hold only applies when SS is
+-- ready), and a dropped imbue ends the hold entirely. The whole-second readout
+-- deliberately matches the stale pre-hold cache (6 s), pinning that a mode switch
+-- always refreshes the text - a stale "SS HOLD" must never survive into it.
+clock = 501
+set_scripted_swing(clock, 4.0)          -- swing 500 -> 504; ICD until 502
+cooldowns[17364] = { start = clock - 2, duration = 8 }  -- 6 s left
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_ss_text.text, "SS 6s", "S3: a running cooldown keeps the cooldown text")
+check(visuals_frame.weave_wf_wash.hidden, "S3: a running cooldown also hides the wash")
+cooldowns[17364] = nil
+aura_list = {}
+ST.SHAMAN.on_aura_change(ST)
+clock = 501.5
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_ss_text.hidden, "S3: a dropped imbue ends the hold")
+check(visuals_frame.weave_wf_wash.hidden, "S3: a dropped imbue hides the wash")
+
+-- The badge option still gates the whole badge (hold included).
+aura_list = { { name = "Windfury Weapon" } }
+ST.SHAMAN.on_aura_change(ST)
+class_db.show_shaman_cooldown_badges = false
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_ss_text.hidden, "S3: the badge option off hides the hold too")
+class_db.show_shaman_cooldown_badges = true
+class_db.show_shaman_wf_hold_tint = nil
+aura_list = {}
+
+-- 24) MW5 spender choice (S4) ----------------------------------------------------------
+-- ERA + the Lava Burst rune known: at five stacks the assist marks Lava Burst (icon
+-- + lava tint); without the rune, on TBC, below five stacks, or with the FS-collision
+-- guard armed (FS inside its final 2 s AND a ready shock) the catalogue Lightning
+-- Bolt stays. The gather holds mw_available while the guard is armed, so the frozen
+-- engine falls through to the Flame Shock refresh.
+st.family = "ERA"
+ST.weave_mw_observed = true
+class_db.weave_mw_enabled = true
+known_spells[51505] = true
+clock = 600
+set_scripted_swing(clock, 4.0)
+aura_list = { { name = "Maelstrom Weapon", count = 5, spell_id = 408505 } }
+ST.SHAMAN.on_aura_change(ST)
+eq(ST.weave_mw_stacks, 5, "S4: five stacks are read")
+target_aura_list = {}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_marker.texture, "icon_lava", "S4: the MW5 marker shows Lava Burst when the rune is known")
+near(visuals_frame.weave_marker.color[1], 1.0, 1e-9, "S4: the LvB marker carries the lava tint (red)")
+near(visuals_frame.weave_marker.color[2], 0.55, 1e-9, "S4: the LvB marker carries the lava tint (green)")
+
+-- FS-collision guard: FS inside its final 2 s with a ready shock holds LvB back.
+clock = 601
+target_aura_list = {
+    { name = "Flame Shock", spell_id = 8050, source = "player", duration = 12, expiration = clock + 1.5 },
+}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_marker.texture, "icon_lb", "S4: the FS-collision guard holds LvB back inside the final 2 s")
+
+-- A running shock cooldown means the refresh cannot go out: no hold, LvB stays.
+cooldowns[8050] = { start = clock, duration = 6 }
+clock = 602
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_marker.texture, "icon_lava", "S4: a running shock cooldown leaves LvB in place")
+cooldowns[8050] = nil
+
+-- Exactly 2.0 s of Flame Shock does not hold (strict <).
+clock = 610
+target_aura_list = {
+    { name = "Flame Shock", spell_id = 8050, source = "player", duration = 12, expiration = 612 },
+}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_marker.texture, "icon_lava", "S4: exactly 2.0 s of Flame Shock does not hold (strict <)")
+
+-- Without the rune/talent the MW5 marker stays Lightning Bolt. (The Flame Shock
+-- fixture is cleared so the FS-collision guard cannot mask the choice.)
+known_spells[51505] = nil
+target_aura_list = {}
+clock = 611
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_marker.texture, "icon_lb", "S4: without the rune the MW5 marker stays Lightning Bolt")
+known_spells[51505] = true
+
+-- TBC never resolves Lava Burst at all (not baseline there): the visual-spell
+-- resolver answers the catalogue directly (the marker itself stays hidden on TBC -
+-- no Maelstrom there - so asserting the texture would read a stale value).
+st.family = "TBC"
+local tbc_entry, tbc_family = ST.SHAMAN.get_weave_visual_spell(ST)
+eq(tbc_entry and tbc_entry.icon, "icon_lb", "S4: TBC never resolves Lava Burst (not baseline there)")
+eq(tbc_family, "LB", "S4: TBC keeps the Lightning Bolt family token")
+st.family = "ERA"
+
+-- Below five stacks the catalogue spell stays.
+aura_list = { { name = "Maelstrom Weapon", count = 4, spell_id = 408505 } }
+ST.SHAMAN.on_aura_change(ST)
+clock = 613
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_marker.texture, "icon_lb", "S4: below five stacks the catalogue spell stays")
+
+-- The gather holds mw_available while the guard is armed; the stack count stays
+-- truthful, and a running shock (or no FS reading) leaves the gate open.
+ST.weave_mw_stacks = 5
+clock = 620
+target_aura_list = {
+    { name = "Flame Shock", spell_id = 8050, source = "player", duration = 12, expiration = clock + 1.5 },
+}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+local gathered_s4 = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_s4.mw_available, false, "S4: the gather holds the MW gate while FS is inside the guard")
+eq(gathered_s4.mw_stacks, 5, "S4: the stack count stays truthful while held")
+cooldowns[8050] = { start = clock, duration = 6 }
+gathered_s4 = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_s4.mw_available, true, "S4: a running shock leaves the MW gate open")
+cooldowns[8050] = nil
+target_aura_list = {}
+clock = 621
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+gathered_s4 = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_s4.mw_available, true, "S4: no Flame Shock reading leaves the MW gate open")
+ST.weave_mw_stacks = 0
+ST.weave_mw_observed = false
+st.family = "TBC"
+
+-- 25) Rockbiter Weapon badge -----------------------------------------------------------
+-- Option-gated (nil = off, created lazily); the merged aura walk feeds it, the id
+-- table and the English name both match, and a dropped imbue hides the badge.
+clock = 700
+aura_list = { { name = "Rockbiter Weapon", expiration = clock + 300 } }
+ST.SHAMAN.on_aura_change(ST)
+eq(ST.weave_rockbiter_active, true, "RB: the imbue is tracked through the merged scan")
+class_db.show_shaman_rockbiter_badge = nil
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_rb_text == nil, "RB off (nil): no widget is created")
+class_db.show_shaman_rockbiter_badge = true
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_rb_text ~= nil, "RB on: the badge is created lazily")
+eq(visuals_frame.weave_rb_text.text, "RB 300s", "RB: the badge counts the imbue down")
+check(not visuals_frame.weave_rb_text.hidden, "RB: the badge shows while the imbue is up")
+clock = 705
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_rb_text.text, "RB 295s", "RB: the readout follows the clock")
+
+-- An unreadable expiry shows the bare badge; the id table matches a localized name.
+aura_list = { { name = "Rockbiter Weapon" } }
+ST.SHAMAN.on_aura_change(ST)
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_rb_text.text, "RB", "RB: an unreadable expiry shows the bare badge")
+aura_list = { { name = "Rockbiter (localized)", spell_id = 8017, expiration = clock + 100 } }
+ST.SHAMAN.on_aura_change(ST)
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_rb_text.text, "RB 100s", "RB: the id table matches when the name differs")
+
+-- A dropped imbue hides the badge.
+aura_list = {}
+ST.SHAMAN.on_aura_change(ST)
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_rb_text.hidden, "RB: the badge hides when the imbue drops")
+class_db.show_shaman_rockbiter_badge = nil
+
+-- 26) S5 mana tint verification: the HUD provider's tint path --------------------------
+-- Verified wired: get_hud_state reads the shared hud_mana_tint key and marks
+-- s.usable=false on an insufficient-power reading (the shared default ships true);
+-- an affordable reading or the toggle off leaves the slot untinted.
+do
+    local slot = ST.SHAMAN.HUD_SLOTS[1]
+    class_db.hud_mana_tint = true
+    spell_usable[17364] = { false, true }
+    local s = ST.SHAMAN.get_hud_state(ST, slot, clock)
+    eq(s.usable, false, "S5: an insufficient-power reading tints the slot")
+    class_db.hud_mana_tint = false
+    s = ST.SHAMAN.get_hud_state(ST, slot, clock)
+    eq(s.usable, nil, "S5: the tint toggle off leaves the slot untinted")
+    class_db.hud_mana_tint = true
+    spell_usable[17364] = { true, false }
+    s = ST.SHAMAN.get_hud_state(ST, slot, clock)
+    eq(s.usable, nil, "S5: an affordable reading leaves the slot untinted")
+    spell_usable[17364] = nil
+    class_db.hud_mana_tint = nil
+end
+
+-- 27) Spell-position row (round 2) -----------------------------------------------------
+-- Option-gated (nil = off); on: per-spell icons at each spell's latest safe cast
+-- start, cast-time numbers, the zone band + label, and the ready/clip/wait states.
+-- WRATH client (Maelstrom active) with the sandbox catalogue: LB cast 2.5 s,
+-- CL cast 2.0 s; MW stacks scale the effective cast and move the positions.
+st.family = "WRATH"
+ST.weave_mw_observed = false
+class_db.weave_mw_enabled = true
+clock = 800
+set_scripted_swing(clock, 4.0)          -- swing 800 -> 804
+class_db.show_shaman_spell_positions = nil
+aura_list = {}
+ST.SHAMAN.on_aura_change(ST)
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_pos_zone == nil, "positions off (nil): no widgets are created")
+
+class_db.show_shaman_spell_positions = true
+aura_list = { { name = "Maelstrom Weapon", count = 2, spell_id = 408505 } }
+ST.SHAMAN.on_aura_change(ST)
+eq(ST.weave_mw_stacks, 2, "positions: two stacks are read")
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_pos_zone ~= nil, "positions on: the widgets are created lazily")
+local pos_icons = visuals_frame.weave_pos_icons
+local pos_times = visuals_frame.weave_pos_times
+check(pos_icons.LB and pos_icons.CL and pos_icons.LvB, "positions: LB, CL and LvB slots exist")
+check(not pos_icons.LB.hidden, "positions: the LB icon shows")
+near(pos_icons.LB.offset, 0.625 * BAR_WIDTH, 1e-6,
+    "positions: LB sits at its latest safe start (2 stacks: 4 - 1.5 over 4)")
+near(pos_icons.CL.offset, 0.7 * BAR_WIDTH, 1e-6,
+    "positions: CL sits at its latest safe start (2 stacks: 4 - 1.2 over 4)")
+eq(pos_times.LB.text, "1.5", "positions: the LB cast time is shown")
+eq(pos_times.CL.text, "1.2", "positions: the CL cast time is shown")
+near(pos_icons.LB.color[1], 0.45, 1e-9, "positions: a ready LB icon carries the family color")
+near(pos_icons.LB.color[4], 0.95, 1e-9, "positions: a ready icon carries the ready alpha")
+check(pos_icons.LvB.hidden, "positions: LvB stays hidden without the rune (WRATH)")
+
+-- The zone band + the operator's caption.
+local pos_zone = visuals_frame.weave_pos_zone
+check(not pos_zone.hidden, "positions: the zone band shows")
+near(pos_zone.offset, 0.625 * BAR_WIDTH, 1e-6, "positions: the zone starts at the earliest safe start")
+near(pos_zone.width, 0.075 * BAR_WIDTH, 1e-6, "positions: the zone spans the safe starts")
+near(pos_zone.offset_y, 18, 1e-9, "positions: the zone sits above the bar stack")
+eq(visuals_frame.weave_pos_label.text, "Spells start cast range zone",
+    "positions: the zone label carries the operator's caption")
+
+-- LvB joins the row when the rune/talent is present (ERA; the S4 gate stays).
+st.family = "ERA"
+ST.weave_mw_observed = true
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(not pos_icons.LvB.hidden, "positions: LvB joins the row when the rune is present")
+near(pos_icons.LvB.offset, 0.7 * BAR_WIDTH, 1e-6, "positions: LvB sits at its own safe start")
+eq(pos_times.LvB.text, "1.2", "positions: the LvB cast time is shown")
+
+-- The clip case: past a spell's safe start the icon turns red (casting now would
+-- overrun the swing) - never a ready state.
+clock = 803.5
+set_scripted_swing(clock, 4.0)          -- still the 800 -> 804 swing; now at 0.875
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(pos_icons.LB.color[1], 1, "positions: a passed window reads as a clip (red)")
+near(pos_icons.LB.color[2], 0.15, 1e-9, "positions: the clip tint is the red constant")
+near(pos_icons.CL.color[2], 0.15, 1e-9, "positions: CL clips at the same moment")
+
+-- Fewer than two stacks read as wait (dim): the 2-3 stack gate.
+aura_list = { { name = "Maelstrom Weapon", count = 1, spell_id = 408505 } }
+ST.SHAMAN.on_aura_change(ST)
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+near(pos_icons.LB.color[4], 0.35, 1e-9, "positions: one stack reads as wait (dimmed)")
+
+-- Five stacks: the instant cast sits at the swing end and the degenerate zone
+-- hides (every spell shares the same start).
+aura_list = { { name = "Maelstrom Weapon", count = 5, spell_id = 408505 } }
+ST.SHAMAN.on_aura_change(ST)
+clock = 805
+set_scripted_swing(clock, 4.0)          -- fresh swing 804 -> 808
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+near(pos_icons.LB.offset, BAR_WIDTH, 1e-6, "positions: five stacks put the instant cast at the swing end")
+eq(pos_times.LB.text, "0.0", "positions: the instant cast time reads 0.0")
+check(not pos_icons.LB.hidden, "positions: the instant cast stays ready")
+check(pos_zone.hidden, "positions: a degenerate zone (one start) hides the band")
+
+-- Dynamic re-adjust: after the swing rolls over (and the stacks change) the row
+-- recomputes against the fresh swing.
+aura_list = { { name = "Maelstrom Weapon", count = 3, spell_id = 408505 } }
+ST.SHAMAN.on_aura_change(ST)
+clock = 805.5
+set_scripted_swing(clock, 4.0)
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+near(pos_icons.LB.offset, 0.75 * BAR_WIDTH, 1e-6,
+    "positions: after the rollover LB re-adjusts to the new swing (3 stacks: 4 - 1.0 over 4)")
+near(pos_icons.CL.offset, 0.8 * BAR_WIDTH, 1e-6, "positions: CL re-adjusts with its own cast time")
+eq(pos_times.LB.text, "1.0", "positions: the LB cast time follows the stack count")
+check(not pos_zone.hidden, "positions: the zone returns with distinct starts")
+
+-- The option off hides every widget again.
+class_db.show_shaman_spell_positions = nil
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(pos_zone.hidden, "positions: the option off hides the zone")
+check(pos_icons.LB.hidden, "positions: the option off hides the icons")
+check(pos_times.LB.hidden, "positions: the option off hides the cast times")
+aura_list = {}
+ST.SHAMAN.on_aura_change(ST)
+st.family = "TBC"
+
+-- 28) DW sync + Flurry badges (round 2) ------------------------------------------------
+-- Option-gated (nil = off): the sync readout compares the MH/OH landings against
+-- the Flurry ICD threshold (0.5 s, amber when past it); the Flurry readout shows
+-- the stack count and the live 0.5 s proc ICD. Both work off swing/aura state only
+-- (no st.is_mainline gate); the sync half hides without a live offhand.
+clock = 900
+set_scripted_swing(clock, 2.6)
+aura_list = {}
+ST.SHAMAN.on_aura_change(ST)
+class_db.show_shaman_dw_sync = nil
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_sync_text == nil, "DW badges off (nil): no widgets are created")
+
+class_db.show_shaman_dw_sync = true
+ST.offhand = { has_weapon = true, ends_at = ST.mainhand.ends_at + 0.1 }
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_sync_text ~= nil, "DW badges on: the widgets are created lazily")
+eq(visuals_frame.weave_sync_text.text, "DW SYNC 0.1s", "DW badges: a synced pair reads DW SYNC")
+near(visuals_frame.weave_sync_text.color[2], 1.0, 1e-9, "DW badges: the synced readout is green")
+eq(visuals_frame.weave_sync_text.offset_y, -28, "DW badges: the sync readout sits under Rockbiter")
+eq(visuals_frame.weave_flurry_text.offset_y, -38, "DW badges: the Flurry readout sits under the sync line")
+
+ST.offhand.ends_at = ST.mainhand.ends_at + 0.8
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_sync_text.text, "DW DESYNC 0.8s", "DW badges: drift past the ICD window reads DW DESYNC")
+near(visuals_frame.weave_sync_text.color[2], 0.72, 1e-9, "DW badges: the desync readout is amber")
+
+ST.offhand.ends_at = ST.mainhand.ends_at + 0.5
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_sync_text.text, "DW SYNC 0.5s",
+    "DW badges: exactly the threshold still reads SYNC (strict >)")
+
+ST.offhand = { has_weapon = false, ends_at = ST.mainhand.ends_at }
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_sync_text.hidden, "DW badges: no offhand weapon hides the sync readout")
+ST.offhand = { has_weapon = true }
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_sync_text.hidden, "DW badges: unknown landings never warn")
+
+-- Flurry: a fresh aura stamps the proc time; the readout carries the stacks and
+-- the live ICD, counts down, and drops the suffix once the ICD elapses.
+aura_list = { { name = "Flurry", count = 3, spell_id = 16280 } }
+ST.SHAMAN.on_aura_change(ST)
+eq(ST.weave_flurry_stacks, 3, "DW badges: Flurry stacks are read")
+near(ST.weave_flurry_proc_at, clock, 1e-9, "DW badges: a fresh aura stamps the proc time")
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_flurry_text.text, "FL 3 0.5s", "DW badges: the Flurry readout carries the live ICD")
+near(visuals_frame.weave_flurry_text.color[1], 0.65, 1e-9, "DW badges: the Flurry readout is ice blue")
+clock = 900.3
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_flurry_text.text, "FL 3 0.2s", "DW badges: the ICD counts down")
+clock = 900.6
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_flurry_text.text, "FL 3", "DW badges: the elapsed ICD drops off the readout")
+
+-- A consumed charge (count decrease) never restamps; a re-proc (increase) does.
+aura_list = { { name = "Flurry", count = 2, spell_id = 16280 } }
+ST.SHAMAN.on_aura_change(ST)
+eq(ST.weave_flurry_stacks, 2, "DW badges: a consumed charge drops the stack count")
+near(ST.weave_flurry_proc_at, 900, 1e-9, "DW badges: consuming a charge never restamps the ICD")
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_flurry_text.text, "FL 2", "DW badges: the readout follows the remaining charges")
+clock = 910
+aura_list = { { name = "Flurry", count = 3, spell_id = 16280 } }
+ST.SHAMAN.on_aura_change(ST)
+near(ST.weave_flurry_proc_at, 910, 1e-9, "DW badges: a re-proc restamps the ICD")
+clock = 910.2
+ST.SHAMAN.on_aura_change(ST)
+near(ST.weave_flurry_proc_at, 910, 1e-9, "DW badges: an unchanged count never restamps")
+
+-- A dropped Flurry hides the readout; the badge works without an offhand too.
+aura_list = {}
+ST.SHAMAN.on_aura_change(ST)
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_flurry_text.hidden, "DW badges: a dropped Flurry hides the readout")
+clock = 911
+aura_list = { { name = "Flurry", count = 1, spell_id = 16280 } }
+ST.SHAMAN.on_aura_change(ST)
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_sync_text.hidden, "DW badges: no offhand keeps the sync readout hidden")
+eq(visuals_frame.weave_flurry_text.text, "FL 1 0.5s", "DW badges: Flurry tracks without an offhand (2H)")
+
+-- The option off hides both readouts.
+class_db.show_shaman_dw_sync = nil
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_sync_text.hidden, "DW badges: the option off hides the sync readout")
+check(visuals_frame.weave_flurry_text.hidden, "DW badges: the option off hides the Flurry readout")
+aura_list = {}
+ST.SHAMAN.on_aura_change(ST)
 
 -- 18) Config and options wiring: the five new keys exist in both directions ---------------
 do
@@ -1027,6 +1579,27 @@ do
             key .. " has a toggle widget in the SHAMAN options section")
     end
 end
+
+-- R2: secret-hole scans (no truncation below a restricted row) ------------------
+-- A nil row above the tracked auras no longer hides them: the weave walk and
+-- the target scan both continue past it. (Clock 1000: past every earlier
+-- section, so the 0.05 s target-scan throttle cannot swallow the re-scan.)
+clock = 1000
+set_scripted_swing(clock, 2.0)
+aura_list = {
+    [2] = { name = "Maelstrom Weapon", count = 3, spell_id = 408505 },
+    [3] = { name = "Bloodlust", spell_id = 2825 },
+}
+ST.SHAMAN.on_aura_change(ST)
+eq(ST.weave_mw_stacks, 3, "R2: Maelstrom stacks latch below a secret row")
+near(ST.weave_haste_mult, 1.30, 1e-9, "R2: Bloodlust haste latches below a secret row")
+
+target_aura_list = {
+    [2] = { name = "Flame Shock", spell_id = 8050, source = "player", duration = 12, expiration = clock + 8 },
+}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(not visuals_frame.weave_fs_bg.hidden, "R2: Flame Shock draws below a secret row")
+eq(visuals_frame.weave_fs_label.text, "8", "R2: the label counts down below a secret row")
 
 if failures == 0 then
     print("PASS  shaman_state.lua (" .. tostring(checks) .. " checks)")

@@ -18,6 +18,7 @@
 --   latency_slice_fraction   SuperSwingTimer_UI.lua:890-941
 --   clip_tint                SuperSwingTimer_UI.lua:858-886
 --   range_state              SuperSwingTimer_ClassMods.lua:5585-5610
+--   hold_seconds             SwedgeTimer display kernel (H1 shot clock), not a reference port
 -- Constants: SuperSwingTimer_Constants.lua:168 (cast window), :180 (steady-shot grace),
 -- SuperSwingTimer_UI.lua:872-876 (multi-shot grace), SuperSwingTimer_State.lua:25 (dedupe),
 -- SuperSwingTimer_Constants.lua:975-976 (clip tint colours).
@@ -189,6 +190,25 @@ function hunter_window.cast_bar_display(has_live_cast, window_start, window_dura
         return "window"
     end
     return "hidden"
+end
+
+-- The H1 shot clock: seconds of HOLD left while `now` sits in the hidden Auto-Shot
+-- window (window_start + window_duration - now, i.e. the moment the window closes and
+-- the next Auto Shot fires). The same inclusive-bounds test as cast_bar_display above:
+-- a `now` at either edge is inside (0 at the closing edge), anything outside reads nil,
+-- as does a missing/zero/negative duration or a non-number argument - the shot clock
+-- derives from the same bounds the HOLD ride keys on, never from a clock read (this is
+-- a display kernel for the SwedgeTimer face label, not a verbatim SuperSwingTimer port).
+function hunter_window.hold_seconds(window_start, window_duration, now)
+    if type(window_start) ~= "number" or type(window_duration) ~= "number"
+        or window_duration <= 0 or type(now) ~= "number" then
+        return nil
+    end
+    local window_end = window_start + window_duration
+    if now < window_start or now > window_end then
+        return nil
+    end
+    return window_end - now
 end
 
 -- Width fraction of the red latency end-slice drawn at the right edge of the cast bar:

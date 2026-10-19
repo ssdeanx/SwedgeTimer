@@ -1,7 +1,9 @@
 --=========================================================================================
 -- Module to contain presets for the options table generation
 --=========================================================================================
-local addon_name, st = ...
+-- NOTE: the second chunk vararg (st) is deliberately unbound: this preset file only
+-- defines ST tables and reads LSM; it never touches the st utils table.
+local addon_name = ...
 ---@class AceAddon
 ---@field valid_anchor_points table
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)

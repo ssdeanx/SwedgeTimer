@@ -1,0 +1,14 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T09:59:27Z",
+  "agent_name": "rogue-deep",
+  "self_assessment": {"intent": 5, "confidence": 4, "accuracy": 4, "completeness": 4},
+  "patterns": {
+    "what_worked": "SearxNG snippets + web_url_read extracts carried all verdicts; same-author Era-vs-TBC swing advice flip gave a clean client boundary",
+    "what_was_hard": "wago bodies unrended, CF 403, Wowhead JS shells — listing/snippet text only, labeled throughout",
+    "skill_gap": "no speedrun-log source reachable (WCL bot-walled); opener deltas stay UNCONFIRMED"
+  },
+  "escalation": {"reason": null, "blocked_on": null, "recommendation": null}
+}
+echo saved 2026-10-19T09:59:27Z; ls desks/rogue-deep/.signals/

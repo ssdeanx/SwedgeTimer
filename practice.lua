@@ -1446,3 +1446,1214 @@ function st.practice.score_summary(score)
     summary.score = (attempts > 0) and math.floor(summary.mean_points + 0.5) or 0
     return summary
 end
+
+--=========================================================================================
+-- Generic scenario harness (C1): the reusable sim/timing engine.
+--
+-- Scenario lifecycle, forced-move windows, timing queries and the scoring pipeline live
+-- here; every trainer is a scenario spec registered through
+-- st.practice.harness.register_scenario, and the paladin twist sim is consumer #1
+-- (registered at the bottom of this section). The harness is PURE like the rest of the
+-- module: the caller owns the clock and feeds `now` explicitly.
+--
+-- The direct engine entry points above are deliberately untouched: the shipped practice
+-- UI keeps driving the paladin sim exactly as before (the regression bar), while a
+-- harness-driven session wraps the same functions - tests/practice_state.lua pins that
+-- both paths produce identical sim state for identical inputs.
+--
+-- Scenario spec contract (key/title required; everything else optional):
+--   key          unique string id
+--   title        human-readable label
+--   class        "PALADIN"|"HUNTER"|"WARRIOR"|"DRUID"|"SHAMAN"|"ROGUE" (nil = any class)
+--   kind         one of H.SCENARIO_KINDS
+--   description  one-line summary for a future scenario picker
+--   new_state    function(now, opts) -> scenario state table (default {})
+--   windows      function(now, opts) -> window list on the caller's clock (default none)
+--   begin        function(session, now, opts)
+--   tick         function(session, now, elapsed, out)
+--   finish       function(session, now)
+--   event        function(session, now, key) -> result   (exact-time action hook)
+--   queries      map name -> function(session, now) -> value (timing queries)
+--
+-- Session contract (the caller drives everything; nothing runs on its own):
+--   session = H.new_session(key, now, opts)          -- nil, err for an unknown key
+--   H.begin_session(session, now, opts)              -- builds windows, fires begin
+--   H.tick_session(session, now, elapsed, out)       -- fires tick, returns out
+--   H.scenario_event(session, key, now)              -- fires the exact-time event hook
+--   H.end_session(session, now)                      -- fires finish
+--   H.record_session_attempt(session, grade, lead_ms)
+--   H.session_summary(session)                       -- the shared score summary
+--   H.query(session, name, now)                      -- scenario timing query
+--
+-- Window contract: a window is { index, start_time, end_time, label }; start_time is
+-- inclusive, end_time exclusive. Lists are expected sorted by start_time (build_windows
+-- produces that shape).
+--=========================================================================================
+st.practice.harness = st.practice.harness or {}
+local H = st.practice.harness
+
+H.SCENARIO_KINDS = {
+    paladin_twist = true,
+    combo_windows = true,
+    forced_move = true,
+    execute_phase = true,
+    energy_loop = true,
+    weave_timing = true,
+    swing_window = true,
+}
+
+H.SCENARIOS = H.SCENARIOS or {}
+H.SCENARIO_ORDER = H.SCENARIO_ORDER or {}
+
+-- Register a scenario spec (see the contract above). Returns the spec, or nil plus an
+-- error string. The first registration wins; duplicates are rejected loudly.
+function H.register_scenario(spec)
+    if type(spec) ~= "table" then
+        return nil, "scenario spec must be a table"
+    end
+    if type(spec.key) ~= "string" or spec.key == "" then
+        return nil, "scenario needs a non-empty key"
+    end
+    if type(spec.title) ~= "string" or spec.title == "" then
+        return nil, "scenario needs a non-empty title"
+    end
+    if spec.kind ~= nil and not H.SCENARIO_KINDS[spec.kind] then
+        return nil, "unknown scenario kind: " .. tostring(spec.kind)
+    end
+    if H.SCENARIOS[spec.key] then
+        return nil, "scenario already registered: " .. spec.key
+    end
+    H.SCENARIOS[spec.key] = spec
+    H.SCENARIO_ORDER[#H.SCENARIO_ORDER + 1] = spec.key
+    return spec
+end
+
+function H.get_scenario(key)
+    if type(key) ~= "string" then
+        return nil
+    end
+    return H.SCENARIOS[key]
+end
+
+-- Every registered scenario, in registration order; a class filter keeps specs whose
+-- class matches or is unset (nil = all classes).
+function H.scenarios_for_class(class)
+    local list = {}
+    for i = 1, #H.SCENARIO_ORDER do
+        local spec = H.SCENARIOS[H.SCENARIO_ORDER[i]]
+        if spec and (class == nil or spec.class == nil or spec.class == class) then
+            list[#list + 1] = spec
+        end
+    end
+    return list
+end
+
+--=========================================================================================
+-- Harness: sessions
+--=========================================================================================
+function H.new_session(key, now, opts)
+    local spec = H.SCENARIOS[key]
+    if not spec then
+        return nil, "unknown scenario: " .. tostring(key)
+    end
+    local state = {}
+    if type(spec.new_state) == "function" then
+        state = spec.new_state(now or 0, opts) or {}
+    end
+    return {
+        key = spec.key,
+        spec = spec,
+        state = state,
+        score = st.practice.new_score(),
+        windows = {},
+        started_at = now or 0,
+        active = false,
+    }
+end
+
+function H.begin_session(session, now, opts)
+    if not session or not session.spec or session.active then
+        return false
+    end
+    opts = opts or {}
+    local spec = session.spec
+    session.active = true
+    session.started_at = now or 0
+    if type(opts.windows) == "table" then
+        session.windows = opts.windows
+    elseif type(spec.windows) == "function" then
+        session.windows = spec.windows(now or 0, opts) or {}
+    else
+        session.windows = {}
+    end
+    if type(spec.begin) == "function" then
+        spec.begin(session, now, opts)
+    end
+    return true
+end
+
+function H.tick_session(session, now, elapsed, out)
+    out = out or {}
+    if not session or not session.spec or not session.active then
+        return out
+    end
+    if type(session.spec.tick) == "function" then
+        session.spec.tick(session, now, elapsed, out)
+    end
+    return out
+end
+
+function H.end_session(session, now)
+    if not session or not session.spec or not session.active then
+        return false
+    end
+    session.active = false
+    if type(session.spec.finish) == "function" then
+        session.spec.finish(session, now)
+    end
+    return true
+end
+
+-- Exact-time action hook: the caller reports one action (a cast, a shift, a movement
+-- decision) with its true timestamp, so scenarios grade the action time, not the next
+-- tick that observes its effect.
+function H.scenario_event(session, key, now)
+    if not session or not session.spec or not session.active then
+        return nil
+    end
+    local fn = session.spec.event
+    if type(fn) ~= "function" then
+        return nil
+    end
+    return fn(session, now, key)
+end
+
+-- Scenario timing query; nil plus an error string for an unknown query name.
+function H.query(session, name, now)
+    if not session or not session.spec then
+        return nil, "no session"
+    end
+    local queries = session.spec.queries
+    local fn = queries and queries[name]
+    if type(fn) ~= "function" then
+        return nil, "unknown query: " .. tostring(name)
+    end
+    return fn(session, now)
+end
+
+--=========================================================================================
+-- Harness: scoring pipeline (the same accumulator the paladin session uses)
+--=========================================================================================
+-- The grade-string pipeline is class-agnostic; the harness exposes it as the shared
+-- scoring entry points and every session owns one accumulator.
+H.new_score = st.practice.new_score
+H.record_attempt = st.practice.record_attempt
+H.score_summary = st.practice.score_summary
+
+function H.record_session_attempt(session, grade, lead_ms)
+    if not session then
+        return nil
+    end
+    session.score = st.practice.record_attempt(session.score, grade, lead_ms)
+    return session.score
+end
+
+function H.session_summary(session)
+    if not session then
+        return nil
+    end
+    return st.practice.score_summary(session.score)
+end
+
+-- Grade-band helper shared by the scenario graders: `bands` is an ordered list of
+-- { max = <number>, grade = <string> }; the first band whose max covers the value wins
+-- and a final band without a max is the fallback for everything larger. A non-number
+-- value returns the fallback grade when one exists, else nil (never a grade on a guess).
+function H.grade_band(value, bands)
+    if type(bands) ~= "table" then
+        return nil
+    end
+    local fallback = nil
+    for i = 1, #bands do
+        local band = bands[i]
+        if band and band.grade then
+            if band.max == nil then
+                if fallback == nil then
+                    fallback = band.grade
+                end
+            elseif type(value) == "number" and value <= band.max then
+                return band.grade
+            end
+        end
+    end
+    return fallback
+end
+
+--=========================================================================================
+-- Harness: windows (forced-move cadence and every other windowed mechanic)
+--=========================================================================================
+-- Build a deterministic window list: window i runs
+-- [first_start + (i-1) * (duration + gap), + duration]. `first_start` is absolute in the
+-- caller's clock domain; the same opts always produce the same windows (no randomness).
+function H.build_windows(opts)
+    opts = opts or {}
+    local count = opts.count or 0
+    local duration = opts.duration or 2
+    local gap = opts.gap or 6
+    local start = opts.first_start or 0
+    local label = opts.label
+    local windows = {}
+    for i = 1, count do
+        local window_start = start + (i - 1) * (duration + gap)
+        windows[i] = {
+            index = i,
+            start_time = window_start,
+            end_time = window_start + duration,
+            label = label,
+        }
+    end
+    return windows
+end
+
+-- The window containing t (start inclusive, end exclusive), or nil.
+function H.window_at(windows, t)
+    if type(t) ~= "number" then
+        return nil
+    end
+    for i = 1, #(windows or {}) do
+        local w = windows[i]
+        if w and w.start_time and w.end_time and t >= w.start_time and t < w.end_time then
+            return w
+        end
+    end
+    return nil
+end
+
+-- The first window that has not ended at t (the active one included), or nil.
+function H.next_window(windows, t)
+    if type(t) ~= "number" then
+        return nil
+    end
+    for i = 1, #(windows or {}) do
+        local w = windows[i]
+        if w and w.end_time and t < w.end_time then
+            return w
+        end
+    end
+    return nil
+end
+
+-- Seconds until the next window starts: 0 while inside a window, nil when none is left.
+function H.time_to_next_window(windows, t)
+    local w = H.next_window(windows, t)
+    if not w then
+        return nil
+    end
+    if t >= w.start_time then
+        return 0
+    end
+    return w.start_time - t
+end
+
+-- Seconds left in the window containing t (nil between windows).
+function H.window_remaining(windows, t)
+    local w = H.window_at(windows, t)
+    if not w then
+        return nil
+    end
+    return w.end_time - t
+end
+
+-- Total seconds of [from, to] covered by windows. Windows are expected sorted by
+-- start_time; overlapping entries are merged so the span is counted once.
+function H.overlap_seconds(windows, from, to)
+    if type(from) ~= "number" or type(to) ~= "number" or to <= from then
+        return 0
+    end
+    local total = 0
+    local cursor = from
+    for i = 1, #(windows or {}) do
+        local w = windows[i]
+        if w and w.start_time and w.end_time then
+            local s = math.max(w.start_time, cursor)
+            local e = math.min(w.end_time, to)
+            if e > s then
+                total = total + (e - s)
+            end
+            if w.end_time > cursor then
+                cursor = w.end_time
+            end
+        end
+    end
+    return total
+end
+
+--=========================================================================================
+-- Scenario shells (offline-testable primitives; the class sims land in later rounds)
+--=========================================================================================
+
+-- Consumer #1: the paladin twist sim, driven through the harness lifecycle. The hooks
+-- call the existing sim functions verbatim, so a session driven through the harness is
+-- equivalent to the direct engine calls the practice UI makes (pinned in the tests).
+H.register_scenario({
+    key = "paladin_twist",
+    title = "Twist practice",
+    class = "PALADIN",
+    kind = "paladin_twist",
+    description = "Seal-twist timing drill on the paladin swing sim (the shipped practice session).",
+    new_state = function(now, opts)
+        return st.practice.new_sim()
+    end,
+    begin = function(session, now, opts)
+        st.practice.begin_fight(session.state, now, opts)
+    end,
+    tick = function(session, now, elapsed, out)
+        st.practice.tick(session.state, now, elapsed, out)
+    end,
+    finish = function(session, now)
+        st.practice.end_fight(session.state)
+    end,
+    queries = {
+        time_to_swing = function(session, now)
+            local sim = session.state
+            if not sim or not sim.swing_active then
+                return nil
+            end
+            return sim.swing_ends_at - (now or 0)
+        end,
+        twist_window_remaining = function(session, now)
+            local sim = session.state
+            if not sim or not sim.fading_seal_label or not sim.fading_seal_expires then
+                return nil
+            end
+            local remaining = sim.fading_seal_expires - (now or 0)
+            if remaining < 0 then
+                return 0
+            end
+            return remaining
+        end,
+        rotation = function(session)
+            return st.practice.determine_rotation(session.state)
+        end,
+    },
+})
+
+-- P5: combo-window drills (generic opener + required pieces). The paladin instantiation
+-- is the Avenging Wrath combo: AW opens the window, the haste pieces must land inside
+-- it, and the grade is the slowest piece's lag. The archived practice_aw_includes_pot /
+-- practice_aw_includes_sob options are still deferred (new options are out of this
+-- lane's scope): this ships the offline sim the future UI wiring consumes.
+H.COMBO_DEFAULTS = { opener = "aw", pieces = { "hpot" }, window = 3 }
+
+-- Piece-lag bands in seconds: S tight ... D barely inside the window; an incomplete
+-- window grades F (see combo_evaluate).
+H.COMBO_LAG_BANDS = {
+    { max = 0.2, grade = "S" },
+    { max = 0.5, grade = "A" },
+    { max = 1.0, grade = "B" },
+    { max = 2.0, grade = "C" },
+    { grade = "D" },
+}
+
+function H.new_combo(opts)
+    opts = opts or {}
+    local given = opts.pieces or H.COMBO_DEFAULTS.pieces
+    local pieces = {}
+    for i = 1, #given do
+        pieces[i] = given[i]
+    end
+    return {
+        opener = opts.opener or H.COMBO_DEFAULTS.opener,
+        pieces = pieces,
+        window = opts.window or H.COMBO_DEFAULTS.window,
+        open = false,
+        opened_at = nil,
+        recorded = {},
+        order = {},
+    }
+end
+
+-- The opener key opens the window. A window already running is not restarted (the first
+-- opener wins); an opener arriving after the previous window expired starts a fresh
+-- cycle (the piece log resets).
+function H.combo_open(combo, now, key)
+    if not combo or key ~= combo.opener then
+        return false
+    end
+    if combo.open and type(now) == "number" and type(combo.opened_at) == "number"
+            and (now - combo.opened_at) <= combo.window then
+        return false
+    end
+    combo.open = true
+    combo.opened_at = now
+    combo.recorded = {}
+    combo.order = {}
+    return true
+end
+
+-- Record a required piece landing inside the window; first record per piece wins, and a
+-- piece arriving after the window closed is rejected (the caller can see false).
+function H.combo_record(combo, now, key)
+    if not combo or not combo.open or type(now) ~= "number" then
+        return false
+    end
+    if (now - combo.opened_at) > combo.window then
+        return false
+    end
+    local is_piece = false
+    for i = 1, #combo.pieces do
+        if combo.pieces[i] == key then
+            is_piece = true
+            break
+        end
+    end
+    if not is_piece or combo.recorded[key] then
+        return false
+    end
+    combo.recorded[key] = now
+    combo.order[#combo.order + 1] = key
+    return true
+end
+
+function H.combo_missing(combo)
+    local missing = {}
+    if not combo then
+        return missing
+    end
+    for i = 1, #combo.pieces do
+        local key = combo.pieces[i]
+        if not combo.recorded[key] then
+            missing[#missing + 1] = key
+        end
+    end
+    return missing
+end
+
+-- Evaluate the open window: { grade, lag, complete, missing }. A window with pieces
+-- still missing grades F (the combo did not land); otherwise the grade bands on the
+-- slowest piece's lag. Returns nil when no window is open.
+function H.combo_evaluate(combo)
+    if not combo or not combo.open then
+        return nil
+    end
+    local missing = H.combo_missing(combo)
+    local detail = { complete = (#missing == 0), missing = missing }
+    if #missing > 0 then
+        detail.grade = "F"
+        detail.lag = nil
+        return detail
+    end
+    local lag = 0
+    for i = 1, #combo.pieces do
+        local t = combo.recorded[combo.pieces[i]]
+        if t and (t - combo.opened_at) > lag then
+            lag = t - combo.opened_at
+        end
+    end
+    detail.lag = lag
+    detail.grade = H.grade_band(lag, H.COMBO_LAG_BANDS) or "F"
+    return detail
+end
+
+function H.combo_window_remaining(combo, now)
+    if not combo or not combo.open or type(now) ~= "number" then
+        return nil
+    end
+    local remaining = combo.window - (now - combo.opened_at)
+    if remaining < 0 then
+        return 0
+    end
+    return remaining
+end
+
+H.register_scenario({
+    key = "paladin_aw_combo",
+    title = "Avenging Wrath combo",
+    class = "PALADIN",
+    kind = "combo_windows",
+    description = "AW combo drill: Avenging Wrath opens the window, the haste pieces must land inside it.",
+    new_state = function(now, opts)
+        return {
+            sim = st.practice.new_sim(),
+            combo = H.new_combo(opts),
+            aw_seen = false,
+            piece_seen = {},
+        }
+    end,
+    begin = function(session, now, opts)
+        local state = session.state
+        st.practice.begin_fight(state.sim, now, opts)
+        state.combo = H.new_combo(opts)
+        state.aw_seen = false
+        state.piece_seen = {}
+    end,
+    -- Exact-time path: the caller reports each cast as it happens (best precision).
+    event = function(session, now, key)
+        local combo = session.state.combo
+        if H.combo_open(combo, now, key) then
+            return "opened"
+        end
+        if H.combo_record(combo, now, key) then
+            return "recorded"
+        end
+        return nil
+    end,
+    tick = function(session, now, elapsed, out)
+        local state = session.state
+        st.practice.tick(state.sim, now, elapsed, out)
+        out.combo_opened = false
+        out.combo_recorded = nil
+        local sim = state.sim
+        -- Sim-driven path: AW's buff appearing opens the window, the haste buffs record.
+        if sim.aw_buff_expires > 0 then
+            if not state.aw_seen then
+                state.aw_seen = true
+                if H.combo_open(state.combo, now, "aw") then
+                    out.combo_opened = true
+                end
+            end
+        else
+            state.aw_seen = false
+        end
+        local pieces = state.combo.pieces
+        for i = 1, #pieces do
+            local key = pieces[i]
+            local active
+            if key == "hpot" then
+                active = sim.has_haste_pot
+            elseif key == "abacus" then
+                active = sim.has_abacus
+            elseif key == "dst" then
+                active = sim.has_dst
+            end
+            if active ~= nil then
+                if active and not state.piece_seen[key] then
+                    state.piece_seen[key] = true
+                    if H.combo_record(state.combo, now, key) then
+                        out.combo_recorded = key
+                    end
+                elseif not active then
+                    state.piece_seen[key] = nil
+                end
+            end
+        end
+    end,
+    finish = function(session, now)
+        st.practice.end_fight(session.state.sim)
+    end,
+    queries = {
+        combo_grade = function(session)
+            return H.combo_evaluate(session.state.combo)
+        end,
+        combo_window_remaining = function(session, now)
+            return H.combo_window_remaining(session.state.combo, now)
+        end,
+        combo_missing = function(session)
+            return H.combo_missing(session.state.combo)
+        end,
+        time_to_swing = function(session, now)
+            local sim = session.state.sim
+            if not sim or not sim.swing_active then
+                return nil
+            end
+            return sim.swing_ends_at - (now or 0)
+        end,
+    },
+})
+
+-- H5: forced-move drill. The shell models the forced-move cadence and grades cast
+-- attempts around the windows: casting inside a window is F, a cast that would still be
+-- running when the next window starts is C, and the bands reward finishing with margin.
+-- (Whether the player actually moved is in-client state - UNCONFIRMED offline; this
+-- shell grades the cast legality the sim can see.)
+H.H5_DEFAULTS = { first_delay = 5, count = 5, duration = 2.5, gap = 5.5 }
+
+function H.grade_move_cast(windows, cast_start, cast_time)
+    if type(cast_start) ~= "number" then
+        return nil
+    end
+    if H.window_at(windows, cast_start) then
+        return "F"
+    end
+    local next_w = H.next_window(windows, cast_start)
+    if not next_w then
+        return "S"
+    end
+    local margin = next_w.start_time - (cast_start + (cast_time or 0))
+    if margin <= 0 then
+        return "C"
+    elseif margin <= 0.5 then
+        return "B"
+    elseif margin <= 1.5 then
+        return "A"
+    end
+    return "S"
+end
+
+H.register_scenario({
+    key = "hunter_forced_move",
+    title = "Forced-move drill",
+    class = "HUNTER",
+    kind = "forced_move",
+    description = "Forced-move windows: stay mobile inside them, keep casts clear of the next window.",
+    new_state = function(now, opts)
+        return { in_window = false, current_index = nil }
+    end,
+    windows = function(now, opts)
+        opts = opts or {}
+        local defaults = H.H5_DEFAULTS
+        return H.build_windows({
+            count = opts.count or defaults.count,
+            first_start = (now or 0) + (opts.first_delay or defaults.first_delay),
+            duration = opts.duration or defaults.duration,
+            gap = opts.gap or defaults.gap,
+            label = opts.label or "move",
+        })
+    end,
+    begin = function(session, now, opts)
+        local state = session.state
+        state.in_window = false
+        state.current_index = nil
+    end,
+    -- Exact-time path: the caller reports each cast start with its cast time and the
+    -- shell grades the cast legality against the windows (movement itself stays
+    -- in-client). A number key is a cast start with no cast time; a table key carries
+    -- { start = <time>, cast_time = <seconds> }. Anything else grades nothing.
+    event = function(session, now, key)
+        local start_time, cast_time
+        if type(key) == "number" then
+            start_time, cast_time = key, 0
+        elseif type(key) == "table" and type(key.start) == "number" then
+            start_time, cast_time = key.start, key.cast_time or 0
+        else
+            return nil
+        end
+        return H.grade_move_cast(session.windows, start_time, cast_time)
+    end,
+    tick = function(session, now, elapsed, out)
+        local state = session.state
+        local w = H.window_at(session.windows, now)
+        out.move_started = false
+        out.move_ended = false
+        if w and not state.in_window then
+            state.in_window = true
+            state.current_index = w.index
+            out.move_started = true
+        elseif not w and state.in_window then
+            state.in_window = false
+            state.current_index = nil
+            out.move_ended = true
+        end
+    end,
+    queries = {
+        in_move_window = function(session, now)
+            return H.window_at(session.windows, now) ~= nil
+        end,
+        time_to_move = function(session, now)
+            return H.time_to_next_window(session.windows, now)
+        end,
+        window_remaining = function(session, now)
+            return H.window_remaining(session.windows, now)
+        end,
+    },
+})
+
+-- W6: execute-phase drill. The phase window is driven by the target's HP fraction
+-- (caller-fed; there is no target sensor offline) and the entry grade bands the rage
+-- pooled at the 20% crossing - the pre-execute "BANK" cue.
+H.EXECUTE_DEFAULTS = { threshold = 0.20, entry_rage = 100 }
+
+H.EXECUTE_ENTRY_BANDS = {
+    { max = 0, grade = "S" },
+    { max = 0.25, grade = "A" },
+    { max = 0.5, grade = "B" },
+    { max = 0.75, grade = "C" },
+    { max = 1.0, grade = "D" },
+    { grade = "F" },
+}
+
+-- Advance the phase tracker with a fresh HP fraction; returns "entered"/"exited" on a
+-- crossing and nil otherwise. A non-number fraction is an unknown reading: no change.
+function H.execute_phase_update(state, now, hp_fraction)
+    if not state or type(hp_fraction) ~= "number" then
+        return nil
+    end
+    state.hp_fraction = hp_fraction
+    local threshold = state.threshold or H.EXECUTE_DEFAULTS.threshold
+    local in_phase = hp_fraction <= threshold
+    if in_phase and not state.phase_active then
+        state.phase_active = true
+        state.phase_started_at = now
+        state.entries = (state.entries or 0) + 1
+        return "entered"
+    elseif not in_phase and state.phase_active then
+        state.phase_active = false
+        state.phase_started_at = nil
+        return "exited"
+    end
+    return nil
+end
+
+-- Grade the rage pooled at the phase entry: S at the full entry target, F at empty,
+-- with the quarter bands between.
+function H.grade_execute_entry(state, rage, opts)
+    local target = (opts and opts.entry_rage) or state.entry_rage or H.EXECUTE_DEFAULTS.entry_rage
+    if type(rage) ~= "number" or type(target) ~= "number" or target <= 0 then
+        return nil
+    end
+    if rage <= 0 then
+        return "F"
+    end
+    local fraction = rage / target
+    if fraction > 1 then
+        fraction = 1
+    end
+    return H.grade_band(1 - fraction, H.EXECUTE_ENTRY_BANDS)
+end
+
+H.register_scenario({
+    key = "warrior_execute",
+    title = "Execute-phase drill",
+    class = "WARRIOR",
+    kind = "execute_phase",
+    description = "Execute-phase entry: hold the BANK, cross 20% with rage pooled.",
+    new_state = function(now, opts)
+        opts = opts or {}
+        return {
+            threshold = opts.threshold or H.EXECUTE_DEFAULTS.threshold,
+            entry_rage = opts.entry_rage or H.EXECUTE_DEFAULTS.entry_rage,
+            phase_active = false,
+            phase_started_at = nil,
+            entries = 0,
+            hp_fraction = nil,
+        }
+    end,
+    begin = function(session, now, opts)
+        local state = session.state
+        state.phase_active = false
+        state.phase_started_at = nil
+        state.entries = 0
+        state.hp_fraction = nil
+    end,
+    -- Exact-time path: the caller reports each fresh HP reading (a number fraction) and
+    -- the shell advances the phase tracker synchronously, so the crossing is graded at
+    -- its true time rather than the next tick. The tick keeps reporting the latched
+    -- flags for callers that poke state.hp_fraction directly; entry rage is graded
+    -- through H.grade_execute_entry by the caller (the rage reading rides no query).
+    event = function(session, now, key)
+        if type(key) ~= "number" then
+            return nil
+        end
+        session.state.hp_fraction = key
+        return H.execute_phase_update(session.state, now, key)
+    end,
+    tick = function(session, now, elapsed, out)
+        local transition = H.execute_phase_update(session.state, now, session.state.hp_fraction)
+        out.execute_phase_entered = (transition == "entered")
+        out.execute_phase_exited = (transition == "exited")
+    end,
+    queries = {
+        in_execute_phase = function(session)
+            return session.state.phase_active == true
+        end,
+        phase_time = function(session, now)
+            if not session.state.phase_active or not session.state.phase_started_at then
+                return nil
+            end
+            return (now or 0) - session.state.phase_started_at
+        end,
+    },
+})
+
+-- D7: powershift-loop drill. The 20-energy rule is the fixed model rule; the shift
+-- refund is a sim constant (Furor-5/5 model) because the D1 talent/helm probe is BLOCKED
+-- (UNCONFIRMED - bench/verify_bank.md section 3) - the shell renders its sim honestly
+-- and never reads in-client talents.
+H.POWERSHIFT_DEFAULTS = {
+    energy_max = 100,
+    regen_per_second = 10,
+    shift_refund = 40,
+    rule_energy = 20,
+}
+
+H.POWERSHIFT_BANDS = {
+    { max = 20, grade = "S" },
+    { max = 30, grade = "A" },
+    { max = 40, grade = "B" },
+    { max = 60, grade = "C" },
+    { max = 80, grade = "D" },
+    { grade = "F" },
+}
+
+function H.new_energy_state(opts)
+    opts = opts or {}
+    local defaults = H.POWERSHIFT_DEFAULTS
+    return {
+        energy = opts.energy or 0,
+        energy_max = opts.energy_max or defaults.energy_max,
+        regen_per_second = opts.regen_per_second or defaults.regen_per_second,
+        shift_refund = opts.shift_refund or defaults.shift_refund,
+        last_update_at = nil,
+        shifts = 0,
+    }
+end
+
+-- Advance the energy pool to `now` (continuous regen, capped at the pool size). The
+-- first call only establishes the clock baseline.
+function H.energy_update(state, now)
+    if not state then
+        return nil
+    end
+    local energy = state.energy or 0
+    if type(now) == "number" then
+        local last = state.last_update_at
+        if type(last) == "number" and now > last then
+            energy = energy + (state.regen_per_second or 0) * (now - last)
+        end
+        state.last_update_at = now
+    end
+    local max = state.energy_max or 100
+    if energy > max then
+        energy = max
+    end
+    state.energy = energy
+    return energy
+end
+
+function H.energy_spend(state, now, amount)
+    if not state then
+        return nil
+    end
+    H.energy_update(state, now)
+    local energy = (state.energy or 0) - (amount or 0)
+    if energy < 0 then
+        energy = 0
+    end
+    state.energy = energy
+    return energy
+end
+
+-- Grade the energy at the moment of a shift (lower is better; the rule boundary is
+-- POWERSHIFT_DEFAULTS.rule_energy).
+function H.grade_powershift(state)
+    if not state then
+        return nil
+    end
+    return H.grade_band(state.energy or 0, H.POWERSHIFT_BANDS)
+end
+
+-- Apply one shift cycle: grade the energy, then grant the fixed refund (capped at the
+-- pool) and count the shift. Returns grade, energy.
+function H.powershift_cycle(state, now)
+    if not state then
+        return nil
+    end
+    H.energy_update(state, now)
+    local grade = H.grade_powershift(state)
+    local energy = (state.energy or 0) + (state.shift_refund or 0)
+    local max = state.energy_max or 100
+    if energy > max then
+        energy = max
+    end
+    state.energy = energy
+    state.shifts = (state.shifts or 0) + 1
+    return grade, energy
+end
+
+H.register_scenario({
+    key = "druid_powershift",
+    title = "Powershift-loop drill",
+    class = "DRUID",
+    kind = "energy_loop",
+    description = "Powershift cadence: shift inside the 20-energy rule, refund is a fixed sim value.",
+    new_state = function(now, opts)
+        return H.new_energy_state(opts)
+    end,
+    begin = function(session, now, opts)
+        -- Re-baseline the regen clock without draining the pool: a re-begin after the
+        -- session ended must not grant phantom regen across the gap.
+        session.state.last_update_at = nil
+    end,
+    -- Exact-time path: the caller reports each powershift and the shell grades the
+    -- energy at the shift, grants the fixed refund and counts it (powershift_cycle).
+    event = function(session, now, key)
+        if key ~= "shift" then
+            return nil
+        end
+        local grade = H.powershift_cycle(session.state, now)
+        return grade
+    end,
+    tick = function(session, now, elapsed, out)
+        out.energy = H.energy_update(session.state, now)
+    end,
+    queries = {
+        energy = function(session, now)
+            return H.energy_update(session.state, now)
+        end,
+        grade_next_shift = function(session)
+            return H.grade_powershift(session.state)
+        end,
+    },
+})
+
+-- S7: weave-timing drill, on weave.lua's math (marker fraction / safe start / clip). A
+-- clipped cast grades F; a safe cast bands on the margin left before the marker (a tight
+-- start near the marker is the skilled one). The shell returns nil when weave.lua is not
+-- loaded - never a grade on a guess.
+H.WEAVE_DEFAULTS = { swing_duration = 2.6, effective_cast = 1.5, latency = 0.1 }
+
+H.WEAVE_MARGIN_BANDS = {
+    { max = 0.02, grade = "S" },
+    { max = 0.05, grade = "A" },
+    { max = 0.10, grade = "B" },
+    { max = 0.20, grade = "C" },
+    { grade = "D" },
+}
+
+function H.weave_marker_fraction(swing_duration, effective_cast, latency)
+    local weave = st.weave
+    if not weave or not weave.get_marker_fraction then
+        return nil
+    end
+    return weave.get_marker_fraction(swing_duration, effective_cast, latency)
+end
+
+-- Seconds until the latest safe cast start, through weave.lua's model; nil without it.
+function H.weave_safe_start_in(state, now, next_swing_expiration)
+    local weave = st.weave
+    if not weave or not weave.get_safe_start_in or not state then
+        return nil
+    end
+    return weave.get_safe_start_in(next_swing_expiration, now, state.latency, state.effective_cast)
+end
+
+-- Grade a cast start (swing fraction) plus its measured clip amount. Returns grade,
+-- marker; grade nil when the inputs cannot be scored.
+function H.grade_weave_cast(state, cast_start_fraction, clip_amount)
+    if not state then
+        return nil
+    end
+    local marker = H.weave_marker_fraction(state.swing_duration, state.effective_cast, state.latency)
+    if marker == nil then
+        return nil
+    end
+    local weave = st.weave
+    if weave.is_clipped and weave.is_clipped(clip_amount, cast_start_fraction, marker) then
+        return "F", marker
+    end
+    if type(cast_start_fraction) ~= "number" then
+        return nil, marker
+    end
+    local margin = marker - cast_start_fraction
+    if margin < 0 then
+        margin = 0
+    end
+    return H.grade_band(margin, H.WEAVE_MARGIN_BANDS), marker
+end
+
+H.register_scenario({
+    key = "shaman_weave",
+    title = "Weave-timing drill",
+    class = "SHAMAN",
+    kind = "weave_timing",
+    description = "Spell-weave timing: start the cast before the swing marker, never clip.",
+    new_state = function(now, opts)
+        opts = opts or {}
+        local defaults = H.WEAVE_DEFAULTS
+        return {
+            swing_duration = opts.swing_duration or defaults.swing_duration,
+            effective_cast = opts.effective_cast or defaults.effective_cast,
+            latency = opts.latency or defaults.latency,
+        }
+    end,
+    -- Exact-time path: the caller reports each cast start and the shell grades it
+    -- through weave.lua's marker/clip model. A number key is the swing fraction with no
+    -- measured clip; a table key carries { start = <fraction>, clip = <amount> }.
+    event = function(session, now, key)
+        local state = session.state
+        local start_fraction, clip_amount
+        if type(key) == "number" then
+            start_fraction = key
+        elseif type(key) == "table" and type(key.start) == "number" then
+            start_fraction, clip_amount = key.start, key.clip
+        else
+            return nil
+        end
+        local grade = H.grade_weave_cast(state, start_fraction, clip_amount)
+        return grade
+    end,
+    queries = {
+        marker_fraction = function(session)
+            local state = session.state
+            return H.weave_marker_fraction(state.swing_duration, state.effective_cast, state.latency)
+        end,
+    },
+})
+
+--=========================================================================================
+-- Rogue drills (Round 2, Slice D)
+--=========================================================================================
+-- Energy pooling (rogue_research §1.3, CONFIRMED): a 2 s tick, never pool above 65
+-- pre-tick / 85 post-tick, and spend the finisher BEFORE the tick that would cap the
+-- pool. The drill grades where in the tick cycle the spend starts: the marker is the
+-- latest safe start (one latency before the tick), and a start past it is a tick clip
+-- (F) because the capped tick already landed. Bands are the shared weave margin bands -
+-- a later, tighter spend is the skilled one. A nil marker (ambiguous tick: proc energy /
+-- missing reads, the H4 rule) grades nil, never a guessed tick.
+H.ROGUE_ENERGY_DEFAULTS = { tick_interval = 2, latency = 0.1 }
+
+function H.energy_tick_marker(state)
+    if type(state) ~= "table" or state.tick_known == false then
+        return nil
+    end
+    if type(state.tick_marker) == "number" then
+        return state.tick_marker
+    end
+    local interval = state.tick_interval
+    if type(interval) ~= "number" or interval <= 0 then
+        return nil
+    end
+    local latency = state.latency or 0
+    if type(latency) ~= "number" or latency < 0 then
+        return nil
+    end
+    local marker = 1 - (latency / interval)
+    if marker < 0 then
+        marker = 0
+    end
+    return marker
+end
+
+-- Grade one spend start as a fraction of the tick cycle. A measured clip or a start
+-- past the marker is F; otherwise the margin to the marker bands through the shared
+-- weave bands. A nil marker or a non-number start grades nil (unscored).
+function H.grade_energy_spend(state, start_fraction, clip_amount)
+    local marker = H.energy_tick_marker(state)
+    if marker == nil then
+        return nil
+    end
+    if type(start_fraction) ~= "number" then
+        return nil, marker
+    end
+    if type(clip_amount) == "number" and clip_amount > 0 then
+        return "F", marker
+    end
+    if start_fraction > marker then
+        return "F", marker
+    end
+    local margin = marker - start_fraction
+    if margin < 0 then
+        margin = 0
+    end
+    return H.grade_band(margin, H.WEAVE_MARGIN_BANDS), marker
+end
+
+H.register_scenario({
+    key = "rogue_energy_pool",
+    title = "Energy-pooling drill",
+    class = "ROGUE",
+    kind = "energy_loop",
+    description = "Spend late in the 2 s energy-tick cycle: start before the tick marker, never cap the pool.",
+    new_state = function(now, opts)
+        opts = opts or {}
+        local defaults = H.ROGUE_ENERGY_DEFAULTS
+        return {
+            tick_interval = opts.tick_interval or defaults.tick_interval,
+            latency = opts.latency or defaults.latency,
+            tick_known = opts.tick_known ~= false,
+        }
+    end,
+    -- Exact-time path: a number key is the spend-start fraction of the tick cycle; a
+    -- table key is { start = <fraction>, clip = <measured tick clip> }.
+    event = function(session, now, key)
+        local start_fraction, clip_amount
+        if type(key) == "number" then
+            start_fraction = key
+        elseif type(key) == "table" and type(key.start) == "number" then
+            start_fraction, clip_amount = key.start, key.clip
+        else
+            return nil
+        end
+        return H.grade_energy_spend(session.state, start_fraction, clip_amount)
+    end,
+    queries = {
+        tick_marker = function(session)
+            return H.energy_tick_marker(session.state)
+        end,
+    },
+})
+
+-- Era SS-after-swing (rogue_deep §2.1, CONFIRMED on Classic Era):
+-- classicroguecraft.com/swing-timing-guide/ sims a 0.1 s delay after the mainhand
+-- swing as perfect and 0.2 s as average (Horde sword +35 vs +26-27 dps). The drill
+-- grades that offset: inside [0.1, 0.2] the distance from the 0.1 s ideal bands S..D;
+-- anything earlier or later is F (the window was missed). This is an Era-only melee
+-- technique - the caller selects the drill on Era, and TBC+ shows no cue (rogue_deep
+-- §2.1: Sno removed it deliberately). An unreadable swing record grades nil, never a
+-- guessed window.
+H.ROGUE_SS_DEFAULTS = { window_start = 0.1, window_end = 0.2, ideal = 0.1 }
+
+H.ROGUE_SS_MARGIN_BANDS = {
+    { max = 0.02, grade = "S" },
+    { max = 0.04, grade = "A" },
+    { max = 0.06, grade = "B" },
+    { max = 0.08, grade = "C" },
+    { max = 0.10, grade = "D" },
+    { grade = "F" },
+}
+
+function H.grade_ss_after_swing(state, offset)
+    if type(state) ~= "table" or state.swing_known == false then
+        return nil
+    end
+    if type(offset) ~= "number" then
+        return nil
+    end
+    local window_start = state.window_start or H.ROGUE_SS_DEFAULTS.window_start
+    local window_end = state.window_end or H.ROGUE_SS_DEFAULTS.window_end
+    if offset < window_start or offset > window_end then
+        return "F"
+    end
+    local ideal = state.ideal or H.ROGUE_SS_DEFAULTS.ideal
+    local delta = offset - ideal
+    if delta < 0 then
+        delta = -delta
+    end
+    return H.grade_band(delta, H.ROGUE_SS_MARGIN_BANDS) or "F"
+end
+
+H.register_scenario({
+    key = "rogue_ss_window",
+    title = "SS-after-swing drill",
+    class = "ROGUE",
+    kind = "swing_window",
+    description = "Classic Era sword timing: Sinister Strike 0.1-0.2 s after the mainhand swing lands.",
+    new_state = function(now, opts)
+        opts = opts or {}
+        local defaults = H.ROGUE_SS_DEFAULTS
+        return {
+            window_start = opts.window_start or defaults.window_start,
+            window_end = opts.window_end or defaults.window_end,
+            ideal = opts.ideal or defaults.ideal,
+            swing_known = opts.swing_known ~= false,
+        }
+    end,
+    -- Exact-time path: a number key is the offset in seconds between the mainhand swing
+    -- landing and the Sinister Strike start.
+    event = function(session, now, key)
+        if type(key) ~= "number" then
+            return nil
+        end
+        return H.grade_ss_after_swing(session.state, key)
+    end,
+    queries = {
+        window = function(session)
+            local state = session.state
+            return {
+                start_time = state.window_start,
+                end_time = state.window_end,
+                ideal = state.ideal,
+            }
+        end,
+    },
+})

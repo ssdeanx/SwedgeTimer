@@ -76,6 +76,7 @@ for _, name in ipairs({
     "cast_window", "hidden_window", "is_cast_safe", "is_stopped_position_safe",
     "time_until_next_shot", "sync_duration", "should_restart",
     "cast_bar_display", "latency_slice_fraction", "clip_tint", "range_state",
+    "hold_seconds",
 }) do
     check(type(hw[name]) == "function", "hunter_window." .. name .. " is a function")
 end
@@ -388,6 +389,49 @@ do
         "an unknown now -> hidden")
     eq(call(hw.cast_bar_display, false, 10, 0.5, "now"), "hidden",
         "a non-number now -> hidden")
+end
+
+--=========================================================================================
+-- 9b) hold_seconds: the H1 shot clock over the hidden window
+--=========================================================================================
+do
+    -- The window [10, 10.5]: inside reads the time to the closing edge.
+    near(call(hw.hold_seconds, 10, 0.5, 10), 0.5,
+        "hold: at the window start the full width remains")
+    near(call(hw.hold_seconds, 10, 0.5, 10.25), 0.25,
+        "hold: mid-window reads the remaining hold")
+    eq(call(hw.hold_seconds, 10, 0.5, 10.5), 0,
+        "hold: the closing edge reads 0 (inclusive)")
+    eq(call(hw.hold_seconds, 10, 0.5, 9.999), nil,
+        "hold: just before the window reads nil (not holding)")
+    eq(call(hw.hold_seconds, 10, 0.5, 10.501), nil,
+        "hold: just after the window reads nil")
+    eq(call(hw.hold_seconds, 10, 0.5, nil), nil,
+        "hold: an unknown now reads nil")
+    eq(call(hw.hold_seconds, nil, 0.5, 10.25), nil,
+        "hold: no window anchor reads nil")
+    eq(call(hw.hold_seconds, 10, nil, 10.25), nil,
+        "hold: no window width reads nil")
+    eq(call(hw.hold_seconds, 10, 0, 10.25), nil,
+        "hold: a zero width reads nil")
+    eq(call(hw.hold_seconds, 10, -0.5, 10.25), nil,
+        "hold: a negative width reads nil")
+    eq(call(hw.hold_seconds, "10", 0.5, 10.25), nil,
+        "hold: a non-number anchor reads nil")
+    eq(call(hw.hold_seconds, 10, 0.5, "now"), nil,
+        "hold: a non-number now reads nil")
+
+    -- The kernel and the display share the same bounds: a window the display calls
+    -- active always yields a number, a hidden one never does.
+    local start, duration = 100, 0.55
+    eq(call(hw.cast_bar_display, false, start, duration, 100.4), "window",
+        "hold: the display sees the window at 100.4")
+    near(call(hw.hold_seconds, start, duration, 100.4), 0.15,
+        "hold: the kernel counts the hold at 100.4")
+    eq(call(hw.cast_bar_display, false, start, duration, 99.9), "hidden",
+        "hold: the display is hidden just before the window")
+    eq(call(hw.hold_seconds, start, duration, 99.9), nil,
+        "hold: and the kernel reads nil there too")
 end
 
 --=========================================================================================

@@ -520,10 +520,11 @@ do
               "bestial_wrath", "rapid_fire", "aimed", "trinket1", "trinket2" } },
         { pretty = "Warrior", lower = "warrior", token = "WARRIOR",
           slots = { "op", "execute", "slam", "hs", "cleave", "bt", "ww",
+              "rend", "ms", "bladestorm", "raging_blow",
               "trinket1", "trinket2" } },
         { pretty = "Druid", lower = "druid", token = "DRUID",
           slots = { "maul", "mangle", "rip", "rake", "bite", "shred",
-              "trinket1", "trinket2" } },
+              "tf", "berserk", "trinket1", "trinket2" } },
         { pretty = "Shaman", lower = "shaman", token = "SHAMAN",
           slots = { "stormstrike", "flameshock", "weave", "firenova",
               "earthshock", "twist", "trinket1", "trinket2" } },
@@ -666,6 +667,338 @@ do
                 "WARRIOR: the Rampage toggle carries a numeric order")
         end
     end
+end
+
+--=========================================================================================
+-- 6) Round-1 options pass: every new toggle is wired and stays OFF by default
+--=========================================================================================
+-- The build-out round's reports document one new toggle set per lane; this pass adds the
+-- AceConfig widgets. Each `== true`-read key must carry a toggle in its class panel and
+-- must NOT ship a true default (nil/absent = off - no default-visible change). The two
+-- D2 HUD slots are the hide-on-false shape (`== false` hides, like every sibling slot
+-- toggle), so they ship true and are pinned as such. The two profile-level keys ship
+-- false in config.lua. A wired default flipped to true is caught by the defaults-source
+-- checks below (this suite's mutation proof for the pass).
+do
+    local CLASS_TOGGLES = {
+        { pretty = "Paladin", token = "PALADIN", keys = {
+            "twist_score_enabled", "twist_score_persist", "jotc_bar_enabled",
+            "twist_lust_override_enabled", "aow_exo_pulse_enabled", "cd_icons_enabled" } },
+        { pretty = "Warrior", token = "WARRIOR", keys = {
+            "show_warrior_bank_cue", "show_warrior_battle_shout_badge" } },
+        { pretty = "Hunter", token = "HUNTER", keys = {
+            "hunter_cast_zone_enabled", "hunter_bw_badge_enabled",
+            "hunter_frenzy_stacks_enabled", "hunter_multi_target" } },
+        { pretty = "Shaman", token = "SHAMAN", keys = {
+            "show_shaman_stormstrike_bar", "show_shaman_wf_hold_tint",
+            "show_shaman_rockbiter_badge", "show_shaman_spell_positions",
+            "show_shaman_dw_sync" } },
+        { pretty = "Druid", token = "DRUID", keys = {
+            "show_druid_pips", "show_druid_shred_countdown", "show_druid_maul_badge",
+            "show_druid_omen_glow", "show_druid_gcd_tick" } },
+    }
+    -- Hide-on-false keys: true mirrors the sibling slot toggles and changes no behaviour.
+    local DEFAULT_ON = {
+        { pretty = "Druid", token = "DRUID", keys = { "hud_show_tf", "hud_show_berserk" } },
+    }
+    local f = assert(io.open(ROOT .. "config_presets.lua", "r"))
+    local presets_src = f:read("*a")
+    f:close()
+    presets_src = presets_src:gsub("\r\n", "\n")
+
+    local function defaults_block(token)
+        return presets_src:match("ST%." .. token .. "%.defaults%s*=%s*{(.-)\n%}") or ""
+    end
+
+    local function check_class_toggles(class, want_default)
+        local sb, err = build(class.pretty)
+        check(sb ~= nil, class.pretty .. ": the options tree builds for the new toggles"
+            .. (sb and "" or (": " .. tostring(err))))
+        if not sb then return end
+        local panel = sb.ST.opts_table.args.class
+        local args = panel and panel.args or {}
+        local handler = panel and panel.handler
+        local block = defaults_block(class.token)
+        check(block ~= "", class.pretty .. ": the defaults block is found for the new toggles")
+        for _, key in ipairs(class.keys) do
+            local w = args[key]
+            check(type(w) == "table" and w.type == "toggle",
+                class.pretty .. ": " .. key .. " has a toggle widget (got "
+                .. tostring(type(w) == "table" and w.type or nil) .. ")")
+            if type(w) == "table" then
+                check(type(w.order) == "number",
+                    class.pretty .. ": " .. key .. " carries a numeric order")
+                -- The widget must read the same class key the class code reads:
+                -- resolve the handler name through the class group's handler and run
+                -- the getter against the sandbox class table (the setter's refresh
+                -- chain belongs to the per-module state suites; resolution only here).
+                local getter = type(w.get) == "function" and w.get
+                    or (type(w.get) == "string" and type(handler) == "table" and handler[w.get])
+                    or nil
+                local setter = type(w.set) == "function" and w.set
+                    or (type(w.set) == "string" and type(handler) == "table" and handler[w.set])
+                    or nil
+                check(type(getter) == "function", class.pretty .. ": " .. key .. "'s get resolves")
+                check(type(setter) == "function", class.pretty .. ": " .. key .. "'s set resolves")
+                if type(getter) == "function" then
+                    sb.class_db[key] = true
+                    check(getter(nil, { "class", key }) == true,
+                        class.pretty .. ": " .. key .. "'s getter reads the class key (true)")
+                    sb.class_db[key] = nil
+                    check(not getter(nil, { "class", key }),
+                        class.pretty .. ": " .. key .. "'s getter reads the class key (nil = off)")
+                end
+                if want_default then
+                    check(block:find("%f[%a_]" .. key .. "%s*=%s*true") ~= nil,
+                        class.pretty .. ": " .. key .. " ships true in the defaults")
+                else
+                    check(block:find("%f[%a_]" .. key .. "%s*=%s*true") == nil,
+                        class.pretty .. ": " .. key .. " does NOT ship a true default (nil = off)")
+                end
+            end
+        end
+    end
+
+    for _, class in ipairs(CLASS_TOGGLES) do
+        check_class_toggles(class, false)
+    end
+    for _, class in ipairs(DEFAULT_ON) do
+        check_class_toggles(class, true)
+    end
+
+    -- design_mouse_anchor (designmode.lua): an inline widget in the Design Mode group;
+    -- nil = off and the shared class defaults do not ship it true.
+    local sb = build("Paladin")
+    check(sb ~= nil, "design: the options tree builds")
+    if sb then
+        local group = sb.ST.opts_table.args.design_mode
+        local w = group and group.args and group.args.design_mouse_anchor
+        check(type(w) == "table" and w.type == "toggle",
+            "design: design_mouse_anchor has a toggle widget (got "
+            .. tostring(type(w) == "table" and w.type or nil) .. ")")
+        if type(w) == "table" then
+            check(type(w.order) == "number",
+                "design: design_mouse_anchor carries a numeric order")
+            if type(w.get) == "function" and type(w.set) == "function" then
+                sb.class_db.design_mouse_anchor = true
+                check(w.get() == true, "design: the widget reads design_mouse_anchor (true)")
+                sb.class_db.design_mouse_anchor = nil
+                check(w.get() ~= true, "design: the widget reads design_mouse_anchor (nil = off)")
+            else
+                check(false, "design: the widget carries get/set functions")
+            end
+        end
+    end
+    local cblock = presets_src:match("ST%.class_defaults%s*=%s*{(.-)\n%}") or ""
+    check(cblock ~= "", "design: the shared class_defaults block is found")
+    check(cblock:find("%f[%a_]design_mouse_anchor%s*=%s*true") == nil,
+        "design: design_mouse_anchor does NOT ship a true default")
+
+    -- The two profile-level keys (diag_tick_counters, enemy_swing_enabled): top-level
+    -- widgets reading the profile table, shipped false in config.lua.
+    local cf = assert(io.open(ROOT .. "config.lua", "r"))
+    local config_src = cf:read("*a")
+    cf:close()
+    config_src = config_src:gsub("\r\n", "\n")
+    local psb = build("Paladin")
+    check(psb ~= nil, "profile: the options tree builds")
+    for _, key in ipairs({ "diag_tick_counters", "enemy_swing_enabled" }) do
+        check(config_src:find("%f[%a_]" .. key .. "%s*=%s*false") ~= nil,
+            "profile: " .. key .. " ships false in config.lua defaults")
+        check(config_src:find("%f[%a_]" .. key .. "%s*=%s*true") == nil,
+            "profile: " .. key .. " does not ship a true default")
+        if psb then
+            local w = psb.ST.opts_table.args[key]
+            check(type(w) == "table" and w.type == "toggle",
+                "profile: " .. key .. " has a top-level toggle widget (got "
+                .. tostring(type(w) == "table" and w.type or nil) .. ")")
+            if type(w) == "table" then
+                local handler = psb.ST.opts_table.handler
+                local getter = type(w.get) == "function" and w.get
+                    or (type(handler) == "table" and handler[w.get]) or nil
+                check(type(getter) == "function", "profile: " .. key .. "'s get resolves")
+                if type(getter) == "function" then
+                    psb.profile[key] = true
+                    check(getter(nil, { key }) == true,
+                        "profile: " .. key .. "'s getter reads the profile key (true)")
+                    psb.profile[key] = false
+                    check(getter(nil, { key }) == false,
+                        "profile: " .. key .. "'s getter reads the profile key (false)")
+                end
+            end
+        end
+    end
+end
+
+--=========================================================================================
+-- 7) Options-grade wiring pins: the Task-A dead locals stay gone, names unchanged
+--=========================================================================================
+-- Each luacheck unused/shadow warning in the options files was traced and either
+-- wired or removed-with-rationale (bench/buildout_options-grade_2026-10-17.md).
+-- These source checks pin the removals so a reintroduced dead local fails here,
+-- and the runtime checks pin that the removals changed no displayed name.
+do
+    local function read_source(path)
+        local f = assert(io.open(ROOT .. path, "r"))
+        local src = f:read("*a")
+        f:close()
+        return src:gsub("\r\n", "\n")
+    end
+    local config_src = read_source("config.lua")
+    check(config_src:find("local LSM") == nil,
+        "wiring: config.lua fetches no LSM handle (defaults are plain keys)")
+    check(config_src:find("local LWIN") == nil,
+        "wiring: config.lua fetches no LWIN handle (positions resolve in bars.lua)")
+    check(config_src:find("local addon_name, st") ~= nil,
+        "wiring: config.lua still binds st (the debug trailer reads st.debug)")
+    local presets_src = read_source("config_presets.lua")
+    check(presets_src:find("local LSM") == nil,
+        "wiring: config_presets.lua fetches no LSM handle (plain default values)")
+    local table_presets_src = read_source("option_table_presets.lua")
+    check(table_presets_src:find("local addon_name, st") == nil,
+        "wiring: option_table_presets.lua leaves the st vararg unbound (never used)")
+    check(table_presets_src:find('LibStub%("LibSharedMedia%-3%.0"%)') ~= nil,
+        "wiring: option_table_presets.lua keeps its LSM handle (values = LSM:HashTable)")
+    local tables_src = read_source("option_tables.lua")
+    check(tables_src:find("\nlocal print =") == nil,
+        "wiring: option_tables.lua defines no print alias (only commented-out uses)")
+    check(tables_src:find("local title = settings%.title") == nil,
+        "wiring: generate_hand_options_table fetches no dead title local")
+    local _, n_english = tables_src:gsub('local _, english_class = UnitClass%("player"%)', "")
+    check(n_english == 1,
+        "wiring: exactly one english_class binding remains (module scope, line 78)")
+    check(tables_src:find("color_getter = function%(self") == nil,
+        "wiring: class color_getter names no shadowing self param")
+    check(tables_src:find("color_setter = function%(self") == nil,
+        "wiring: class color_setter names no shadowing self param")
+
+    -- The removals changed no displayed name: hand groups still carry panel_title.
+    local psb = build("Paladin")
+    check(psb ~= nil, "wiring: the options tree builds for the name pins")
+    if psb then
+        local mh = psb.ST.opts_table.args.mainhand
+        check(type(mh) == "table" and mh.name == "Mainhand",
+            "wiring: paladin mainhand group still named by panel_title (got "
+            .. tostring(type(mh) == "table" and mh.name or nil) .. ")")
+    end
+    local wsb = build("Warrior")
+    if wsb then
+        local names = { mainhand = "Mainhand", offhand = "Offhand", ranged = "Ranged" }
+        for hand, want in pairs(names) do
+            local g = wsb.ST.opts_table.args[hand]
+            check(type(g) == "table" and g.name == want,
+                "wiring: warrior " .. hand .. " group still named by panel_title (got "
+                .. tostring(type(g) == "table" and g.name or nil) .. ")")
+        end
+    end
+end
+
+--=========================================================================================
+-- 8) Options-followup pins: warrior arms/SoD slot toggles, practice reset
+--    re-anchor, pips x/y probe
+--=========================================================================================
+do
+    local function read_followup_source(path)
+        local f = assert(io.open(ROOT .. path, "r"))
+        local src = f:read("*a")
+        f:close()
+        return src:gsub("\r\n", "\n")
+    end
+
+    -- (a) The four arms/SoD slot toggles ride the hud_show_tf hide-on-false shape:
+    -- hud.lua derives the db key from the slot key and hides on == false, so the
+    -- shipped true defaults preserve the always-drawn rendering (no visible change).
+    local hud_src = read_followup_source("hud.lua")
+    check(hud_src:find('show_key = "hud_show_"', 1, true) ~= nil,
+        "followup: hud.lua derives the toggle key from the slot key (hud_show_..key)")
+    check(hud_src:find("db[icon.show_key] == false", 1, true) ~= nil,
+        "followup: hud.lua hides the slot on == false (hide-on-false shape)")
+    local wsb = build("Warrior")
+    check(wsb ~= nil, "followup: the warrior options tree builds")
+    if wsb then
+        local panel = wsb.ST.opts_table.args.class
+        local args = panel and panel.args or {}
+        local handler = panel and panel.handler
+        for _, key in ipairs({ "hud_show_rend", "hud_show_ms",
+            "hud_show_bladestorm", "hud_show_raging_blow" }) do
+            local w = args[key]
+            check(type(w) == "table" and w.type == "toggle",
+                "followup: " .. key .. " has a toggle widget (got "
+                .. tostring(type(w) == "table" and w.type or nil) .. ")")
+            if type(w) == "table" then
+                local getter = type(w.get) == "function" and w.get
+                    or (type(w.get) == "string" and type(handler) == "table" and handler[w.get])
+                    or nil
+                local setter = type(w.set) == "function" and w.set
+                    or (type(w.set) == "string" and type(handler) == "table" and handler[w.set])
+                    or nil
+                check(type(getter) == "function", "followup: " .. key .. "'s get resolves")
+                check(type(setter) == "function", "followup: " .. key .. "'s set resolves")
+                if type(getter) == "function" then
+                    wsb.class_db[key] = true
+                    check(getter(nil, { "class", key }) == true,
+                        "followup: " .. key .. "'s getter reads the class key (true)")
+                    wsb.class_db[key] = nil
+                    check(getter(nil, { "class", key }) ~= false,
+                        "followup: " .. key .. "'s getter reads the class key (nil = drawn)")
+                end
+            end
+        end
+    end
+
+    -- (b) practice_reset_position re-anchors through the panel's own position
+    -- applier (practice_ui.lua apply_settings re-reads the zeroed offsets and
+    -- defers internally under combat lockdown), mirroring the update_result_font
+    -- seam in the same options section.
+    local tables_src = read_followup_source("option_tables.lua")
+    check(tables_src:find("practice_ui.apply_settings", 1, true) ~= nil,
+        "followup: the reset path routes through practice_ui.apply_settings")
+    local psb = build("Paladin")
+    check(psb ~= nil, "followup: the paladin options tree builds for the reset pin")
+    if psb then
+        local panel = psb.ST.opts_table.args.class
+        local w = panel and panel.args and panel.args.practice_reset_position
+        check(type(w) == "table" and type(w.func) == "function",
+            "followup: practice_reset_position carries an execute func")
+        if type(w) == "table" and type(w.func) == "function" then
+            local applied = 0
+            psb.st.practice_ui = { apply_settings = function() applied = applied + 1 end }
+            psb.class_db.practice_panel_x = 42
+            psb.class_db.practice_panel_y = -17
+            w.func()
+            check(psb.class_db.practice_panel_x == 0 and psb.class_db.practice_panel_y == 0,
+                "followup: the reset zeroes the panel offsets")
+            check(applied == 1, "followup: the reset re-anchors through apply_settings")
+            psb.st.practice_ui = nil
+            psb.class_db.practice_panel_x = 42
+            psb.class_db.practice_panel_y = -17
+            local ok = pcall(w.func)
+            check(ok, "followup: the reset runs with no practice_ui loaded")
+            check(psb.class_db.practice_panel_x == 0 and psb.class_db.practice_panel_y == 0,
+                "followup: the reset zeroes the offsets with no practice_ui loaded")
+        end
+    end
+
+    -- (c) Pips x/y probe: the bars.lua factory consumes opts.x/opts.y, but the only
+    -- call site (druid.lua) passes literals and no druid_pips_x/y db key exists
+    -- anywhere, so there is nothing to wire (no options without a consumer).
+    local bars_src = read_followup_source("bars.lua")
+    check(bars_src:find("tonumber(opts.x)", 1, true) ~= nil,
+        "followup: the pips factory consumes opts.x")
+    check(bars_src:find("tonumber(opts.y)", 1, true) ~= nil,
+        "followup: the pips factory consumes opts.y")
+    local druid_src = read_followup_source("classes/druid.lua")
+    check(druid_src:find("druid_pips_x", 1, true) == nil,
+        "followup: no druid_pips_x db key exists at the call site")
+    check(druid_src:find("druid_pips_y", 1, true) == nil,
+        "followup: no druid_pips_y db key exists at the call site")
+    local presets_src = read_followup_source("config_presets.lua")
+    check(presets_src:find("druid_pips_x", 1, true) == nil,
+        "followup: no druid_pips_x default exists (correctly unwired)")
+    check(presets_src:find("druid_pips_y", 1, true) == nil,
+        "followup: no druid_pips_y default exists (correctly unwired)")
+    check(tables_src:find("druid_pips_x", 1, true) == nil,
+        "followup: no druid_pips_x widget exists (correctly unwired)")
 end
 
 --=========================================================================================

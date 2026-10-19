@@ -59,6 +59,22 @@ for _, id in ipairs({20424,20944,20945,20946,20947,29385}) do
 end
 eq(twist.SOC_PROC_IDS[12345], nil, "non-proc id absent")
 
+-- R1: string-payload success (Anniversary shape). The numeric path above is
+-- untouched and stays byte-identical.
+eq(twist.SOC_PROC_NAME_FALLBACK, "Seal of Command", "the literal English proc name")
+check(twist.detect_twist_success_name(true, "Seal of Command", nil),
+    "literal fallback lands with no resolved names")
+check(twist.detect_twist_success_name(true, "Heiliger Befehl", { ["Heiliger Befehl"] = true }),
+    "resolved localized name lands")
+eq(twist.detect_twist_success_name(true, "Judgement of Command", nil), false,
+    "an unrelated name never lands")
+eq(twist.detect_twist_success_name(false, "Seal of Command", nil), false,
+    "no pending => no success by name")
+eq(twist.detect_twist_success_name(true, nil, nil), false,
+    "a non-string name never lands")
+eq(twist.detect_twist_success_name(true, 20424, nil), false,
+    "a numeric id takes the numeric path, not the name path")
+
 -- get_window_seconds
 eq(twist.get_window_seconds("None", 120, 50), 0.4, "None: 0.4 baseline")
 local dynamic = twist.get_window_seconds("Dynamic", 200, 0)

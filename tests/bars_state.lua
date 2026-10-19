@@ -24,7 +24,8 @@
 --      endofswing GCD markers (wrap/clamp), the deadzone width from latency, the class's
 --      own hand set in on_latency_update/on_gcd_length_change, pause, swing-ended/is_full
 --      states, show/hide and out-of-range dim through the real visibility passes, and the
---      mainhand-only LibDataBroker feed.
+--      mainhand-only LibDataBroker feed. Section 2b adds the degraded states: the
+--      engine-dead render (H1) and the per-tick hook/zone isolation (H2).
 --   3. The per-frame class dispatch (on_bar_update) must-show/must-not states: paladin
 --      twist band alphas (marker/window/armed/attempt/success/impossible) driven by the
 --      real CLEU chain; warrior Overpower flash pulse + Shield Block + Slam + debuff
@@ -831,22 +832,32 @@ end
 local BOOT_FRAMES = 2  -- UIParent + AceDB's frame
 local CLASSES = {
     { key = "PALADIN", hands = { "mainhand" },
-      -- twist band (1 texture) + twist success text (1 fontstring) + judgement
-      -- marker line (1 line) + seal icons (2 icon textures, 2 timer texts, 1
-      -- container frame + 2 cooldown frames + 2 timer text frames)
-      textures = 3, fontstrings = 3, lines = 1, extra_frames = 5 },
+      -- twist band (1 texture) + twist success text (1 fontstring) + hit-rate
+      -- badge (1 fontstring) + judgement marker line (1 line) + seal icons
+      -- (2 icon textures, 2 timer texts, 1 container frame + 2 cooldown frames
+      -- + 2 timer text frames) + JotC mini-bar (1 icon texture, 1 timer text,
+      -- 1 container frame + 1 cooldown frame + 1 timer text frame) + CD icon
+      -- row (7 icon textures, 1 container frame + 7 icon frames + 7 cooldown
+      -- frames)
+      textures = 11, fontstrings = 5, lines = 1, extra_frames = 23 },
     { key = "WARRIOR", hands = { "mainhand", "offhand", "ranged" },
       -- shield block (3 texture) + slam (2 texture, 1 fontstring) + 5 debuffs
       -- (15 texture, 5 fontstring) + overpower (4 texture, 1 fontstring)
-      -- + Rampage badge (1 fontstring, classes/warrior.lua setup_warrior_visuals)
-      textures = 24, fontstrings = 8, lines = 0, extra_frames = 0 },
+      -- + Rampage badge (1 fontstring) + rage-bank cue (1 texture,
+      -- 1 fontstring) + Battle Shout badge (1 fontstring)
+      textures = 25, fontstrings = 10, lines = 0, extra_frames = 0 },
     { key = "HUNTER", hands = { "mainhand", "offhand", "ranged" },
       -- hunter_ui: cast bar (4 texture, 1 fontstring) + range helper (1 texture)
       -- + rapid fire (1 texture, 1 fontstring) + aspect icon (2 texture) + 4 frames
-      textures = 8, fontstrings = 2, lines = 0, extra_frames = 4 },
+      -- + movement-safe cast zone (2 texture) + Bestial Wrath / Frenzy badges
+      -- (2 frames, 4 texture, 2 fontstring)
+      textures = 14, fontstrings = 4, lines = 0, extra_frames = 6 },
     { key = "DRUID", hands = { "mainhand" },
-      -- energy column (2 texture) + form label (1 fontstring) + 3 debuffs (9 texture, 3 fontstring)
-      textures = 11, fontstrings = 4, lines = 0, extra_frames = 0 },
+      -- energy column (2 texture) + GCD tick marker (1 texture) + Omen glow
+      -- (1 texture) + form label (1 fontstring) + D5 shred countdown
+      -- (1 fontstring) + D6 maul badge (1 fontstring) + combo pips (5 texture,
+      -- 1 frame) + 3 debuffs (9 texture, 3 fontstring)
+      textures = 18, fontstrings = 6, lines = 0, extra_frames = 1 },
     { key = "SHAMAN", hands = { "mainhand", "offhand" },
       -- mainhand: 3 marker textures + spark + windfury (2) + flame shock (3 texture, 1 fontstring)
       -- + 2 badge fontstrings + 4 shield rects = 13; offhand: the spark mirror = 1
@@ -1233,6 +1244,92 @@ do
     eq(sb.hook_calls.PALADIN or 0, hooks_before + 1,
         "hook dispatch: every tick invokes the class hook exactly once")
     eq(sb.hook_calls.PALADIN or 0, ticks, "hook dispatch: tick count matches hook count")
+end
+
+--=========================================================================================
+-- 2b) Degraded and isolated tick states (H1-render, H2)
+--=========================================================================================
+-- H1-render: the inert stand-in must never impersonate a live cycle. The bar dims,
+-- paints an explicit "engine offline" label and keeps the fill static.
+do
+    local b = boot({ class = "PALADIN", engine = "absent" })
+    local sb = b.sb
+    local ST = b.ST
+    local vf = visuals(b, "mainhand")
+    eq(ST.swing_engine, "inert-standin", "H1: the absent engine selects the inert stand-in")
+    eq(ST.mainhand.engine_dead, true, "H1: init_timers marks the dead engine per hand")
+    eq(ST.mainhand.speed, nil, "H1: no plausible cycle speed is invented")
+    tick(b, "mainhand")
+    eq(vf.center_text.text, "engine offline", "H1: the bar names the degraded engine")
+    eq(vf.center_text.shown, true, "H1: the offline label is visible")
+    eq(vf.left_text.shown, false, "H1: configured left text is not left pretending")
+    eq(vf.right_text.shown, false, "H1: configured right text is not left pretending")
+    near(vf.bar.width, 1, 1e-9, "H1: the fill stays the neutral sliver")
+    eq(vf.bar.alpha, 0.35, "H1: the bar is dimmed")
+    check(sb.prints[#sb.prints] == nil or not sb.prints[#sb.prints]:find("Bar update error", 1, true),
+        "H1: rendering the dead engine is not reported as a hook error")
+end
+
+-- H2: a throwing class hook is isolated after the fill/text painted; the first throw per
+-- site prints once, every throw is counted, and the site quarantines after 25.
+do
+    local b = boot({ class = "PALADIN" })
+    local sb = b.sb
+    local ST = b.ST
+    local vf = visuals(b, "mainhand")
+    local real_hook = ST.PALADIN.on_bar_update
+    local site = "class:PALADIN:on_bar_update"
+    start_swing(b, "mainhand", 2.6, 2.6)
+    sb.clock = 0.65
+    ST.PALADIN.on_bar_update = function() error("class hook exploded") end
+    local prints_before = #sb.prints
+    local ok, err = pcall(tick, b, "mainhand")
+    check(ok, "H2: a throwing class hook does not break the tick (" .. tostring(err) .. ")")
+    near(vf.bar.width, vf.width * 0.25, 1e-9, "H2: the fill still painted before the hook")
+    eq(vf.left_text.text, "2.6", "H2: the bar text still painted before the hook")
+    eq(ST.bar_hook_errors.count, 1, "H2: the throw is counted")
+    eq(ST.bar_hook_errors.by_site[site], 1, "H2: the counter is attributed to the class hook")
+    eq(#sb.prints, prints_before + 1, "H2: the first throw prints exactly one chat line")
+    check(type(sb.prints[#sb.prints]) == "string"
+        and sb.prints[#sb.prints]:find("Bar update error in " .. site, 1, true) ~= nil,
+        "H2: the notice names the failing site")
+
+    for _ = 1, 3 do
+        tick(b, "mainhand")
+    end
+    eq(ST.bar_hook_errors.by_site[site], 4, "H2: every throw keeps counting")
+    eq(#sb.prints, prints_before + 1, "H2: repeated throws do not spam chat")
+
+    for _ = 5, 25 do
+        tick(b, "mainhand")
+    end
+    eq(ST.bar_hook_errors.by_site[site], 25, "H2: the site reaches the quarantine threshold")
+    eq(ST.bar_hook_errors.quarantined[site], true, "H2: the site is quarantined for the session")
+    check(type(sb.prints[#sb.prints]) == "string"
+        and sb.prints[#sb.prints]:find("quarantined for this session", 1, true) ~= nil,
+        "H2: the quarantine is announced, never silent")
+    local counted = ST.bar_hook_errors.count
+    tick(b, "mainhand")
+    eq(ST.bar_hook_errors.count, counted, "H2: a quarantined hook is not called again")
+    eq(ST.bar_hook_errors.by_site[site], 25, "H2: a quarantined hook does not keep counting")
+    ST.PALADIN.on_bar_update = real_hook
+end
+
+-- H2: zone draws are isolated the same way, and one bad zone does not stop the next.
+do
+    local b = boot({ class = "PALADIN" })
+    local sb = b.sb
+    local ST = b.ST
+    local good_runs = 0
+    ST:register_zone("bad", function() error("zone exploded") end, 0)
+    ST:register_zone("good", function() good_runs = good_runs + 1 end, 1)
+    local ok, err = pcall(tick, b, "mainhand")
+    check(ok, "H2: a throwing zone does not break the tick (" .. tostring(err) .. ")")
+    eq(good_runs, 1, "H2: the later zone still runs after the bad zone threw")
+    eq(ST.bar_hook_errors.by_site["zone:bad"], 1, "H2: the zone throw is counted by zone id")
+    check(type(sb.prints[#sb.prints]) == "string"
+        and sb.prints[#sb.prints]:find("Bar update error in zone:bad", 1, true) ~= nil,
+        "H2: the zone notice names the zone id")
 end
 
 --=========================================================================================
@@ -2251,7 +2348,7 @@ do
     sb.stl_cb["SWING_TIMER_INFO_INITIALIZED"]()
     sb.lrc_cb["CHECKERS_CHANGED"]()
     eq(ST.interfaces_are_initialised, true, "pre-init: the real reports complete init")
-    eq(#sb.frames, 10, "pre-init: construction then created the four hand frames plus the "
+    eq(#sb.frames, 28, "pre-init: construction then created the four hand frames plus the "
         .. "paladin seal-icon set (container, 2 cooldowns, 2 timer frames)")
     eq(type(ST:get_bar_frame("mainhand"):GetScript("OnUpdate")), "function",
         "pre-init: the OnUpdate script is registered at construction")

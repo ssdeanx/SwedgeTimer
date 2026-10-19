@@ -403,6 +403,11 @@ local function build(opts)
     setfenv(utils, env)
     utils("SwedgeTimer", st)
 
+    -- design.lua (pure) backs the descriptor normaliser the C6 handoff must satisfy.
+    local design = assert(loadfile(ROOT .. "design.lua"))
+    setfenv(design, env)
+    design("SwedgeTimer", st)
+
     -- nextaction.lua owns the rotation thresholds practice.lua delegates to (the TOCs
     -- load it before practice.lua; practice_state.lua does the same).
     local nextaction = assert(loadfile(ROOT .. "nextaction.lua"))
@@ -453,6 +458,7 @@ local ENTRY_POINTS = {
     "update_proc_icons", "attach_overlay", "detach_overlay", "detach_all_overlays",
     "flash_overlay", "update_overlays", "update_fight_timer",
     "load_bests", "maybe_save_bests", "best_score_text", "update_score",
+    "save_timeline_position",
 }
 for i = 1, #ENTRY_POINTS do
     check(type(bui[ENTRY_POINTS[i]]) == "function", "practice_ui.lua exposes " .. ENTRY_POINTS[i])
@@ -1220,6 +1226,7 @@ do
         { "flash_overlay", { "cs" } },
         { "update_overlays", { 0 } },
         { "update_fight_timer", { 0 } },
+        { "save_timeline_position", {} },
         { "load_bests", {} },
         { "maybe_save_bests", {} },
         { "update_score", {} },
@@ -1880,6 +1887,266 @@ do
     eq(F.class_db.practice_bests.score, 100, "stop() mid-fight persists the better score")
     eq(F.class_db.practice_bests.grade, "S", "the better grade persists with it")
     eq(count_keys(F.hand_db), hand_keys_before, "the better save stays in the class table")
+end
+
+--=========================================================================================
+-- 21) Design-mode targets: descriptor shape, save/reset per element, session gating
+--=========================================================================================
+do
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+
+    -- Before init: the descriptors exist, frames read nil, nothing is available.
+    eq(type(u.design_targets), "table", "the design targets table exists at load")
+    eq(#u.design_targets, 3, "three practice elements are exposed")
+    local by_key = {}
+    for i = 1, #u.design_targets do
+        by_key[u.design_targets[i].key] = u.design_targets[i]
+    end
+    check(by_key.practice_panel ~= nil, "the panel target is registered")
+    check(by_key.practice_rotation ~= nil, "the rotation display target is registered")
+    check(by_key.practice_timeline ~= nil, "the timeline target is registered")
+    for _, key in ipairs({ "practice_panel", "practice_rotation", "practice_timeline" }) do
+        local d = by_key[key]
+        eq(type(d.title), "string", key .. " has a title")
+        eq(type(d.get_frame), "function", key .. " has get_frame")
+        eq(type(d.available), "function", key .. " has available")
+        eq(type(d.save), "function", key .. " has save")
+        eq(type(d.reset), "function", key .. " has reset")
+        eq(d.get_frame(), nil, key .. ": no frame before init")
+        eq(d.available(), false, key .. ": unavailable before a session")
+    end
+
+    u.init(T)
+    for _, key in ipairs({ "practice_panel", "practice_rotation", "practice_timeline" }) do
+        check(by_key[key].get_frame() ~= nil, key .. ": the frame exists after init")
+    end
+    u.start(T)
+    for _, key in ipairs({ "practice_panel", "practice_rotation", "practice_timeline" }) do
+        eq(by_key[key].available(), true, key .. ": available during a session")
+    end
+
+    -- Panel: save re-anchors through the panel's own path and persists its offsets.
+    local panel = by_key.practice_panel
+    u.panel.left, u.panel.top = 148, 20
+    F.bar_frame.right, F.bar_frame.top = 60, 60
+    panel.save(120, -80)
+    eq(F.class_db.practice_panel_x, 80, "save_position persists the x offset")
+    eq(F.class_db.practice_panel_y, -40, "save_position persists the y offset")
+    eq(u.panel.point[1], "TOPLEFT", "the panel save re-anchors through the bar path")
+    eq(u.panel.point[4], 88, "the stored x offset plus the default gap")
+    eq(u.panel.point[5], -40, "the stored y offset")
+    panel.reset()
+    eq(F.class_db.practice_panel_x, 0, "the panel reset restores the default x")
+    eq(F.class_db.practice_panel_y, 0, "the panel reset restores the default y")
+    eq(u.panel.point[1], "TOPLEFT", "the reset re-anchors to the bar")
+    eq(u.panel.point[4], 8, "the default gap lands at 8 px")
+
+    -- Rotation display: save stores the session-local centre offsets.
+    local rot = by_key.practice_rotation
+    u.rotation_display.center_x, u.rotation_display.center_y = 120, -80
+    rot.save(120, -80)
+    eq(u.rot_x, 120, "the rotation save stores x")
+    eq(u.rot_y, -80, "the rotation save stores y")
+    eq(u.rotation_display.point[1], "CENTER", "the rotation save re-anchors")
+    rot.reset()
+    eq(u.rot_x, 0, "the rotation reset restores the default x")
+    eq(u.rot_y, 100, "the rotation reset restores the default y")
+    eq(u.rotation_display.point[4], 0, "the reset re-anchors at the default x")
+    eq(u.rotation_display.point[5], 100, "the reset re-anchors at the default y")
+
+    -- Timeline: save stores the session-local centre offsets.
+    local tl = by_key.practice_timeline
+    tl.save(50, -300)
+    eq(u.timeline_x, 50, "the timeline save stores x")
+    eq(u.timeline_y, -300, "the timeline save stores y")
+    eq(u.timeline_frame.point[1], "CENTER", "the timeline save re-anchors")
+    tl.reset()
+    eq(u.timeline_x, 0, "the timeline reset restores the default x")
+    eq(u.timeline_y, -200, "the timeline reset restores the default y")
+    eq(u.timeline_frame.point[5], -200, "the reset re-anchors at the default y")
+
+    u.stop(T)
+    eq(by_key.practice_panel.available(), false, "the targets gate on the session again")
+
+    -- The descriptors pass the real design.lua registry normaliser (the C6 contract).
+    for i = 1, #u.design_targets do
+        local norm, nerr = b.st.design.normalise_descriptor(u.design_targets[i])
+        check(norm ~= nil, "target " .. u.design_targets[i].key .. " normalises (" .. tostring(nerr) .. ")")
+        if norm then
+            eq(norm.key, u.design_targets[i].key, "the normalised key survives for " .. norm.key)
+        end
+    end
+end
+
+--=========================================================================================
+-- 22) Grade review: timeline close button, drag persistence, key buttons, wheel, bests
+--=========================================================================================
+do
+    -- The timeline close button is labelled and toggles the frame.
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    u.start(T)
+    local tclose = nil
+    for i = 1, #F.frames do
+        local fr = F.frames[i]
+        if fr.parent == u.timeline_frame and fr.width == 16 and fr:GetScript("OnClick") then
+            tclose = fr
+        end
+    end
+    check(tclose ~= nil, "the timeline close button exists")
+    eq(tclose.label.text, "X", "the timeline close button reads X")
+    eq(u.timeline_visible, true, "the timeline shows after start")
+    tclose:GetScript("OnClick")()
+    eq(u.timeline_visible, false, "the timeline close button hides the timeline")
+    eq(u.timeline_frame.shown, false, "the frame hides")
+    tclose:GetScript("OnClick")()
+    eq(u.timeline_visible, true, "the close button shows the timeline again")
+    u.stop(T)
+end
+
+do
+    -- A timeline drag stores session-local center offsets and re-anchors.
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    u.start(T)
+    u.timeline_frame.center_x, u.timeline_frame.center_y = 50, -300
+    F.env.UIParent.center_x, F.env.UIParent.center_y = 0, 0
+    u.save_timeline_position(T)
+    eq(u.timeline_x, 50, "a drag stores the timeline x center offset")
+    eq(u.timeline_y, -300, "a drag stores the timeline y center offset")
+    eq(u.timeline_frame.point[4], 50, "the stored offset re-anchors")
+    eq(u.timeline_frame.point[5], -300, "the stored y offset re-anchors")
+    -- The frame's own drag-stop script persists (it previously snapped back).
+    u.timeline_x, u.timeline_y = 0, -200
+    u.timeline_frame:GetScript("OnDragStop")(u.timeline_frame)
+    eq(u.timeline_x, 50, "the drag-stop script persists the position")
+    u.stop(T)
+end
+
+do
+    -- The invisible key buttons cast through cast_key.
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    u.start(T)
+    local sim = u.sim
+    F.clock = 4.0
+    sim.gcd_active = false
+    sim.cs_cooldown_expires = 0
+    local sync0 = F.practice_sync
+    u.buttons.cs:GetScript("OnClick")()
+    near(sim.cs_cooldown_expires, 10.0, "the key button casts (4.0 + 6)")
+    eq(F.practice_sync, sync0 + 1, "the key button syncs once")
+    u.stop(T)
+end
+
+do
+    -- The timeline mousewheel drives the scrollbar and the auto-scroll latch.
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    u.start(T)
+    F.clock = 0.5
+    u.cast_key(T, "cs")
+    F.clock = 2.01
+    drive(b)
+    eq(u.timeline_auto_scroll, true, "auto-scroll rides the end after render")
+    local sf = u.timeline_frame.scroll_frame
+    local _, max_hi = u.timeline_frame.scrollbar:GetMinMaxValues()
+    check(max_hi > 0, "the scrollbar spans the content")
+    sf:GetScript("OnMouseWheel")(sf, 1)
+    eq(u.timeline_auto_scroll, false, "wheeling up leaves the end")
+    check(u.timeline_frame.scrollbar:GetValue() < max_hi, "wheeling up scrolls back")
+    sf:GetScript("OnMouseWheel")(sf, -1)
+    eq(u.timeline_auto_scroll, true, "wheeling down to the end resumes auto-scroll")
+    u.stop(T)
+end
+
+do
+    -- A better grade with a worse score still persists the grade (never downgrades).
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local pr = b.st.practice
+    F.class_db.practice_bests = { score = 100, hit_rate = 1.0, mean_error_ms = 50,
+        attempts = 5, grade = "A" }
+    u.init(T)
+    u.start(T)
+    eq(u.bests.grade, "A", "the seeded best grade loads")
+    pr.record_attempt(u.score, "S", 60)
+    for _ = 1, 4 do pr.record_attempt(u.score, "F", nil) end
+    u.stop_fight(T)
+    eq(F.class_db.practice_bests.score, 100, "a worse score never overwrites the best score")
+    eq(F.class_db.practice_bests.grade, "S", "the better grade still persists")
+    eq(F.class_db.practice_bests.attempts, 5, "the attempt count rides with the kept score")
+    u.stop(T)
+end
+
+do
+    -- Equal score with a tighter mean error wins the tiebreak.
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local pr = b.st.practice
+    F.class_db.practice_bests = { score = 40, hit_rate = 0.5, mean_error_ms = 110,
+        attempts = 2, grade = "A" }
+    u.init(T)
+    u.start(T)
+    pr.record_attempt(u.score, "A", 50)
+    pr.record_attempt(u.score, "F", nil)
+    u.stop_fight(T)
+    eq(F.class_db.practice_bests.score, 40, "the tie score persists")
+    near(F.class_db.practice_bests.mean_error_ms, 50, "the tighter mean error wins the tiebreak")
+    u.stop(T)
+end
+
+do
+    -- Corrupted stored bests read as empty and are repaired by the next save.
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local pr = b.st.practice
+    F.class_db.practice_bests = "junk"
+    u.init(T)
+    u.start(T)
+    eq(u.bests, nil, "a non-table best reads as no best")
+    eq(u.panel.score_text.text, "Score --", "the line shows no best")
+    pr.record_attempt(u.score, "S", 60)
+    u.stop_fight(T)
+    check(type(F.class_db.practice_bests) == "table", "the next save repairs the stored best")
+    eq(F.class_db.practice_bests.score, 100, "the repaired best carries the session score")
+    u.stop(T)
+end
+
+do
+    -- Wrong-typed fields inside the stored table fall back to empty values.
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    F.class_db.practice_bests = { score = "x", hit_rate = "y", grade = 7, attempts = "z" }
+    u.init(T)
+    u.start(T)
+    eq(u.bests.score, 0, "a non-number score falls back to 0")
+    eq(u.bests.grade, nil, "a non-string grade falls back to nil")
+    eq(u.bests.attempts, 0, "a non-number attempt count falls back to 0")
+    eq(u.best_score_text(), "0", "a zero score with no grade reads as 0")
+    u.stop(T)
+end
+
+do
+    -- Reload semantics: dropping the live bests re-reads them from the class table.
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local pr = b.st.practice
+    u.init(T)
+    u.start(T)
+    pr.record_attempt(u.score, "S", 60)
+    u.stop_fight(T)
+    eq(F.class_db.practice_bests.score, 100, "the session persists its score")
+    u.bests = nil
+    u.load_bests(T)
+    eq(u.bests.score, 100, "a reload re-reads the stored score")
+    eq(u.bests.grade, "S", "a reload re-reads the stored grade")
+    u.stop(T)
 end
 
 if failures == 0 then

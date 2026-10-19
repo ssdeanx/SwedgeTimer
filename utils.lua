@@ -43,7 +43,7 @@ st.utils.test_tolerance = function(n1, n2, tolerance)
 	local diff = math.abs(n1 - n2)
 	if diff < tolerance then
 		return true
-	else 
+	else
 		return false
 	end
 end

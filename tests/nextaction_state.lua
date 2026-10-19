@@ -129,8 +129,18 @@ check(fresh(inp({})) == out, "evaluate returns the caller's out table (no per-ca
 check(type(out.action) == "string" and type(out.hold) == "boolean"
     and type(out.riding) == "boolean" and type(out.judge_call) == "boolean"
     and (out.filler_kind == nil or type(out.filler_kind) == "string")
-    and type(out.prediction_hold) == "number" and type(out.waiting_judgement) == "boolean",
-    "evaluate writes the seven result fields with the right types")
+    and type(out.prediction_hold) == "number" and type(out.waiting_judgement) == "boolean"
+    and out.inputs_unknown == false,
+    "evaluate writes the eight result fields with the right types")
+
+-- M6: the caller's inputs_unknown bit is threaded through unchanged (nil/false read
+-- as known; only an explicit true marks the tick unknown).
+local unknown_r = ev({ inputs_unknown = true })
+eq(unknown_r.inputs_unknown, true, "M6: an explicit inputs_unknown=true threads into out")
+unknown_r = ev({})
+eq(unknown_r.inputs_unknown, false, "M6: a known tick reads inputs_unknown=false")
+unknown_r = ev({ inputs_unknown = 1 })
+eq(unknown_r.inputs_unknown, false, "M6: only boolean true marks the inputs unknown")
 
 -- GCD ready, before div (swing 3.0, gcd 0): rel_div = 1.05 --------------------
 local r = ev({ seal = "soc" })
@@ -644,6 +654,7 @@ eq(stale_na.judge_call, false, "retail: a stale judgement cue is cleared")
 eq(stale_na.filler_kind, nil, "retail: a stale filler is cleared")
 eq(stale_na.prediction_hold, 0, "retail: a stale prediction hold is neutralised")
 eq(stale_na.waiting_judgement, false, "retail: a stale judgement latch is cleared")
+eq(stale_na.inputs_unknown, true, "retail: the inert engine reports unknown inputs")
 -- The gate is Retail-specific: any other family still prompts.
 st.family = "TBC"
 r = ev({})
@@ -843,6 +854,11 @@ eq(stale_fcfs.judge_call, false, "fcfs: a stale judgement cue is cleared")
 eq(stale_fcfs.filler_kind, nil, "fcfs: a stale filler is cleared")
 eq(stale_fcfs.prediction_hold, 0, "fcfs: a stale prediction hold is neutralised")
 eq(stale_fcfs.waiting_judgement, false, "fcfs: a stale judgement latch is cleared")
+eq(stale_fcfs.inputs_unknown, false, "fcfs: a known tick reads inputs_unknown=false")
+local unknown_fcfs = finputs({})
+unknown_fcfs.inputs_unknown = true
+r = na.evaluate_fcfs(unknown_fcfs, stale_fcfs)
+eq(r.inputs_unknown, true, "fcfs: inputs_unknown threads through like evaluate")
 
 -- SoD Exodin: Exo (core) > CS > DS > Judge > Cons > HoW ----------------------
 r = fev({ fcfs_mode = "sod" })
@@ -941,6 +957,43 @@ eq(na.classify_twist_weapon(nil), "slow", "tbc: unknown speed defaults to 3.0 ->
 -- The labels never move the rotation thresholds above.
 eq(na.calculate_rotation(3.8, 1.5), "1/2", "tbc: 3.8 still cadences 1/2")
 eq(na.calculate_rotation(3.6, 1.5), "1/2", "tbc: 3.6 still cadences 1/2")
+
+-- Rotation-text resolution: every cadence the thresholds can select has a
+-- display name, so the guide frame's rotation text never renders a bare key
+-- or nil for a known pattern (the provider mapping is audited in §6 of the
+-- buildout report; the engine side is pinned here).
+local pattern_speeds = {
+    { 3.0, 1.5 }, { 2.3, 1.3 }, { 2.45, 1.5 }, { 2.0, 1.3 },
+    { 2.0, 1.5 }, { 1.6, 1.5 }, { 1.2, 1.5 }, { 0.9, 1.5 },
+}
+local seen_patterns = {}
+for _, pg in ipairs(pattern_speeds) do
+    local key = na.calculate_rotation(pg[1], pg[2])
+    check(key ~= nil, "every probe speed selects a rotation pattern")
+    check(type(na.display_names[key]) == "string" and na.display_names[key] ~= "",
+        "rotation text resolves for pattern " .. tostring(key))
+    seen_patterns[key] = true
+end
+local seen_count = 0
+for _ in pairs(seen_patterns) do seen_count = seen_count + 1 end
+eq(seen_count, 8, "the probes cover all eight rotation patterns")
+
+-- P3: Bloodlust/Heroism twist-window scale (bench/verify_bank.md P3) ----------
+-- Pure helper only: the live paladin gather gates on the C2 family contract
+-- (st.lust_supported) and the throttled aura scan, then hands the window
+-- through this function. Absent/false activity must pass the window through
+-- untouched, so callers that never saw a lust window keep the base math.
+eq(na.LUST_TWIST_WINDOW_SCALE, 0.6, "lust: the window scale is 0.6")
+near(na.apply_lust_window(0.4, true), 0.24, "lust: the 0.4 s baseline scales to 0.24")
+near(na.apply_lust_window(0.54, true), 0.324, "lust: a dynamic-padded window scales the same way")
+near(na.apply_lust_window(0.8, true), 0.48, "lust: the fixed-padding cap scales too")
+eq(na.apply_lust_window(0.4, false), 0.4, "lust: inactive passes the window through")
+eq(na.apply_lust_window(0.4, nil), 0.4, "lust: nil activity passes the window through")
+eq(na.apply_lust_window(0, true), 0, "lust: a zero window stays zero")
+eq(na.apply_lust_window(-1, true), 0, "lust: a negative window floors at 0")
+eq(na.apply_lust_window(nil, true), nil, "lust: a nil window stays nil")
+eq(na.apply_lust_window("junk", true), "junk", "lust: a non-number window passes through")
+eq(na.apply_lust_window(0.4, "yes"), 0.4, "lust: a non-boolean truthy flag is not activity")
 
 -- Forever adaptation (UNCONFIRMED beta; docs/research/forever_beta.md) --------
 -- An absent/false flag keeps the archived behaviour (pinned by every check

@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:05:40Z",
+  "agent_name": "competitor-scan",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 3
+  },
+  "patterns": {
+    "what_worked": "Enumerate-first then pick-per-job: 28 Firecrawl tools enumerated; MCP search/agent broken on this deployment, so the same self-hosted Firecrawl instance was driven via REST (/v2/search, /v2/scrape) plus SearxNG JSON. Targeted scrapes with waitFor>=6000ms rendered Wowhead guides and wago.io flavor pages that generic search could not reach. Reddit keyword-filtered scrapes yielded the Forever ecosystem wave and the rotation-helper competition.",
+    "what_was_hard": "MCP firecrawl_search rejects every body (Invalid request body), firecrawl_agent rejects keys, developer_search 404s, find_tools needs an Alexandria key. wago.io pack bodies are WA import strings (feature lists unreadable); old.reddit hit a 2FA wall and reddit .json scrape failed; Forever native swing-timer setup details stayed UNCONFIRMED.",
+    "skill_gap": "Decoding wago.io WA import strings (or using a live-browser interact session) would unlock pack-level feature inventories; a reddit fallback (pullpush-style API) would close comment-body gaps."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Operator triage: (1) resolve the NAG/NextActionTBC vs in-repo nextaction authorship question (report §9); (2) TOP-15 rows 2/3/4/6/8 are the parser-first candidates, rows 3/4/8 are S-M and offline-testable."
+  }
+}

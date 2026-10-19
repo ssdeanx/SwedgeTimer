@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:13:59Z",
+  "run_id": "practice-buildout-2026-10-17",
+  "agent_name": "practice",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Keeping the harness additive made the regression bar provable: the direct engine paths are untouched, the paladin scenario wraps them, and one equivalence test drives an identical sequence through both paths comparing 38 sim fields plus cast/tick/on_swing flags. Both mutation proofs (window start edge, D7 20-energy band) were caught by the pinned checks and restored clean.",
+    "what_was_hard": "The full-suite green gate is not reachable from inside this lane: other lanes are mid-flight in the same tree (classes/druid.lua, bars.lua, designmode_state.lua were edited during the runs), so tests/run.sh shows 4 failures that are all outside this scope. Also, a spot check caught a real combo-window reopen bug that the first test pass missed (a second AW cycle never reopened) - fixed and pinned.",
+    "skill_gap": "In-client behaviour of anything new is UNCONFIRMED by design (offline only). Movement compliance (H5), HP/rage feeds (W6), the fixed D7 refund, and the P5 UI wiring all need an in-client session or the options pass before they are real."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Re-run the full suite at reconcile after the other lanes land; the practice suites are green in every run. C6 consumes ui.design_targets (normaliser-verified)."
+  },
+  "journal_marker": "desks/practice/journal.md § 2026-10-17 C1 harness split + shells done"
+}

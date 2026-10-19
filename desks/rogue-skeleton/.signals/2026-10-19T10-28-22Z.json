@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T10:28:22Z",
+  "agent_name": "rogue-skeleton",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Read the bench brief/readiness/lessons first; built the class as a strict no-behaviour skeleton, then pinned each contract through the real shared frames (guide '…' and HUD silent-until-enabled) instead of source-only checks. Mutation proofs confirmed every new check bites.",
+    "what_was_hard": "The baseline tree had the pure lane's rogue_guide.lua on disk but unlisted in all 7 TOCs, so toc_check was 7 failures before any writer change; the TOC integration for that line had to be included here to reach a green harness (readiness §3 item 8).",
+    "skill_gap": "None material. The TOC count in the brief says 8 appends but only 7 toc files exist; recorded in the journal instead of inventing an eighth."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

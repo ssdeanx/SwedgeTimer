@@ -34,6 +34,11 @@ st.weave.FAMILY_COLORS = {
     CH  = { 1.00, 0.90, 0.20, 1 },  -- yellow
 }
 
+-- Lava Burst (SoD rune) marker tint for the MW5 spender choice (S4): the assist
+-- shows the Lava Burst icon at five Maelstrom stacks, tinted in the spell's lava
+-- orange instead of a weave family colour (LvB is a spender, not a tracked family).
+st.weave.LAVA_BURST_COLOR = { 1.00, 0.55, 0.15, 1 }
+
 -- Tracked spell families. IDs run low rank -> high rank; the runtime resolves the
 -- highest known rank for the active character (reference ResolveSpellInfo walks the
 -- list backwards, SuperSwingTimer_Weaving.lua:271-294).
@@ -82,6 +87,74 @@ function st.weave.has_maelstrom_weapon(family, mw_observed)
     return true
 end
 
+-- MW5 spender choice (S4): at five Maelstrom Weapon stacks the assist recommends
+-- the spender - Lava Burst ONLY when the rune/talent is present (known == true;
+-- the SoD rune; LvB is not baseline in TBC, and a wrong choice is worse than the
+-- baseline LB), Lightning Bolt otherwise. Every non-true reading (nil, false,
+-- a number) demotes to Lightning Bolt - no prompt on a guess.
+function st.weave.get_mw5_spender(lava_burst_known)
+    if lava_burst_known ~= true then
+        return "lightning"
+    end
+    return "lavaburst"
+end
+
+-- FS-collision guard (S4, bank: "hold weave if FS < 2s and shock ready"): while
+-- the target's Flame Shock is inside its final MW5_FS_GUARD_SECONDS AND the shock
+-- cooldown is ready to refresh it, the five-stack weave is held back so the
+-- Flame Shock refresh goes first - the spender must not overwrite the FS window.
+-- Strictly numeric FS (a missing/non-number reading never holds) and strictly
+-- boolean-ready shock (nil/unknown never holds: no hold on a guess, the engine's
+-- fishing-rule convention). Boundary: exactly 2.0 s does NOT hold (strict <).
+st.weave.MW5_FS_GUARD_SECONDS = 2
+
+function st.weave.should_hold_mw5(flameshock_remaining, shock_ready)
+    local fs = flameshock_remaining
+    return type(fs) == "number" and fs < st.weave.MW5_FS_GUARD_SECONDS
+        and shock_ready == true
+end
+
+-- 2-3 stack weave (round 2, operator spec - BINDING): "shaman dont have to wait
+-- until 5 stacks for mw ... u can actually do it at 2-3 if u cast it at correct
+-- time and dont clip your mh weapon". The assist prompts a weave spell from
+-- MW_MIN_WEAVE_STACKS stacks up while the cast still fits the swing window; five
+-- stacks stays the instant fallback (always safe); a cast started after the
+-- spell's latest safe start is a clip and is NEVER prompted. The per-spell state:
+--   "wait"  - fewer than MW_MIN_WEAVE_STACKS stacks, an unreadable reading
+--             (unknown never reads ready), or an unknown latest-safe start (H4:
+--             get_marker_fraction returns nil when the cast is unresolvable, so the
+--             spell stays dim instead of claiming the whole swing is safe);
+--   "clip"  - the safe start has passed: casting now would overrun the swing;
+--   "ready" - castable now without clipping (five stacks short-circuits: the
+--             instant cast has no window).
+st.weave.MW_MIN_WEAVE_STACKS = 2
+
+function st.weave.get_spell_position_state(mw_stacks, current_fraction, safe_start_fraction)
+    if type(mw_stacks) ~= "number" or mw_stacks < st.weave.MW_MIN_WEAVE_STACKS then
+        return "wait"
+    end
+    if mw_stacks >= st.weave.MW_MAX_STACKS then
+        return "ready"
+    end
+    local current = current_fraction
+    local safe = safe_start_fraction
+    if type(current) ~= "number" or type(safe) ~= "number"
+        or current ~= current or safe ~= safe then
+        -- Unreadable (or NaN) readings never read ready - the row stays dim.
+        return "wait"
+    end
+    if current > safe then
+        return "clip"
+    end
+    return "ready"
+end
+
+-- Pure: the operator's weave prompt gate in one call: the spell is safe to press
+-- right now (state "ready"). Thin on purpose - the state helper owns the rules.
+function st.weave.can_prompt_weave(mw_stacks, current_fraction, safe_start_fraction)
+    return st.weave.get_spell_position_state(mw_stacks, current_fraction, safe_start_fraction) == "ready"
+end
+
 -- Pure: clamp a fraction into [0, 1]; non-numbers read as 0 (reference ClampFraction,
 -- SuperSwingTimer_Weaving.lua:445-451).
 function st.weave.clamp_fraction(v)
@@ -120,33 +193,66 @@ function st.weave.get_maelstrom_multiplier(stacks)
     return mult
 end
 
--- Pure: effective cast time in seconds.
+-- Pure: effective cast time in seconds, or nil when the base cast is unknown.
 --   instant          : an instant-cast buff is up -> nothing to schedule (0).
 --   maelstrom <= 0   : 5 stacks (or the caller reporting the instant state) -> 0.
+--   base missing/non-positive: nil (UNKNOWN) - H4: 0 is a legitimate instant-cast
+--     signal, so the old 0-return made an unresolved catalogue read (unknown rank,
+--     absent id, GetSpellInfo nil) render the marker at the swing end as if the cast
+--     were free. The caller must hide/dim its marker on nil, never treat it as instant.
 --   Otherwise base / haste * maelstrom, with a dead or missing haste treated as 1 and
---   a missing Maelstrom multiplier treated as 1 (no reduction). Never negative.
+--   a missing Maelstrom multiplier treated as 1 (no reduction - conservative: an
+--   unknown reduction can only lengthen the cast, never claim a safe one). Never
+--   negative.
 function st.weave.get_effective_cast_time(base_cast_seconds, haste_multiplier, maelstrom_multiplier, instant)
     if instant then return 0 end
     local mw = maelstrom_multiplier
-    if type(mw) ~= "number" then mw = 1 end
+    if type(mw) ~= "number" or mw ~= mw then mw = 1 end
     if mw <= 0 then return 0 end
     local base = base_cast_seconds
-    if type(base) ~= "number" or base <= 0 then return 0 end
+    if type(base) ~= "number" or base ~= base or base <= 0 then return nil end
     local haste = haste_multiplier
-    if type(haste) ~= "number" or haste <= 0 then haste = 1 end
+    if type(haste) ~= "number" or haste ~= haste or haste <= 0 then haste = 1 end
     local effective = (base / haste) * mw
     if effective < 0 then effective = 0 end
     return effective
 end
 
--- Pure: swing fraction of the latest safe cast start. A cast begun after this fraction
--- lands after the next swing. duration <= 0 -> 0 (reference
--- SuperSwingTimer_Weaving.lua:552).
+-- Pure: swing fraction of the latest safe cast start, or nil when the effective cast
+-- time is unknown (H4: never draw on a guess - the caller hides/dims its marker).
+-- A cast begun after this fraction lands after the next swing. duration <= 0 -> 0
+-- (reference SuperSwingTimer_Weaving.lua:552).
 function st.weave.get_marker_fraction(duration, effective_cast_seconds, latency_seconds)
-    if type(duration) ~= "number" or duration <= 0 then return 0 end
-    local cast = effective_cast_seconds or 0
-    local latency = latency_seconds or 0
+    if type(duration) ~= "number" or duration ~= duration or duration <= 0 then return 0 end
+    local cast = effective_cast_seconds
+    if type(cast) ~= "number" or cast ~= cast or cast < 0 then
+        -- Unresolvable cast: unknown, not instant. The old `or 0` collapsed both
+        -- signals and pinned the marker at the swing end.
+        return nil
+    end
+    local latency = latency_seconds
+    if type(latency) ~= "number" or latency ~= latency then latency = 0 end
     return st.weave.clamp_fraction((duration - (cast + latency)) / duration)
+end
+
+-- Pure: bounds of the "spells start cast range zone" (round 2): the min and max
+-- of the numeric latest-safe-start fractions across the shown spells, plus how
+-- many numeric entries were seen. min/max are nil when nothing numeric was given
+-- (never draw a zone on a guess). Non-number entries are skipped.
+function st.weave.get_cast_zone_bounds(starts)
+    if type(starts) ~= "table" then
+        return nil, nil, 0
+    end
+    local min_start, max_start, count = nil, nil, 0
+    for i = 1, #starts do
+        local value = starts[i]
+        if type(value) == "number" then
+            count = count + 1
+            if min_start == nil or value < min_start then min_start = value end
+            if max_start == nil or value > max_start then max_start = value end
+        end
+    end
+    return min_start, max_start, count
 end
 
 -- Pure: seconds until the latest safe cast start; negative once the window has passed.
@@ -165,10 +271,12 @@ end
 
 -- Pure: is the cast clipped? True when it overruns the swing (clip_amount > 0) or was
 -- started after the latest safe start (cast_start_fraction beyond the marker)
--- (reference SuperSwingTimer_Weaving.lua:570).
+-- (reference SuperSwingTimer_Weaving.lua:570). A nil/unknown marker asserts nothing
+-- (H4: no clip verdict is built on a missing cast time).
 function st.weave.is_clipped(clip_amount, cast_start_fraction, marker_fraction)
     if (clip_amount or 0) > 0 then return true end
-    if cast_start_fraction ~= nil and cast_start_fraction > marker_fraction then return true end
+    if type(marker_fraction) == "number" and cast_start_fraction ~= nil
+        and cast_start_fraction > marker_fraction then return true end
     return false
 end
 
@@ -228,31 +336,87 @@ function st.weave.is_windfury_proc_capped(procs_this_minute)
     return type(procs_this_minute) == "number" and procs_this_minute >= st.weave.WINDFURY_MAX_PROCS_PER_MINUTE
 end
 
+-- Internal cooldowns (ICDs), in seconds, keyed so more can join later (operator:
+-- "figuring out how to take advantage of and knowing icd's"):
+--   windfury : Windfury Weapon proc ICD (3 s, shared across hands - the 20/min
+--              ceiling above).
+--   flurry   : Flurry (16280) proc ICD (0.5 s, operator spec: "flurry has .5 sec
+--              icd aka internal cooldown").
+st.weave.ICD_SECONDS = {
+    windfury = st.weave.WINDFURY_ICD_SECONDS,
+    flurry = 0.5,
+}
+
+-- Pure: seconds left on an internal cooldown that started at last_time, measured
+-- against icd_seconds. A missing/non-positive stamp or a non-positive window
+-- returns nil (nothing to show - never a fake countdown); a stamp in the future
+-- or an elapsed cooldown floors at the full window / 0. The generic form of the
+-- windfury ICD read below.
+function st.weave.get_icd_remaining(last_time, icd_seconds, now)
+    if type(last_time) ~= "number" or last_time <= 0
+        or type(icd_seconds) ~= "number" or icd_seconds <= 0 then
+        return nil
+    end
+    local since = (now or 0) - last_time
+    if since < 0 then since = 0 end
+    local remaining = icd_seconds - since
+    if remaining < 0 then remaining = 0 end
+    return remaining
+end
+
+-- Pure: Flurry proc-ICD remaining seconds, or nil when no proc stamp is known.
+-- Stamps are written by classes/shaman.lua when the aura's stack count increases
+-- (a fresh proc); an unreadable/absent stamp shows nothing.
+function st.weave.get_flurry_icd_remaining(last_proc_time, now)
+    return st.weave.get_icd_remaining(last_proc_time, st.weave.ICD_SECONDS.flurry, now)
+end
+
+-- Dual-wield swing sync (round 2, operator spec): keep the MH and OH landings
+-- within the Flurry ICD window so desync does not burn extra Flurry charges. The
+-- threshold IS the ICD - the model where the ICD affects timing.
+st.weave.DW_SYNC_THRESHOLD_SECONDS = st.weave.ICD_SECONDS.flurry
+
+-- Pure: absolute seconds between the two weapons' next landings, or nil unless
+-- both stamps are numbers (never warn on a guess).
+function st.weave.get_dw_sync_offset(mh_ends_at, oh_ends_at)
+    if type(mh_ends_at) ~= "number" or type(oh_ends_at) ~= "number" then
+        return nil
+    end
+    return math.abs(mh_ends_at - oh_ends_at)
+end
+
+-- Pure: is the dual-wield pair out of sync? Strictly numeric offset above the
+-- threshold; nil/unknown never warns.
+function st.weave.is_dw_desynced(offset)
+    return type(offset) == "number" and offset > st.weave.DW_SYNC_THRESHOLD_SECONDS
+end
+
 -- Flame Shock target bar: the fallback duration covers auras whose duration payload is
 -- missing; the glow window is the reference's final 4 s (SuperSwingTimer_ClassMods.lua
 -- 3850-3852, 3866).
 st.weave.FLAME_SHOCK_FALLBACK_DURATION = 12
 st.weave.FLAME_SHOCK_GLOW_SECONDS = 4
 
--- Shield charge tracker: Lightning Shield can reach 4 charges (talent/era variants),
--- Water Shield tops out at 3 (reference SuperSwingTimer_ClassMods.lua:4058-4209 draws a
--- fixed row per shield type, with the empty slots dimmed).
+-- Shield charge tracker: the reference draws a fixed 3-rect row
+-- (LIGHTNING_SHIELD_NUM_RECTS = 3, SuperSwingTimer_ClassMods.lua:3514) and falls
+-- back to the 3-charge standard whenever the aura reports no readable count
+-- (SuperSwingTimer_ClassMods.lua:4141-4144: `if not chargeCount then chargeCount = 3`).
+-- This port keeps one extra Lightning slot for the era/talent variants that can
+-- reach 4 charges, so the row is sized per type; the unreadable-count fallback is
+-- the 3-charge standard for both shields (never the optimistic full row).
 st.weave.SHIELD_MAX_CHARGES = {
     lightning = 4,
     water = 3,
 }
+st.weave.SHIELD_FALLBACK_CHARGES = 3
 
 -- Pure: seconds left on the windfury internal cooldown, measured from the last mainhand
 -- swing stamp. A missing/non-positive stamp returns nil (nothing to show); a stamp in
 -- the future or an elapsed cooldown floors at the full window / 0 (reference
--- SuperSwingTimer_ClassMods.lua:3836-3838).
+-- SuperSwingTimer_ClassMods.lua:3836-3838). Delegates to the generic ICD read with the
+-- registry's windfury window, so every ICD shares one implementation.
 function st.weave.get_windfury_icd_remaining(last_swing_time, now)
-    if type(last_swing_time) ~= "number" or last_swing_time <= 0 then return nil end
-    local since_swing = (now or 0) - last_swing_time
-    if since_swing < 0 then since_swing = 0 end
-    local remaining = st.weave.WINDFURY_ICD_SECONDS - since_swing
-    if remaining < 0 then remaining = 0 end
-    return remaining
+    return st.weave.get_icd_remaining(last_swing_time, st.weave.ICD_SECONDS.windfury, now)
 end
 
 -- Pure: windfury ICD tint bucket for a remaining countdown: "red" | "orange" | "green".
@@ -263,6 +427,35 @@ function st.weave.get_windfury_tint_bucket(remaining)
     if remaining > st.weave.WINDFURY_TINT_RED_ABOVE then return "red" end
     if remaining > st.weave.WINDFURY_TINT_ORANGE_ABOVE then return "orange" end
     return "green"
+end
+
+-- Pure: the delay-if-fishing-WF hold (S3): Stormstrike is ready but the Windfury
+-- ICD clears inside the current swing, so pressing Stormstrike now wastes the
+-- empowered proc chance. Strictly numeric (nil/NaN never hold), the ICD must be
+-- live (> 0) and the swing still running (> 0); a swing landing now (<= 0) never
+-- holds - the next tick re-evaluates against the fresh swing. Mirrors the guide
+-- engine's local should_delay_stormstrike (shaman_guide.lua rule 7); this copy is
+-- the pure, testable source for the bar wash and the SS badge tint (that module
+-- is frozen and keeps its own private copy).
+function st.weave.should_hold_stormstrike(windfury_icd_remaining, swing_remaining)
+    local wf = windfury_icd_remaining
+    local swing = swing_remaining
+    return type(wf) == "number" and wf > 0
+        and type(swing) == "number" and swing > 0 and wf <= swing
+end
+
+-- Pure: start fraction of the WF-fishing hold wash (S3): the amber overlay covers
+-- the swing's final fraction - from the point the Windfury ICD clears to the
+-- swing's end, the window where the held Stormstrike becomes safe to press.
+-- Returns nil when the inputs are unusable (never draw on a guess); the fraction
+-- is clamped into [0, 1].
+function st.weave.get_wf_hold_wash_fraction(swing_elapsed, swing_duration, icd_remaining)
+    if type(swing_elapsed) ~= "number" or type(swing_duration) ~= "number"
+        or swing_duration <= 0 or type(icd_remaining) ~= "number"
+        or icd_remaining < 0 then
+        return nil
+    end
+    return st.weave.clamp_fraction((swing_elapsed + icd_remaining) / swing_duration)
 end
 
 -- Pure: remaining seconds of the Flame Shock debuff for display, floored at 0, plus the
@@ -290,6 +483,39 @@ function st.weave.should_flame_shock_glow(remaining)
         and remaining > 0 and remaining <= st.weave.FLAME_SHOCK_GLOW_SECONDS
 end
 
+-- Stormstrike nature-vulnerability debuff (S2): the target debuff bar tracks 17364
+-- - CONFIRMED 12 s, +20% nature damage taken (bench/verify_bank.md §2, Wowhead TBC
+-- spell=17364). The ability trigger id noted on the bench (32175) is accepted
+-- defensively as an aura id; that role is UNCONFIRMED. The glow window mirrors the
+-- Flame Shock bar's final-seconds rule.
+st.weave.STORMSTRIKE_FALLBACK_DURATION = 12
+st.weave.STORMSTRIKE_GLOW_SECONDS = 4
+
+-- Pure: remaining seconds of the Stormstrike debuff for display, floored at 0, plus
+-- the bar's total span. A missing/non-positive expiration stamp falls back to the
+-- full duration, and a missing/non-positive duration falls back to the Stormstrike
+-- default (same shape as get_flame_shock_remaining).
+function st.weave.get_stormstrike_remaining(duration, expiration_time, now)
+    local total = duration
+    if type(total) ~= "number" or total <= 0 then
+        total = st.weave.STORMSTRIKE_FALLBACK_DURATION
+    end
+    local expires = expiration_time
+    if type(expires) == "number" and expires > 0 then
+        local remaining = expires - (now or 0)
+        if remaining < 0 then remaining = 0 end
+        return remaining, total
+    end
+    return total, total
+end
+
+-- Pure: should the Stormstrike bar glow? Only while the debuff is up and inside the
+-- final seconds (mirrors should_flame_shock_glow).
+function st.weave.should_stormstrike_glow(remaining)
+    return type(remaining) == "number"
+        and remaining > 0 and remaining <= st.weave.STORMSTRIKE_GLOW_SECONDS
+end
+
 -- Pure: remaining seconds of a spell cooldown, or nil when the spell is ready (or the
 -- client reports no usable cooldown). Reference GetShamanCooldownRemaining,
 -- SuperSwingTimer_ClassMods.lua:3665-3677.
@@ -304,14 +530,14 @@ end
 
 -- Pure: shield charge tracker display state. slots is the fixed rectangle count for the
 -- shield type (0 when the type is unknown); filled is the aura's charge count clamped
--- into [0, slots], with a missing/non-positive count reading as full (reference
--- SuperSwingTimer_ClassMods.lua:4141-4144 falls back to the full row).
+-- into [0, slots], with a missing/non-positive count reading as the 3-charge standard
+-- (reference SuperSwingTimer_ClassMods.lua:4141-4144 falls back to 3, never the full row).
 function st.weave.get_shield_tracker_state(shield_type, count)
     local slots = st.weave.SHIELD_MAX_CHARGES[shield_type]
     if type(slots) ~= "number" then return 0, 0 end
     local filled = count
     if type(filled) ~= "number" or filled < 1 then
-        filled = slots
+        filled = st.weave.SHIELD_FALLBACK_CHARGES
     else
         filled = math.floor(filled + 0.5)
     end

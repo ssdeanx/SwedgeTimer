@@ -410,6 +410,9 @@ local function create_icon(parent, slot, index)
     f.text_hidden = false
     f.text_value = nil    -- the quantised value behind the current text
     f.text_color = nil
+    -- Provider liveness baseline: the first tick observes without reflowing (so a
+    -- live row never shifts on boot); a later flip reflows the row (see reflow_row).
+    f.last_hidden = false
     return f
 end
 
@@ -631,6 +634,14 @@ function HUD.matched_icon_size(self, count, spacing)
     return math.max(8, (width - math.max(0, count - 1) * spacing) / count)
 end
 
+-- Effective visibility: toggle want x provider liveness. A slot the provider hides
+-- (a dead spell, runeless-Era Mangle) draws nothing and reserves no row width.
+-- icon.wanted is toggle-level (set by apply_settings / refresh_layout_cache);
+-- icon.last_hidden is liveness-level (observed by update_display).
+local function icon_effective(icon)
+    return icon.wanted and icon.last_hidden ~= true
+end
+
 function HUD.apply_settings(self)
     self = self or ST
     local frame = HUD.frame
@@ -665,7 +676,7 @@ function HUD.apply_settings(self)
     for i = 1, #HUD.icons do
         local icon = HUD.icons[i]
         icon.wanted = HUD.icon_should_show(self, icon, designing)
-        if icon.wanted then
+        if icon_effective(icon) then
             count = count + 1
         end
     end
@@ -689,7 +700,7 @@ function HUD.apply_settings(self)
         local icon = HUD.icons[i]
         icon:SetSize(size, size)
         icon:ClearAllPoints()
-        if icon.wanted then
+        if icon_effective(icon) then
             if vertical then
                 icon:SetPoint("TOP", frame, "TOP", 0, -offset)
             else
@@ -720,6 +731,75 @@ function HUD.apply_settings(self)
         HUD.update_display(self)
     elseif frame:IsShown() then
         frame:Hide()
+    end
+end
+
+--=========================================================================================
+-- Hidden-flip reflow (gap closure)
+--=========================================================================================
+-- A provider-hidden slot reserves no row width: when a tick observes a hidden flip,
+-- the row reflows (width, count, positions) without waiting for a settings change.
+-- Layout-only: no provider calls (the tick already read every state), no
+-- update_display (that would re-run every provider and break the HS §5
+-- exactly-once pin). Combat-safe: Show/Hide + reposition on these non-secure row
+-- frames only; under lockdown the reflow defers via pending_apply and the on_update
+-- pending branch applies it (through apply_settings, which reads the same
+-- icon_effective liveness) once combat lifts. Creation stays lockdown-gated in
+-- ensure_created.
+function HUD.reflow_row(self)
+    self = self or ST
+    local frame = HUD.frame
+    if not frame then
+        return
+    end
+    if InCombatLockdown and InCombatLockdown() then
+        HUD.pending_apply = true
+        return
+    end
+    local db = self:get_class_table()
+    local size = db.hud_icon_size or DEFAULT_ICON_SIZE
+    local spacing = db.hud_spacing or DEFAULT_SPACING
+    local vertical = db.hud_orientation == "vertical"
+    local count = 0
+    for i = 1, #HUD.icons do
+        if icon_effective(HUD.icons[i]) then
+            count = count + 1
+        end
+    end
+    -- Match the bar, like apply_settings: the row is exactly as wide as the bar AS
+    -- DRAWN (outline included). Rows only - a column has no width to match.
+    if db.hud_match_bar_width and not vertical and count > 0 then
+        size = HUD.matched_icon_size(self, count, spacing)
+    end
+    HUD.current_icon_size = size
+    local span = count * size + math.max(0, count - 1) * spacing
+    if vertical then
+        frame:SetSize(size, math.max(span, 1))
+    else
+        frame:SetSize(math.max(span, 1), size)
+    end
+    local offset = 0
+    for i = 1, #HUD.icons do
+        local icon = HUD.icons[i]
+        icon:SetSize(size, size)
+        icon:ClearAllPoints()
+        if icon_effective(icon) then
+            if vertical then
+                icon:SetPoint("TOP", frame, "TOP", 0, -offset)
+            else
+                icon:SetPoint("LEFT", frame, "LEFT", offset, 0)
+            end
+            offset = offset + size + spacing
+            icon:Show()
+        else
+            if icon:IsShown() then
+                icon:Hide()
+            end
+            if icon.glowing and LCG and LCG.PixelGlow_Stop then
+                LCG.PixelGlow_Stop(icon, GLOW_KEY)
+                icon.glowing = false
+            end
+        end
     end
 end
 
@@ -969,6 +1049,7 @@ function HUD.update_display(self)
     local db = self:get_class_table()
     local now = api.get_time()
     local preview = db.hud_locked == false
+    local reflow_needed = false
     for i = 1, #HUD.icons do
         local icon = HUD.icons[i]
         if icon.wanted then
@@ -984,8 +1065,52 @@ function HUD.update_display(self)
                 end
             end
             if s and not s.hidden then
+                -- First observation baselines without reflowing (a live row never
+                -- shifts on boot); a later flip reflows after the loop.
+                if icon.last_hidden == nil then
+                    icon.last_hidden = false
+                elseif icon.last_hidden ~= false then
+                    icon.last_hidden = false
+                    reflow_needed = true
+                end
+                -- A slot the provider hid on an earlier tick (druid Mangle on
+                -- runeless Era, TF/Berserk where the client's spell data carries
+                -- no such spell) revives here: the settings pass shows every
+                -- wanted icon, so a dead slot must re-show to rejoin the row.
+                if not icon:IsShown() then
+                    icon:Show()
+                end
                 HUD.paint(self, icon, s, now)
+            elseif s and s.hidden then
+                if icon.last_hidden == nil then
+                    icon.last_hidden = true
+                elseif icon.last_hidden ~= true then
+                    icon.last_hidden = true
+                    reflow_needed = true
+                end
+                -- Provider-level hide wins over the toggle-level want: the slot
+                -- stays built (a later liveness retry can revive it) but draws
+                -- nothing. A stale proc glow stops with it, like the
+                -- toggle-off path in apply_settings.
+                if icon:IsShown() then
+                    icon:Hide()
+                end
+                if icon.glowing and LCG and LCG.PixelGlow_Stop then
+                    LCG.PixelGlow_Stop(icon, GLOW_KEY)
+                    icon.glowing = false
+                end
             end
+        end
+    end
+    if reflow_needed then
+        -- The flip is already painted (hide/show above); only the row geometry
+        -- is still stale. Under lockdown it waits: repositioning can run in
+        -- combat, but the lane defers the whole reflow so the row never shifts
+        -- mid-fight, and the on_update pending branch applies it on exit.
+        if InCombatLockdown and InCombatLockdown() then
+            HUD.pending_apply = true
+        else
+            HUD.reflow_row(self)
         end
     end
 end

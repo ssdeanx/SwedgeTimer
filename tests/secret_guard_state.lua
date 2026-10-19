@@ -1213,6 +1213,37 @@ do
 end
 
 --=========================================================================================
+-- 13b. M5 observability: api.auras_may_be_secret (release in the secret regime)
+--=========================================================================================
+do
+    local sb = build({})
+    local api = sb.st.api
+    check(type(api.auras_may_be_secret) == "function",
+        "M5 probe: the compat wrapper is exported")
+
+    -- Control: a classic client has no C_Secrets at all -> nil (unknown, never "no").
+    sb.env.C_Secrets = nil
+    eq(api.auras_may_be_secret(), nil, "M5 probe: no C_Secrets reads nil (control)")
+
+    -- The client's own answers pass through.
+    sb.env.C_Secrets = { ShouldAurasBeSecret = function() return true end }
+    eq(api.auras_may_be_secret(), true, "M5 probe: secret auras -> true")
+    sb.env.C_Secrets = { ShouldAurasBeSecret = function() return false end }
+    eq(api.auras_may_be_secret(), false, "M5 probe: unrestricted auras -> false")
+
+    -- Unknown shapes degrade to nil instead of guessing.
+    sb.env.C_Secrets = { ShouldAurasBeSecret = function() return "yes" end }
+    eq(api.auras_may_be_secret(), nil, "M5 probe: a non-boolean answer reads unknown")
+    sb.env.C_Secrets = { ShouldAurasBeSecret = function() error("restricted") end }
+    eq(api.auras_may_be_secret(), nil, "M5 probe: a throwing probe reads unknown")
+    sb.env.C_Secrets = { ShouldAurasBeSecret = 1 }
+    eq(api.auras_may_be_secret(), nil, "M5 probe: a missing function reads unknown")
+    sb.env.C_Secrets = "SECRET"
+    eq(api.auras_may_be_secret(), nil, "M5 probe: a non-table C_Secrets reads unknown")
+    sb.env.C_Secrets = nil
+end
+
+--=========================================================================================
 -- 14. Static pin: the vendored LibRangeCheck-2.0 guard (with an in-suite bite-proof)
 --=========================================================================================
 local function rangecheck_guard_failures(src)

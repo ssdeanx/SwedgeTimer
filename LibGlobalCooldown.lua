@@ -59,18 +59,13 @@ lib.has_bloodlust = false
 lib.has_breath_haste = false
 lib.current_spell_haste = nil
 
--- A cast time that will be guaranteed to not benefit from a class's 
--- instant cast procs. Defaults to Flash of Light, but if the player is a 
+-- A cast time that will be guaranteed to not benefit from a class's
+-- instant cast procs. Defaults to Flash of Light, but if the player is a
 -- Paladin we'll change this to rank 1 Frostbolt to avoid AoW instant casts.
 lib.cast_time_1500ms_spell_id = 19750
 
 function lib:Fire(event, ...)
 	self.callbacks:Fire(event, ...)
-end
-
--- Rounds down, e.g. if step=0.1 will round down to 1dp.
-local simple_floor = function(num, step)
-    return floor(num / step) * step
 end
 
 -----------------------------------------------------------
@@ -112,8 +107,6 @@ function lib:calculate_expected_spell_gcd()
     end
     -- print(string.format("current: %f, old: %f", current, self.current_spell_gcd))
     -- print(current, self.current_spell_gcd)
-    -- Round to 4 decimal places
-    -- current = simple_floor(current, 0.0001)
 
     -- If has changed, fire relevant triggers.
     if current ~= self.current_spell_gcd then
@@ -131,7 +124,7 @@ function lib:release_gcd_lock()
 end
 
 function lib:poll_gcd()
-    -- Function to be called when we have reason to believe a new GCD may 
+    -- Function to be called when we have reason to believe a new GCD may
     -- have triggered. Locks out new updates when we're on a GCD.
     if self.gcd_duration then
         return
@@ -213,7 +206,7 @@ end
 
 function lib:UNIT_SPELLCAST_INTERRUPTED()
     if self.gcd_duration then
-        local time_started, duration_reported = GetSpellCooldown(gcd_probe_spell_id)
+        local duration_reported = select(2, GetSpellCooldown(gcd_probe_spell_id))
         if duration_reported == 0 then
             self:release_gcd_lock()
         end

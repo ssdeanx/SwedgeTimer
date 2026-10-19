@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T09:48:13Z",
+  "agent_name": "version-bump",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Single-occurrence grep confirmed exactly one 2.1.0 per target file before editing; edit tool preserved CRLF; harness re-ran green after the bump.",
+    "what_was_hard": "None; metadata-only lane with explicit line/file scope.",
+    "skill_gap": null
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

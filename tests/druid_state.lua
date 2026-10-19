@@ -66,6 +66,7 @@ local function build(opts)
         form = 0,                 -- what GetShapeshiftForm reports
         talents = opts.talents or {}, -- talent index -> rank (11 = moonkin, 19 = tree)
         target_auras = opts.target_auras or {}, -- what UnitAura("target", i) serves
+        player_auras = opts.player_auras or {}, -- what UnitAura("player", i) serves
         -- call counters
         get_family_spell_id_calls = 0,
         get_spell_info_calls = 0,
@@ -85,6 +86,8 @@ local function build(opts)
         last_cost_id = nil,
         last_hand = nil,
         vertex = nil,
+        -- Cooldown readings by query (id or name) -> { start, duration }.
+        cooldowns_by_query = opts.cooldowns or {},
     }
 
     local env = setmetatable({}, { __index = _G })
@@ -136,6 +139,12 @@ local function build(opts)
     end
     env.UnitAura = function(unit, index, filter)
         sb.unit_aura_calls = sb.unit_aura_calls + 1
+        if unit == "player" then
+            local pentry = sb.player_auras[index]
+            if not pentry then return nil end
+            return pentry.name, nil, pentry.count, nil, pentry.duration,
+                pentry.expiration, pentry.source, nil, nil, pentry.spell_id
+        end
         if unit ~= "target" then
             return nil
         end
@@ -150,6 +159,16 @@ local function build(opts)
         return id == sb.current_spell
     end
     env.GetShapeshiftForm = function() return sb.form end
+    -- Cooldown readings by query (id or name) -> { start, duration }; the default
+    -- 0,0 is exactly what compat's no-probe fallback reports, so adding the stub
+    -- leaves every pre-existing expectation untouched.
+    env.GetSpellCooldown = function(query)
+        local entry = sb.cooldowns_by_query[query]
+        if entry then
+            return entry[1], entry[2], 1, 1
+        end
+        return 0, 0, 0, 0
+    end
     -- Classic GetTalentInfo(tab, index) -> name, icon, tier, column, rank, maxRank.
     env.GetTalentInfo = function(_, index)
         return "Talent", nil, 1, 1, (sb.talents[index] or 0), 1
@@ -1369,6 +1388,482 @@ do
     sb.power = 61
     ST.DRUID.on_bar_update(ST, "mainhand")
     near(vf.druid_energy_tick_fill.height, 0, "TBC: a genuine +20 tick still re-anchors")
+end
+
+--=========================================================================================
+-- 23) D3 pips wiring: the installed bars-design factory (ST:new_pips, colon shape)
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    local factory_calls = 0
+    local widget = {
+        set = function(self, count) self.count = count end,
+        glow_full = function(self, full) self.full = full end,
+        Show = function(self) self.shown = true end,
+        Hide = function(self) self.shown = false end,
+    }
+    ST.new_pips = function(self, parent, opts)
+        factory_calls = factory_calls + 1
+        widget.self, widget.parent, widget.opts = self, parent, opts
+        return widget
+    end
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    eq(factory_calls, 1, "post_init creates the pips through ST:new_pips once")
+    eq(widget.self, ST, "the factory receives the addon as self (the colon shape)")
+    eq(widget.parent, sb.visuals, "the pips parent is the mainhand visuals frame")
+    eq(widget.opts.point, "BOTTOMLEFT", "the construction anchor is the bar's bottom-left")
+    eq(widget.opts.x, 0, "no horizontal offset")
+    eq(widget.opts.y, -18, "the row sits clear of the centred D5/D6 readout")
+    eq(widget.opts.design.key, "druid_pips", "the design target carries a stable key")
+    eq(widget.opts.design.title, "Combo Points", "and a readable title")
+    eq(sb.visuals.druid_pips, widget, "the widget lands on the visuals frame")
+    -- Idempotent: a second setup never re-creates.
+    ST.DRUID.setup_druid_visuals(ST)
+    eq(factory_calls, 1, "a second setup never re-creates the pips")
+    -- Cat form drives the live combo count; 5 lights the full glow.
+    local db = sb.class_db
+    db.show_druid_pips = true
+    ST.form_index = 3
+    sb.power_type = 3
+    sb.power = 3
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(widget.count, 3, "cat form feeds the live combo count")
+    eq(widget.full, false, "three combo points carry no full glow")
+    eq(widget.shown, true, "the pips show in cat form")
+    sb.power = 5
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(widget.count, 5, "the fifth combo point feeds through")
+    eq(widget.full, true, "five combo points light the full glow")
+    -- Bear form hides the row.
+    sb.power_type = 1
+    sb.power = 50
+    ST.form_index = 1
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(widget.shown, false, "bear form hides the pips")
+    -- An unreadable count hides instead of drawing a lie.
+    ST.form_index = 3
+    sb.power_type = 3
+    sb.power = nil
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(widget.shown, false, "an unreadable combo count hides the pips")
+    -- Toggle off hides and never touches the widget.
+    db.show_druid_pips = nil
+    sb.power = 2
+    widget.count = nil
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(widget.shown, false, "the toggle off hides the pips")
+    eq(widget.count, nil, "the toggle off never re-sets the widget")
+
+    -- No factory (a flavor without bars.lua): the wiring stays inert, no error.
+    local bare = build()
+    local BST = bare.ST
+    BST.interfaces_are_initialised = true
+    BST.DRUID.post_init(BST)
+    eq(bare.visuals.druid_pips, nil, "without a factory no widget is created")
+    bare.class_db.show_druid_pips = true
+    BST.form_index = 3
+    bare.power_type = 3
+    bare.power = 4
+    local ok, err = pcall(BST.DRUID.on_bar_update, BST, "mainhand")
+    check(ok, "the factory-less wiring does not error (" .. tostring(err) .. ")")
+
+    -- A factory that throws degrades to "no widget", never an error.
+    local broken = build()
+    local XST = broken.ST
+    XST.new_pips = function() error("boom") end
+    XST.interfaces_are_initialised = true
+    local ok2, err2 = pcall(XST.DRUID.post_init, XST)
+    check(ok2, "a throwing factory does not break post_init (" .. tostring(err2) .. ")")
+    eq(broken.visuals.druid_pips, nil, "a throwing factory leaves no widget")
+end
+
+--=========================================================================================
+-- 24) D5 energy-deficit countdown: the "Shred in Xs" text
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    local vf = sb.visuals
+    local db = sb.class_db
+    db.show_druid_shred_countdown = true
+    -- The tick bar off: the countdown alone keeps the energy sampler alive.
+    db.show_druid_energy_tick = false
+    db.show_druid_form_label = false
+    ST.form_index = 3
+    sb.power_type = 3
+    sb.clock = 100
+    sb.power = 20
+    sb.unit_power_calls = 0
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(sb.unit_power_calls > 0,
+        "the countdown keeps the energy sampler alive with the bar off")
+    eq(vf.druid_shred_countdown.text, "Shred in 4s",
+        "22 energy short is two ticks -> 4 s")
+    check(not vf.druid_shred_countdown.hidden, "the countdown shows while short")
+    sb.clock = 101
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(vf.druid_shred_countdown.text, "Shred in 3s", "half a cycle later the wait is 3 s")
+    -- Affordable: hidden.
+    sb.power = 42
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_shred_countdown.hidden, "affordable energy hides the countdown")
+    -- Unreadable energy: hidden.
+    sb.power = nil
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_shred_countdown.hidden, "unreadable energy hides the countdown")
+    -- Off-cat: hidden.
+    sb.power = 20
+    sb.power_type = 1
+    ST.form_index = 1
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_shred_countdown.hidden, "bear form hides the countdown")
+    -- The toggle off reads nothing at all (bars off too).
+    db.show_druid_shred_countdown = nil
+    sb.power_type = 3
+    ST.form_index = 3
+    sb.unit_power_calls = 0
+    sb.unit_power_type_calls = 0
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(sb.unit_power_calls, 0, "countdown off + bars off: no power reads")
+    eq(sb.unit_power_type_calls, 0, "countdown off + bars off: no power-type reads")
+    check(vf.druid_shred_countdown.hidden, "countdown off hides the text")
+end
+
+-- The cost is family-gated: TBC reads the verified 42, Era has no verified cost.
+do
+    local tbc = build({ project = 5 })
+    eq(tbc.st.family, "TBC", "project 5 reports the TBC family")
+    local TST = tbc.ST
+    TST.interfaces_are_initialised = true
+    TST.DRUID.post_init(TST)
+    tbc.class_db.show_druid_shred_countdown = true
+    TST.form_index = 3
+    tbc.power_type = 3
+    tbc.clock = 50
+    tbc.power = 20
+    TST.DRUID.on_bar_update(TST, "mainhand")
+    eq(tbc.visuals.druid_shred_countdown.text, "Shred in 4s",
+        "TBC uses the verified 42-energy cost")
+
+    local era = build({ project = 2 })
+    eq(era.st.family, "ERA", "project 2 reports the ERA family")
+    local EST = era.ST
+    EST.interfaces_are_initialised = true
+    EST.DRUID.post_init(EST)
+    era.class_db.show_druid_shred_countdown = true
+    EST.form_index = 3
+    era.power_type = 3
+    era.clock = 50
+    era.power = 20
+    EST.DRUID.on_bar_update(EST, "mainhand")
+    check(era.visuals.druid_shred_countdown.hidden,
+        "Era has no verified Shred cost -> no countdown")
+end
+
+--=========================================================================================
+-- 25) D6 Maul-efficiency badge: at-cap time and capped-gain events
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    local vf = sb.visuals
+    local db = sb.class_db
+    -- Toggle off: on_rage_update reads no power at all.
+    sb.unit_power_calls = 0
+    ST.DRUID.on_rage_update(ST)
+    eq(sb.unit_power_calls, 0, "badge off: on_rage_update reads no power")
+    check(vf.druid_maul_badge_text.hidden, "badge off: the text stays hidden")
+
+    db.show_druid_maul_badge = true
+    ST.in_combat = true
+    ST.form_index = 1
+    sb.power_type = 1
+    -- The first capped reading opens the segment (no event: no previous reading).
+    sb.clock = 100
+    sb.power = 100
+    ST.DRUID.on_rage_update(ST)
+    eq(ST.druid_maul_badge_since, 100, "the first capped reading opens the segment")
+    eq(ST.druid_maul_badge_events, nil, "no event without a previous reading")
+    -- A same-value capped update counts nothing.
+    sb.clock = 103
+    ST.DRUID.on_rage_update(ST)
+    eq(ST.druid_maul_badge_events, nil, "a same-value capped update counts no event")
+    -- A spend to 60 closes the segment: 3 s at cap.
+    sb.power = 60
+    ST.DRUID.on_rage_update(ST)
+    near(ST.druid_maul_badge_seconds, 3, 1e-9, "leaving the cap banks the at-cap seconds")
+    eq(ST.druid_maul_badge_since, nil, "the segment closes")
+    -- A gain landing back on the cap counts one capped event.
+    sb.clock = 104
+    sb.power = 100
+    ST.DRUID.on_rage_update(ST)
+    eq(ST.druid_maul_badge_events, 1, "a gain landing on the cap counts a capped event")
+    -- The per-frame sync shows the badge in bear form with whole seconds.
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(vf.druid_maul_badge_text.text, "Cap 3s", "the badge reads the banked seconds")
+    check(not vf.druid_maul_badge_text.hidden, "the badge shows in bear form")
+    -- Cat form closes the open segment and hides the text.
+    sb.clock = 105
+    sb.power_type = 3
+    sb.power = 50
+    ST.form_index = 3
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    near(ST.druid_maul_badge_seconds, 4, 1e-9, "leaving bear closes the open segment")
+    check(vf.druid_maul_badge_text.hidden, "the badge hides outside bear form")
+    -- The toggle going off also closes the segment (no reads).
+    ST.form_index = 1
+    sb.power_type = 1
+    sb.clock = 106
+    db.show_druid_maul_badge = nil
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.druid_maul_badge_since, nil, "the toggle off closes the open segment")
+    check(vf.druid_maul_badge_text.hidden, "the toggle off hides the badge")
+    -- Combat exit resets the fight readout.
+    db.show_druid_maul_badge = true
+    ST.DRUID.on_combat_exit(ST)
+    eq(ST.druid_maul_badge_seconds, nil, "combat exit resets the badge")
+    eq(ST.druid_maul_badge_events, nil, "combat exit resets the event count")
+    eq(ST.druid_maul_badge_rage, nil, "combat exit drops the rage baseline")
+    -- Out of combat: readings never accumulate.
+    sb.clock = 200
+    sb.power = 100
+    ST.in_combat = false
+    ST.DRUID.on_rage_update(ST)
+    eq(ST.druid_maul_badge_since, nil, "out of combat the cap never opens a segment")
+end
+
+--=========================================================================================
+-- 26) Omen of Clarity proc glow (discover #8): the guarded proc id on the column
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    local vf = sb.visuals
+    local db = sb.class_db
+    -- Guide off, omen toggle on: the scan runs for the glow alone.
+    db.nextaction_enabled = false
+    db.show_druid_omen_glow = true
+    ST.form_index = 3
+    sb.power_type = 3
+    sb.power = 50
+    sb.player_auras = {
+        { name = "Clearcasting", spell_id = 16870, source = "player",
+            duration = 15, expiration = 110 },
+    }
+    sb.unit_aura_calls = 0
+    sb.clock = 100
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(sb.unit_aura_calls > 0,
+        "the omen toggle keeps the player scan alive with the guide off")
+    check(not vf.druid_omen_glow.hidden, "the proc glows on the energy column")
+    -- A different buff never lights it.
+    sb.player_auras = {
+        { name = "Tiger's Fury", spell_id = 5217, source = "player",
+            duration = 6, expiration = 105 },
+    }
+    sb.clock = 101
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_omen_glow.hidden, "another buff never lights the omen glow")
+    -- The tick bar off: nothing to outline.
+    sb.player_auras = {
+        { name = "Clearcasting", spell_id = 16870, source = "player",
+            duration = 15, expiration = 120 },
+    }
+    db.show_druid_energy_tick = false
+    sb.clock = 102
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_omen_glow.hidden, "with the tick bar off the glow hides")
+    db.show_druid_energy_tick = true
+    -- Toggle off + guide off: no aura reads at all.
+    db.show_druid_omen_glow = nil
+    sb.unit_aura_calls = 0
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(sb.unit_aura_calls, 0, "omen off + guide off: no aura reads at all")
+    check(vf.druid_omen_glow.hidden, "omen off hides the glow")
+end
+
+--=========================================================================================
+-- 27) GCD tick overlay (discover #4): the marker on the energy column
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    local vf = sb.visuals
+    local db = sb.class_db
+    db.show_druid_gcd_tick = true
+    ST.form_index = 3
+    sb.power_type = 3
+    sb.power = 20
+    sb.clock = 100
+    sb.unit_power_calls = 0
+    ST.gcd = { expires = 100.5 }
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    local marker = vf.druid_energy_gcd_marker
+    check(not marker.hidden, "a running GCD shows the marker")
+    near(marker.offset_y, 5, 1e-9,
+        "the marker sits at the GCD-end fraction (0.5/2 of a 20 px column)")
+    eq(marker.anchor, vf.druid_energy_tick_bg, "the marker rides the column")
+    -- The GCD done: hidden.
+    ST.gcd = { expires = 99 }
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(marker.hidden, "an elapsed GCD hides the marker")
+    -- The tick bar off: hidden even with a GCD running.
+    ST.gcd = { expires = sb.clock + 0.5 }
+    db.show_druid_energy_tick = false
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(marker.hidden, "no column -> no marker")
+    db.show_druid_energy_tick = true
+    -- The toggle off: hidden.
+    db.show_druid_gcd_tick = nil
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(marker.hidden, "the toggle off hides the marker")
+end
+
+--=========================================================================================
+-- 28) D2 TF/Berserk HUD slots: the static list, the rank re-point and the
+--     per-family liveness gates
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    local slots = ST.DRUID.HUD_SLOTS
+    eq(#slots, 10, "ten descriptors ship (six rotational + TF/Berserk + two trinkets)")
+    local by_key = {}
+    for i = 1, #slots do by_key[slots[i].key] = slots[i] end
+    eq(slots[7].key, "tf", "TF follows the six rotational slots")
+    eq(slots[8].key, "berserk", "Berserk follows TF")
+    eq(by_key.berserk.spell, 50334, "Berserk ships the WotLK id")
+    eq(by_key.tf.spell, 9845, "TF ships the Era/TBC rank as its fallback icon")
+
+    -- No TF/Berserk spell data at all: both slots hide.
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    eq(ST.DRUID.get_hud_state(ST, by_key.tf, 100).hidden, true,
+        "no TF data on the client hides the slot")
+    eq(ST.DRUID.get_hud_state(ST, by_key.berserk, 100).hidden, true,
+        "no Berserk data on the client hides the slot")
+    -- The probe retries at the names-retry cadence: spell data arriving late
+    -- (or the literal name resolving) flips the slot.
+    sb.known_names = { ["Tiger's Fury"] = true }
+    eq(ST.DRUID.get_hud_state(ST, by_key.tf, 104).hidden, true,
+        "before the retry cadence the slot stays hidden")
+    eq(ST.DRUID.get_hud_state(ST, by_key.tf, 106).hidden, nil,
+        "the retry flips TF live when the name resolves")
+    -- The positive latch: forgetting mid-session keeps the slot until /reload.
+    sb.known_names = {}
+    eq(ST.DRUID.get_hud_state(ST, by_key.tf, 200).hidden, nil,
+        "the liveness probe latches positives per session")
+    -- Berserk: the id resolving (WotLK) flips it.
+    sb.known = { [50334] = true }
+    eq(ST.DRUID.get_hud_state(ST, by_key.berserk, 200).hidden, nil,
+        "a resolving Berserk id flips the slot")
+
+    -- Runeless Era hides Berserk; the SoD rune basis flips it live.
+    local era = build({ project = 2 })
+    local EST = era.ST
+    EST.interfaces_are_initialised = true
+    EST.DRUID.post_init(EST)
+    local eslots = EST.DRUID.HUD_SLOTS
+    eq(EST.DRUID.get_hud_state(EST, eslots[8], 100).hidden, true,
+        "runeless Era hides Berserk (not baseline there)")
+    local sod = build({ project = 2, known = { [33983] = true } })
+    local SST = sod.ST
+    SST.interfaces_are_initialised = true
+    SST.DRUID.post_init(SST)
+    eq(SST.DRUID.get_hud_state(SST, SST.DRUID.HUD_SLOTS[8], 100).hidden, nil,
+        "the SoD rune basis flips Berserk live on the Era token")
+    -- Era TF data keeps the TF slot live.
+    local era_tf = build({ project = 2, known = { [9845] = true } })
+    local ETST = era_tf.ST
+    ETST.interfaces_are_initialised = true
+    ETST.DRUID.post_init(ETST)
+    eq(ETST.DRUID.get_hud_state(ETST, ETST.DRUID.HUD_SLOTS[7], 100).hidden, nil,
+        "Era TF data keeps the TF slot live")
+end
+
+-- The provider reads the D2 cooldowns by the client's own localized name and
+-- glows while ready in combat.
+do
+    local sb = build({ known = { [50213] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    local slots = ST.DRUID.HUD_SLOTS
+    local tf = slots[7]
+    eq(tf.spell, 50213, "post_init re-points TF at the highest resolving rank")
+    ST.in_combat = true
+    sb.clock = 700
+    -- Ready in combat: the glow is on, no swipe (off the GCD).
+    ST.gcd = { expires = 700.8, spell_length = 1.5 }
+    local s = ST.DRUID.get_hud_state(ST, tf, 700)
+    eq(s.glow, true, "a ready TF glows in combat")
+    eq(s.remaining, nil, "a ready TF carries no swipe")
+    -- Burning: the client's reading shows by the resolved name.
+    sb.cooldowns_by_query = { ["Spell 50213"] = { 690, 30 } }
+    s = ST.DRUID.get_hud_state(ST, tf, 700)
+    near(s.remaining, 20, 1e-9, "a burning TF reports the client's cooldown")
+    eq(s.duration, 30, "the full duration rides the swipe")
+    eq(s.desaturate, true, "a burning TF greys the icon")
+    eq(s.glow, false, "a burning TF does not glow")
+    -- A GCD-length echo is filtered, not counted.
+    sb.cooldowns_by_query = { ["Spell 50213"] = { 699, 1.5 } }
+    s = ST.DRUID.get_hud_state(ST, tf, 700)
+    eq(s.remaining, nil, "the GCD echo is filtered, not a TF cooldown")
+    sb.cooldowns_by_query = {}
+    -- Out of combat: no glow.
+    ST.in_combat = false
+    s = ST.DRUID.get_hud_state(ST, tf, 700)
+    eq(s.glow, false, "out of combat the ready TF does not glow")
+end
+
+--=========================================================================================
+-- R2: secret-hole scans (no truncation below a restricted row)
+--=========================================================================================
+do
+    -- Target merged scan: Mangle below a secret row still draws.
+    local sb = build({ known = { [33983] = true, [27008] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    local bars = sb.visuals.druid_debuff
+    sb.clock = 200
+    -- Index 1 degrades to absent (secret); the player's Mangle sits at index 2.
+    sb.target_auras = {
+        [2] = { name = "localized mangle", spell_id = 33983, source = "player", duration = 12, expiration = 208 },
+    }
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(not bars.mangle.bg.hidden, "R2: Mangle draws below a secret row")
+    near(bars.mangle.fill.width, 100 * (8 / 12), 1e-6, "R2: the fill shows the remaining fraction")
+    eq(bars.mangle.label.text, "8", "R2: the label shows whole seconds")
+
+    -- Player buff scan: Clearcasting below a secret row still lights the omen glow.
+    local pb = build()
+    local PST = pb.ST
+    PST.interfaces_are_initialised = true
+    PST.DRUID.post_init(PST)
+    local pdb = pb.class_db
+    pdb.nextaction_enabled = false
+    pdb.show_druid_omen_glow = true
+    PST.form_index = 3
+    pb.power_type = 3
+    pb.power = 50
+    pb.player_auras = {
+        [2] = { name = "Clearcasting", spell_id = 16870, source = "player",
+            duration = 15, expiration = 110 },
+    }
+    pb.clock = 100
+    PST.DRUID.on_bar_update(PST, "mainhand")
+    check(not pb.visuals.druid_omen_glow.hidden, "R2: Clearcasting glows below a secret row")
 end
 
 if failures == 0 then

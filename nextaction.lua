@@ -28,9 +28,14 @@
 --     into it and returns it — no per-call result table is allocated.
 --   * out fields: action ("soc"|"sob"|"twist"|"cs"), hold, riding, judge_call,
 --     filler_kind (nil|"consecration"|"exorcism"|"how", the last Era-only),
---     prediction_hold, waiting_judgement.
+--     prediction_hold, waiting_judgement, inputs_unknown.
 --   * inputs.waiting_judgement is the current judgement-cue latch; out.waiting_judgement
 --     is the updated latch — the caller feeds it back in on the next tick.
+--   * inputs.inputs_unknown (optional bool, M6): the caller's own "the core timing
+--     reads are unusable" flag - the provider sets it when the swing fields cannot be
+--     trusted. The engine threads it into out.inputs_unknown unchanged; the guide UI
+--     renders "…" instead of an action while it is true. The engine never derives it
+--     itself: an all-defaults input set is indistinguishable from a legitimate one here.
 --
 -- Optional inputs beyond the frozen set (each falls back to the archived db default, so
 -- callers that omit them get the archive's behaviour):
@@ -318,6 +323,30 @@ local ERA_HOW_HEALTH_PCT = 20
 -- reseal above, Era the single SoR->SoC reseal.
 local FOREVER_JUDGE_SEAL_GCDS = 1
 
+-- Bloodlust / Heroism override for the twist window (sourced TBC 2.5.6 ret;
+-- bench/verify_bank.md P3 row): under a haste raid buff every action is busy
+-- sooner, so the twist window the caller feeds the landmarks must shrink. The
+-- scale is a plain constant (no option); the caller decides whether to apply
+-- it (the paladin gather gates on its own option and on the live aura scan).
+-- apply_lust_window(window_seconds, lust_active) is pure: without an active
+-- buff the window passes through untouched (nil stays nil); with one it is
+-- scaled by LUST_TWIST_WINDOW_SCALE and floored at 0.
+st.nextaction.LUST_TWIST_WINDOW_SCALE = 0.6
+
+function st.nextaction.apply_lust_window(window_seconds, lust_active)
+    if type(window_seconds) ~= "number" then
+        return window_seconds
+    end
+    if lust_active ~= true then
+        return window_seconds
+    end
+    local scaled = window_seconds * st.nextaction.LUST_TWIST_WINDOW_SCALE
+    if scaled < 0 then
+        return 0
+    end
+    return scaled
+end
+
 -- Pure: one engine tick (archived nextaction.lua:186-465, compute() minus
 -- practice/editmode/UI). Reads `inputs`, writes into the caller-owned `out` table and
 -- returns it. See the module header for the input/output contract.
@@ -337,8 +366,14 @@ function st.nextaction.evaluate(inputs, out)
         out.filler_kind = nil
         out.prediction_hold = 0
         out.waiting_judgement = false
+        out.inputs_unknown = true
         return out
     end
+
+    -- M6: the caller's explicit "core inputs unusable" bit is threaded through
+    -- untouched; the UI renders "…" instead of advice while it is set. The engine
+    -- itself only reports what the caller declared - the provider owns the reads.
+    out.inputs_unknown = inputs.inputs_unknown == true
 
     local speed = inputs.speed or 3.0
     local swing_remaining = inputs.swing_remaining or 0
@@ -704,6 +739,8 @@ if st.debug then st.utils.print_msg('-- Parsed nextaction.lua correctly') end
 --     filler_kind "consecration" | "exorcism" | "how" (Holy Wrath on Wrath,
 --     Hammer of Wrath on SoD). hold is true only when nothing is ready (wait on
 --     the first known ability); riding never; waiting_judgement always false.
+--   * inputs.inputs_unknown (optional bool, M6) passes through to
+--     out.inputs_unknown exactly as in evaluate above.
 --=========================================================================================
 
 -- Priority orders, first match wins (sourced above; index order is the contract).
@@ -815,6 +852,9 @@ function st.nextaction.evaluate_fcfs(inputs, out)
     local hold = false
     local judge_call = false
     local filler_kind = nil
+    -- M6: the caller's explicit "core inputs unusable" bit (the paladin provider
+    -- sets it when the swing fields are not usable); the UI renders "…" on it.
+    local inputs_unknown = inputs.inputs_unknown == true
     if order then
         -- Never-wait: the first READY ability in priority order wins (a ready
         -- lower-priority ability beats waiting on a higher-priority cooldown).
@@ -866,5 +906,6 @@ function st.nextaction.evaluate_fcfs(inputs, out)
     out.filler_kind = filler_kind
     out.prediction_hold = 0
     out.waiting_judgement = false
+    out.inputs_unknown = inputs_unknown
     return out
 end

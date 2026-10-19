@@ -798,6 +798,102 @@ do
         "rule 2: an unknown now shows no hold either")
 end
 
+-- Rule 2b: the pre-cast range gate (H4): byte-exact 0 holds before every cast prompt,
+-- nil and every other spelling allow.
+do
+    local out = evaluate({ target_in_range = 0 })
+    eq(out.action, nil, "rule 2b: out of range shows no action")
+    eq(out.hold, true, "rule 2b: out of range holds")
+    eq(out.hold_text, "HOLD", "rule 2b: out of range reads HOLD")
+
+    -- Ahead of the TBC cooldown priority and of the weave.
+    eq(evaluate({ target_in_range = 0, kc_known = true }).action, nil,
+        "rule 2b outranks the TBC Kill Command priority")
+    eq(evaluate({ target_in_range = 0, bw_known = true }).action, nil,
+        "rule 2b outranks Bestial Wrath")
+    eq(evaluate({ target_in_range = 0, rf_known = true }).action, nil,
+        "rule 2b outranks Rapid Fire")
+    eq(evaluate({ target_in_range = 0, multi_known = true }).action, nil,
+        "rule 2b outranks a due Multi-Shot weave")
+    -- Ahead of the queued ride (conservative: out of range nothing fires).
+    eq(evaluate({ target_in_range = 0, raptor_strike_queued = true }).hold_text, "HOLD",
+        "rule 2b outranks the queued ride")
+    -- Behind rule 1: a live cast still rides.
+    eq(evaluate({ target_in_range = 0, steady_remaining = 0.3 }).hold_text, "RIDE",
+        "rule 1 still outranks the range gate: a live cast rides")
+
+    -- The Wrath arms sit behind the gate too.
+    local saved = pure.family
+    pure.family = "WRATH"
+    eq(evaluate({ target_in_range = 0, killshot_known = true,
+        target_hp_frac = 0.10 }).hold_text, "HOLD",
+        "rule 2b outranks the Wrath execute")
+    eq(evaluate({ target_in_range = 0, chimera_known = true }).hold_text, "HOLD",
+        "rule 2b outranks the Wrath MM prompt")
+    pure.family = saved
+    eq(pure.family, nil, "the pure sandbox carries no family token by default")
+    eq(evaluate({ chimera_known = true }).action, "steady",
+        "off-Wrath the Chimera arm never prompts (the family gate is back)")
+
+    -- nil = unknown = allowed; numeric 1 and the boolean spellings never hold.
+    eq(evaluate({ target_in_range = 1 }).action, "steady",
+        "rule 2b: in range allows the prompts (numeric 1)")
+    eq(evaluate({ target_in_range = NONE }).action, "steady",
+        "rule 2b: an unknown probe allows the prompts (nil = unknown)")
+    eq(evaluate({ target_in_range = true }).action, "steady",
+        "rule 2b: a boolean true spelling never holds")
+    eq(evaluate({ target_in_range = false }).action, "steady",
+        "rule 2b: a boolean false spelling is not the byte-exact 0")
+end
+
+-- H2: the Bloodlust/Heroism window suppresses the weave arms only (rules 6a/6b),
+-- with Steady Shot kept as the spam cue; every other rule stays live.
+do
+    -- A due clip-safe Aimed Shot (3 s cast + 0.03 latency vs a 3.06 ttl: swing_start
+    -- 99 + 4.06 - now 100) fires without a window; inside one it falls through to the
+    -- Steady spam cue.
+    eq(evaluate({ aimed_known = true, aimed_cast_seconds = 3.0, latency = 0.03,
+        synced_duration = 4.06 }).action, "aimed",
+        "H2: a due clip-safe Aimed fires without a window")
+    eq(evaluate({ aimed_known = true, aimed_cast_seconds = 3.0, latency = 0.03,
+        synced_duration = 4.06, lust_remaining = 30 }).action, "steady",
+        "H2: the Aimed weave suppressed, Steady Shot carries the window")
+    -- A due clip-safe Multi-Shot (0.5 s cast vs a 1.06 ttl) is suppressed too, and the
+    -- suppressed arm falls through to the Steady spam cue.
+    eq(evaluate({ multi_known = true, latency = 0.03,
+        synced_duration = 2.06 }).action, "multi",
+        "H2: a due clip-safe Multi fires without a window")
+    eq(evaluate({ multi_known = true, latency = 0.03,
+        synced_duration = 2.06, lust_remaining = 30 }).action, "steady",
+        "H2: the Multi weave suppressed, Steady Shot becomes the spam cue")
+    -- Only a positive remaining suppresses: 0 and negatives read as no window.
+    eq(evaluate({ multi_known = true, latency = 0.03,
+        synced_duration = 1.56, lust_remaining = 0 }).action, "multi",
+        "H2: a zero remaining is not a window")
+    eq(evaluate({ multi_known = true, latency = 0.03,
+        synced_duration = 1.56, lust_remaining = -5 }).action, "multi",
+        "H2: a negative remaining is not a window")
+    eq(evaluate({ multi_known = true, latency = 0.03,
+        synced_duration = 1.56, lust_remaining = NONE }).action, "multi",
+        "H2: an absent reading is not a window")
+
+    -- The suppression never touches the other rules.
+    eq(evaluate({ lust_remaining = 30, kc_known = true }).action, "kill_command",
+        "H2: the TBC Kill Command priority stays live in the window")
+    eq(evaluate({ lust_remaining = 30, hidden_window_start = 99.9,
+        hidden_window_duration = 0.5 }).hold_text, "HOLD",
+        "H2: the hidden-window hold stays live in the window")
+    eq(evaluate({ lust_remaining = 30, steady_remaining = 0.3 }).hold_text, "RIDE",
+        "H2: the live-cast ride stays live in the window")
+    eq(evaluate({ lust_remaining = 30, target_in_range = 0 }).hold_text, "HOLD",
+        "H2: the range gate stays live in the window")
+    local saved = pure.family
+    pure.family = "WRATH"
+    eq(evaluate({ lust_remaining = 30 }).action, "steady",
+        "H2: the Wrath filler is never suppressed")
+    pure.family = saved
+end
+
 -- Rule 6c: the Steady cooldown gate and the clip-safe boundary.
 do
     eq(evaluate({ steady_remaining_cd = 0 }).action, "steady",
@@ -1038,6 +1134,8 @@ local function build(opts)
         cooldown_queries = 0,
         health = nil,
         health_max = nil,
+        aura_queries = 0,
+        player_auras = nil,
     }
 
     local env = {}
@@ -1091,6 +1189,22 @@ local function build(opts)
             false, 1, false, cast.spell_id
     end
     env.UnitChannelInfo = function() return nil end
+    -- Player auras for the H2 Bloodlust/Heroism scan (compat's scan_player_aura reads
+    -- through this wrapper). nil means "no auras": every existing fixture stays on the
+    -- no-window path. Non-player units answer nil (the hunter badges' pet scan lives in
+    -- hunter_ui, not in this sandbox).
+    env.UnitAura = function(unit, index, filter)
+        sb.aura_queries = sb.aura_queries + 1
+        if unit ~= "player" then
+            return nil
+        end
+        local aura = sb.player_auras and sb.player_auras[index]
+        if not aura then
+            return nil
+        end
+        return aura.name, "", aura.count or 0, "", aura.duration, aura.expiration,
+            nil, nil, nil, aura.spell_id
+    end
     env.IsCurrentSpell = function() return false end
     env.IsMounted = function() return false end
     env.IsAutoRepeatSpell = function() return true end
@@ -1494,6 +1608,68 @@ do
     eq(fgathered.wrath_aimed_known, false, "an unlearned Wrath Aimed never prompts")
     eq(fgathered.arcane_known, false, "an unlearned Arcane never prompts")
     eq(fgathered.target_hp_frac, nil, "no Kill Shot rank means no health probe")
+end
+
+-- H2 gather wiring: the Bloodlust/Heroism read through compat's frozen scan contract,
+-- throttled; Era never arms and spends no scan.
+do
+    local h2 = build({ project = 5 })  -- TBC arms the scan
+    eq(h2.st.lust_supported, true, "H2: the TBC family arms the lust scan")
+    local h2ST, h2st = h2.ST, h2.st
+    h2ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, auto_repeat_active = true }
+    h2ST.latency = { world_ms = 50 }
+    h2ST.raptor_strike_queued = false
+    h2ST.steady_shot_queued = false
+    h2.clock = 100
+    h2.player_auras = {
+        { name = "Bloodlust", spell_id = 2825, duration = 40, expiration = 130 },
+    }
+    local g = h2ST.HUNTER.guide.gather(h2ST, {})
+    near(g.lust_remaining, 30, 1e-9, "H2 gather: a live Bloodlust reads its remaining seconds")
+    check(h2.aura_queries > 0, "H2 gather: the aura scan ran on TBC")
+    check(h2st.lust_spell_ids ~= nil, "H2 gather: the id list comes from compat")
+    -- Throttle: the aura drops, but a gather inside the window reuses the reading.
+    h2.player_auras = nil
+    h2.clock = 100.2
+    near(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, 30, 1e-9,
+        "H2 gather: the scan is throttled (cached reading serves the tick)")
+    -- Past the throttle the scan re-polls and the dropped aura clears the field.
+    h2.clock = 100.6
+    eq(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, nil,
+        "H2 gather: a dropped aura clears the window after the throttle")
+    -- Heroism matches the same contract (the id list, not the name).
+    h2.player_auras = {
+        { name = "Heroism", spell_id = 32182, duration = 40, expiration = 140.6 },
+    }
+    h2.clock = 101.2
+    near(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, 39.4, 1e-9,
+        "H2 gather: Heroism matches the id list too")
+    -- An unrelated aura is never the window.
+    h2.player_auras = {
+        { name = "Rapid Fire", spell_id = 3045, duration = 15, expiration = 120 },
+    }
+    h2.clock = 101.8
+    eq(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, nil,
+        "H2 gather: an unrelated aura is never the window")
+    -- An expired window clamps to 0 and reads as no window (never suppressed on 0).
+    h2.player_auras = {
+        { name = "Bloodlust", spell_id = 2825, duration = 40, expiration = 101.9 },
+    }
+    h2.clock = 102.4
+    eq(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, nil,
+        "H2 gather: an expired window reads as no window")
+    -- Era never arms: no scan is spent and the field stays nil.
+    local era = build({ project = 2 })
+    eq(era.st.lust_supported, false, "H2 gather: the Era family keeps the scan closed")
+    era.ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, auto_repeat_active = true }
+    era.ST.latency = { world_ms = 50 }
+    era.clock = 50
+    era.player_auras = {
+        { name = "Bloodlust", spell_id = 2825, duration = 40, expiration = 90 },
+    }
+    eq(era.ST.HUNTER.guide.gather(era.ST, {}).lust_remaining, nil,
+        "H2 gather: Era never reads a lust window")
+    eq(era.aura_queries, 0, "H2 gather: Era spends no aura scan")
 end
 
 --=========================================================================================

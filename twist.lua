@@ -71,6 +71,22 @@ function st.twist.detect_twist_success(attempt_pending, spell_id)
     return st.twist.SOC_PROC_IDS[spell_id] == true
 end
 
+-- Seal of Command proc names (R1): clients that report the spell name where
+-- classic reports the numeric id (Anniversary, UNCONFIRMED) still need the
+-- success to land. The literal English proc name is the fallback; the
+-- client's own localized names (resolved through GetSpellInfo by the caller,
+-- same discipline as the warrior's localized-name scans) are authoritative.
+st.twist.SOC_PROC_NAME_FALLBACK = "Seal of Command"
+
+-- Pure: did a spell-NAME payload equal the success for a pending attempt?
+-- The numeric path above is untouched and stays byte-identical.
+function st.twist.detect_twist_success_name(attempt_pending, name, localized_names)
+    if not attempt_pending then return false end
+    if type(name) ~= "string" then return false end
+    if localized_names ~= nil and localized_names[name] == true then return true end
+    return name == st.twist.SOC_PROC_NAME_FALLBACK
+end
+
 -- Pure: twist window duration (seconds) given the selected padding mode.
 --   mode        : "None" | "Fixed" | "Dynamic"
 --   lag_ms      : calibrated world latency in milliseconds (Dynamic mode)

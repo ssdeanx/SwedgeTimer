@@ -56,7 +56,10 @@
 --                                            or Savage Roar answers GetSpellInfo by
 --                                            name - Era-base knows neither)
 --   time_to_die                              target seconds-to-die, when known
---                                            (no client source yet; nil = unknown)
+--                                            (D4: the EMA-smoothed HP/s estimate
+--                                            from classes/druid.lua's sampler;
+--                                            nil = unknown - no target, unreadable
+--                                            or dead health)
 --   target_short_lived                       explicit short-lived flag (true only)
 --   can_powershift                           RESERVED (no rule reads it): the
 --                                            Furor + Wolfshead basis has no
@@ -220,10 +223,11 @@
 --       timer/rage input exists here, in-game to confirm).
 --   No powershifting on Wrath (Furor no longer refunds on shift): no rule
 --   holds SHIFT here, ever. The last-10-seconds clause rides the frozen
---   execute inputs (target_short_lived, time_to_die <= 10); time_to_die has
---   no client source yet and the gather writes nil, so an unknown target
---   defaults to the long fight and the mid-fight Bite falls through to
---   Shred until an explicit execute signal exists (the research behaviour).
+--   execute inputs (target_short_lived, time_to_die <= 10); the D4 EMA
+--   sampler now feeds time_to_die whenever the target's health is readable,
+--   and an unknown target (no target, unreadable health) still defaults to
+--   the long fight, so the mid-fight Bite falls through to Shred until the
+--   estimate says the target dies inside the window (the research behaviour).
 --
 -- SOD APPENDIX - cat form only, when family == "ERA" with sod_runes
 -- (first match wins; docs/research/rotations_sod.md):

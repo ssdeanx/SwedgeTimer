@@ -2,7 +2,7 @@
 ## Title: SwedgeTimer
 ## Notes: General purpose swing timer addon for all WoW clients.
 ## Author: Swedge
-## Version: "2.0.8"
+## Version: "2.1.1"
 ## DefaultState: enabled
 ## OptDeps: Ace3, LibSharedMedia-3.0, LibStub
 ## SavedVariables: SwedgeTimerDB
@@ -20,6 +20,7 @@ Libs\LibClassicDurations\LibClassicDurations.xml
 Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
 compat.lua
 swing_source.lua
+enemy_swing.lua
 LibLatencyMonitor.lua
 LibGlobalCooldown.lua
 
@@ -43,6 +44,7 @@ warrior_guide.lua
 druid_guide.lua
 shaman_guide.lua
 hunter_guide.lua
+rogue_guide.lua
 design.lua
 hunter_window.lua
 hunter_ui.lua
@@ -66,3 +68,4 @@ classes\hunter.lua
 classes\paladin.lua
 classes\shaman.lua
 classes\warrior.lua
+classes\rogue.lua

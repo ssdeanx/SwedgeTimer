@@ -71,6 +71,17 @@ local function build_profile(opts)
         env.LibStub = function(major)
             if major == "AceAddon-3.0" then
                 return { GetAddon = function() return opts.ST end }
+            elseif major == "CallbackHandler-1.0" then
+                -- swing_source.lua builds its callback registry at load time.
+                return {
+                    New = function()
+                        return {
+                            Fire = function() end,
+                            RegisterCallback = function() end,
+                            UnregisterCallback = function() end,
+                        }
+                    end,
+                }
             end
             return {}
         end
@@ -286,6 +297,325 @@ do
     eq(st.interface_number, 38002, "titan(38002): interface number recorded")
     eq(st.is_mainline, false, "titan(38002): swing engine still available")
     eq(st.gcd_probe_spell_id, 29515, "titan(38002): gcd probe is 29515")
+end
+
+-- ---------------------------------------------------------------------------
+-- Cata (14) / Mists (19) runtime family (proctor G1): the TOC half is pinned by
+-- toc_check; this is the runtime half - family mapping, spell resolution, the lust
+-- gate, and the engine availability that main.lua's selection ladder reads.
+-- ---------------------------------------------------------------------------
+do
+    local cases = {
+        { project = 14, family = "CATA", label = "cata(14)" },
+        { project = 19, family = "MISTS", label = "mists(19)" },
+    }
+    for i = 1, #cases do
+        local case = cases[i]
+        local _, st = build_profile({
+            project = case.project,
+            globals = { GetSpellInfo = spell_table(ALL_RANKS) },
+            module = "swing_source.lua",
+        })
+        eq(st.family, case.family, case.label .. ": family")
+        eq(st.is_mainline, false, case.label .. ": classic-code client")
+        eq(st.gcd_probe_spell_id, 29515, case.label .. ": gcd probe is 29515")
+        eq(st.lust_supported, true, case.label .. ": lust window arms (TBC+ spell line)")
+        eq(st.api.get_family_spell_id({47450, 30324, 29707, 25286, 78}), 47450,
+            case.label .. ": HS resolves the highest known rank")
+        eq(st.api.get_family_spell_id({48480, 48479, 26996, 9881}), 48480,
+            case.label .. ": Maul resolves the highest known rank")
+        eq(st.api.get_family_spell_id({47520, 845}), 47520,
+            case.label .. ": Cleave resolves the highest known rank")
+        eq(st.api.get_family_spell_id({999991, 999992}), nil,
+            case.label .. ": ids absent from this client -> nil")
+        -- Engine selection input: the Forever source only reports itself available on
+        -- the FOREVER family, and neither Cata nor Mists ships the vendored library
+        -- (toc_check:233-255). Both branches of main.lua's ladder are therefore closed
+        -- and the remaining branch is the inert stand-in - the boot below proves it.
+        eq(st.swing_source.available, false,
+            case.label .. ": the Forever swing source stays inert")
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- Engine selection + player combat continuity (proctor G1/G4): load the REAL
+-- main.lua read-only over compat.lua + swing_source.lua (the main_init_state.lua
+-- discipline - nothing in main.lua/bars.lua/tocs is touched) with the Cata/Mists
+-- profile, then drive the combat events directly.
+-- ---------------------------------------------------------------------------
+local function boot_main(project, interface, lib_present)
+    local env = {}
+    for k, v in pairs(_G) do env[k] = v end
+    env._G = env
+    env.WOW_PROJECT_ID = project
+    env.WOW_PROJECT_CLASSIC = 2
+    env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5
+    env.WOW_PROJECT_WRATH_CLASSIC = 11
+    env.WOW_PROJECT_CATACLYSM_CLASSIC = 14
+    env.WOW_PROJECT_MISTS_CLASSIC = 19
+    env.WOW_PROJECT_MAINLINE = 1
+    env.GetBuildInfo = function() return "0.0.0", "00000", "today", interface end
+    env.GetTime = function() return 100 end
+    env.GetTimePreciseSec = function() return 100 end
+    env.UnitClass = function() return "Paladin", "PALADIN" end
+    env.UnitAttackSpeed = function() return 2.6, 0 end
+    env.UnitRangedDamage = function() return 0 end
+    env.C_EventUtils = { IsEventValid = function() return false end }
+
+    local boot = { hooks = 0 }
+    local ST, st
+    local stub_lib = {
+        RegisterCallback = function() end,
+        UnregisterCallback = function() end,
+    }
+    local callback_handler = {
+        New = function()
+            return {
+                Fire = function() end,
+                RegisterCallback = function() end,
+                UnregisterCallback = function() end,
+            }
+        end,
+    }
+    env.LibStub = function(major, silent)
+        if major == "AceAddon-3.0" then
+            return { NewAddon = function() return ST end }
+        elseif major == "CallbackHandler-1.0" then
+            return callback_handler
+        elseif major == "LibClassicSwingTimerAPI" then
+            -- Absent on the Cata/Mists flavors (their tocs ship no vendored library).
+            return lib_present and stub_lib or nil
+        end
+        return stub_lib
+    end
+
+    ST = {}
+    st = { utils = { print_msg = function() end } }
+    local modules = { "compat.lua", "swing_source.lua", "main.lua" }
+    for i = 1, #modules do
+        local chunk = assert(loadfile(ROOT .. modules[i]))
+        setfenv(chunk, env)
+        local ok, err = pcall(chunk, "SwedgeTimer", st)
+        check(ok, "main boot (" .. tostring(project) .. "): " .. modules[i]
+            .. " loads (" .. tostring(err) .. ")")
+    end
+    ST.player_class = "PALADIN"
+    ST.PALADIN.on_combat_exit = function() boot.hooks = boot.hooks + 1 end
+    boot.env, boot.st, boot.ST = env, st, ST
+    return boot
+end
+
+do
+    -- G1: engine selection on the Cata/Mists flavors. With the vendored library
+    -- absent (toc_check pins that for both) and the Forever source probe closed
+    -- (swing_source.available false above), main.lua must select the inert stand-in.
+    for _, case in ipairs({
+        { project = 14, label = "cata(14)" },
+        { project = 19, label = "mists(19)" },
+    }) do
+        local boot = boot_main(case.project, case.project == 14 and 14000 or 19000, false)
+        eq(boot.ST.swing_engine, "inert-standin",
+            case.label .. ": the lib-absent boot selects the inert stand-in")
+        -- Control: the same ladder selects the vendored library when it is present.
+        local vendored = boot_main(case.project, case.project == 14 and 14000 or 19000, true)
+        eq(vendored.ST.swing_engine, "vendored-lib",
+            case.label .. " control: a present library still wins")
+    end
+end
+
+do
+    -- G4: player combat-enter/exit continuity. The cycle is owned by the swing
+    -- engine; the combat handlers must flip in_combat exactly and call the class
+    -- hook once without touching the mainhand record (no clearing, no fake STOP).
+    local boot = boot_main(14, 14000, false)
+    local ST = boot.ST
+    ST.mainhand = { speed = 2.6, start = 100.0, ends_at = 102.6, is_full = false }
+    local cycle = ST.mainhand
+
+    ST:PLAYER_REGEN_DISABLED()
+    eq(ST.in_combat, true, "G4: combat enter flips in_combat")
+    eq(ST.mainhand, cycle, "G4: combat enter keeps the mainhand record")
+    eq(ST.mainhand.speed, 2.6, "G4: the cycle speed is untouched")
+
+    ST:PLAYER_REGEN_ENABLED()
+    eq(ST.in_combat, false, "G4: combat exit flips in_combat back")
+    eq(ST.mainhand, cycle, "G4: combat exit keeps the mainhand record")
+    eq(ST.mainhand.start, 100.0, "G4: the cycle start survives the transition")
+    eq(ST.mainhand.ends_at, 102.6, "G4: the cycle end survives the transition")
+    eq(ST.mainhand.is_full, false, "G4: the bar is not forced full on exit")
+    eq(boot.hooks, 1, "G4: the class combat-exit hook runs exactly once")
+
+    -- A second ride: one more clean transition, no accumulation.
+    ST:PLAYER_REGEN_DISABLED()
+    ST:PLAYER_REGEN_ENABLED()
+    eq(boot.hooks, 2, "G4: each exit fires one hook call")
+    eq(ST.mainhand, cycle, "G4: repeated rides keep the same cycle object")
+end
+
+
+-- ---------------------------------------------------------------------------
+-- Lust window (C2): family gate, confirmed ids, shared player-aura scan
+-- ---------------------------------------------------------------------------
+
+do
+    -- Era: Bloodlust/Heroism is TBC+ only (verify_bank §2) - the gate must stay
+    -- closed, and the scan must still exist and degrade to nil, nil.
+    local _, st = build_profile({ project = 2 })
+    eq(st.family, "ERA", "era: family")
+    eq(st.lust_supported, false, "era: lust window must not arm on Classic Era")
+    local rem, stk = st.api.scan_player_aura(function() return true end)
+    check(rem == nil and stk == nil, "era scan: no aura API on the profile -> nil, nil")
+end
+
+do
+    -- Families where the spells exist: TBC, Wrath, Forever (Mainline-code, but
+    -- the spells are not Era-gated away there). UNKNOWN stays off.
+    local _, tbc = build_profile({ project = 5 })
+    eq(tbc.family, "TBC", "tbc: family")
+    eq(tbc.lust_supported, true, "tbc: lust window arms")
+    local _, wrath = build_profile({ project = 11 })
+    eq(wrath.lust_supported, true, "wrath: lust window arms")
+    local _, forever = build_profile({ project = 18 })
+    eq(forever.lust_supported, true, "forever: lust window arms")
+    local _, unknown = build_profile({ project = nil })
+    eq(unknown.lust_supported, false, "unknown family: lust window stays off")
+end
+
+do
+    -- Id registration: exactly the two CONFIRMED ids on the lust list; the
+    -- UNCONFIRMED post-lust debuffs sit in their own table, never mixed in.
+    local _, st = build_profile({ project = 5 })
+    check(st.lust_spell_ids[1] == 2825 and st.lust_spell_ids[2] == 32182
+        and st.lust_spell_ids[3] == nil, "tbc: lust ids are exactly 2825/32182 (CONFIRMED)")
+    check(st.post_lust_debuff_ids[1] == 57723 and st.post_lust_debuff_ids[2] == 57724,
+        "tbc: post-lust 57723/57724 registered (UNCONFIRMED, no hard dependency)")
+end
+
+do
+    -- TBC classic path through the aura wrapper: remaining = expirationTime -
+    -- now in the GetTime domain, the stacks rules, and the nil paths.
+    local function buff_stub(entries)
+        return function(unit, index, filter)
+            if unit ~= "player" or filter ~= "HELPFUL" then return nil end
+            local entry = entries[index]
+            if not entry then return nil end
+            return "Buff " .. tostring(entry.spell_id), nil, entry.count, nil,
+                entry.duration, entry.expiration, nil, nil, nil, entry.spell_id
+        end
+    end
+    local _, st = build_profile({
+        project = 5,
+        globals = {
+            GetTime = function() return 1000 end,
+            UnitAura = buff_stub({
+                { spell_id = 12345, count = 5 },
+                { spell_id = 2825, duration = 40, expiration = 1030 },
+            }),
+        },
+    })
+    local remaining, stacks = st.api.scan_player_aura(function(id) return id == 2825 end)
+    eq(remaining, 30, "tbc scan: remaining = expirationTime - now (1030-1000)")
+    eq(stacks, nil, "tbc scan: non-stacking aura reports nil stacks")
+    remaining, stacks = st.api.scan_player_aura(function(id) return id == 12345 end)
+    eq(remaining, nil, "tbc scan: entry without expirationTime -> nil remaining")
+    eq(stacks, 5, "tbc scan: stacked aura reports its count")
+    remaining, stacks = st.api.scan_player_aura(function(id) return id == 999999 end)
+    check(remaining == nil and stacks == nil, "tbc scan: unmatched id -> nil, nil")
+    remaining, stacks = st.api.scan_player_aura(nil)
+    check(remaining == nil and stacks == nil, "tbc scan: nil predicate -> nil, nil")
+    local calls, last_name, last_count = 0
+    st.api.scan_player_aura(function(id, name, count)
+        calls = calls + 1
+        last_name, last_count = name, count
+        return false
+    end)
+    eq(calls, 2, "tbc scan: predicate runs once per real aura (nil rows are skipped, not matched)")
+    eq(last_name, "Buff 2825", "tbc scan: predicate receives the aura name")
+    eq(last_count, nil, "tbc scan: predicate receives the count as-is")
+end
+
+do
+    -- R2: a secret (nil) entry above the lust buff no longer truncates the scan.
+    local function hole_buff_stub(entries)
+        return function(unit, index, filter)
+            if unit ~= "player" or filter ~= "HELPFUL" then return nil end
+            local entry = entries[index]
+            if not entry then return nil end
+            return "Buff", nil, entry.count, nil,
+                entry.duration, entry.expiration, nil, nil, nil, entry.spell_id
+        end
+    end
+    local _, st = build_profile({
+        project = 5,
+        globals = {
+            GetTime = function() return 1000 end,
+            -- Index 1 degrades to absent (secret); Bloodlust sits at index 2.
+            UnitAura = hole_buff_stub({
+                [2] = { spell_id = 2825, duration = 40, expiration = 1030 },
+            }),
+        },
+    })
+    local remaining, stacks = st.api.scan_player_aura(function(id) return id == 2825 end)
+    eq(remaining, 30, "tbc scan hole: Bloodlust below a secret row is still found")
+    eq(stacks, nil, "tbc scan hole: non-stacking aura reports nil stacks")
+end
+
+do
+    -- R3 probe: classic-line profiles expose the combat-log global, so CLEU
+    -- chains can arm; Mainline-code ones (Forever, Retail) do not.
+    local _, tbc = build_profile({
+        project = 5,
+        globals = { CombatLogGetCurrentEventInfo = function() return nil end },
+    })
+    eq(tbc.cleu_supported, true, "tbc: the combat-log global means CLEU chains can arm")
+    local _, forever = build_profile({ project = 18 })
+    eq(forever.cleu_supported, false, "forever: no combat-log global, CLEU chains stay inert")
+    local _, retail = build_profile({ project = 1 })
+    eq(retail.cleu_supported, false, "retail: no combat-log global, CLEU chains stay inert")
+end
+
+do
+    -- An expired/stale reading must clamp at 0, and a count of 1 is unstacked.
+    local _, st = build_profile({
+        project = 5,
+        globals = {
+            GetTime = function() return 1000 end,
+            UnitAura = function(unit, index, filter)
+                if unit ~= "player" or filter ~= "HELPFUL" or index ~= 1 then
+                    return nil
+                end
+                return "Buff 2825", nil, 1, nil, 40, 990, nil, nil, nil, 2825
+            end,
+        },
+    })
+    local remaining, stacks = st.api.scan_player_aura(function() return true end)
+    eq(remaining, 0, "tbc scan: stale expiration clamps to 0")
+    eq(stacks, nil, "tbc scan: a count of 1 reads as unstacked")
+end
+
+do
+    -- Mainline C_ path (retail here, Forever shares it): no classic UnitAura
+    -- global on this profile, so the scan must run through C_UnitAuras.
+    local _, st = build_profile({
+        project = 1,
+        globals = {
+            GetTime = function() return 1000 end,
+            C_UnitAuras = {
+                GetAuraDataByIndex = function(unit, index, filter)
+                    if unit ~= "player" or filter ~= "HELPFUL" or index ~= 1 then
+                        return nil
+                    end
+                    return {
+                        name = "Bloodlust", applications = 1, duration = 40,
+                        expirationTime = 1030, spellId = 2825,
+                    }
+                end,
+            },
+        },
+    })
+    local remaining, stacks = st.api.scan_player_aura(function(id) return id == 2825 end)
+    eq(remaining, 30, "retail scan: C_ path remaining = expirationTime - now")
+    eq(stacks, nil, "retail scan: single application reads as unstacked")
 end
 
 -- ---------------------------------------------------------------------------

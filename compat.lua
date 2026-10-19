@@ -14,6 +14,10 @@
 --   st.is_mainline      : true on Mainline-code clients (Retail, WoW Forever): their
 --                         classic combat log is gone, so the swing engine cannot run
 --   st.gcd_probe_spell_id : spell id whose cooldown reading mirrors the global cooldown
+--   st.lust_spell_ids   : confirmed Bloodlust (2825) / Heroism (32182) spell ids
+--   st.lust_supported   : true where Bloodlust/Heroism can exist (TBC+; Era: false)
+--   st.cleu_supported   : true where the classic combat log exists (classic-line;
+--                         Retail/Forever: false, so CLEU-driven chains stay inert)
 --   st.api.*            : normalized wrappers for APIs that differ across clients
 --
 -- On clients where the original global function still exists, each wrapper preserves the
@@ -107,6 +111,29 @@ st.gcd_probe_spell_id = 29515
 if st.is_mainline then
 	st.gcd_probe_spell_id = 61304
 end
+
+--------------------------------------------------------------------------------
+-- Bloodlust / Heroism (the lust window)
+--------------------------------------------------------------------------------
+-- Bloodlust (Horde) 2825 and its Alliance twin Heroism 32182 are a first-class
+-- haste-window input for the swing tracking (hunter H2, paladin P3). Both ids
+-- are CONFIRMED (bench/verify_bank.md §2: Wowhead TBC pages, 40s duration). The
+-- spells only exist from TBC onward, so a lust helper must never arm on Classic
+-- Era: consumers gate on st.lust_supported, which is derived from st.family
+-- (never a version string) and stays false on Era and on the UNKNOWN fallback
+-- family - only the confirmed families TBC/WRATH/CATA/MISTS/RETAIL/FOREVER arm.
+st.lust_spell_ids = { 2825, 32182 }
+
+st.lust_supported = (family ~= "ERA" and family ~= "UNKNOWN")
+
+-- Post-lust debuff ids, registered for reference only. UNCONFIRMED:
+-- bench/verify_bank.md §2 found no primary source for Exhaustion/Sated
+-- 57723/57724 (secondary WeakAura mentions only), and the 57723-vs-57724 name
+-- mapping is unconfirmed as well. IN-CLIENT CHECK: read the debuff id off the
+-- player right after a Bloodlust lands before any caller depends on it. Nothing
+-- may hard-depend on these values: matching them must stay on nil-safe paths
+-- that degrade to "no debuff" instead of erroring.
+st.post_lust_debuff_ids = { 57723, 57724 }
 
 --------------------------------------------------------------------------------
 -- Normalized API surface
@@ -455,6 +482,84 @@ else
 	api.UnitAura = function()
 		return nil
 	end
+end
+
+-- Player aura scan: one predicate over the player's own buffs, normalised into
+--   duration_remaining_seconds, stacks = api.scan_player_aura(predicate)
+-- CONTRACT FROZEN (hunter H2 / paladin P3 code against this exact shape):
+--   * predicate(spell_id, name, stacks) returns truthy for a match; first match
+--     wins. spell_id can be nil on a client without numeric ids - an id
+--     comparison already treats that safely - and stacks follows the same
+--     count convention as the wrapper above.
+--   * returns nil, nil when not found, when no aura API exists on the client,
+--     or when the predicate is not a function. Callers must treat nil as "no
+--     window", never as zero.
+--   * remaining seconds come from expirationTime on the api.get_time() axis
+--     (the domain the rest of the addon compares in), clamped at 0 once
+--     expired; nil remaining with a set stacks means found-but-no-time.
+--   * stacks is the count for anything above 1 and nil for a non-stacking aura
+--     (classic count nil, retail applications 1) - identical on every family.
+-- Family paths, all through this file's own wrappers: the classic global on
+-- Era/TBC/Wrath (a consumer may re-poll at a 0.05s cadence - this scan holds no
+-- state of its own) and the C_UnitAuras read on the Mainline-code clients. A
+-- secret entry degrades to absent in the wrapper above and the walk continues
+-- past it (no early break): a restricted row above the buff no longer
+-- truncates the scan, so a restricted list still reports not found (nil, nil)
+-- only when nothing matches.
+local scan_player_aura_index_max = 40
+
+function api.scan_player_aura(predicate)
+	if type(predicate) ~= "function" then
+		return nil, nil
+	end
+	local now = api.get_time()
+	for index = 1, scan_player_aura_index_max do
+		local name, _, count, _, _, expiration, _, _, _, spell_id = api.UnitAura(
+			"player", index, "HELPFUL")
+		-- No early break (R2): nil is simply no match at this index. The
+		-- 40-row cap bounds the walk, so the worst-case cost is the same 40
+		-- UnitAura calls as before.
+		if name ~= nil then
+			if predicate(spell_id, name, count) then
+				local remaining
+				if type(expiration) == "number" then
+					remaining = expiration - now
+					if remaining < 0 then
+						remaining = 0
+					end
+				end
+				local stacks
+				if type(count) == "number" and count > 1 then
+					stacks = count
+				end
+				return remaining, stacks
+			end
+		end
+	end
+	return nil, nil
+end
+
+-- Secret-value regime observability (M5): can restricted (secret) AURA rows be
+-- hidden from every aura consumer right now? The whole-entry degrade above stays
+-- exactly as it is (E2: one secret field -> the entry reads absent); this probe
+-- only makes the regime itself readable so a consumer can tell "no lust" from
+-- "the aura list may be restricted". true/false only when C_Secrets answers with a
+-- boolean; nil when the API/probe is absent or throws (unknown, never "no" - every
+-- classic client is the exact no-op nil here).
+function api.auras_may_be_secret()
+	local c_secrets = rawget(_G, "C_Secrets")
+	if type(c_secrets) ~= "table" then
+		return nil
+	end
+	local probe = rawget(c_secrets, "ShouldAurasBeSecret")
+	if type(probe) ~= "function" then
+		return nil
+	end
+	local ok, value = pcall(probe)
+	if ok and type(value) == "boolean" then
+		return value
+	end
+	return nil
 end
 
 -- Casting and channels -------------------------------------------------------------------
@@ -891,6 +996,14 @@ function api.CombatLogGetCurrentEventInfo()
 	end
 	return get_combat_log_event_info()
 end
+
+-- Classic combat-log availability (R3): the paladin twist attempt/success chain
+-- and the warrior Overpower dodge window arm only where the classic combat log
+-- exists. Probed from the same CombatLogGetCurrentEventInfo global the wrapper
+-- above reads: classic-line clients expose it, Mainline-code clients (Retail,
+-- WoW Forever) do not. Consumers gate on this flag, never on st.is_mainline
+-- alone (Forever runs Mainline code but keeps its own swing engine).
+st.cleu_supported = get_combat_log_event_info ~= nil
 
 -- Totems -----------------------------------------------------------------------------------
 -- GetTotemInfo(slot) reports the totem in a slot:

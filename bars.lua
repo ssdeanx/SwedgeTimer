@@ -12,6 +12,8 @@
 local addon_name, st = ...
 local print = st.utils.print_msg
 local LSM = LibStub("LibSharedMedia-3.0")
+local LCG = LibStub("LibCustomGlow-1.0")
+local floor = math.floor
 ---@class ST
 ---@field get_hand_table fun(self: ST, hand: string): table
 ---@field get_class_table fun(self: ST): table
@@ -63,7 +65,7 @@ function ST:init_visuals_template(hand)
 
     -- Configure drag and drop handlers with LibWindow, adding a callback
     -- to the config menu to let the panel know the coords have changed.
-    LWIN.RegisterConfig(anchor_frame, self:get_hand_table(hand))
+    LWIN.RegisterConfig(anchor_frame, db)
     anchor_frame:RegisterForDrag("LeftButton")
     anchor_frame:SetScript("OnDragStart", function()
             LWIN.OnDragStart(anchor_frame)
@@ -180,7 +182,7 @@ function ST:configure_bar_size_and_positions(hand)
     bar_frame:SetWidth(db.bar_width)
     bar_frame:SetHeight(db.bar_height)
 
-    -- For the visuals frame, we calculate a reduced size 
+    -- For the visuals frame, we calculate a reduced size
     -- based on the backplane settings.
     -- Set it internally for use elsewhere
     local visuals_frame = self:get_visuals_frame(hand)
@@ -399,6 +401,173 @@ function ST:get_bar_frame(hand)
 end
 
 --=========================================================================================
+-- C3: unified swing-safe overlay service (registered zones)
+--
+-- A small registration seam for per-hand bar overlays (clip / slam / twist-style bands).
+-- Additive by design: the existing band call sites (classes/*.lua) keep drawing exactly
+-- as they do today; zones registered here are invoked once per bar tick by
+-- onupdate_common, after the class hook. This is the differentiator against
+-- SuperSwingTimer's hardcoded overlay consolidation (verify_bank C3 / §6.4): a
+-- registered service instead of one fixed layout.
+--
+--   local handle = self:register_zone(zone_id, draw_fn, priority)
+--     zone_id   unique non-empty string
+--     draw_fn   function(ctx), called once per bar tick for every hand
+--     priority  number, lower runs first (ties keep registration order; default 0)
+--   handle = { zone_id, priority, unregister(), set_priority(p) }
+--
+-- ctx is one reused table (no per-tick allocation): hand, frame (the hand's visuals
+-- frame), state (self[hand]), db (the hand table), width, height, time
+-- (st.api.get_time()), progress (the bar fill fraction). Draw calls are isolated per
+-- zone through the guarded dispatcher below (H2): a throwing zone cannot freeze the
+-- bar, and the first throw per zone is reported once.
+--=========================================================================================
+function ST:register_zone(zone_id, draw_fn, priority)
+    if type(zone_id) ~= "string" or zone_id == "" then
+        return nil, "zone_id must be a non-empty string"
+    end
+    if type(draw_fn) ~= "function" then
+        return nil, "draw_fn must be a function(ctx)"
+    end
+    local zones = self.zones
+    if not zones then
+        zones = { list = {}, by_id = {}, count = 0, seq = 0, ctx = {} }
+        self.zones = zones
+    end
+    if zones.by_id[zone_id] then
+        return nil, "duplicate zone id '" .. zone_id .. "'"
+    end
+    zones.seq = zones.seq + 1
+    local entry = {
+        zone_id = zone_id,
+        draw_fn = draw_fn,
+        priority = tonumber(priority) or 0,
+        seq = zones.seq,
+    }
+
+    -- Ascending priority, stable by registration seq. Slots shift; the list stays dense.
+    local function insert(e)
+        local list = zones.list
+        local at = zones.count
+        while at > 1 do
+            local prev = list[at - 1]
+            if prev.priority > e.priority
+                or (prev.priority == e.priority and prev.seq > e.seq) then
+                list[at] = prev
+                at = at - 1
+            else
+                break
+            end
+        end
+        list[at] = e
+    end
+
+    local function remove()
+        local list = zones.list
+        for i = 1, zones.count do
+            if list[i] == entry then
+                for j = i, zones.count - 1 do
+                    list[j] = list[j + 1]
+                end
+                list[zones.count] = nil
+                zones.count = zones.count - 1
+                return true
+            end
+        end
+        return false
+    end
+
+    zones.count = zones.count + 1
+    insert(entry)
+    zones.by_id[zone_id] = entry
+
+    local handle = { zone_id = zone_id, priority = entry.priority }
+    function handle.unregister()
+        if not zones.by_id[zone_id] then return false end
+        remove()
+        zones.by_id[zone_id] = nil
+        return true
+    end
+    function handle.set_priority(_, p)
+        if not zones.by_id[zone_id] then return false end
+        local np = tonumber(p)
+        if not np then return false end
+        entry.priority = np
+        handle.priority = np
+        remove()
+        zones.count = zones.count + 1
+        insert(entry)
+        return true
+    end
+    return handle
+end
+
+--=========================================================================================
+-- Per-tick isolation (H2): a class hook or zone must never freeze the bar.
+--
+-- The bar fill/text are painted before these calls, so the visual stays correct even
+-- when a hook throws. The first throw per site is reported once in chat; every throw
+-- is counted (self.bar_hook_errors, printed by /st diag's runtime line). After
+-- BARS_HOOK_QUARANTINE_THROWS the site is quarantined for the session, so a permanently
+-- broken hook cannot burn a pcall every frame - the quarantine is announced, never a
+-- silent removal.
+--=========================================================================================
+local BARS_HOOK_QUARANTINE_THROWS = 25
+
+local function run_guarded(self, site, fn, ...)
+    local errors = self.bar_hook_errors
+    if errors and errors.quarantined and errors.quarantined[site] then
+        return
+    end
+    local ok, err = pcall(fn, ...)
+    if ok then
+        return
+    end
+    if not errors then
+        errors = { count = 0, by_site = {}, quarantined = {}, first_reported = {} }
+        self.bar_hook_errors = errors
+    end
+    errors.count = errors.count + 1
+    errors.by_site[site] = (errors.by_site[site] or 0) + 1
+    if not errors.first_reported[site] then
+        errors.first_reported[site] = true
+        self:Print("Bar update error in " .. site .. " (isolated): " .. tostring(err))
+    end
+    if errors.by_site[site] >= BARS_HOOK_QUARANTINE_THROWS then
+        errors.quarantined[site] = true
+        self:Print("Bar update " .. site
+            .. " quarantined for this session after repeated errors.")
+    end
+end
+
+function ST:update_zones(hand)
+    -- Dispatches the registered zones for one hand, ascending priority. No-op (and no
+    -- clock read) while nothing is registered.
+    local zones = self.zones
+    if not zones or zones.count == 0 then
+        return
+    end
+    local ctx = zones.ctx
+    local state = self[hand]
+    if not state then
+        return
+    end
+    local w, h = self:get_bar_visuals_width_and_height(hand)
+    ctx.hand = hand
+    ctx.frame = self:get_visuals_frame(hand)
+    ctx.state = state
+    ctx.db = self:get_hand_table(hand)
+    ctx.width = w
+    ctx.height = h
+    ctx.time = st.api.get_time()
+    ctx.progress = state and state.current_progress or nil
+    local list = zones.list
+    for i = 1, zones.count do
+        run_guarded(self, "zone:" .. tostring(list[i].zone_id), list[i].draw_fn, ctx)
+    end
+end
+
+--=========================================================================================
 -- OnUpdate funcs
 --=========================================================================================
 function ST:onupdate_common(hand, elapsed)
@@ -407,6 +576,28 @@ function ST:onupdate_common(hand, elapsed)
     local d = self[hand]
     local t = GetTime()
     local db = self:get_hand_table(hand)
+    if d.engine_dead then
+        -- H1-render: no engine. Never impersonate a live 1 s cycle; paint a dim bar
+        -- with an explicit degraded label instead. This is terminal for the session.
+        frame.bar:SetWidth(1)
+        frame.bar:SetTexCoord(0, 0, 0, 1)
+        self:set_bar_texts(hand)
+        if not frame._engine_dead_rendered then
+            frame._engine_dead_rendered = true
+            frame.bar:SetAlpha(0.35)
+            frame.center_text:SetAlpha(0.8)
+        end
+        return
+    end
+    if type(d.speed) ~= "number" or type(d.start) ~= "number"
+        or type(d.ends_at) ~= "number" or d.speed <= 0 then
+        -- No cycle yet (idle engine before its first start): neutral sliver, no maths
+        -- on nil - the old path divided nil and froze the tick.
+        frame.bar:SetWidth(1)
+        frame.bar:SetTexCoord(0, 0, 0, 1)
+        self:set_bar_texts(hand)
+        return
+    end
     if not d.is_paused then
         d.current_progress = math.min(1, (t - d.start) /
             (d.ends_at - d.start)
@@ -419,7 +610,7 @@ function ST:onupdate_common(hand, elapsed)
     local timer_width = w * progress
     frame.bar:SetWidth(max(1, timer_width))
 	frame.bar:SetTexCoord(0, progress, 0, 1)
-    
+
     -- Update the GCD underlay if necessary.
     if db.show_gcd_underlay and self.gcd.expires then
         self:set_gcd_width(hand, timer_width, progress)
@@ -431,7 +622,7 @@ function ST:onupdate_common(hand, elapsed)
         local gcd_d = self:get_gcd_marker_duration(hand, '1a')
         local gcd_additional_progress = gcd_d / d.speed
         local combined_progress = progress + gcd_additional_progress
-        -- Hide it only if the bar is full and hide_inactive is enabled, 
+        -- Hide it only if the bar is full and hide_inactive is enabled,
         -- otherwise show.
         if d.is_full and db.gcd1a_marker_hide_inactive then
             frame.gcd1a_marker:Hide()
@@ -483,9 +674,17 @@ function ST:onupdate_common(hand, elapsed)
     self:set_bar_texts(hand)
 
     -- Generic class hook for per-frame bar visuals (e.g. the paladin twist band).
+    -- Isolated per tick (H2): the fill/text above already painted, so a throwing hook
+    -- costs its own visuals, not the bar.
     local class = self[self.player_class]
     if class and class.on_bar_update then
-        class.on_bar_update(self, hand)
+        run_guarded(self, "class:" .. tostring(self.player_class) .. ":on_bar_update",
+            class.on_bar_update, self, hand)
+    end
+
+    -- C3: registered overlay zones (additive service; one table read when unused).
+    if self.zones and self.zones.count > 0 then
+        self:update_zones(hand)
     end
 
     -- LibDataBroker feed (mainhand only, see ldb.lua): the broker object is created on
@@ -559,7 +758,7 @@ end
 
 function ST:on_bar_inactive(hand)
     -- Called when the bar enters the inactive state.
-    -- This is when the player stops swinging with a full timer for 
+    -- This is when the player stops swinging with a full timer for
     -- some finite and configurable period of time.
     -- print("TRIGGERING BAR INACTIVE")
     local db = self:get_hand_table(hand)
@@ -586,7 +785,6 @@ end
 -- These all operate on a given hand.
 --=========================================================================================
 function ST:set_gcd_width(hand, timer_width, progress)
-    local db = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand)
     local tab = self[hand]
     local gcd_progress = (self.gcd.expires - tab.start) / (tab.ends_at - tab.start)
@@ -644,12 +842,15 @@ function ST:set_gcd_marker_positions(hand)
     -- and sets them.
     -- print('Setting marker positions for hand: ' .. tostring(hand))
     local db_hand = self:get_hand_table(hand)
-    local db_class = self:get_class_table()
     local frame = self:get_visuals_frame(hand)
     local s = self[hand].speed
+    if type(s) ~= "number" or s <= 0 then
+        -- No engine cycle: no marker can be positioned. Hide both, never divide nil.
+        frame.gcd1a_marker:Hide()
+        frame.gcd1b_marker:Hide()
+        return
+    end
 
-    local hand_is_full = GetTime() >= self[hand].ends_at
-    -- print('hand_is_full says: '..tostring(hand_is_full))
     local w, h = self:get_bar_visuals_width_and_height(hand)
 
     -- Only process if enabled
@@ -657,7 +858,7 @@ function ST:set_gcd_marker_positions(hand)
         if db_hand.gcd1a_marker_anchor == "endofswing" then
             local t_before = self:get_gcd_marker_duration(hand, '1a')
             local progress = t_before / s
-            -- If progress > 1 then the marker is pushed off the side of the bar, 
+            -- If progress > 1 then the marker is pushed off the side of the bar,
             -- more than one standard swing, so *always* hide it.
             if progress >= 1 then
                 frame.gcd1a_marker:Hide()
@@ -711,15 +912,26 @@ end
 
 function ST:set_bar_texts(hand)
     -- Function to set the requisite texts on the bar.
-    if self[hand].is_paused then return end
     local frame = self:get_visuals_frame(hand)
+    if self[hand].engine_dead then
+        -- H1-render: an explicit degraded label instead of blank/pretend values.
+        frame.left_text:Hide()
+        frame.right_text:Hide()
+        frame.center_text:SetText("engine offline")
+        frame.center_text:Show()
+        return
+    end
+    if self[hand].is_paused then return end
     local db = self:get_hand_table(hand)
     local t = GetTime()
     local speed = self[hand].speed
-    local timer = max(0, self[hand].ends_at - t)
+    local ends_at = self[hand].ends_at
+    local timer = type(ends_at) == "number" and max(0, ends_at - t) or nil
     local lookup = {
-        attack_speed = format("%.1f", st.utils.simple_round(speed, 0.1)),
-        swing_timer = format("%.1f", st.utils.simple_round(timer, 0.1)),
+        attack_speed = type(speed) == "number"
+            and format("%.1f", st.utils.simple_round(speed, 0.1)) or "",
+        swing_timer = type(timer) == "number"
+            and format("%.1f", st.utils.simple_round(timer, 0.1)) or "",
     }
 
     if self:needs_range_string(hand) then
@@ -780,8 +992,14 @@ function ST:set_deadzone_width(hand)
     -- print('call to set deadzone width for '..hand)
     local db = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand).deadzone
+    local speed = self[hand].speed
+    if type(speed) ~= "number" or speed <= 0 then
+        -- No engine cycle to scale against (the inert stand-in): hide, never divide nil.
+        frame:Hide()
+        return
+    end
     local db_shared = self.db.profile
-    local frac = (self.latency.world_ms / 1000) / self[hand].speed
+    local frac = (self.latency.world_ms / 1000) / speed
     frac = frac * db_shared.deadzone_scale_factor
     local w = self:get_bar_visuals_width_and_height(hand)
     frame:SetWidth(max(1, frac * w))
@@ -822,6 +1040,184 @@ function ST:set_bar_color(hand, color_table)
             self:convert_color(db.bar_color_default)
         )
     end
+end
+
+--=========================================================================================
+-- D3: generic combo-point pips (frozen contract for the parallel druid lane)
+--
+--   local pips = ST:new_pips(parent, opts)
+--     -> a frame with :set(count 0-5) and :glow_full(bool)
+--
+-- Five-rect row (verify_bank D3 row: the Wago feral-pack standard). Filled pips take
+-- opts.color (default gold), empty pips the same hue dimmed; glow_full(true) arms the
+-- gold pulse (LibCustomGlow PixelGlow), shown while the count is full. All opts are
+-- optional: count, size, gap, point, x, y, color, empty_color, glow_color (0-255 rgb
+-- + 0-1 alpha arrays), texture, and design = false | { key, title, save, reset }.
+-- set() is nil-safe: a non-number reads as 0 (empty row, never stale pips).
+--=========================================================================================
+local PIPS_COUNT = 5
+local PIPS_SIZE = 10
+local PIPS_GAP = 2
+local PIPS_COLOR = { 255, 210, 64, 1 }        -- filled pip: gold (the D3 standard)
+local PIPS_EMPTY_ALPHA = 0.15                 -- empty pip: the same hue, dimmed
+local PIPS_GLOW_LINES = 8
+local PIPS_GLOW_FREQUENCY = 0.5
+local PIPS_GLOW_LENGTH = 8
+local PIPS_GLOW_THICKNESS = 1
+
+local pips_serial = 0
+
+function ST:new_pips(parent, opts)
+    if type(parent) ~= "table" or type(parent.CreateTexture) ~= "function" then
+        return nil
+    end
+    opts = opts or {}
+    local count = floor(tonumber(opts.count) or PIPS_COUNT)
+    if count < 1 then count = 1 end
+    local size = tonumber(opts.size) or PIPS_SIZE
+    local gap = tonumber(opts.gap) or PIPS_GAP
+
+    pips_serial = pips_serial + 1
+    local frame = CreateFrame("Frame", nil, parent)
+    local total_w = count * size + (count - 1) * gap
+    frame:SetSize(total_w, size)
+    local point = opts.point or "BOTTOM"
+    local x = tonumber(opts.x) or 0
+    local y = tonumber(opts.y) or 0
+    frame:SetPoint(point, parent, point, x, y)
+
+    local fill = opts.color or PIPS_COLOR
+    local fill_r, fill_g, fill_b = self:convert_color(fill)
+    local empty_r, empty_g, empty_b, empty_a
+    if opts.empty_color then
+        empty_r, empty_g, empty_b, empty_a = self:convert_color(opts.empty_color)
+    else
+        empty_r, empty_g, empty_b = fill_r, fill_g, fill_b
+        empty_a = PIPS_EMPTY_ALPHA
+    end
+
+    local cells = {}
+    for i = 1, count do
+        local cell = frame:CreateTexture(nil, "ARTWORK")
+        if opts.texture then
+            cell:SetTexture(opts.texture)
+        else
+            cell:SetColorTexture(1, 1, 1, 1)
+        end
+        cell:SetSize(size, size)
+        cell:SetPoint("LEFT", frame, "LEFT", (i - 1) * (size + gap), 0)
+        cells[i] = cell
+    end
+
+    local state = { current = 0, glow = false, glowing = false }
+
+    local function glow_update()
+        local want = state.glow and state.current >= count
+        if want and not state.glowing then
+            state.glowing = true
+            if LCG and LCG.PixelGlow_Start then
+                local gr, gg, gb, ga = self:convert_color(opts.glow_color or PIPS_COLOR)
+                LCG.PixelGlow_Start(frame, { gr, gg, gb, ga or 1 },
+                    PIPS_GLOW_LINES, PIPS_GLOW_FREQUENCY, PIPS_GLOW_LENGTH,
+                    PIPS_GLOW_THICKNESS, 0, 0, false)
+            end
+        elseif not want and state.glowing then
+            state.glowing = false
+            if LCG and LCG.PixelGlow_Stop then
+                LCG.PixelGlow_Stop(frame)
+            end
+        end
+    end
+
+    local function pips_set(n)
+        n = floor((tonumber(n) or 0) + 0.5)
+        if n < 0 then n = 0 elseif n > count then n = count end
+        state.current = n
+        for i = 1, count do
+            local cell = cells[i]
+            if i <= n then
+                cell:SetVertexColor(fill_r, fill_g, fill_b, fill[4] or 1)
+            else
+                cell:SetVertexColor(empty_r, empty_g, empty_b, empty_a or 1)
+            end
+        end
+        glow_update()
+    end
+
+    local function pips_glow(on)
+        state.glow = on == true
+        glow_update()
+    end
+
+    -- The contract is called colon-style (pips:set(3) / pips:glow_full(true)), so the
+    -- attached methods drop the self argument; the inner helpers stay (n) / (on).
+    frame.set = function(_, n) pips_set(n) end
+    frame.glow_full = function(_, on) pips_glow(on) end
+
+    pips_set(0)
+
+    -- Design target (C6): every new widget registers so design mode can select/move it.
+    -- opts.design = false opts out; a caller table supplies key/title and (optionally)
+    -- its own save/reset db seam. Without them the drop centres the row on the offsets
+    -- (session-only) and reset re-anchors it to its construction point.
+    local dm = st.designmode
+    local design = opts.design
+    if design ~= false and dm and dm.registry then
+        local dcfg = type(design) == "table" and design or {}
+        local key = dcfg.key or ("pips_" .. pips_serial)
+        local desc = {
+            key = key,
+            title = dcfg.title or "Combo points",
+            get_frame = function() return frame end,
+            save = dcfg.save or function(sx, sy)
+                local scale = frame:GetScale() or 1
+                if scale <= 0 then scale = 1 end
+                frame:ClearAllPoints()
+                frame:SetPoint("CENTER", UIParent, "CENTER", sx / scale, sy / scale)
+            end,
+            reset = dcfg.reset or function()
+                frame:ClearAllPoints()
+                frame:SetPoint(point, parent, point, x, y)
+            end,
+        }
+        local _, err = dm.registry:register(desc)
+        if err then
+            print("Design mode: pips element not registered - " .. tostring(err))
+        end
+
+        -- Snap-to-row template (C6): the row's own cells join the drag magnets, so a
+        -- dragged element can land on the pip rhythm. The slots are reused per tick.
+        if dm.register_template and st.design and st.design.row_boxes then
+            -- The row's cells sit centred on the frame: the first pip's centre is half a
+            -- pip in from the frame's left edge.
+            local base = st.design.row_boxes(count, size, gap, (size - total_w) / 2, 0, "x")
+            local slots = {}
+            for i = 1, count do
+                slots[i] = { l = 0, r = 0, t = 0, b = 0 }
+            end
+            dm.register_template({
+                id = key .. "_cells",
+                get_cells = function()
+                    local s = (frame:GetEffectiveScale() or 1)
+                        / (UIParent:GetEffectiveScale() or 1)
+                    local cx, cy = frame:GetCenter()
+                    local ux, uy = UIParent:GetCenter()
+                    if not (cx and cy and ux and uy) then return nil end
+                    local ox, oy = cx * s - ux, cy * s - uy
+                    for i = 1, count do
+                        local b, c = base[i], slots[i]
+                        c.l = ox + b.l * s
+                        c.r = ox + b.r * s
+                        c.t = oy + b.t * s
+                        c.b = oy + b.b * s
+                    end
+                    return slots
+                end,
+            })
+        end
+    end
+
+    return frame
 end
 
 

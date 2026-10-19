@@ -50,7 +50,7 @@ check(type(D) == "table", "design.lua defines st.design")
 local entry_points = {
     "round_half", "grid_centre", "round_grid", "interval_gap", "target_for", "nearest",
     "centre_magnet", "box_lines", "offer_lines", "align", "snap", "centre_force",
-    "centred", "normalise_descriptor", "new_registry",
+    "centred", "normalise_descriptor", "new_registry", "row_boxes", "normalise_template",
 }
 for i = 1, #entry_points do
     check(type(D[entry_points[i]]) == "function", "design.lua exposes " .. entry_points[i])
@@ -430,7 +430,69 @@ eq(walked[1], "k", "registry: each() is in order (1)")
 eq(walked[2], "second", "registry: each() is in order (2)")
 
 --=========================================================================================
--- 12) Static wiring: TOCs, defaults, options, main.lua
+-- 12) Stacked-layout cells and snap templates (C6)
+--=========================================================================================
+do
+local rb = D.row_boxes(3, 10, 2, 100, 50, "x")
+check(type(rb) == "table" and #rb == 3, "row_boxes: three cells")
+eq(rb[1].l, 95, "row_boxes: first cell left")
+eq(rb[1].r, 105, "row_boxes: first cell right")
+eq(rb[1].t, 55, "row_boxes: first cell top")
+eq(rb[1].b, 45, "row_boxes: first cell bottom")
+eq(rb[2].l, 107, "row_boxes: the step is size + gap (second cell left)")
+eq(rb[3].r, 129, "row_boxes: third cell right")
+eq(rb[3].t, 55, "row_boxes: cells share the cross-axis band")
+eq(D.row_boxes(1, 10, 2, 0, 0)[1].l, -5, "row_boxes: a single cell is centred on the origin")
+eq(D.row_boxes(2, 10, 0, 0, 0)[2].l, 5, "row_boxes: gap 0 steps by size")
+local rb_y = D.row_boxes(2, 10, 4, 0, 100, "y")
+eq(rb_y[1].t, 105, "row_boxes (y): first cell top")
+eq(rb_y[2].b, 81, "row_boxes (y): the column steps downwards")
+eq(rb_y[2].l, -5, "row_boxes (y): the cross axis stays centred on x")
+eq(D.row_boxes(2, 10, 2, 0, 0, "z")[2].l, 7, "row_boxes: an unknown axis reads as horizontal")
+eq(#D.row_boxes(2.7, 10, 2, 0, 0), 2, "row_boxes: a fractional count floors")
+eq(D.row_boxes(0, 10, 2, 0, 0), nil, "row_boxes: count 0 -> nil")
+eq(D.row_boxes(2, 0, 2, 0, 0), nil, "row_boxes: size 0 -> nil")
+eq(D.row_boxes(2, -5, 2, 0, 0), nil, "row_boxes: a negative size -> nil")
+eq(D.row_boxes(2, 10, "x", 0, 0), nil, "row_boxes: a non-number gap -> nil")
+eq(D.row_boxes(2, 10, 2, nil, 0), nil, "row_boxes: a nil origin -> nil")
+eq(D.row_boxes(nil, 10, 2, 0, 0), nil, "row_boxes: a nil count -> nil")
+local rb_c = D.row_boxes(1, 10, 0, 3, 4)
+rb_c[1].l = -999
+eq(D.row_boxes(1, 10, 0, 3, 4)[1].l, -2, "row_boxes: returns fresh tables (no shared state)")
+
+local base_tpl = { id = "t", get_cells = function() return nil end }
+local tnorm = D.normalise_template(base_tpl)
+check(tnorm ~= nil, "normalise_template: a minimal template is valid")
+eq(tnorm.id, "t", "normalise_template: id carried")
+check(tnorm.get_cells == base_tpl.get_cells, "normalise_template: get_cells carried")
+check(tnorm ~= base_tpl, "normalise_template: returns a copy, not the input table")
+local tpl_called = false
+local tpl_fn = { id = "t", get_cells = function() tpl_called = true end }
+local ok_tpl, tpl_norm = pcall(D.normalise_template, tpl_fn)
+check(ok_tpl and tpl_norm ~= nil, "normalise_template: does not call get_cells (fed before frames exist)")
+eq(tpl_called, false, "normalise_template: ...verified by the counter")
+eq(D.normalise_template({ id = "t", get_cells = function() end, custom = 5 }).custom, 5,
+    "normalise_template: extra fields survive the copy")
+local tbad, tmsg = D.normalise_template(nil)
+eq(tbad, nil, "normalise_template: nil -> invalid")
+check(type(tmsg) == "string" and tmsg:find("table") ~= nil,
+    "normalise_template: nil error names the type")
+local _, tid_err = D.normalise_template({ get_cells = function() end })
+check(tid_err and tid_err:find("id") ~= nil, "normalise_template: missing id error names the field")
+local _, tid_err2 = D.normalise_template({ id = "", get_cells = function() end })
+check(tid_err2 and tid_err2:find("id") ~= nil, "normalise_template: empty id is rejected")
+local _, tcell_err = D.normalise_template({ id = "t" })
+check(tcell_err and tcell_err:find("get_cells") ~= nil,
+    "normalise_template: missing get_cells error names the field")
+local _, tborder_err = D.normalise_template({ id = "t", get_cells = function() end, border = "3" })
+check(tborder_err and tborder_err:find("border") ~= nil,
+    "normalise_template: a string border is rejected")
+check(D.normalise_template({ id = "t", get_cells = function() end,
+    border = function() return 2 end }) ~= nil, "normalise_template: a function border passes")
+end
+
+--=========================================================================================
+-- 13) Static wiring: TOCs, defaults, options, main.lua
 --=========================================================================================
 local function read(path)
     local f = assert(io.open(ROOT .. path, "r"))
@@ -501,9 +563,32 @@ do
     check(design_src:find("GetTime") == nil, "design.lua uses no clock")
     check(mode_src:find("GetTime") == nil, "designmode.lua uses no clock (cursor-driven drag)")
     check(mode_src:find("%f[%a_]is_mainline%f[%A]") == nil, "designmode.lua never gates on the client family")
-    for _, needle in ipairs({ "bar_", "st.hud", "st.rotation_text", "st.nextaction_ui", "st.practice_ui" }) do
+    for _, needle in ipairs({ "bar_", "st.hud", "st.rotation_text", "st.nextaction_ui", "st.practice_ui",
+        "practice_rotation", "practice_timeline" }) do
         check(mode_src:find(needle, 1, true) ~= nil, "designmode.lua registers the " .. needle .. " element")
     end
+
+    -- C3 / C6 / D3 build-out wiring (this round): the zone service, the snap-template
+    -- registry and the frozen pips contract must exist where the report says they do.
+    local bars_src = read("bars.lua")
+    check(bars_src:find("function ST:register_zone") ~= nil,
+        "bars.lua exposes the C3 zone registration")
+    check(bars_src:find("function ST:update_zones") ~= nil,
+        "bars.lua exposes the C3 zone dispatch")
+    check(bars_src:find("self:update_zones(hand)", 1, true) ~= nil,
+        "bars.lua dispatches registered zones from onupdate_common")
+    check(bars_src:find("function ST:new_pips") ~= nil,
+        "bars.lua exposes the D3 pips factory")
+    check(bars_src:find("frame.set = function", 1, true) ~= nil,
+        "the pips frame exposes the frozen set contract")
+    check(bars_src:find("frame.glow_full = function", 1, true) ~= nil,
+        "the pips frame exposes the frozen glow_full contract")
+    check(mode_src:find("function DM.register_template") ~= nil,
+        "designmode.lua exposes the snap-template registration")
+    check(mode_src:find("function DM.unregister_template") ~= nil,
+        "designmode.lua exposes template removal")
+    check(mode_src:find("design_mouse_anchor", 1, true) ~= nil,
+        "designmode.lua reads the mouse-anchoring toggle")
 end
 
 if failures == 0 then

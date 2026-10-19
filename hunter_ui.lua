@@ -10,6 +10,10 @@
 --   latency end-slice          SuperSwingTimer_UI.lua:890-941
 --   melee re-anchor            SuperSwingTimer_UI.lua:26-39, 1140-1146
 --   cast-bar visibility        SuperSwingTimer_UI.lua:459-491
+--   movement-safe cast zone    SuperSwingTimer_UI.lua:204-225 (IsRangedCastWindowSafe),
+--                              805-850 (the overlay + threshold marker)
+--   pet badges                 SuperSwingTimer_ClassMods.lua:6224-6385 (the tracked-icon
+--                              pattern: icon + countdown + stacks + gold glow last 4 s)
 --   range helper               SuperSwingTimer_ClassMods.lua:5538-5701
 --   Rapid Fire bar             SuperSwingTimer_ClassMods.lua:5879-6024
 --   aspect icon                SuperSwingTimer_ClassMods.lua:6026-6135
@@ -77,6 +81,30 @@ local ASPECT_SPELL_IDS = {
     [13165] = true, [27044] = true, [5118] = true, [13163] = true,
     [13159] = true, [20190] = true, [34074] = true, [13171] = true,
 }
+-- Bestial Wrath (wowhead TBC spell 19574: 18 s buff, 2 min cooldown - the badge shows
+-- the buff's duration, never the cooldown) and Frenzy Effect (wowhead TBC/WotLK spell
+-- 19615: the pet's 8 s, 30% attack-speed buff; stacks up to 3, the community-tracked
+-- BM pattern). Id-first matching with the localized-name fallback resolved from the
+-- client's own spell data; an id missing from a client simply never matches, so the
+-- badge stays inert there.
+local BW_SPELL_ID = 19574
+local FRENZY_EFFECT_ID = 19615
+-- Badge geometry and cadence: same 20 px as the aspect icon, aura scans throttled to
+-- the aspect cadence, gold glow inside the final 4 s (the reference glow window,
+-- ClassMods.lua:6363-6372).
+local BADGE_ICON_SIZE = 20
+local BADGE_SCAN_INTERVAL = 0.2
+local BADGE_GLOW_WINDOW = 4
+-- The reference pulses the glow with a sine (ClassMods.lua:6366-6370); a static alpha
+-- at the pulse's midpoint is used here instead - same signal, no per-frame colour
+-- churn (documented deviation in the build-out report).
+local BADGE_GLOW_COLOR = {1, 0.85, 0, 0.35}
+-- Movement-safe cast zone: the final cast-window fraction of the ranged swing, green
+-- when standing still is safe (stopped at or before the window opened), red otherwise
+-- (autoShotSafe / autoShotUnsafe, Constants:977-978; same values as the clip tint).
+local CAST_ZONE_SAFE = {0.2, 0.78, 0.25, 0.4}
+local CAST_ZONE_UNSAFE = {1, 0, 0, 0.4}
+local CAST_ZONE_MARKER_WIDTH = 3            -- the reference's threshold marker (UI.lua:834)
 
 --=========================================================================================
 -- Helpers
@@ -233,6 +261,54 @@ local function create_aspect_icon(ranged_frame)
     return icon
 end
 
+local function create_cast_zone(ranged_frame)
+    -- The movement-safe cast zone lives on the ranged bar's visuals frame (the same
+    -- surface the paladin twist band uses): a texture on the bar frame itself would
+    -- render under the child visuals frame. Without a visuals frame (degenerate build)
+    -- both textures stay nil and the update is a no-op. The zone is right-anchored and
+    -- width-driven; the marker is a thin dark line at the window boundary.
+    local parent = ranged_frame and ranged_frame.visuals_frame
+    if not parent then
+        return nil, nil
+    end
+    local zone = parent:CreateTexture(nil, "OVERLAY")
+    zone:SetDrawLayer("OVERLAY", -2)
+    zone:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, 0)
+    zone:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
+    zone:SetWidth(0)
+    zone:Hide()
+    local marker = parent:CreateTexture(nil, "OVERLAY")
+    marker:SetDrawLayer("OVERLAY", -1)
+    marker:SetColorTexture(0, 0, 0, 1)
+    marker:SetWidth(CAST_ZONE_MARKER_WIDTH)
+    marker:Hide()
+    return zone, marker
+end
+
+local function create_badge(name, ranged_frame)
+    -- The tracked-icon pattern (reference ClassMods.lua:6224-6279): icon texture with
+    -- the standard inset, an additive gold glow overlay, one text. Callers place the
+    -- text (BW: the countdown above the icon; Frenzy: the stack count bottom-right).
+    local frame = CreateFrame("Frame", addon_name .. name, ranged_frame)
+    frame:SetSize(BADGE_ICON_SIZE, BADGE_ICON_SIZE)
+    frame:EnableMouse(false)
+    frame.tex = frame:CreateTexture(nil, "ARTWORK")
+    frame.tex:SetAllPoints()
+    frame.tex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    frame.glow = frame:CreateTexture(nil, "OVERLAY", nil, 7)
+    frame.glow:SetAllPoints()
+    frame.glow:SetColorTexture(unpack(BADGE_GLOW_COLOR))
+    if frame.glow.SetBlendMode then
+        frame.glow:SetBlendMode("ADD")
+    end
+    frame.glow:Hide()
+    frame.text = frame:CreateFontString(nil, "OVERLAY")
+    frame.text:SetTextColor(1, 1, 1, 0.95)
+    frame.text:Hide()
+    frame:Hide()
+    return frame
+end
+
 function ui.build(self, ranged_frame)
     local db_hand = self:get_hand_table("ranged")
     local texture = LSM:Fetch("statusbar", db_hand.bar_texture_key)
@@ -270,6 +346,40 @@ function ui.build(self, ranged_frame)
             ui.aspect_textures[spell_id] = icon
         end
     end
+
+    -- Movement-safe cast zone (option-gated; nil = off) and the H6 pet badges. The
+    -- zone lives on the ranged bar's visuals frame (nil when that is absent, in which
+    -- case its update is a no-op). Badge text placement follows the reference: BW's
+    -- countdown above the icon, Frenzy's stack count bottom-right.
+    ui.cast_zone, ui.cast_zone_marker = create_cast_zone(ranged_frame)
+    ui.bw_badge = create_badge("HunterBWBadge", ranged_frame)
+    ui.bw_badge.text:SetPoint("BOTTOM", ui.bw_badge, "TOP", 0, 2)
+    ui.bw_badge.text:SetJustifyH("CENTER")
+    ui.frenzy_badge = create_badge("HunterFrenzyBadge", ranged_frame)
+    ui.frenzy_badge.text:SetPoint("BOTTOMRIGHT", ui.frenzy_badge, "BOTTOMRIGHT", -1, 1)
+    ui.frenzy_badge.text:SetJustifyH("RIGHT")
+
+    -- Badge spell tokens: localized names and icon textures from the client's own data
+    -- (the ids stay the primary matcher, so a cold cache only disables the name
+    -- fallback and leaves a texture-less badge hidden).
+    ui.bw_name, _, ui.bw_texture = api.GetSpellInfo(BW_SPELL_ID)
+    ui.frenzy_name, _, ui.frenzy_texture = api.GetSpellInfo(FRENZY_EFFECT_ID)
+    if ui.bw_texture then
+        ui.bw_badge.tex:SetTexture(ui.bw_texture)
+    end
+    if ui.frenzy_texture then
+        ui.frenzy_badge.tex:SetTexture(ui.frenzy_texture)
+    end
+
+    -- Transition caches for the new widgets (nil = "no change seen yet").
+    ui.zone_width = nil
+    ui.zone_left = nil
+    ui.zone_safe = nil
+    ui.bw_anchor = nil
+    ui.frenzy_anchor = nil
+    ui.badge_scan_at = nil
+    ui.bw_text = nil
+    ui.frenzy_text = nil
 
     ui.ready = true
 end
@@ -496,6 +606,14 @@ function ui.update_cast_bar(self, db, now)
         elapsed = duration
     end
     local remaining = duration - elapsed
+    if mode ~= "cast" then
+        -- H1 shot clock: the window face's countdown is the HOLD-seconds kernel over
+        -- the same bounds cast_bar_display just matched (the moment the window closes
+        -- and the next Auto Shot fires). Falls back to the clamped arithmetic only if
+        -- the kernel is absent (a flavor without hunter_window).
+        remaining = st.hunter_window.hold_seconds(window_start, window_duration, now)
+            or remaining
+    end
 
     local bar_width = frame:GetWidth() or 0
     local progress = 0
@@ -546,6 +664,84 @@ function ui.update_cast_bar(self, db, now)
 
     if not frame:IsShown() then
         frame:Show()
+    end
+end
+
+--=========================================================================================
+-- Movement-safe cast zone (reference UI.lua:204-225, 805-850)
+--=========================================================================================
+-- The final cast-window fraction of the ranged swing, tinted green when standing still
+-- right now is safe (the player stopped at or before the window opened) and red when
+-- still moving through it or stopped too late - the WeaponSwingTimer/SuperSwingTimer
+-- "safe to move" standard (bench/verify_bank.md §5.1). The maths are the pure
+-- hunter_window kernels (cast_window + is_stopped_position_safe); the movement state
+-- (self.is_moving / self.last_stopped_moving_at) is main.lua's. Option-gated:
+-- hunter_cast_zone_enabled strictly true shows it (nil = off; the options pass wires
+-- the default), and a disabled zone performs no reads at all.
+function ui.update_cast_zone(self, db, now)
+    local zone = ui.cast_zone
+    if not zone then
+        return
+    end
+    local marker = ui.cast_zone_marker
+    if db.hunter_cast_zone_enabled ~= true then
+        ui.zone_safe = nil
+        zone:Hide()
+        if marker then
+            marker:Hide()
+        end
+        return
+    end
+    local ranged = self.ranged
+    local cycle_duration = ranged and (ranged.synced_duration or ranged.speed)
+    if not (ranged and type(ranged.start) == "number"
+        and type(cycle_duration) == "number" and cycle_duration > 0
+        and type(now) == "number" and now <= ranged.start + cycle_duration) then
+        -- No live ranged cycle: nothing to bound the window with, so the zone hides
+        -- rather than guessing (the reference's non-swinging early out).
+        ui.zone_safe = nil
+        zone:Hide()
+        if marker then
+            marker:Hide()
+        end
+        return
+    end
+    local cast_window = st.hunter_window.cast_window(world_latency_seconds(self))
+    local bar_width = (ui.ranged_frame and ui.ranged_frame:GetWidth()) or 0
+    local width = math.min((cast_window / cycle_duration) * bar_width, bar_width)
+    if width < 0 then
+        width = 0
+    end
+    local safe = st.hunter_window.is_stopped_position_safe(
+        self.is_moving == true, self.last_stopped_moving_at,
+        ranged.start, cycle_duration, cast_window)
+    if ui.zone_safe ~= safe then
+        ui.zone_safe = safe
+        local color = safe and CAST_ZONE_SAFE or CAST_ZONE_UNSAFE
+        zone:SetColorTexture(color[1], color[2], color[3], color[4])
+    end
+    if ui.zone_width ~= width then
+        ui.zone_width = width
+        zone:SetWidth(width)
+    end
+    -- The threshold marker sits on the window boundary (the reference's markerLeft,
+    -- UI.lua:834-841), anchored off the zone's parent so it spans the full bar height.
+    local left = bar_width - width - CAST_ZONE_MARKER_WIDTH * 0.5
+    if left < 0 then
+        left = 0
+    end
+    if ui.zone_left ~= left then
+        ui.zone_left = left
+        local parent = ui.ranged_frame and ui.ranged_frame.visuals_frame
+        if marker and parent then
+            marker:ClearAllPoints()
+            marker:SetPoint("TOPLEFT", parent, "LEFT", left, 0)
+            marker:SetPoint("BOTTOMLEFT", parent, "LEFT", left, 0)
+        end
+    end
+    zone:Show()
+    if marker then
+        marker:Show()
     end
 end
 
@@ -691,6 +887,170 @@ function ui.update_rapid_fire(self, db, now)
 end
 
 --=========================================================================================
+-- Pet badges: Bestial Wrath duration + pet Frenzy stacks (H6)
+--=========================================================================================
+-- The tracked-icon pattern (reference ClassMods.lua:6224-6385): the BW badge shows the
+-- buff's remaining duration with a gold glow inside the final 4 s; the Frenzy badge
+-- shows the pet's stack count while the 30%-attack-speed buff is up. Both are
+-- option-gated off by default (hunter_bw_badge_enabled / hunter_frenzy_stacks_enabled
+-- strictly true shows; nil = off, wired by the options pass) and their scans are
+-- throttled to the aspect cadence. BW reads the player's own buffs through compat's
+-- frozen scan_player_aura contract; Frenzy reads the pet's buffs through the same
+-- UnitAura wrapper (a different unit - the scan helper is player-only by contract).
+local function badge_row_anchor(db)
+    -- Continue the aspect icon's fallback chain: the badge row sits left of the aspect
+    -- icon when that is enabled, else left of the range helper when that is, else left
+    -- of the bar itself (UIParent centre without a ranged frame).
+    if db.hunter_aspect_icon_enabled ~= false and ui.aspect_icon then
+        return ui.aspect_icon
+    end
+    if db.hunter_range_helper_enabled ~= false and ui.range_helper then
+        return ui.range_helper
+    end
+    return ui.ranged_frame or UIParent
+end
+
+local function update_bw_badge()
+    local badge = ui.bw_badge
+    if not ui.bw_texture then
+        if badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    local remaining = api.scan_player_aura(function(spell_id, name)
+        return spell_id == BW_SPELL_ID or (ui.bw_name ~= nil and name == ui.bw_name)
+    end)
+    if type(remaining) ~= "number" or remaining <= 0 then
+        badge.glow:Hide()
+        if badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    -- Countdown: whole seconds at or above 3 s, one decimal below (the reference
+    -- durationText rule, ClassMods.lua:6374-6378).
+    local text
+    if remaining >= 3 then
+        text = string.format("%.0f", remaining)
+    else
+        text = string.format("%.1f", remaining)
+    end
+    if ui.bw_text ~= text then
+        ui.bw_text = text
+        badge.text:SetText(text)
+    end
+    if remaining <= BADGE_GLOW_WINDOW then
+        badge.glow:Show()
+    else
+        badge.glow:Hide()
+    end
+    if not badge.text:IsShown() then
+        badge.text:Show()
+    end
+    if not badge:IsShown() then
+        badge:Show()
+    end
+end
+
+local function update_frenzy_badge()
+    local badge = ui.frenzy_badge
+    if not ui.frenzy_texture then
+        if badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    local found = false
+    local count
+    for index = 1, AURA_SCAN_LIMIT do
+        local name, _, aura_count, _, _, _, _, _, _, aura_spell_id =
+            api.UnitAura("pet", index, "HELPFUL")
+        if not name then
+            break
+        end
+        if aura_spell_id == FRENZY_EFFECT_ID
+            or (ui.frenzy_name ~= nil and name == ui.frenzy_name) then
+            found = true
+            count = aura_count
+            break
+        end
+    end
+    if not found then
+        if badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    -- The stack count the client reports (1..3); a client that reports no count shows
+    -- the icon alone rather than a fabricated 1.
+    local text
+    if type(count) == "number" and count >= 1 then
+        text = tostring(count)
+    end
+    if ui.frenzy_text ~= text then
+        ui.frenzy_text = text
+        if text then
+            badge.text:SetText(text)
+        end
+    end
+    if text then
+        if not badge.text:IsShown() then
+            badge.text:Show()
+        end
+    else
+        badge.text:Hide()
+    end
+    if not badge:IsShown() then
+        badge:Show()
+    end
+end
+
+function ui.update_pet_badges(self, db, now)
+    local bw_badge = ui.bw_badge
+    local frenzy_badge = ui.frenzy_badge
+    if not (bw_badge and frenzy_badge) then
+        return
+    end
+    local bw_on = db.hunter_bw_badge_enabled == true
+    local frenzy_on = db.hunter_frenzy_stacks_enabled == true
+    if not bw_on and bw_badge:IsShown() then
+        bw_badge:Hide()
+    end
+    if not frenzy_on and frenzy_badge:IsShown() then
+        frenzy_badge:Hide()
+    end
+    if not (bw_on or frenzy_on) then
+        return
+    end
+    -- Anchors: recomputed only when the row target changes (an option flip or the
+    -- frame set), never per tick.
+    local anchor = badge_row_anchor(db)
+    if ui.bw_anchor ~= anchor then
+        ui.bw_anchor = anchor
+        bw_badge:ClearAllPoints()
+        bw_badge:SetPoint("RIGHT", anchor, "LEFT", -2, 0)
+    end
+    local frenzy_anchor = (bw_on and bw_badge) or anchor
+    if ui.frenzy_anchor ~= frenzy_anchor then
+        ui.frenzy_anchor = frenzy_anchor
+        frenzy_badge:ClearAllPoints()
+        frenzy_badge:SetPoint("RIGHT", frenzy_anchor, "LEFT", -2, 0)
+    end
+    -- Throttled scans: the badges hold their last state between polls.
+    if ui.badge_scan_at and now < ui.badge_scan_at then
+        return
+    end
+    ui.badge_scan_at = now + BADGE_SCAN_INTERVAL
+    if bw_on then
+        update_bw_badge()
+    end
+    if frenzy_on then
+        update_frenzy_badge()
+    end
+end
+
+--=========================================================================================
 -- Aspect icon (reference ClassMods.lua:6026-6135)
 --=========================================================================================
 function ui.update_aspect_icon(self, db, now)
@@ -769,6 +1129,19 @@ function ui.hide_all(self)
     if ui.aspect_icon then
         ui.aspect_icon:Hide()
     end
+    if ui.cast_zone then
+        ui.cast_zone:Hide()
+    end
+    if ui.cast_zone_marker then
+        ui.cast_zone_marker:Hide()
+    end
+    if ui.bw_badge then
+        ui.bw_badge:Hide()
+    end
+    if ui.frenzy_badge then
+        ui.frenzy_badge:Hide()
+    end
+    ui.zone_safe = nil
     ui.sync_melee_anchor(self)
 end
 
@@ -784,9 +1157,20 @@ function ui.update(self)
     local now = api.get_time()
     ui.update_cast_bar(self, db, now)
     ui.sync_melee_anchor(self)
+    ui.update_cast_zone(self, db, now)
     ui.update_range_helper(self, db)
     ui.update_rapid_fire(self, db, now)
+    ui.update_pet_badges(self, db, now)
     ui.update_aspect_icon(self, db, now)
+end
+
+function ui.force_rapid_fire_refresh(self)
+    -- Readiness (23989) resets Rapid Fire's cooldown; the reference forces the Rapid
+    -- Fire bar's next scan immediately (ForceHunterRapidFireRefresh, ClassMods.lua:
+    -- 5951-5956). Here the scan is driven by the ranged tick, so the force is a
+    -- throttle bypass and the next tick reads the new state. Nil-safe before build:
+    -- update_rapid_fire only runs once ui.ready is true.
+    ui.rf_scan_at = nil
 end
 
 function ui.on_bar_update(self, hand)

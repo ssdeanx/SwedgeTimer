@@ -515,7 +515,9 @@ end
 
 -- Active guidance: map the provider output onto the widgets (archive 896-926, minus
 -- the design-mode preview branches). out.action / out.filler_slot / out.judge_slot are
--- the provider's slot keys; each one maps to that slot's icon.
+-- the provider's slot keys; each one maps to that slot's icon. out.inputs_unknown
+-- (M6) suppresses every advice target and paints the label as "…": the provider has
+-- told us its core timing reads are unusable, so showing an action would be a guess.
 local function display_active(self, provider, inputs, out)
     local frame = ui.frame
     local db = self:get_class_table()
@@ -525,13 +527,14 @@ local function display_active(self, provider, inputs, out)
         targets[i] = 0
     end
 
-    local action_index = out.action and ui.slot_index[out.action]
+    local unknown = out.inputs_unknown == true
+    local action_index = not unknown and out.action and ui.slot_index[out.action]
     if action_index then
         targets[action_index] = 1
     end
 
     local filler_index
-    if out.filler_slot and db.nextaction_show_fillers ~= false then
+    if not unknown and out.filler_slot and db.nextaction_show_fillers ~= false then
         filler_index = ui.slot_index[out.filler_slot]
         if filler_index then
             targets[filler_index] = 1
@@ -540,7 +543,7 @@ local function display_active(self, provider, inputs, out)
 
     -- The filler pops over the whole slot; suppress the judgement cue (and its glow,
     -- which would otherwise render through the filler icon) while it shows.
-    if out.judge_slot and db.nextaction_show_judgement ~= false then
+    if not unknown and out.judge_slot and db.nextaction_show_judgement ~= false then
         local judge_index = ui.slot_index[out.judge_slot]
         if judge_index and not (filler_index and targets[filler_index] > 0) then
             targets[judge_index] = 1
@@ -548,7 +551,7 @@ local function display_active(self, provider, inputs, out)
     end
 
     local hold_target = 0
-    if out.hold and db.nextaction_hold_enabled ~= false then
+    if not unknown and out.hold and db.nextaction_hold_enabled ~= false then
         hold_target = 1
         local text = out.hold_text
         if text == nil then
@@ -606,6 +609,20 @@ local function display_active(self, provider, inputs, out)
     end
 
     update_texts(self, provider, inputs)
+
+    -- M6: unknown inputs render the guide's one explicit "no advice" state: the
+    -- rotation text goes away (its key would be thresholded off a defaulted speed)
+    -- and the caption becomes "…". The latch keeps SetText off the per-frame path.
+    if unknown then
+        frame.rotation_text:Hide()
+        if frame.label_unknown ~= true then
+            frame.label_unknown = true
+            frame.label:SetText("…")
+        end
+    elseif frame.label_unknown then
+        frame.label_unknown = false
+        frame.label:SetText((provider.labels and provider.labels.next_action) or "Next action:")
+    end
 end
 
 -- Idle: no active guidance (reachable only with the "always" visibility key). The
@@ -678,9 +695,16 @@ function ui.update(self)
     end
 
     -- The provider owns the reused inputs table; the UI owns the reused output table.
-    local inputs = provider.gather(self, ui.inputs)
-    if type(inputs) ~= "table" then
+    -- A provider that returns a non-table (exception-path degrade) leaves last tick's
+    -- table in place: that is stale state, so it is flagged unknown (M6) and the
+    -- guide shows "…" instead of advice built on stale reads.
+    local gathered = provider.gather(self, ui.inputs)
+    local inputs
+    if type(gathered) == "table" then
+        inputs = gathered
+    else
         inputs = ui.inputs
+        inputs.inputs_unknown = true
     end
     if self.in_combat then
         -- Active guidance: one reused output table, no per-frame allocations.

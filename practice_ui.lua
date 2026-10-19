@@ -122,6 +122,8 @@ local TIMELINE_LANE_HEIGHT = 24
 local TIMELINE_ICON_SIZE = 20
 local TIMELINE_LABEL_WIDTH = 60
 local TIMELINE_RULER_HEIGHT = 46
+local TIMELINE_DEFAULT_X = 0      -- session-local default centre offset (archive layout)
+local TIMELINE_DEFAULT_Y = -200
 local ROTATION_BAND_ICON_SIZE = 14
 local ROTATION_BAND_ICON_SPACING = 2
 local ROTATION_BAND_MAX_ICONS = 5
@@ -1741,7 +1743,9 @@ function ui.build_timeline(self)
         "BackdropTemplate")
     ui.timeline_frame = frame
     frame:SetSize(TIMELINE_WIDTH + TIMELINE_LABEL_WIDTH + 16, frame_height)
-    frame:SetPoint("CENTER", UIParent, "CENTER", 0, -200)
+    ui.timeline_x = ui.timeline_x or TIMELINE_DEFAULT_X
+    ui.timeline_y = ui.timeline_y or TIMELINE_DEFAULT_Y
+    frame:SetPoint("CENTER", UIParent, "CENTER", ui.timeline_x, ui.timeline_y)
     frame:SetFrameStrata("HIGH")
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -1763,11 +1767,16 @@ function ui.build_timeline(self)
     end)
     frame:SetScript("OnDragStop", function(f)
         f:StopMovingOrSizing()
+        ui.save_timeline_position(self)
     end)
 
     local close_btn = CreateFrame("Button", nil, frame)
     close_btn:SetSize(16, 16)
     close_btn:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
+    close_btn.label = close_btn:CreateFontString(nil, "OVERLAY")
+    close_btn.label:SetPoint("CENTER", 0, 0)
+    close_btn.label:SetFontObject(GameFontHighlightSmall)
+    close_btn.label:SetText("X")
     close_btn:SetScript("OnClick", function()
         ui.toggle_timeline(ST)
     end)
@@ -1870,6 +1879,27 @@ function ui.build_timeline(self)
     end)
 
     frame:Hide()
+end
+
+-- Stores the dragged timeline position as a center offset (session-local, like the
+-- rotation display).
+function ui.save_timeline_position(self)
+    local frame = ui.timeline_frame
+    if not frame or not UIParent then
+        return
+    end
+    if not (frame.GetCenter and UIParent.GetCenter) then
+        return
+    end
+    local cx, cy = frame:GetCenter()
+    local ux, uy = UIParent:GetCenter()
+    if not (cx and cy and ux and uy) then
+        return
+    end
+    ui.timeline_x = math.floor(cx - ux + 0.5)
+    ui.timeline_y = math.floor(cy - uy + 0.5)
+    frame:ClearAllPoints()
+    frame:SetPoint("CENTER", UIParent, "CENTER", ui.timeline_x, ui.timeline_y)
 end
 
 -- Toggles the timeline frame (archive toggle_timeline 2513-2537).
@@ -3089,5 +3119,96 @@ function ui.save_position(self)
     db.practice_panel_y = math.floor(top - bar_top + 0.5)
     ui.apply_settings(self)
 end
+
+--=========================================================================================
+-- Design-mode targets (C6 handoff)
+--=========================================================================================
+-- The practice UI's placeable elements, exposed in the designmode.lua registry descriptor
+-- shape ({ key, title, get_frame, available, save(x, y), reset }) so the design-mode lane
+-- can register them without reaching into this module's internals:
+--   * practice_panel    - the control panel; its offsets persist through the existing
+--                         practice_panel_x/practice_panel_y keys (save_position owns the
+--                         maths), reset restores the 0/0 archive layout.
+--   * practice_rotation - the centre-screen rotation display; position is session-local
+--                         (ui.rot_x/rot_y, no db keys in this lane), so save/reset only
+--                         move the live frame for the session.
+--   * practice_timeline - the fight timeline; position is session-local too
+--                         (ui.timeline_x/timeline_y), defaults CENTER + 0, -200.
+-- get_frame returns nil before init / before the frame exists, and available() is true
+-- only while a session runs - the design-mode refresh skips both silently.
+ui.design_targets = {
+    {
+        key = "practice_panel",
+        title = "Practice panel",
+        get_frame = function() return ui.panel end,
+        available = function() return ui.is_active() end,
+        save = function(x, y)
+            local panel = ui.panel
+            if not panel then
+                return
+            end
+            panel:ClearAllPoints()
+            panel:SetPoint("CENTER", UIParent, "CENTER", x, y)
+            ui.save_position(ST)
+        end,
+        reset = function()
+            local db = ST:get_class_table()
+            if type(db) == "table" then
+                db.practice_panel_x = 0
+                db.practice_panel_y = 0
+            end
+            ui.apply_settings(ST)
+        end,
+    },
+    {
+        key = "practice_rotation",
+        title = "Practice rotation display",
+        get_frame = function() return ui.rotation_display end,
+        available = function() return ui.is_active() end,
+        save = function(x, y)
+            local frame = ui.rotation_display
+            if not frame then
+                return
+            end
+            frame:ClearAllPoints()
+            frame:SetPoint("CENTER", UIParent, "CENTER", x, y)
+            ui.save_rotation_position(ST)
+        end,
+        reset = function()
+            ui.rot_x = ROT_DISPLAY_DEFAULT_X
+            ui.rot_y = ROT_DISPLAY_DEFAULT_Y
+            local frame = ui.rotation_display
+            if frame then
+                frame:ClearAllPoints()
+                frame:SetPoint("CENTER", UIParent, "CENTER", ui.rot_x, ui.rot_y)
+            end
+        end,
+    },
+    {
+        key = "practice_timeline",
+        title = "Practice timeline",
+        get_frame = function() return ui.timeline_frame end,
+        available = function() return ui.is_active() end,
+        save = function(x, y)
+            local frame = ui.timeline_frame
+            if not frame then
+                return
+            end
+            ui.timeline_x = math.floor(x + 0.5)
+            ui.timeline_y = math.floor(y + 0.5)
+            frame:ClearAllPoints()
+            frame:SetPoint("CENTER", UIParent, "CENTER", ui.timeline_x, ui.timeline_y)
+        end,
+        reset = function()
+            ui.timeline_x = TIMELINE_DEFAULT_X
+            ui.timeline_y = TIMELINE_DEFAULT_Y
+            local frame = ui.timeline_frame
+            if frame then
+                frame:ClearAllPoints()
+                frame:SetPoint("CENTER", UIParent, "CENTER", ui.timeline_x, ui.timeline_y)
+            end
+        end,
+    },
+}
 
 if st.debug then st.utils.print_msg('-- Parsed practice_ui.lua module correctly') end

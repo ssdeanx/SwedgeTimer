@@ -63,7 +63,7 @@ opt-in queued Steady Shot). Swing timers themselves work for every class.
 | **The Burning Crusade Classic Anniversary** | `20506` |
 | **WotLK Titanforge** | `38002` |
 | **WoW Forever** | `16001` |
-| **Retail / Live (Midnight)** | `120100` |
+| **Retail / Live (Midnight)** | `12.1.x (120100, 120105)` |
 
 ### Swing timers
 
@@ -97,7 +97,7 @@ opt-in queued Steady Shot). Swing timers themselves work for every class.
 ### Tooling
 
 - LibDataBroker data source for broker displays (Titan Panel, Baggage, and similar).
-- `/st` (or `/swedgetimer`) opens the options; `/st practice` toggles the twist practice session.
+- `/st` (or `/swedgetimer`) opens the options; `/st practice` toggles the twist practice session, `/st design` toggles design mode, `/st diag` prints the diagnostic report.
 
 ---
 
@@ -108,7 +108,7 @@ opt-in queued Steady Shot). Swing timers themselves work for every class.
 | Language | Lua 5.1 (WoW addon runtime) |
 | Framework | Ace3 (AceAddon, AceDB, AceDBOptions, AceConfig, AceConsole, AceEvent, AceGUI) |
 | Libraries | LibStub, CallbackHandler-1.0, LibWindow-1.1, LibSharedMedia-3.0, LibCustomGlow-1.0, LibRangeCheck-2.0, LibClassicDurations (Era/TBC), LibDataBroker-1.1, LibClassicSwingTimerAPI (classic line only), LibLatencyMonitor, LibGlobalCooldown |
-| Verification | `lua5.1` + `luac5.1` + `luacheck` via `bash tests/run.sh` (24 steps: syntax, client-profile smoke tests, per-module state and guide-contract suites, TOC integrity, static wiring parity, lint) |
+| Verification | `lua5.1` + `luac5.1` + `luacheck` via `bash tests/run.sh` (35 steps: syntax, client-profile smoke tests, per-module state and guide-contract suites, TOC integrity, static wiring parity, lint) |
 
 ---
 
@@ -149,7 +149,7 @@ SwedgeTimer/
 
 | Command | Description |
 | :--- | :--- |
-| `bash tests/run.sh` | Full offline verification (24 steps, must be 0 failed) |
+| `bash tests/run.sh` | Full offline verification (35 steps, must be 0 failed) |
 | `lua5.1 tests/smoke.lua` | Client-profile simulation: family detection + compat API on each client family |
 | `lua5.1 tests/toc_check.lua` | TOC integrity: path casing, duplicates, module coverage, load order |
 | `lua5.1 tests/wiring_check.lua` | Static wiring parity: event registration, class-hook dispatch, init guards, API contract, clock rule |
@@ -183,7 +183,7 @@ We welcome contributions from the community. Please follow these guidelines:
    - `docs:` — documentation only
    - `test:` — adding or improving tests
    - `chore:` — maintenance, CI, dependencies
-4. **Run the tests**: `bash tests/run.sh` (must end with `24 steps, 0 failed`).
+4. **Run the tests**: `bash tests/run.sh` (must end with `35 steps, 0 failed`).
 5. **Lint your code**: `luacheck .` (0 errors; no new warnings).
 6. **Push** and open a Pull Request.
 

@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:11:32Z",
+  "run_id": "hunter-buildout-2026-10-17",
+  "agent_name": "hunter",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the dead attempt's partials against the frozen specs first: hold_seconds (hunter_window) and rules 2b + the lust suppression (hunter_guide) were already correct and were kept verbatim; only the consumers (cast-bar label, gather wiring, tests) were missing. The frozen C2 contract was consumed exactly as documented (nil = no window, throttle in the calling lane), and the paladin lane's P3 throttle shape was mirrored, so H2 reads identically on both desks.",
+    "what_was_hard": "H1's display target: the bank's 'HOLD seconds' has no reference counterpart (SuperSwingTimer shows the numeric Auto Shot countdown only), so the kernel was wired into the cast bar's window face - the same bounds the HOLD overlay keys on - and documented as a SwedgeTimer display kernel. The H6 Frenzy id needed external sourcing (19615, wowhead TBC/WotLK) because the bench carried no pet ids; the Forever variant (428728) is 403-blocked and stays out.",
+    "skill_gap": "The offline harness cannot load the addon: badge geometry/anchoring on a live bar, the cast-zone colours in motion, and the client reads (19574/19615/23989/5384, Bloodlust aura payload) stay UNCONFIRMED until an in-client session."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/hunter/journal.md § 2026-10-17 Build-out round 1 done"
+}

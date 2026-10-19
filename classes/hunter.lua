@@ -144,6 +144,22 @@ local summon_hawk_ids = get_tab({
 local sniper_shot_ids = get_tab({
 })
 
+-- Feign Death (5384; reference SuperSwingTimer_State.lua:893, and the vendored
+-- LibClassicSwingTimerAPI's own reset_swing_spells[5384] block) and Readiness (23989;
+-- reference SuperSwingTimer_Constants.lua:181, wowhead TBC spell page). Both drive
+-- event-side handling only (the spellcast-succeeded branches below): Feign Death
+-- clears the class-owned ranged display state, Readiness forces the Rapid Fire bar's
+-- next scan. Neither is a prompt/rank family, so an absent client simply never fires
+-- the branch.
+local FEIGN_DEATH_ID = 5384
+local READINESS_ID = 23989
+
+-- The Bloodlust/Heroism id set (H2), converted once from compat's confirmed list
+-- (st.lust_spell_ids: 2825 Bloodlust / 32182 Heroism, bench/verify_bank.md §2) into
+-- the keyed lookup the scan predicate tests. nil when a compat without the C2 surface
+-- is loaded, which keeps the scan closed rather than guessing.
+local lust_ids = st.lust_spell_ids and get_tab(st.lust_spell_ids) or nil
+
 --=========================================================================================
 -- Auto Shot ranged sync (phase 1)
 --=========================================================================================
@@ -259,6 +275,37 @@ function ST.HUNTER.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id
     if steady_shot_ids[spell_id] ~= nil then
         self.steady_shot_queued = false
         self:set_bar_color("mainhand")
+    end
+    if spell_id == FEIGN_DEATH_ID then
+        -- Feign Death (reference State.lua:1459-1461: hunterAutoRepeatActive=false,
+        -- ResetTimer("ranged")). The shot is interrupted and the auto-repeat drops; the
+        -- swing engine re-anchors its own ranged timer on the FD path (the vendored
+        -- LibClassicSwingTimerAPI's 5384 block restarts the swings when the FD cooldown
+        -- starts; swing_source has no FD path, so the Forever engine waits for its next
+        -- PLAYER_SWING). This module therefore only clears the display state it owns:
+        -- the auto-repeat reading, the cached hidden window (its bounds belong to the
+        -- dead cycle), the synced cycle length and the restart dedupe stamp (a fresh
+        -- start must not be blocked by the old cycle's dedupe window). The engine-owned
+        -- start/ends_at/speed are never touched - bars.lua's OnUpdate runs arithmetic
+        -- over them every tick.
+        local ranged = self.ranged
+        if ranged then
+            ranged.auto_repeat_active = false
+            ranged.hidden_window_start = nil
+            ranged.hidden_window_duration = nil
+            ranged.synced_duration = nil
+            ranged.last_restart_at = nil
+        end
+    end
+    if spell_id == READINESS_ID then
+        -- Readiness resets Rapid Fire's cooldown; the reference forces the Rapid Fire
+        -- bar's next scan immediately (ForceHunterRapidFireRefresh, ClassMods.lua:
+        -- 5951-5956). Here the bar scans from the ranged tick, so the force is a
+        -- throttle bypass and the next tick reads the new state. Guarded so a flavor
+        -- without hunter_ui stays inert.
+        if st.hunter_ui and st.hunter_ui.force_rapid_fire_refresh then
+            st.hunter_ui.force_rapid_fire_refresh(self)
+        end
     end
 end
 
@@ -737,6 +784,12 @@ end
 -- Live inputs for the pure engine, written into the caller-owned reused table. Every
 -- field of the frozen input set is written on every call, so no stale value can survive
 -- between ticks; nil means "the client did not answer".
+--
+-- The H2 Bloodlust/Heroism scan throttle (seconds): the guide gather runs every frame
+-- while the guide shows, so the aura scan re-polls at this cadence (the paladin lane's
+-- P3 interval) and the cached reading serves the ticks between polls.
+local LUST_RESCAN_INTERVAL = 0.5
+
 function ST.HUNTER.gather_guide_inputs(self, out)
     local inputs = out or ST.HUNTER.guide_inputs
     local now = api.get_time()
@@ -999,6 +1052,36 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     inputs.sniper_cast_seconds = sniper_cast_time or 4.0
     inputs.sniper_known = sniper_current_id ~= nil
     inputs.sniper_remaining_cd = get_guide_cooldown(sniper_current_id)
+
+    -- H2: the Bloodlust/Heroism window through compat's frozen player-aura scan
+    -- (bench/buildout_compat-bl_2026-10-17.md §2; ids 2825/32182 CONFIRMED per
+    -- bench/verify_bank.md §2). While one is up the guide suppresses the Aimed and
+    -- Multi-Shot weave arms (rules 6a/6b) and lets Steady Shot keep flowing as the
+    -- spam cue. The scan is throttled (LUST_RESCAN_INTERVAL) because the gather runs
+    -- every frame while the guide shows; the cached value is a plain remaining read,
+    -- never a clock extrapolation. Era never arms (st.lust_supported is family-derived
+    -- in compat.lua; the ids are data, not a probe) and an absent compat surface or
+    -- aura API stays nil - nil is "no window", never zero. Closed-on-unknown (R4):
+    -- only an explicit true arms the scan; nil (a pre-C2 compat) or false stays
+    -- off. Every field is written on every call (the frozen input discipline).
+    local lust_remaining
+    if st.lust_supported == true and lust_ids
+        and type(api.scan_player_aura) == "function" then
+        if self.hunter_lust_at and (now - self.hunter_lust_at) < LUST_RESCAN_INTERVAL then
+            lust_remaining = self.hunter_lust_remaining
+        else
+            self.hunter_lust_at = now
+            self.hunter_lust_remaining = nil
+            local remaining = api.scan_player_aura(function(spell_id)
+                return lust_ids[spell_id] ~= nil
+            end)
+            if type(remaining) == "number" and remaining > 0 then
+                self.hunter_lust_remaining = remaining
+            end
+            lust_remaining = self.hunter_lust_remaining
+        end
+    end
+    inputs.lust_remaining = lust_remaining
 
     -- The ranged range of the Steady Shot school; nil = unknown (the engine never treats
     -- nil as out of range). One client probe, no allocation.

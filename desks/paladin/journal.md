@@ -1,0 +1,11 @@
+# paladin — Journal
+
+## 2026-10-17 — Desk opened
+- **Purpose:** P1/P2 (JotC debuff 21183, 20s max) /P3/P6/P7 + cooldown icon group.
+- **Scope:** classes/paladin.lua, nextaction.lua, nextaction_ui.lua only.
+- **Next step:** wait for dispatch brief in bench/briefs/; twist behaviour pinned by tests/twist_state.lua must not shift.
+
+## 2026-10-17 — Build-out round 1 (finisher; brief bench/briefs/brief_paladin_2026-10-17.md)
+- **Worked on:** inspected the dead attempt's partial work (P1/P2/P3/P6/P7/CD all present in classes/paladin.lua; apply_lust_window in nextaction.lua) and kept it. Cleared the three failures: (1) wired `ST.PALADIN.aow_exo_pulse_start(` at the overlap transition in process_aow (dead-hook failure), gated `and not st.is_retail`; (2) P3 gate now consumes the landed C2 contract `st.lust_supported ~= false` (Era + UNKNOWN closed, nil-safe); (3) on_combat_exit tears down only a live pulse, so the existing bars_state "combat exit stops the glow" pin passes unchanged. Wrote NEW tests/paladin_state.lua (165 checks: counters/persist, JotC refresh + mini-bar scan/latch, pulse transitions/teardown/Retail, seal-icon texture latch + Era slot, lust gate TBC/Era/UNKNOWN/practice, CD row + glow + racial + Retail) and extended tests/nextaction_state.lua (+11 apply_lust_window pins). tests/twist_state.lua untouched, pins intact.
+- **Current state:** scope files done, offline-verified. `bash tests/run.sh` 35 steps: paladin_state / nextaction_state / twist_state / wiring_check all PASS, luacheck 0 errors. Remaining red is other lanes' in-flight work (druid smoke error, bars-design pips/register_zone, warrior/hunter/druid bars_state counts) plus the paladin bars_state count reconciliation the brief defers to a later wave (deltas reported in bench/buildout_paladin_2026-10-17.md: +18 frames, +8 textures, +2 fontstrings). Mutation proofs on /tmp/opencode/mut_paladin (P2 refresh removal → 3 fails; pulse-start removal → wiring_check dead hook; both restored green).
+- **Next step:** options pass — wire widgets + defaults for twist_score_enabled / twist_score_persist / jotc_bar_enabled / twist_lust_override_enabled / aow_exo_pulse_enabled / cd_icons_enabled (all nil = off today, documented in the bench report); later wave reconciles bars_state counts. In-client list: racial candidate ids, Holy Wrath resolver ranks, JotC refresh cadence.

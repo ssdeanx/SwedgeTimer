@@ -152,6 +152,35 @@ local function build(opts)
         return nil
     end
 
+    -- Opt-in health fixture (before the compat load, so compat's secret-guard
+    -- wrapping observes the stubs per unit): read through sb fields, so tests
+    -- can move the values mid-section. Any unit without a value reads nil (the
+    -- compat fallback shape), which every consumer must treat as unknown.
+    local health_opts = opts.health or {}
+    sb.health_player_cur = health_opts.player and health_opts.player.cur
+    sb.health_player_max = health_opts.player and health_opts.player.max
+    sb.health_target_cur = health_opts.target and health_opts.target.cur
+    sb.health_target_max = health_opts.target and health_opts.target.max
+    sb.unit_health_calls = 0
+    env.UnitHealth = function(unit)
+        sb.unit_health_calls = sb.unit_health_calls + 1
+        if unit == "player" then
+            return sb.health_player_cur
+        end
+        return sb.health_target_cur
+    end
+    env.UnitHealthMax = function(unit)
+        sb.unit_health_calls = sb.unit_health_calls + 1
+        if unit == "player" then
+            return sb.health_player_max
+        end
+        return sb.health_target_max
+    end
+    -- Opt-in usability probe (hud_no_mana and the W7 fallback read it through
+    -- compat's (usable, insufficient) wrapper); left absent keeps compat's
+    -- no-probe fallback, whose unknown reading renders as "no glow"/"no tint".
+    env.IsSpellUsable = opts.usable
+
     -- compat.lua reads several legacy globals through _G (annotation-safe on
     -- Mainline-code clients); mirror EVERY sandbox stub for the duration of its load,
     -- then restore _G exactly. A hardcoded name list goes stale the moment compat adds
@@ -360,6 +389,8 @@ for _, hook in ipairs({
     "on_bar_update", "on_spellcast_event", "on_combat_log_unfiltered",
     "setup_warrior_visuals", "get_debuff_remaining", "should_debuff_glow",
     "get_overpower_remaining", "get_rampage_display", "is_overpower_cast",
+    "get_rampage_tier", "get_bank_state", "get_battle_shout_display",
+    "composite_rage_gate", "gate_composite_action",
 }) do
     check(type(base.ST.WARRIOR[hook]) == "function", "WARRIOR." .. hook .. " is defined")
 end
@@ -1390,6 +1421,21 @@ do
     cleu("SPELL_MISSED", 12345, "Something", 1, "DODGE")
     eq(ST.warrior_overpower_proc_until, nil, "an unrelated dodged spell does not arm the window")
 
+    -- R1: string payloads (the Anniversary shape) arm through the name fallback.
+    sb.clock = 220
+    cleu("SPELL_MISSED", "Heroic Strike", "Heroic Strike", 1, "DODGE")
+    near(ST.warrior_overpower_proc_until, 225,
+        "R1: a string Heroic Strike arms the window via the literal fallback")
+    ST.warrior_overpower_proc_until = nil
+    cleu("SPELL_MISSED", "Cleave", "Cleave", 1, "DODGE")
+    near(ST.warrior_overpower_proc_until, 225,
+        "R1: a string Cleave arms the window via the literal fallback")
+    ST.warrior_overpower_proc_until = nil
+    cleu("SPELL_MISSED", "Something", "Something", 1, "DODGE")
+    eq(ST.warrior_overpower_proc_until, nil, "R1: an unrelated string never arms the window")
+    cleu("SPELL_MISSED", nil, "Heroic Strike", 1, "DODGE")
+    eq(ST.warrior_overpower_proc_until, nil, "R1: a nil id never arms, even with a proc name")
+
     -- Combat exit clears an armed window.
     cleu("SWING_MISSED", "DODGE", false)
     check(ST.warrior_overpower_proc_until ~= nil, "the window is armed before the exit")
@@ -1597,10 +1643,10 @@ do
     ST.WARRIOR.on_bar_update(ST, "mainhand")
     check(not badge.hidden, "five live stacks show the badge")
     eq(badge.text, "RAMPAGE x5 12s", "the badge shows stacks + refresh window")
-    near(badge.color[1], 255 / 255, "the badge colour converts red")
-    near(badge.color[2], 140 / 255, "the badge colour converts green")
-    near(badge.color[3], 26 / 255, "the badge colour converts blue")
-    near(badge.color[4], 0.95, "the badge colour keeps its alpha")
+    near(badge.color[1], 46 / 255, "the badge colour converts to the green tier")
+    near(badge.color[2], 204 / 255, "the badge colour converts to the green tier (green)")
+    near(badge.color[3], 113 / 255, "the badge colour converts to the green tier (blue)")
+    near(badge.color[4], 1.0, "the green tier keeps full alpha")
 
     -- The text is only re-set when the readout changes.
     local sets_before = badge.text_sets
@@ -1932,6 +1978,471 @@ do
     FST.WARRIOR.on_bar_update(FST, "mainhand")
     colour_eq(fbar.fill.color, { 46, 204, 113, 1.0 },
         "Forever: no swing reset -> always green")
+end
+
+--=========================================================================================
+-- 26) Build-out W2: the composite rage gate (verify §4.2 - BINDING)
+--=========================================================================================
+-- The pure predicate row-table, the gate over the engine's Bloodthirst pick
+-- ("BT first, WW next" on a short-fall, nil otherwise), the reserve semantics
+-- (a queued HS/Cleave cost is protected ahead of the prompt) and the RIDE
+-- pass-through (the engine rides a queue before any core prompt, so the gate
+-- must never touch a held prompt).
+
+do
+    local sb = build()
+    local ST = sb.ST
+
+    check(ST.WARRIOR.composite_rage_gate(100, 30, 0) == true,
+        "W2 gate: rage covers the cost")
+    check(ST.WARRIOR.composite_rage_gate(29, 30, 0) == false,
+        "W2 gate: rage below the cost withhold")
+    check(ST.WARRIOR.composite_rage_gate(60, 25, 30) == true,
+        "W2 gate: rage at cost + reserve still passes")
+    check(ST.WARRIOR.composite_rage_gate(54, 25, 30) == false,
+        "W2 gate: rage below cost + reserve withhold")
+    check(ST.WARRIOR.composite_rage_gate(nil, 30, 0) == true,
+        "W2 gate: unknown power is not a shortage")
+    check(ST.WARRIOR.composite_rage_gate(29, nil, 0) == true,
+        "W2 gate: unknown cost is not a shortage (degrade to allow)")
+    check(ST.WARRIOR.composite_rage_gate(10, 10, nil) == true,
+        "W2 gate: an unknown reserve degrades to absent")
+    check(ST.WARRIOR.composite_rage_gate(9, 10, nil) == false,
+        "W2 gate: degraded reserve still judges cost")
+
+    -- Direct gate rows: the fresh out keeps hold fields visible.
+    local out = { action = nil, hold = true, hold_text = "RIDE" }
+    ST.WARRIOR.gate_composite_action({ rage = 5, hs_queued = true, hs_cost = 30 }, out)
+    eq(out.action, nil, "W2 gate: a non-BT pick passes untouched (RIDE)")
+    eq(out.hold_text, "RIDE", "W2 gate: a non-BT pick keeps its hold text")
+    out = { action = "ww", hold = false }
+    ST.WARRIOR.gate_composite_action({ rage = 29, ww_remaining = 1 }, out)
+    eq(out.action, "ww", "W2 gate: a WW pick passes untouched")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action({ rage = nil, bt_cost = 30 }, out)
+    eq(out.action, "bt", "W2 gate: unknown power keeps the BT prompt (label contract)")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action({ rage = 5, ww_remaining = nil, ww_cost = 25 }, out)
+    eq(out.action, nil, "W2 gate: a gated BT with no WW read demotes to no prompt")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action({ rage = 29, ww_remaining = 0, ww_cost = 25 }, out)
+    eq(out.action, "ww", "W2 gate: a gated BT falls back to ready+affordable WW")
+    eq(out.hold, false, "W2 gate: the fallback keeps the hold shape")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action({ rage = 29, ww_remaining = 1 }, out)
+    eq(out.action, nil, "W2 gate: a gated BT with WW on cooldown demotes to no prompt")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action(
+        { rage = 5, hs_queued = true, hs_cost = 30, ww_remaining = 0, ww_cost = 25 }, out)
+    eq(out.action, nil,
+        "W2 gate: the HS reserve beats even the ready WW fallback (5 < 55)")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action(
+        { rage = 29, cleave_queued = true, cleave_cost = 30, ww_remaining = 0, ww_cost = 25 }, out)
+    eq(out.action, nil, "W2 gate: the Cleave reserve arms the same composite")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action(
+        { rage = 57, hs_queued = true, hs_cost = 30, ww_remaining = 0, ww_cost = 25 }, out)
+    eq(out.action, "ww", "W2 gate: the reserve carries onto the WW fallback (57 < 60, >= 55)")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action({ rage = 66, bt_cost = nil }, out)
+    eq(out.action, "bt", "W2 gate: a muted BT cost falls back to the fixed cost (66 >= 30)")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action({ rage = 29, bt_cost = nil }, out)
+    eq(out.action, nil, "W2 gate: the muted-cost fallback still withholds at the floor")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action(
+        { rage = 29, bt_cost = nil, ww_cost = nil, ww_remaining = 0 }, out)
+    eq(out.action, "ww", "W2 gate: both fallback costs still arm the WW fallback")
+    out = { action = "bt", hold = false }
+    ST.WARRIOR.gate_composite_action({ rage = 45, bt_cost = nil }, out)
+    eq(out.action, "bt", "W2 gate: a muted BT cost passes above its fallback")
+
+    -- Wrapper rows over the REAL engine: rule 5 (a ready core reader) feeds the
+    -- gate directly, so the demote/fallback is observable end to end.
+    local function core_inputs(rage)
+        return {
+            target_health_pct = 50,
+            hs_queued = false,
+            cleave_queued = false,
+            bt_remaining = 0,
+            ww_remaining = 0,
+            bt_cost = 30,
+            ww_cost = 25,
+            rage = rage,
+        }
+    end
+    out = ST.WARRIOR.guide.evaluate(core_inputs(70), {})
+    eq(out.action, "bt", "W2 wrapper: the engine's core prompt is Bloodthirst")
+    out = ST.WARRIOR.guide.evaluate(core_inputs(29), {})
+    eq(out.action, "ww", "W2 wrapper: short rage demotes the pick to the WW core")
+    local withheld = core_inputs(29)
+    withheld.ww_remaining = 1
+    out = ST.WARRIOR.guide.evaluate(withheld, {})
+    eq(out.action, nil, "W2 wrapper: short rage + WW on cooldown prompts nothing")
+    local ride = core_inputs(200)
+    ride.hs_queued = true
+    out = ST.WARRIOR.guide.evaluate(ride, {})
+    eq(out.action, nil, "W2 wrapper: a queued HS rides before any core prompt")
+    eq(out.hold_text, "RIDE", "W2 wrapper: the RIDE pass-through keeps its text")
+end
+
+--=========================================================================================
+-- 27) Build-out W1: the rage-bank cue - the pure state, the widget draw path,
+--     the read gating and the default-off toggle
+--=========================================================================================
+
+do
+    local sb0 = build()
+    local ST0 = sb0.ST
+    eq(ST0.WARRIOR.get_bank_state(30, 20, 70, true), true, "W1 state: in the band at the floor")
+    eq(ST0.WARRIOR.get_bank_state(30, 20, 70, false), false, "W1 state: out of combat never banks")
+    eq(ST0.WARRIOR.get_bank_state(30, 20, 70, nil), false, "W1 state: unknown combat never banks")
+    eq(ST0.WARRIOR.get_bank_state(nil, 20, 70, true), false, "W1 state: unknown health never arms")
+    eq(ST0.WARRIOR.get_bank_state(30, nil, 70, true), false, "W1 state: unknown threshold never arms")
+    eq(ST0.WARRIOR.get_bank_state(30, 20, nil, true), false, "W1 state: unknown rage never arms")
+    eq(ST0.WARRIOR.get_bank_state(30, 20, 59, true), false, "W1 state: below the floor")
+    eq(ST0.WARRIOR.get_bank_state(30, 20, 60, true), true, "W1 state: at the floor (inclusive)")
+    eq(ST0.WARRIOR.get_bank_state(19.9, 20, 70, true), false, "W1 state: below the band")
+    eq(ST0.WARRIOR.get_bank_state(20, 20, 70, true), true, "W1 state: at the band bottom (inclusive)")
+    eq(ST0.WARRIOR.get_bank_state(34.9, 20, 70, true), true, "W1 state: inside the band top")
+    eq(ST0.WARRIOR.get_bank_state(35, 20, 70, true), false, "W1 state: past the band top (exclusive)")
+    eq(ST0.WARRIOR.get_bank_state(10, 20, 70, true), false, "W1 state: already in Execute -> no bank")
+
+    -- Widget path: 30 % health (inside the default [20, 35) band), rage hits
+    -- the floor in combat.
+    local sb = build({ health = { player = { cur = 3000, max = 10000 } } })
+    local ST = sb.ST
+    ST.WARRIOR.post_init(ST)
+    check(sb.visuals.warrior_bank ~= nil, "W1 cue: the widgets exist after setup")
+    local bank_edge = sb.visuals.warrior_bank.edge
+    local bank_text = sb.visuals.warrior_bank.text
+    eq(bank_text.text, "BANK", "W1 cue: the static label is the creation-time write")
+    check(bank_edge.hidden and bank_text.hidden, "W1 cue: both widgets start hidden")
+
+    -- The nil-off default: the cue never shows while the toggle is unset,
+    -- even with a fully armed state.
+    ST.in_combat = true
+    sb.power = 70
+    sb.clock = 100
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bank_edge.hidden, "W1 cue: the unset toggle hides the edge (nil = off)")
+    check(bank_text.hidden, "W1 cue: the unset toggle hides the text (nil = off)")
+    eq(sb.unit_health_calls, 0, "W1 cue: the reads sit behind the toggle entirely")
+
+    sb.class_db.show_warrior_bank_cue = true
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bank_edge.hidden, "W1 cue: the armed state shows the edge")
+    check(not bank_text.hidden, "W1 cue: the armed state shows the text")
+    check(sb.unit_health_calls > 0, "W1 cue: the reads run behind the toggle")
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bank_edge.hidden, "W1 cue: an unchanged state stays shown")
+
+    sb.power = 59
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bank_edge.hidden, "W1 cue: rage below the floor hides the cue")
+    check(bank_text.hidden, "W1 cue: rage below the floor hides the text")
+
+    sb.power = 70
+    sb.health_player_cur = 3550
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bank_edge.hidden, "W1 cue: past the band top hides the cue")
+
+    sb.health_player_cur = 3400
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bank_edge.hidden, "W1 cue: back inside the band re-arms the cue")
+
+    ST.in_combat = nil
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bank_edge.hidden, "W1 cue: combat exit hides the cue")
+
+    -- The toggle off stops the reads too (the early exit precedes them).
+    ST.in_combat = true
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bank_edge.hidden, "W1 cue: re-arms again")
+    sb.class_db.show_warrior_bank_cue = false
+    local reads_before_off = sb.unit_health_calls
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(bank_edge.hidden, "W1 cue: the toggle off hides the cue")
+    eq(sb.unit_health_calls, reads_before_off, "W1 cue: the toggle off stops the reads")
+
+    -- Unknown health in a build without the fixture never arms the cue
+    -- (the nil read is not zero and never in-band).
+    local nsb = build()
+    local NST = nsb.ST
+    NST.WARRIOR.post_init(NST)
+    NST.in_combat = true
+    nsb.power = 70
+    nsb.class_db.show_warrior_bank_cue = true
+    NST.WARRIOR.on_bar_update(NST, "mainhand")
+    check(nsb.visuals.warrior_bank.edge.hidden, "W1 cue: unreadable health never arms")
+end
+
+--=========================================================================================
+-- 28) Build-out W3: rampage refresh tiers - the pure tier matrix and the badge
+--     recolouring on the draw path
+--=========================================================================================
+
+do
+    local sb0 = build()
+    local ST0 = sb0.ST
+    eq(ST0.WARRIOR.get_rampage_tier(nil, nil, 0), nil, "W3 tier: no buff -> no tier")
+    eq(ST0.WARRIOR.get_rampage_tier(0, 100, 90), nil, "W3 tier: zero stacks -> no tier")
+    eq(ST0.WARRIOR.get_rampage_tier(5, nil, 0), "amber", "W3 tier: no expiry reads amber (uncertain)")
+    eq(ST0.WARRIOR.get_rampage_tier(5, 0, 0), "amber", "W3 tier: a zero expiry reads amber")
+    eq(ST0.WARRIOR.get_rampage_tier(5, 13.5, 0), "green", "W3 tier: well-maintained -> green")
+    eq(ST0.WARRIOR.get_rampage_tier(5, 4.01, 0), "green", "W3 tier: outside the glow window -> green")
+    eq(ST0.WARRIOR.get_rampage_tier(5, 4.0, 0), "amber", "W3 tier: at the glow window edge -> amber")
+    eq(ST0.WARRIOR.get_rampage_tier(5, 2.01, 0), "amber", "W3 tier: between 2 and 4 -> amber")
+    eq(ST0.WARRIOR.get_rampage_tier(5, 2.0, 0), "red", "W3 tier: at the 2 s edge -> red")
+    eq(ST0.WARRIOR.get_rampage_tier(5, 4.5, 5), "red", "W3 tier: elapsed -> red")
+
+    -- The draw path recolours the badge as the window decays, and an
+    -- expiry-less buff reads the uncertain amber on the widget itself.
+    local sb = build()
+    local ST = sb.ST
+    ST.WARRIOR.post_init(ST)
+    local badge = sb.visuals.warrior_rampage_text
+    sb.auras = { { name = "Rampage", id = 29838, count = 5, duration = 30, expiration = 1430 } }
+    ST.WARRIOR.on_aura_change(ST)
+    sb.clock = 1400
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(badge.text, "RAMPAGE x5 30s", "W3 badge: the fresh window readout")
+    colour_eq(badge.color, { 46, 204, 113, 1.0 }, "W3 badge: a fresh window reads green")
+    sb.clock = 1426
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    colour_eq(badge.color, { 255, 140, 26, 0.95 }, "W3 badge: inside the glow window reads amber")
+    sb.clock = 1428.5
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    colour_eq(badge.color, { 217, 38, 26, 1.0 }, "W3 badge: inside the final 2 s reads red")
+    sb.auras = { { name = "Rampage", id = 29838, count = 4, duration = 30 } }
+    ST.WARRIOR.on_aura_change(ST)
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not badge.hidden, "W3 badge: an expiry-less buff still draws")
+    colour_eq(badge.color, { 255, 140, 26, 0.95 }, "W3 badge: an unknown window reads amber")
+    sb.auras = {}
+    ST.WARRIOR.on_aura_change(ST)
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(badge.hidden, "W3 badge: a faded buff hides the badge")
+end
+
+--=========================================================================================
+-- 29) Build-out W7: the HUD readiness-glow fallback - probe-only, never gated
+--     on st.is_mainline, the live window short-circuits, scope pinned to OP
+--=========================================================================================
+
+do
+    local usable_calls = 0
+    local sb = build({
+        known = { [7384] = true },
+        usable = function(id)
+            usable_calls = usable_calls + 1
+            return id == "Spell 7384"
+        end,
+    })
+    local ST = sb.ST
+    ST.WARRIOR.post_init(ST)
+    local slot = ST.WARRIOR.HUD_SLOTS[1]
+    eq(slot.key, "op", "W7 probe: the slot under test is Overpower")
+
+    -- A live dodge window drives the glow and short-circuits the probe.
+    sb.clock = 500
+    ST.warrior_overpower_proc_until = 505
+    local s = ST.WARRIOR.get_hud_state(ST, slot, 500)
+    eq(s.glow, true, "W7 probe: a live window glows")
+    eq(usable_calls, 0, "W7 probe: a live window skips the probe")
+    ST.warrior_overpower_proc_until = nil
+
+    -- A stamp that is set but elapsed is the window's own verdict: the glow
+    -- stops and the probe is not consulted (the hud_state binding pin,
+    -- mirrored here so the lifecycle rule is provable inside this suite).
+    ST.warrior_overpower_proc_until = 499
+    local probe_calls_before = usable_calls
+    s = ST.WARRIOR.get_hud_state(ST, slot, 500)
+    eq(s.glow, false, "W7 probe: an elapsed window stops the glow")
+    eq(usable_calls, probe_calls_before, "W7 probe: an elapsed window skips the probe")
+    ST.warrior_overpower_proc_until = nil
+
+    -- Empty stamp: the probe runs and arms the fallback.
+    s = ST.WARRIOR.get_hud_state(ST, slot, 500)
+    check(usable_calls > 0, "W7 probe: an empty stamp runs the probe")
+    eq(s.glow, true, "W7 probe: a usable spell arms the fallback glow")
+    local unchanged = usable_calls
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(usable_calls >= unchanged, "W7 probe: the draw pass survives the fallback")
+
+    -- The probe answering false (or unknown) never arms a glow.
+    local nope = build({
+        known = { [7384] = true },
+        usable = function() return false end,
+    })
+    local NOP = nope.ST
+    NOP.WARRIOR.post_init(NOP)
+    NOP.warrior_overpower_proc_until = nil
+    s = NOP.WARRIOR.get_hud_state(NOP, NOP.WARRIOR.HUD_SLOTS[1], 500)
+    eq(s.glow, false, "W7 probe: an unusable reading keeps the glow off")
+
+    local herd = build({
+        known = { [7384] = true },
+        usable = function() return nil end,
+    })
+    local HUDP = herd.ST
+    HUDP.WARRIOR.post_init(HUDP)
+    s = HUDP.WARRIOR.get_hud_state(HUDP, HUDP.WARRIOR.HUD_SLOTS[1], 500)
+    eq(s.glow, false, "W7 probe: an unknown reading renders no glow")
+
+    -- No probe at all (the older families' shape): nil-safe, no glow.
+    local bare = build()
+    local BST = bare.ST
+    BST.WARRIOR.post_init(BST)
+    BST.warrior_overpower_proc_until = nil
+    s = BST.WARRIOR.get_hud_state(BST, BST.WARRIOR.HUD_SLOTS[1], 500)
+    eq(s.glow, false, "W7 probe: a client with no probe renders no glow")
+
+    -- Scope pin: the fallback arms the Overpower slot only.
+    local exec = ST.WARRIOR.HUD_SLOTS[2]
+    eq(exec.key, "execute", "W7 probe: the second slot is Execute")
+    s = ST.WARRIOR.get_hud_state(ST, exec, 500)
+    eq(s.glow, false, "W7 probe: the fallback never arms the Execute slot")
+end
+
+--=========================================================================================
+-- 30) Build-out: the Battle Shout badge - capture plumbing (rank ids, literal
+--     name, the fallback shadow, later-expiring wins, absence clears) and the
+--     badge draw on the nil-off default toggle
+--=========================================================================================
+
+do
+    local sb = build()
+    local ST = sb.ST
+
+    -- A client-reported expiry is captured verbatim.
+    sb.auras = { { name = "Battle Shout", id = 6673, duration = 120, expiration = 130 } }
+    sb.clock = 10
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_battle_shout_expires, 130, "BS capture: the reported expiry is kept")
+    -- A rank-table match wins over an unrelated localized name.
+    sb.auras = { { name = "Amp clamor", id = 2048, duration = 120, expiration = 55 } }
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_battle_shout_expires, 55, "BS capture: rank ids match before names")
+    -- The English literal fallback (the Rampage scan's convention).
+    sb.auras = { { name = "Battle Shout", id = 999999, duration = 120, expiration = 77 } }
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_battle_shout_expires, 77, "BS capture: the literal name fallback matches")
+    -- A non-matching aura never captures.
+    sb.auras = { { name = "Bloodsurge", id = 46916, duration = 5, expiration = 99 } }
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_battle_shout_expires, nil, "BS capture: an unrelated aura is ignored")
+    -- A client-reported no-expiry arms the fallback shadow (now + duration).
+    sb.clock = 40
+    sb.auras = { { name = "Battle Shout", id = 6673, duration = 120 } }
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_battle_shout_expires, 160, "BS capture: a missing expiry arms the shadow")
+    -- The later-expiring match wins inside one walk.
+    sb.auras = {
+        { name = "Battle Shout", id = 6673, duration = 120, expiration = 100 },
+        { name = "Battle Shout", id = 2048, duration = 120, expiration = 200 },
+    }
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_battle_shout_expires, 200, "BS capture: the later-expiring match wins")
+    -- Absence clears.
+    sb.auras = {}
+    ST.WARRIOR.on_aura_change(ST)
+    eq(ST.warrior_battle_shout_expires, nil, "BS capture: a faded buff clears the capture")
+
+    -- The badge draw on the nil-off default toggle.
+    ST.WARRIOR.post_init(ST)
+    local badge = sb.visuals.warrior_battle_shout_text
+    check(badge ~= nil, "BS badge: the widget exists after setup")
+    sb.clock = 100
+    sb.auras = { { name = "Battle Shout", id = 6673, duration = 120, expiration = 130 } }
+    ST.WARRIOR.on_aura_change(ST)
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(badge.hidden, "BS badge: the unset toggle hides the badge (nil = off)")
+
+    sb.class_db.show_warrior_battle_shout_badge = true
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not badge.hidden, "BS badge: the toggle on shows a live buff")
+    eq(badge.text, "BS 30s", "BS badge: the badge counts the reported expiry")
+    local sets = badge.text_sets
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(badge.text_sets, sets, "BS badge: an unchanged readout performs no text write")
+    sb.clock = 124
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    eq(badge.text, "BS 6s", "BS badge: the countdown follows the expiry stamp")
+    sb.clock = 131
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(badge.hidden, "BS badge: an elapsed window hides the badge")
+
+    -- Combat exit does NOT clear the buff (it persists between fights).
+    ST.WARRIOR.on_combat_exit(ST)
+    eq(ST.warrior_battle_shout_expires, 130, "BS badge: combat exit keeps the buff state")
+
+    -- The toggle off hides a still-live badge.
+    sb.class_db.show_warrior_battle_shout_badge = false
+    sb.clock = 100
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(badge.hidden, "BS badge: the toggle off hides a live badge")
+end
+
+--=========================================================================================
+-- R1 (localized): a string matching the client's own rank names arms the window
+--=========================================================================================
+do
+    local sb = build({ known = { [25286] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+
+    local function cleu(subevent, ...)
+        ST.WARRIOR.on_combat_log_unfiltered(ST, "COMBAT_LOG_EVENT_UNFILTERED", 100, subevent,
+            false, "Player-1", "Player", 0, 0, "Target-1", "Target", 0, 0, ...)
+    end
+
+    -- The fixture's GetSpellInfo answers "Spell <id>" for known ids, so the
+    -- resolved localized name for the known TBC Heroic Strike rank matches.
+    sb.clock = 100
+    cleu("SPELL_MISSED", "Spell 25286", "Spell 25286", 1, "DODGE")
+    near(ST.warrior_overpower_proc_until, 105,
+        "R1: a resolved localized rank name arms the window")
+    ST.warrior_overpower_proc_until = nil
+    cleu("SPELL_MISSED", "Spell 99999", "Spell 99999", 1, "DODGE")
+    eq(ST.warrior_overpower_proc_until, nil,
+        "R1: an unresolvable localized name never arms the window")
+end
+
+--=========================================================================================
+-- R2: secret-hole aura walks (no truncation below a restricted row)
+--=========================================================================================
+do
+    -- Target merged scan: the debuff below a secret row still draws.
+    local sb = build({ known = { [772] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.WARRIOR.post_init(ST)
+    local bars = sb.visuals.warrior_debuff
+
+    sb.clock = 200
+    -- Index 1 degrades to absent (secret); the player's Rend sits at index 2.
+    sb.target_auras = {
+        [2] = { name = "Rend", id = 772, source = "player", duration = 9, expiration = 206 },
+    }
+    ST.WARRIOR.on_bar_update(ST, "mainhand")
+    check(not bars.rend.bg.hidden, "R2: Rend draws below a secret row")
+    near(bars.rend.fill.width, 100 * (6 / 9), "R2: the fill shows the remaining fraction")
+
+    -- Shield Block player scan: the buff below a secret row still shows.
+    local pb = build({ known = { [2565] = true } })
+    local PST = pb.ST
+    PST.interfaces_are_initialised = true
+    PST.WARRIOR.post_init(PST)
+    local bar = pb.visuals.warrior_shield_block
+    pb.clock = 400
+    pb.auras = {
+        [2] = { name = "Shield Block", id = 2565, duration = 5, expiration = 403 },
+    }
+    PST.WARRIOR.on_bar_update(PST, "mainhand")
+    check(not bar.bg.hidden, "R2: Shield Block shows below a secret row")
 end
 
 if failures == 0 then

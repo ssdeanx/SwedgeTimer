@@ -30,13 +30,17 @@
 --   self.init_deadline_fired         set by the 5 s deadline when it had to rescue init
 --   st.practice_ui / st.hud / st.rotation_text / st.designmode  the UI modules
 --   C_Secrets                        the secret-value restriction predicates (Mainline)
+--   diag.tick_sites                  the per-tick counters (written ONLY by main.lua's
+--                                    OnUpdate counting wrapper installed through
+--                                    wrap_onupdate; the report reads and stays print-only)
+--   self.db.profile.diag_tick_counters  the enable gate wrap_onupdate reads (nil = off)
 --=========================================================================================
 local _, st = ...
 
 st.diag = st.diag or {}
 local diag = st.diag
 
--- Hard output cap. The verbose report is 4 lines today, so this is headroom for a broken
+-- Hard output cap. The verbose report is 5 lines today, so this is headroom for a broken
 -- field, never a truncation the owner should see.
 diag.MAX_LINES = 6
 
@@ -179,6 +183,57 @@ local function provider_count(self)
 end
 
 --=========================================================================================
+-- Per-tick budget counters (the hand-bar OnUpdate sites)
+--=========================================================================================
+-- main.lua's OnUpdate hook line (init_timers) installs either the original hand.onupdate
+-- or, through diag.wrap_onupdate below, a counting wrapper. The gate is the profile key
+-- diag_tick_counters: strictly true turns the counters on for the whole session, every
+-- other value (including nil - the default) installs the original function object
+-- untouched, so a default session keeps a byte-identical hook and flat-zero added
+-- overhead per frame tick. The toggle takes effect on the next login/reload; the options
+-- pass owns the widget and the documented default.
+-- Ownership: only the wrapper (called from main.lua's hook) writes diag.tick_sites; the
+-- report below reads it, therefore report stays print-only. Installing the wrapper is
+-- never a frame creation, event registration or SavedVariables write.
+diag.tick_sites = diag.tick_sites or {} -- hand -> { ticks = <n>, seconds = <t> }
+local TICK_HANDS = { "mainhand", "offhand", "ranged" }
+
+function diag.wrap_onupdate(self, hand, original)
+    if type(original) ~= "function" then
+        return original
+    end
+    if read(read(read(self, "db"), "profile"), "diag_tick_counters") ~= true then
+        return original
+    end
+    if type(diag.tick_sites) ~= "table" then
+        diag.tick_sites = {}
+    end
+    -- Attribution clock: the aligned clock in compat (st.api.get_time), which wraps raw
+    -- GetTimePreciseSec and never throws. A sandbox or broken compat simply leaves the
+    -- seconds unmeasured (nil keeps them "?", unknown is never rendered as zero) while
+    -- the tick counts keep running.
+    local clock = nil
+    if type(st.api) == "table" and type(st.api.get_time) == "function" then
+        clock = st.api.get_time
+    end
+    local site = { ticks = 0, seconds = clock and 0 or nil }
+    diag.tick_sites[hand] = site
+    return function(elapsed)
+        site.ticks = site.ticks + 1
+        if clock then
+            local before = clock()
+            original(elapsed)
+            local after = clock()
+            if type(after) == "number" and type(before) == "number" then
+                site.seconds = site.seconds + (after - before)
+            end
+        else
+            original(elapsed)
+        end
+    end
+end
+
+--=========================================================================================
 -- Line construction
 --=========================================================================================
 local function guides_text(self)
@@ -238,6 +293,54 @@ local function modules_line(self)
         #PROVIDER_CLASSES)
 end
 
+-- Per-site tick count render: the number, or "?" wherever the counting wrapper was not
+-- installed for that hand (a default OFF session) or the count is unreadable. The labels
+-- are stable over every state so /st diag output stays greppable session over session.
+local function ticks_site_value(hand)
+    local site = read(diag.tick_sites, hand)
+    if type(site) == "table" and type(site.ticks) == "number" then
+        return tostring(site.ticks)
+    end
+    return "?"
+end
+
+-- On-update time attribution: the summed measured seconds over every recorded site, or
+-- "?" when no site has a readable seconds field (counting off, or no clock captured).
+local function ticks_cpu_value()
+    if type(diag.tick_sites) ~= "table" then
+        return "?"
+    end
+    local seconds = nil
+    for _, site in pairs(diag.tick_sites) do
+        if type(site) == "table" and type(site.seconds) == "number" then
+            seconds = (seconds or 0) + site.seconds
+        end
+    end
+    if seconds == nil then
+        return "?"
+    end
+    return string.format("%.2fs", seconds)
+end
+
+-- Verbose line: what each OnUpdate site ran and how long it took (the C4 tick-budget
+-- audit, the /tmw cpu analogue); the counting gate is documented at diag.wrap_onupdate.
+local function ticks_line()
+    local on = "no"
+    for i = 1, #TICK_HANDS do
+        if type(read(diag.tick_sites, TICK_HANDS[i])) == "table" then
+            on = "yes"
+        end
+    end
+    return string.format(
+        "%s ticks on=%s mainhand=%s offhand=%s ranged=%s cpu=%s",
+        PREFIX,
+        on,
+        ticks_site_value("mainhand"),
+        ticks_site_value("offhand"),
+        ticks_site_value("ranged"),
+        ticks_cpu_value())
+end
+
 -- Secret-value restriction predicates (Mainline clients) - the switches that decide
 -- whether restricted reads come back as opaque secrets. C_Secrets is absent on classic
 -- clients, where the line is just "secrets api=no". Every probe is pcall'd; a missing,
@@ -292,6 +395,8 @@ function diag.report(self, verbose)
             out[#out + 1] = flags_ok and flags or (PREFIX .. " flags unavailable")
             local modules_ok, modules = pcall(modules_line, self)
             out[#out + 1] = modules_ok and modules or (PREFIX .. " modules unavailable")
+            local ticks_ok, ticks = pcall(ticks_line)
+            out[#out + 1] = ticks_ok and ticks or (PREFIX .. " ticks unavailable")
             local secrets_ok, secrets = pcall(secrets_line)
             out[#out + 1] = secrets_ok and secrets or (PREFIX .. " secrets unavailable")
         end

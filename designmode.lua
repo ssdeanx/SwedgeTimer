@@ -13,6 +13,11 @@
 -- position on double-click. Hold Shift while dragging to place freely, Alt to force the
 -- exact screen centre. Esc or the same command exits; entering combat closes it.
 --
+-- Snap templates (C6): stacked-layout providers (DM.register_template) offer their cell
+-- lines to the drag magnets, so an element can snap onto a row's rhythm. Mouse anchoring
+-- (discover #17, Gnosis-style): the class key design_mouse_anchor (nil = off) centres the
+-- dragged element on the cursor instead of preserving the grab offset.
+--
 -- Ported (lean) from the archived build's editmode.lua (docs/swedge/SwedgeTimer_Forever/
 -- editmode.lua). What is deliberately NOT ported, because this build has no live
 -- consumers for it: the toolbar and its per-element chips with on/off switches,
@@ -322,7 +327,7 @@ end
 
 -- Candidate guide lines: every OTHER shown element's box lines within reach, filled into
 -- the module's reusable lists (design.lua reuses the slot tables, so the tick does not
--- allocate once the slots exist).
+-- allocate once the slots exist). Registered snap templates offer their cells' lines too.
 local function collect_lines(o, l, r, t, b)
     local lines_x, lines_y = DM.lines_x, DM.lines_y
     local nx, ny = 0, 0
@@ -334,6 +339,27 @@ local function collect_lines(o, l, r, t, b)
                 nx, ny = D.offer_lines(lines_x, nx, lines_y, ny,
                     or_l, or_r, or_t, or_b, other.edge_border or 0,
                     l, r, t, b, D.DEFAULT_REACH)
+            end
+        end
+    end
+    local tpls = DM.templates
+    for i = 1, tpls.count do
+        local tpl = tpls.list[i]
+        local okc, cells = pcall(tpl.get_cells)
+        if okc and type(cells) == "table" then
+            local bd = tpl.border
+            if type(bd) == "function" then
+                local okb, bv = pcall(bd)
+                bd = okb and bv or 0
+            end
+            local border = tonumber(bd) or 0
+            for c = 1, #cells do
+                local cell = cells[c]
+                if type(cell) == "table" then
+                    nx, ny = D.offer_lines(lines_x, nx, lines_y, ny,
+                        cell.l, cell.r, cell.t, cell.b, border,
+                        l, r, t, b, D.DEFAULT_REACH)
+                end
             end
         end
     end
@@ -375,6 +401,9 @@ local function make_overlay(i)
             GameTooltip:SetText(d.title, 1, 1, 1)
             GameTooltip:AddLine("Drag to move  -  Shift: no snap  -  Alt: exact centre", 0.8, 0.8, 0.8)
             GameTooltip:AddLine("Double-click to reset the position", 0.8, 0.8, 0.8)
+            if db().design_mouse_anchor == true then
+                GameTooltip:AddLine("Mouse anchoring: the element centres on the cursor", 0.8, 0.8, 0.8)
+            end
             GameTooltip:Show()
         end
     end)
@@ -431,8 +460,15 @@ drag_tick = function(self)
     if not f then return end
     local mx, my = cursor_ui()
     if not mx then return end
-    local rawx = self.start_x + (mx - self.cursor_x)
-    local rawy = self.start_y + (my - self.cursor_y)
+    local rawx, rawy
+    if db().design_mouse_anchor == true then
+        -- Mouse anchoring (discover #17, Gnosis-style; nil = off): the element's centre
+        -- follows the cursor, so the drop anchors the frame to the mouse.
+        rawx, rawy = mx, my
+    else
+        rawx = self.start_x + (mx - self.cursor_x)
+        rawy = self.start_y + (my - self.cursor_y)
+    end
     local sx, sy, gx, gy
     if IsShiftKeyDown and IsShiftKeyDown() then
         sx, sy = D.round_half(rawx), D.round_half(rawy)
@@ -700,6 +736,115 @@ register({
         if st.practice_ui then st.practice_ui.apply_settings(ST) end
     end,
 })
+
+-- The practice rotation display + timeline (practice_ui.lua ui.design_targets):
+-- screen-positioned frames with session-local positions, available only while a
+-- session runs. The descriptors delegate to the practice module's own table
+-- (single source; the C6 handoff) and degrade silently when it is absent, so the
+-- registry count stays stable in every sandbox. Bar-relative sidebars (the
+-- paladin JotC mini-bar, the CD icon group, the enemy swing bar) are
+-- deliberately NOT separate targets: they are children of the bar frame and
+-- move with the bar overlay.
+local function practice_delegate(key)
+    local pui = st.practice_ui
+    local targets = pui and pui.design_targets
+    if type(targets) ~= "table" then
+        return nil
+    end
+    for i = 1, #targets do
+        local t = targets[i]
+        if type(t) == "table" and t.key == key then
+            return t
+        end
+    end
+    return nil
+end
+
+local function practice_descriptor(key, title)
+    return {
+        key = key,
+        title = title,
+        get_frame = function()
+            local d = practice_delegate(key)
+            if d then
+                local ok, frame = pcall(d.get_frame)
+                if ok then
+                    return frame
+                end
+            end
+            return nil
+        end,
+        available = function()
+            local d = practice_delegate(key)
+            if d and d.available then
+                local ok, open = pcall(d.available)
+                if ok then
+                    return open and true or false
+                end
+            end
+            return false
+        end,
+        save = function(x, y)
+            local d = practice_delegate(key)
+            if d and d.save then
+                d.save(x, y)
+            end
+        end,
+        reset = function()
+            local d = practice_delegate(key)
+            if d and d.reset then
+                d.reset()
+            end
+        end,
+    }
+end
+
+register(practice_descriptor("practice_rotation", "Practice rotation display"))
+register(practice_descriptor("practice_timeline", "Practice timeline"))
+
+--=========================================================================================
+-- Snap templates (C6): stacked-layout providers. A template is { id, get_cells } (see
+-- design.lua's normalise_template); its cell lines join the drag magnets, so an element
+-- being dragged can land on a registered row's rhythm. Registered by the widgets that
+-- own the layout (e.g. the pips row) and removed by id.
+--=========================================================================================
+DM.templates = DM.templates or { list = {}, by_id = {}, count = 0 }
+
+function DM.register_template(t)
+    local norm, err = D.normalise_template(t)
+    if not norm then
+        st.utils.print_msg("Design mode: template not registered - " .. tostring(err))
+        return nil
+    end
+    local tpls = DM.templates
+    if tpls.by_id[norm.id] then
+        st.utils.print_msg("Design mode: template not registered - duplicate template id '"
+            .. norm.id .. "'")
+        return nil
+    end
+    tpls.count = tpls.count + 1
+    tpls.list[tpls.count] = norm
+    tpls.by_id[norm.id] = norm
+    return norm
+end
+
+function DM.unregister_template(id)
+    local tpls = DM.templates
+    local tpl = tpls.by_id[id]
+    if not tpl then return false end
+    tpls.by_id[id] = nil
+    for i = 1, tpls.count do
+        if tpls.list[i] == tpl then
+            for j = i, tpls.count - 1 do
+                tpls.list[j] = tpls.list[j + 1]
+            end
+            tpls.list[tpls.count] = nil
+            tpls.count = tpls.count - 1
+            return true
+        end
+    end
+    return false
+end
 
 --=========================================================================================
 -- Lock overrides: while design mode runs the elements' own `locked` keys are forced off

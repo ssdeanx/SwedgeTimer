@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T13:16:22Z",
+  "run_id": "compat-bl-buildout-2026-10-17",
+  "agent_name": "compat-bl",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Brief was self-contained and the verify_bank rows pinned the CONFIRMED/UNCONFIRMED split; the scan reuses the whole-or-nothing aura wrapper so the secret regime needed no second implementation.", 
+    "what_was_hard": "The brief's 'TBC 0.05s player-aura poll' phrasing: implemented as a stateless single-pass scan whose family paths run through the existing wrappers, with the poll cadence left to the consumer lane (compat holds no timer state). Flagged in the bench report rather than inventing compat-side state.",
+    "skill_gap": "Offline harness cannot prove real client behavior of era/TBC expirationTime freshness; that stays an in-client check item."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

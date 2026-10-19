@@ -2,7 +2,9 @@
 -- Module to contain config default settings for the addon, per class and global
 ------------------------------------------------------------------------------------
 local addon_name, st = ...
-local LSM = LibStub("LibSharedMedia-3.0")
+-- No LSM fetch here: this file only declares default values (plain media-key
+-- strings); this file's only LSM handle lives in option_table_presets.lua
+-- (values = LSM:HashTable), which resolves them when the widgets are built.
 ---@type AceAddon
 ---@class AceAddon
 ---@field class_defaults table
@@ -260,6 +262,11 @@ ST.DRUID.defaults = {
     hud_show_rake = true,
     hud_show_bite = true,
     hud_show_shred = true,
+    -- D2: Tiger's Fury / Berserk join the row. Hide-on-false shape like every other
+    -- slot toggle (nil behaves identically); shipping true only makes the options
+    -- checkbox match the effective default.
+    hud_show_tf = true,
+    hud_show_berserk = true,
     hud_show_trinket1 = true,
     hud_show_trinket2 = true,
 
@@ -560,6 +567,58 @@ ST.PRIEST.defaults = {
 -- ROGUE
 ------------------------------------------------------------------------------------
 ST.ROGUE.defaults = {
+    -- Energy/pooling presentation (Round 1, Slice B wires the visuals; Slice A ships
+    -- the keys only). Nil-safe per the standing rule: == false hides, nil = off, so
+    -- every behaviour toggle below ships false and nothing is visible by default.
+    -- The 65/85 bands are the sourced never-pool-above thresholds (rogue_research
+    -- §1.3): 65 pre-tick on Era/TBC, 85 post-tick. Tuning is options-driven; the
+    -- data lives here so a profile keeps its choice.
+    show_rogue_energy_tick = false,
+    rogue_energy_tick_color = {255, 209, 64, 0.90},
+    show_rogue_pool_tint = false,
+    rogue_pool_tint_color = {255, 128, 0, 0.85},
+    rogue_pool_band_pre = 65,
+    rogue_pool_band_post = 85,
+
+    -- Finisher / upkeep cues (Slice B/C). Colours are 0-255 RGB + 0-1 alpha like the
+    -- other class colours (converted through the same convert_color path).
+    show_rogue_snd_cue = false,
+    rogue_snd_color = {255, 209, 64, 0.90},
+    show_rogue_rupture_cue = false,
+    rogue_rupture_color = {214, 64, 54, 0.90},
+    show_rogue_ea_cue = false,
+    rogue_ea_color = {140, 89, 38, 0.90},
+    show_rogue_shiv_cue = false,
+    rogue_shiv_color = {89, 140, 191, 0.90},
+    show_rogue_tea_cue = false,
+    rogue_tea_color = {112, 8, 11, 0.90},
+
+    -- Next Action Guide (the shared nextaction_ui frame driven by ST.ROGUE.guide in
+    -- classes/rogue.lua; the decision model is the pure rogue_guide.lua). Default
+    -- OFF: a wrong prompt is worse than none, so the owner enables it after in-client
+    -- verification. Key names match the paladin's/shaman's so the shared frame reads
+    -- them unchanged. This slice reports inputs_unknown, so the frame shows "…".
+    nextaction_enabled = false,
+    nextaction_locked = true,
+    nextaction_visibility_key = "in_combat",
+    nextaction_icon_size = 45,
+    nextaction_x = 0,
+    nextaction_y = -180,
+
+    -- Cooldown HUD: the rogue slot toggles (the shared hud_* keys live in
+    -- ST.class_defaults; the descriptors they gate are ST.ROGUE.HUD_SLOTS in
+    -- classes/rogue.lua). Slot toggles ship on: the HUD master hud_enabled ships
+    -- off in the shared defaults, so nothing surfaces until enabled.
+    hud_show_snd = true,
+    hud_show_rupture = true,
+    hud_show_ea = true,
+    hud_show_ar = true,
+    hud_show_bf = true,
+    hud_show_tea = true,
+    hud_show_kick = true,
+    hud_show_trinket1 = true,
+    hud_show_trinket2 = true,
+
     -- Bar options
     ['**'] = ST.bar_defaults,
 	mainhand = {
@@ -743,8 +802,9 @@ ST.WARRIOR.defaults = {
 
     -- Cooldown HUD: the warrior slot toggles (the shared hud_* keys live in
     -- ST.class_defaults; the descriptors they gate are ST.WARRIOR.HUD_SLOTS in
-    -- classes/warrior.lua). The union of both family sets ships on (cleave is
-    -- the non-TBC slot, bt/ww the TBC ones): the HUD master hud_enabled ships
+    -- classes/warrior.lua). The union of the family sets ships on (cleave is
+    -- the non-TBC slot, bt/ww the TBC ones, rend/ms/bladestorm the arms set and
+    -- raging_blow the SoD set): the HUD master hud_enabled ships
     -- off in the shared defaults, so nothing surfaces until enabled.
     hud_show_op = true,
     hud_show_execute = true,
@@ -753,6 +813,10 @@ ST.WARRIOR.defaults = {
     hud_show_cleave = true,
     hud_show_bt = true,
     hud_show_ww = true,
+    hud_show_rend = true,
+    hud_show_ms = true,
+    hud_show_bladestorm = true,
+    hud_show_raging_blow = true,
     hud_show_trinket1 = true,
     hud_show_trinket2 = true,
 

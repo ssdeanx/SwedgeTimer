@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:17:17Z",
+  "run_id": "bars-design-buildout-2026-10-17",
+  "agent_name": "bars-design",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Keeping the C3 service a pure registry (no frames at load, one table read in onupdate_common when unused) held bars_state's init counts flat; the pips factory is the only new frame source and it fires only when a class calls it. Loading the real bars.lua into the designmode sandbox (fixture wiring anchor->bar_frame->visuals_frame) made the C3/D3/C6 behaviour executable offline in the one test file the scope allowed.",
+    "what_was_hard": "Two colon-call traps: closures inside a local table constructor cannot see that local (handle.set_priority resolved as a global), and attached widget methods must absorb self (pips:set(3) fed the frame into the count parameter) - both caught by the new checks and fixed. The pips template cells must be centred on the row frame, not started at it, or the snap template misses the drawn pips.",
+    "skill_gap": "Offline harness cannot load the addon: the pips/glow visuals, the template guides in a live drag and the mouse-anchored placement stay UNCONFIRMED until an in-client check."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/bars-design/journal.md § 2026-10-17 Build-out round 1 done"
+}

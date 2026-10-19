@@ -30,6 +30,14 @@ local st = {}
 local env = setmetatable({}, { __index = _G })
 env.ST = st
 
+-- weave.lua loads before practice.lua in every TOC (the S7 weave scenario delegates its
+-- timing model to st.weave), so the sandbox mirrors that order.
+local wmod = assert(loadfile(ROOT .. "weave.lua"))
+setfenv(wmod, env)
+local okw, errw = pcall(function() wmod("SwedgeTimer", st) end)
+check(okw, "weave.lua loads under the sandbox (" .. tostring(errw) .. ")")
+check(type(st.weave) == "table", "st.weave table exists")
+
 local mod = assert(loadfile(ROOT .. "nextaction.lua"))
 setfenv(mod, env)
 local ok, err = pcall(function() mod("SwedgeTimer", st) end)
@@ -1342,6 +1350,553 @@ local sb = pr.score_summary(dbb)
 eq(sa.score, sb.score, "determinism: identical sequences give identical scores")
 eq(sa.mean_error_ms, sb.mean_error_ms, "determinism: identical mean errors")
 eq(sa.best_grade, sb.best_grade, "determinism: identical best grades")
+
+--=========================================================================================
+-- Generic scenario harness (C1) ------------------------------------------------------------
+--=========================================================================================
+local H = pr.harness
+check(type(H) == "table", "st.practice.harness exists")
+for _, name in ipairs({
+    "register_scenario", "get_scenario", "scenarios_for_class", "new_session",
+    "begin_session", "tick_session", "end_session", "scenario_event", "query",
+    "record_session_attempt", "session_summary", "grade_band", "build_windows",
+    "window_at", "next_window", "time_to_next_window", "window_remaining",
+    "overlap_seconds", "new_combo", "combo_open", "combo_record", "combo_missing",
+    "combo_evaluate", "combo_window_remaining", "grade_move_cast",
+    "execute_phase_update", "grade_execute_entry", "new_energy_state", "energy_update",
+    "energy_spend", "grade_powershift", "powershift_cycle", "weave_marker_fraction",
+    "weave_safe_start_in", "grade_weave_cast", "energy_tick_marker",
+    "grade_energy_spend", "grade_ss_after_swing",
+}) do
+    check(type(H[name]) == "function", "harness exposes " .. name)
+end
+
+-- harness: registry ---------------------------------------------------------------
+eq(#H.SCENARIO_ORDER, 8, "eight scenarios are registered")
+local specs = H.scenarios_for_class(nil)
+eq(#specs, 8, "scenarios_for_class(nil) returns every scenario")
+eq(specs[1].key, "paladin_twist", "the paladin twist sim is consumer #1")
+local paladin_specs = H.scenarios_for_class("PALADIN")
+eq(#paladin_specs, 2, "two paladin scenarios")
+eq(paladin_specs[1].key, "paladin_twist", "paladin order: twist first")
+eq(paladin_specs[2].key, "paladin_aw_combo", "paladin order: AW combo second")
+eq(#H.scenarios_for_class("HUNTER"), 1, "one hunter shell")
+eq(H.scenarios_for_class("HUNTER")[1].key, "hunter_forced_move", "the hunter shell is H5")
+eq(H.get_scenario("warrior_execute").kind, "execute_phase", "W6 spec kind")
+eq(H.get_scenario("druid_powershift").kind, "energy_loop", "D7 spec kind")
+eq(H.get_scenario("shaman_weave").kind, "weave_timing", "S7 spec kind")
+eq(H.get_scenario("paladin_aw_combo").kind, "combo_windows", "P5 spec kind")
+eq(H.get_scenario("paladin_twist").kind, "paladin_twist", "the paladin spec kind")
+local rogue_specs = H.scenarios_for_class("ROGUE")
+eq(#rogue_specs, 2, "two rogue scenarios")
+eq(rogue_specs[1].key, "rogue_energy_pool", "rogue order: energy pool first")
+eq(rogue_specs[2].key, "rogue_ss_window", "rogue order: SS window second")
+eq(H.get_scenario("rogue_energy_pool").kind, "energy_loop", "rogue energy spec kind")
+eq(H.get_scenario("rogue_ss_window").kind, "swing_window", "rogue SS spec kind")
+eq(H.get_scenario("nope"), nil, "unknown scenario reads nil")
+local dup, dup_err = H.register_scenario({ key = "paladin_twist", title = "dup" })
+eq(dup, nil, "duplicate registration is rejected")
+check(type(dup_err) == "string", "duplicate registration reports an error")
+eq(H.register_scenario({ title = "no key" }), nil, "a keyless spec is rejected")
+eq(H.register_scenario({ key = "x", title = "bad kind", kind = "bogus" }), nil,
+    "an unknown kind is rejected")
+eq(#H.SCENARIO_ORDER, 8, "rejected registrations do not enter the registry")
+
+-- harness: windows -------------------------------------------------------------------
+local win = H.build_windows({ count = 3, first_start = 10, duration = 2.5, gap = 5.5, label = "move" })
+eq(#win, 3, "build_windows count")
+eq(win[1].start_time, 10, "window 1 start")
+eq(win[1].end_time, 12.5, "window 1 end")
+eq(win[2].start_time, 18, "window 2 start follows the duration+gap cadence")
+eq(win[3].start_time, 26, "window 3 start")
+eq(win[1].label, "move", "window label")
+eq(win[1].index, 1, "window index")
+local win_b = H.build_windows({ count = 3, first_start = 10, duration = 2.5, gap = 5.5, label = "move" })
+eq(win_b[3].start_time, win[3].start_time, "build_windows is deterministic")
+eq(H.window_at(win, 9.99), nil, "window_at before the first window")
+check(H.window_at(win, 10) ~= nil, "window_at includes the start edge")
+eq(H.window_at(win, 12.5), nil, "window_at excludes the end edge")
+eq(H.window_at(win, 11).index, 1, "window_at inside")
+eq(H.window_at(win, nil), nil, "window_at with a non-number")
+eq(H.window_at({}, 10), nil, "window_at with no windows")
+eq(H.next_window(win, 5).start_time, 10, "next_window before the first")
+eq(H.next_window(win, 10).start_time, 10, "next_window keeps the active window")
+eq(H.next_window(win, 12.4).start_time, 10, "next_window keeps it until its end edge")
+eq(H.next_window(win, 12.5).start_time, 18, "next_window moves on at the end edge")
+eq(H.next_window(win, 26.1).start_time, 26, "next_window keeps the last window until its end")
+eq(H.next_window(win, 28.6), nil, "next_window after the last")
+eq(H.time_to_next_window(win, 5), 5, "time_to_next_window before")
+eq(H.time_to_next_window(win, 11), 0, "time_to_next_window inside reads 0")
+eq(H.time_to_next_window(win, 28.6), nil, "time_to_next_window after the last is nil")
+eq(H.window_remaining(win, 11), 1.5, "window_remaining inside")
+eq(H.window_remaining(win, 13), nil, "window_remaining between windows")
+near(H.overlap_seconds(win, 0, 30), 7.5, "overlap_seconds counts the full windows")
+near(H.overlap_seconds(win, 11, 19), 2.5, "overlap_seconds clamps to the span (1.5 + 1.0)")
+eq(H.overlap_seconds(win, 13, 18), 0, "overlap_seconds with no overlap")
+eq(H.overlap_seconds(win, 5, 5), 0, "overlap_seconds with an empty span")
+near(H.overlap_seconds({ { start_time = 0, end_time = 5 }, { start_time = 3, end_time = 8 } }, 0, 10), 8,
+    "overlap_seconds merges overlapping windows")
+
+-- harness: session lifecycle ---------------------------------------------------------
+local missing_session, session_err = H.new_session("nope", 0)
+eq(missing_session, nil, "new_session rejects an unknown key")
+check(type(session_err) == "string", "new_session reports the unknown key")
+local sess = H.new_session("hunter_forced_move", 100)
+eq(sess.active, false, "a new session is inactive")
+eq(sess.started_at, 100, "a new session records its start time")
+eq(sess.score.attempts, 0, "a new session owns an empty score")
+eq(#sess.windows, 0, "windows are built at begin")
+eq(H.begin_session(sess, 100), true, "begin_session activates")
+eq(sess.active, true, "the session is active after begin")
+eq(#sess.windows, 5, "the H5 session builds its default windows")
+eq(sess.windows[1].start_time, 105, "the first forced-move window starts 5 s in")
+eq(H.begin_session(sess, 101), false, "a second begin is a no-op")
+local sout = {}
+H.tick_session(sess, 104.9, 0.05, sout)
+eq(sout.move_started, false, "no move window before the first start")
+H.tick_session(sess, 105.1, 0.05, sout)
+eq(sout.move_started, true, "crossing the first window start fires move_started")
+H.tick_session(sess, 105.2, 0.05, sout)
+eq(sout.move_started, false, "move_started does not repeat")
+H.tick_session(sess, 107.6, 0.05, sout)
+eq(sout.move_ended, true, "crossing the window end fires move_ended")
+eq(H.end_session(sess, 108), true, "end_session ends it")
+eq(sess.active, false, "the session is inactive after end")
+eq(H.end_session(sess, 109), false, "a second end is a no-op")
+sout.move_started = "stale"
+H.tick_session(sess, 120, 0.05, sout)
+eq(sout.move_started, "stale", "an inactive session's tick does not run")
+local custom = H.new_session("hunter_forced_move", 0)
+H.begin_session(custom, 0, { windows = { { start_time = 1, end_time = 2, label = "x" } } })
+eq(#custom.windows, 1, "opts.windows overrides the spec windows")
+
+-- harness: queries + events ----------------------------------------------------------
+local esess = H.new_session("hunter_forced_move", 0)
+eq(H.scenario_event(esess, "x", 1), nil, "events do not fire before begin")
+H.begin_session(esess, 0)
+eq(H.scenario_event(esess, "x", 1), nil, "an unknown H5 action grades nothing")
+local qv, qerr = H.query(esess, "nope", 0)
+eq(qv, nil, "unknown query reads nil")
+check(type(qerr) == "string", "unknown query reports an error")
+eq(H.query(esess, "in_move_window", 4.9), false, "H5 query before the window")
+eq(H.query(esess, "in_move_window", 5.5), true, "H5 query inside the window")
+eq(H.query(esess, "time_to_move", 4), 1, "H5 time_to_move before the window")
+eq(H.query(esess, "time_to_move", 6), 0, "H5 time_to_move inside reads 0")
+near(H.query(esess, "window_remaining", 6), 1.5, "H5 window_remaining inside")
+-- H5: the exact-time cast path grades through the session windows
+eq(H.scenario_event(esess, 3, 3), "S", "H5 event: a cast clear of the window is S")
+eq(H.scenario_event(esess, 5.5, 5.5), "F", "H5 event: a cast inside the window is F")
+eq(H.scenario_event(esess, { start = 12.6, cast_time = 0.5 }, 12.6), "C",
+    "H5 event: a table key grades the cast running into the next window")
+eq(H.scenario_event(esess, nil, 1), nil, "H5 event: a missing key grades nothing")
+-- H5: re-begin clears the transient window flags without rebuilding the windows
+esess.state.in_window = true
+esess.state.current_index = 3
+H.end_session(esess, 10)
+H.begin_session(esess, 20)
+eq(esess.state.in_window, false, "H5 re-begin clears the window flag")
+eq(esess.state.current_index, nil, "H5 re-begin clears the window index")
+eq(#esess.windows, 5, "H5 re-begin rebuilds the windows on the new clock")
+H.end_session(esess, 30)
+
+-- harness: scoring pipeline ----------------------------------------------------------
+local ss = H.new_session("hunter_forced_move", 0)
+H.begin_session(ss, 0)
+H.record_session_attempt(ss, "S", 100)
+H.record_session_attempt(ss, "F", nil)
+local ssum = H.session_summary(ss)
+eq(ssum.attempts, 2, "session summary counts attempts")
+eq(ssum.hits, 1, "session summary counts hits")
+eq(ssum.score, 50, "session score = (100 + 0) / 2")
+eq(H.session_summary(nil), nil, "a nil session has no summary")
+eq(H.record_session_attempt(nil, "S", 1), nil, "a nil session records nothing")
+local hsc = H.new_score()
+H.record_attempt(hsc, "A", 150)
+eq(H.score_summary(hsc).score, 80, "the harness pipeline behaves like the engine's")
+
+-- harness: grade_band ----------------------------------------------------------------
+local bands = { { max = 1, grade = "S" }, { max = 2, grade = "A" }, { grade = "F" } }
+eq(H.grade_band(0.5, bands), "S", "grade_band first band")
+eq(H.grade_band(1, bands), "S", "grade_band includes the max edge")
+eq(H.grade_band(1.5, bands), "A", "grade_band second band")
+eq(H.grade_band(99, bands), "F", "grade_band fallback")
+eq(H.grade_band(nil, bands), "F", "grade_band non-number reads the fallback")
+eq(H.grade_band(0.5, nil), nil, "grade_band without bands is nil")
+eq(H.grade_band(nil, { { max = 1, grade = "S" } }), nil, "grade_band without a fallback stays nil")
+
+-- P5: combo windows ------------------------------------------------------------------
+local combo = H.new_combo()
+eq(combo.opener, "aw", "combo default opener is AW")
+eq(combo.pieces[1], "hpot", "combo default piece is the haste pot")
+eq(combo.window, 3, "combo default window is 3 s")
+eq(combo.open, false, "a new combo is closed")
+eq(H.combo_open(combo, 0, "hpot"), false, "a non-opener does not open the window")
+eq(H.combo_open(combo, 10, "aw"), true, "AW opens the window")
+eq(H.combo_open(combo, 10.5, "aw"), false, "a second AW does not reopen")
+eq(H.combo_record(combo, 10.5, "cs"), false, "a non-piece is not recorded")
+eq(H.combo_record(combo, 10.5, "hpot"), true, "the piece records inside the window")
+eq(H.combo_record(combo, 10.6, "hpot"), false, "a duplicate piece is rejected")
+eq(H.combo_window_remaining(combo, 11), 2, "combo window_remaining counts down")
+local cdetail = H.combo_evaluate(combo)
+eq(cdetail.complete, true, "the combo is complete")
+eq(cdetail.grade, "A", "a 0.5 s lag grades A")
+near(cdetail.lag, 0.5, "the lag is the slowest piece")
+local incomplete = H.new_combo({ pieces = { "hpot", "abacus" } })
+H.combo_open(incomplete, 0, "aw")
+H.combo_record(incomplete, 0.1, "hpot")
+local idetail = H.combo_evaluate(incomplete)
+eq(idetail.complete, false, "a missing piece leaves the combo incomplete")
+eq(idetail.grade, "F", "an incomplete combo grades F")
+eq(idetail.missing[1], "abacus", "the missing piece is reported")
+eq(H.combo_evaluate(H.new_combo()), nil, "a closed combo evaluates to nil")
+local function combo_grade_for(lag)
+    local c = H.new_combo()
+    H.combo_open(c, 0, "aw")
+    H.combo_record(c, lag, "hpot")
+    return H.combo_evaluate(c).grade
+end
+eq(combo_grade_for(0.2), "S", "combo lag 0.2 is S")
+eq(combo_grade_for(0.21), "A", "combo lag 0.21 is A")
+eq(combo_grade_for(0.5), "A", "combo lag 0.5 is A")
+eq(combo_grade_for(1.0), "B", "combo lag 1.0 is B")
+eq(combo_grade_for(2.0), "C", "combo lag 2.0 is C")
+eq(combo_grade_for(2.9), "D", "combo lag 2.9 is D")
+eq(combo_grade_for(3.0), "D", "combo lag at the window edge is D")
+eq(combo_grade_for(3.1), "F", "a piece past the window never records (incomplete)")
+
+-- a later opener starts a fresh window once the previous one expired
+local cyc = H.new_combo()
+H.combo_open(cyc, 0, "aw")
+H.combo_record(cyc, 0.1, "hpot")
+eq(H.combo_open(cyc, 2, "aw"), false, "an opener inside the running window does not restart it")
+eq(H.combo_open(cyc, 4, "aw"), true, "an opener after the window expired starts a fresh cycle")
+eq(H.combo_missing(cyc)[1], "hpot", "the fresh cycle starts with no pieces")
+eq(H.combo_evaluate(cyc).complete, false, "the fresh cycle is incomplete until the piece lands")
+
+-- P5: the AW combo scenario through the harness --------------------------------------
+local asess = H.new_session("paladin_aw_combo", 0)
+H.begin_session(asess, 0, { bl_delay = 999 })
+eq(asess.state.sim.fight_active, true, "the combo scenario begins its sim fight")
+eq(H.scenario_event(asess, "aw", 10), "opened", "AW opens the combo window at its cast time")
+eq(H.scenario_event(asess, "hpot", 10.3), "recorded", "the pot records at its cast time")
+local aq = H.query(asess, "combo_grade", 10.4)
+eq(aq.grade, "A", "the 0.3 s combo grades A")
+eq(aq.complete, true, "the combo is complete")
+eq(H.scenario_event(asess, "hpot", 10.5), nil, "a duplicate piece event is rejected")
+near(H.query(asess, "combo_window_remaining", 10.5), 2.5, "the combo query counts the window down")
+eq(H.query(asess, "combo_missing", 10.5)[1], nil, "no pieces are missing")
+-- sim-driven path: the tick observes the AW/haste buff transitions
+local asess2 = H.new_session("paladin_aw_combo", 0)
+H.begin_session(asess2, 0, { bl_delay = 999 })
+pr.cast(asess2.state.sim, "aw", 5, out)
+local aout = {}
+H.tick_session(asess2, 5.1, 0.05, aout)
+eq(aout.combo_opened, true, "the tick observes AW and opens the window")
+pr.cast(asess2.state.sim, "hpot", 5.2, out)
+H.tick_session(asess2, 5.25, 0.05, aout)
+eq(aout.combo_recorded, "hpot", "the tick observes the pot and records the piece")
+local aq2 = H.query(asess2, "combo_grade", 5.4)
+eq(aq2.complete, true, "the sim-driven combo completes")
+eq(aq2.grade, "S", "a 0.15 s observed lag grades S")
+H.end_session(asess2, 6)
+eq(asess2.state.sim.fight_active, false, "finish ends the sim fight")
+
+-- H5: cast legality around the forced-move windows -----------------------------------
+local mwin = H.build_windows({ count = 2, first_start = 5, duration = 2, gap = 8 })
+eq(H.grade_move_cast(mwin, 6, 0), "F", "a cast inside the window is F")
+eq(H.grade_move_cast(mwin, 14.5, 0.5), "C", "a cast running into the next window is C")
+eq(H.grade_move_cast(mwin, 14, 0.5), "B", "finishing 0.5 s before the window is B")
+eq(H.grade_move_cast(mwin, 13, 0.5), "A", "finishing 1.5 s before the window is A")
+eq(H.grade_move_cast(mwin, 10, 0.5), "S", "finishing with room is S")
+eq(H.grade_move_cast(mwin, 20, 0.5), "S", "a cast after the last window is S")
+eq(H.grade_move_cast(mwin, nil, 0), nil, "a missing cast time grades nothing")
+
+-- W6: execute-phase tracker + entry grading ------------------------------------------
+local ex = H.new_session("warrior_execute", 0)
+eq(H.begin_session(ex, 0), true, "the execute session begins")
+eq(H.execute_phase_update(ex.state, 1, 0.5), nil, "above the threshold: no crossing")
+eq(H.execute_phase_update(ex.state, 2, 0.20), "entered", "crossing the threshold enters the phase")
+eq(H.execute_phase_update(ex.state, 3, 0.10), nil, "staying inside fires nothing")
+eq(ex.state.entries, 1, "the entry is counted")
+eq(H.query(ex, "in_execute_phase", 3), true, "the query reports the phase")
+near(H.query(ex, "phase_time", 3.5), 1.5, "the query reports the time in phase")
+eq(H.execute_phase_update(ex.state, 4, 0.35), "exited", "re-crossing exits the phase")
+eq(H.query(ex, "phase_time", 4), nil, "no phase time outside the phase")
+eq(H.execute_phase_update(ex.state, 5, "x"), nil, "an unknown HP reading changes nothing")
+eq(ex.state.phase_active, false, "the unknown reading leaves the phase state")
+eq(H.grade_execute_entry(ex.state, 100), "S", "full rage at entry is S")
+eq(H.grade_execute_entry(ex.state, 80), "A", "80% rage is A")
+eq(H.grade_execute_entry(ex.state, 50), "B", "half rage is B")
+eq(H.grade_execute_entry(ex.state, 30), "C", "30% rage is C")
+eq(H.grade_execute_entry(ex.state, 10), "D", "10% rage is D")
+eq(H.grade_execute_entry(ex.state, 0), "F", "empty rage is F")
+eq(H.grade_execute_entry(ex.state, nil), nil, "a missing rage reading grades nothing")
+eq(H.grade_execute_entry(ex.state, 120), "S", "over-target rage clamps to S")
+local ex2 = H.new_session("warrior_execute", 0)
+H.begin_session(ex2, 0)
+local eout = {}
+ex2.state.hp_fraction = 0.1
+H.tick_session(ex2, 1, 0.05, eout)
+eq(eout.execute_phase_entered, true, "the tick carries the entry flag")
+H.tick_session(ex2, 1.1, 0.05, eout)
+eq(eout.execute_phase_entered, false, "the entry flag does not repeat")
+ex2.state.hp_fraction = 0.5
+H.tick_session(ex2, 1.2, 0.05, eout)
+eq(eout.execute_phase_exited, true, "the tick carries the exit flag")
+-- W6: the exact-time HP path feeds the tracker synchronously
+do
+local ex3 = H.new_session("warrior_execute", 0)
+H.begin_session(ex3, 0)
+eq(H.scenario_event(ex3, 0.5, 1), nil, "W6 event: above the threshold reports no crossing")
+eq(H.scenario_event(ex3, 0.20, 2), "entered", "W6 event: crossing the threshold enters")
+eq(ex3.state.hp_fraction, 0.20, "W6 event: the reading is stored for the tick")
+local eout3 = {}
+H.tick_session(ex3, 2.1, 0.05, eout3)
+eq(eout3.execute_phase_entered, false, "W6 event: the entry does not re-fire on the tick")
+eq(H.scenario_event(ex3, "x", 3), nil, "W6 event: a non-number reading grades nothing")
+eq(H.scenario_event(ex3, 0.5, 4), "exited", "W6 event: re-crossing exits")
+-- W6: the graded unit is the entry - grade the pooled rage, record, summarise
+local ex4 = H.new_session("warrior_execute", 0)
+H.begin_session(ex4, 0)
+eq(H.scenario_event(ex4, 0.15, 1), "entered", "W6 scoring: the entry crossing")
+H.record_session_attempt(ex4, H.grade_execute_entry(ex4.state, 90), nil)
+local exsum = H.session_summary(ex4)
+eq(exsum.attempts, 1, "W6 scoring: one entry recorded")
+eq(exsum.hits, 1, "W6 scoring: the pooled entry is a hit")
+eq(exsum.score, 80, "W6 scoring: 90% rage grades A for 80 points")
+-- W6: re-begin clears the phase without touching the configured threshold
+H.end_session(ex4, 2)
+H.begin_session(ex4, 10)
+eq(ex4.state.phase_active, false, "W6 re-begin clears the phase")
+eq(ex4.state.entries, 0, "W6 re-begin clears the entry count")
+eq(ex4.state.hp_fraction, nil, "W6 re-begin clears the last reading")
+eq(ex4.state.threshold, 0.20, "W6 re-begin keeps the configured threshold")
+end
+
+-- D7: powershift loop (fixed sim model; the D1 talent probe stays blocked) -----------
+eq(H.POWERSHIFT_DEFAULTS.rule_energy, 20, "the 20-energy rule is the model rule")
+eq(H.POWERSHIFT_DEFAULTS.shift_refund, 40, "the refund is a fixed sim constant")
+local en = H.new_energy_state()
+eq(en.energy, 0, "a fresh energy pool starts empty")
+eq(en.energy_max, 100, "the pool caps at 100")
+eq(H.energy_update(en, 0), 0, "the first update only sets the clock baseline")
+eq(H.energy_update(en, 2), 20, "2 s of regen at 10/s reaches 20")
+eq(H.energy_update(en, 20), 100, "regen caps at the pool size")
+eq(H.energy_spend(en, 20, 30), 70, "spending floors at the pool value")
+eq(H.energy_spend(en, 20, 999), 0, "overspending floors at 0")
+eq(H.grade_powershift(en), "S", "shifting at 0 energy is S")
+en.energy = 20
+eq(H.grade_powershift(en), "S", "shifting at exactly the 20-energy rule is S")
+en.energy = 21
+eq(H.grade_powershift(en), "A", "21 energy drops to A")
+en.energy = 40
+eq(H.grade_powershift(en), "B", "40 energy is B")
+en.energy = 60
+eq(H.grade_powershift(en), "C", "60 energy is C")
+en.energy = 80
+eq(H.grade_powershift(en), "D", "80 energy is D")
+en.energy = 81
+eq(H.grade_powershift(en), "F", "above 80 energy is F")
+local pgrade, pafter = H.powershift_cycle(en, 20)
+eq(pgrade, "F", "the cycle grades the energy at the shift")
+eq(pafter, 100, "the fixed refund lands (capped at the pool)")
+eq(en.shifts, 1, "the shift is counted")
+local low = H.new_energy_state({ energy = 10 })
+local lgrade, lafter = H.powershift_cycle(low, 0)
+eq(lgrade, "S", "a low-energy shift grades S")
+eq(lafter, 50, "the refund adds to the pool")
+local ds = H.new_session("druid_powershift", 0)
+H.begin_session(ds, 0)
+local dout = {}
+H.tick_session(ds, 0, 0.05, dout)
+eq(dout.energy, 0, "the first scenario tick establishes the baseline")
+H.tick_session(ds, 3, 0.05, dout)
+eq(dout.energy, 30, "the scenario tick advances the pool")
+eq(H.query(ds, "grade_next_shift", 3), "A", "the query grades the current energy")
+-- D7: the exact-time shift path grades, refunds and counts through the session
+do
+local ds2 = H.new_session("druid_powershift", 0)
+H.begin_session(ds2, 0)
+H.tick_session(ds2, 0, 0.05, {})
+H.tick_session(ds2, 1, 0.05, {})
+eq(H.scenario_event(ds2, "shift", 1), "S", "D7 event: shifting at 10 energy grades S")
+eq(ds2.state.energy, 50, "D7 event: the fixed refund lands in the pool")
+eq(ds2.state.shifts, 1, "D7 event: the shift is counted")
+eq(H.scenario_event(ds2, "dance", 1), nil, "D7 event: a non-shift action is ignored")
+local first_shift = H.scenario_event(ds2, "shift", 2)
+eq(first_shift, "C", "D7 event: shifting at 60 energy grades C")
+H.record_session_attempt(ds2, first_shift, nil)
+local dssum = H.session_summary(ds2)
+eq(dssum.attempts, 1, "D7 scoring: one shift recorded")
+eq(dssum.score, 40, "D7 scoring: the C shift scores 40")
+-- D7: re-begin re-baselines the clock without draining the pool
+H.end_session(ds2, 2)
+local kept = ds2.state.energy
+H.begin_session(ds2, 100)
+eq(ds2.state.energy, kept, "D7 re-begin keeps the pooled energy")
+local reout = {}
+H.tick_session(ds2, 100, 0.05, reout)
+eq(reout.energy, kept, "D7 re-begin grants no phantom regen across the gap")
+end
+
+-- S7: weave-timing (weave.lua math) --------------------------------------------------
+local we = H.new_session("shaman_weave", 0)
+H.begin_session(we, 0)
+local marker = H.query(we, "marker_fraction", 0)
+near(marker, (2.6 - 1.6) / 2.6, "the marker comes from weave.lua's model")
+near(H.weave_marker_fraction(2.6, 1.5, 0.1), (2.6 - 1.6) / 2.6, "the marker helper delegates")
+near(H.weave_safe_start_in(we.state, 5, 10), 3.4, "safe_start_in delegates to weave.lua")
+local wstate = { swing_duration = 2.6, effective_cast = 1.5, latency = 0.1 }
+local wgrade, wmarker = H.grade_weave_cast(wstate, 0.38, 0)
+near(wmarker, marker, "the grade helper reports the marker")
+eq(wgrade, "S", "a start 0.005 before the marker is S")
+eq(H.grade_weave_cast(wstate, 0.36, 0), "A", "a start 0.025 before the marker is A")
+eq(H.grade_weave_cast(wstate, 0.30, 0), "B", "a start 0.085 before the marker is B")
+eq(H.grade_weave_cast(wstate, 0.20, 0), "C", "a start 0.185 before the marker is C")
+eq(H.grade_weave_cast(wstate, 0.0, 0), "D", "a very early start is D")
+eq(H.grade_weave_cast(wstate, 0.5, 0), "F", "a start past the marker clips and is F")
+eq(H.grade_weave_cast(wstate, 0.2, 0.4), "F", "a measured clip is F")
+eq(H.grade_weave_cast(wstate, nil, 0), nil, "an unmeasured start grades nothing")
+-- S7: the exact-time cast path grades through the session state
+do
+local we2 = H.new_session("shaman_weave", 0)
+H.begin_session(we2, 0)
+eq(H.scenario_event(we2, 0.38, 0), "S", "S7 event: a number key grades the swing fraction")
+eq(H.scenario_event(we2, { start = 0.5 }, 0), "F", "S7 event: a table key past the marker clips")
+eq(H.scenario_event(we2, { start = 0.30, clip = 0.4 }, 0), "F", "S7 event: a measured clip is F")
+eq(H.scenario_event(we2, "x", 0), nil, "S7 event: a non-cast action grades nothing")
+eq(H.scenario_event(we2, { start = "x" }, 0), nil, "S7 event: a table without a start grades nothing")
+local wgrade_ev = H.scenario_event(we2, 0.36, 0)
+H.record_session_attempt(we2, wgrade_ev, nil)
+local wsum = H.session_summary(we2)
+eq(wsum.attempts, 1, "S7 scoring: one cast recorded")
+eq(wsum.score, 80, "S7 scoring: the A cast scores 80")
+end
+
+-- Rogue drills (Round 2, Slice D) ------------------------------------------------------
+-- Energy pooling: the marker is one latency before the 2 s tick (0.95 with the
+-- defaults) and the shared weave margin bands grade the distance to it. A start at or
+-- past the marker is a tick clip (F); an unknown tick grades nil (never a guess).
+do
+local rog = H.new_session("rogue_energy_pool", 0)
+H.begin_session(rog, 0)
+near(H.query(rog, "tick_marker", 0), 0.95, "the tick marker sits one latency before the tick")
+local rmarker, rgrade
+rgrade, rmarker = H.grade_energy_spend(rog.state, 0.94, 0)
+near(rmarker, 0.95, "the energy grade helper reports the marker")
+eq(rgrade, "S", "energy: a start 0.01 before the marker is S")
+eq(H.grade_energy_spend(rog.state, 0.91, 0), "A", "energy: 0.04 before the marker is A")
+eq(H.grade_energy_spend(rog.state, 0.86, 0), "B", "energy: 0.09 before the marker is B")
+eq(H.grade_energy_spend(rog.state, 0.76, 0), "C", "energy: 0.19 before the marker is C")
+eq(H.grade_energy_spend(rog.state, 0.70, 0), "D", "energy: a very early spend is D")
+eq(H.grade_energy_spend(rog.state, 0.96, 0), "F", "energy: a start past the marker caps the tick and is F")
+eq(H.grade_energy_spend(rog.state, 0.90, 0.05), "F", "energy: a measured tick clip is F")
+eq(H.grade_energy_spend(rog.state, nil, 0), nil, "energy: an unmeasured start grades nothing")
+eq(H.energy_tick_marker({ tick_known = false }), nil, "an unknown tick has no marker")
+eq(H.energy_tick_marker({ tick_interval = 0 }), nil, "a broken tick interval has no marker")
+eq(H.scenario_event(rog, 0.94, 0), "S", "energy event: a number key grades the tick fraction")
+eq(H.scenario_event(rog, { start = 0.96 }, 0), "F", "energy event: a table key past the marker clips")
+eq(H.scenario_event(rog, { start = 0.90, clip = 0.4 }, 0), "F", "energy event: a measured clip is F")
+eq(H.scenario_event(rog, "x", 0), nil, "energy event: a non-spend action grades nothing")
+eq(H.scenario_event(rog, { start = "x" }, 0), nil, "energy event: a table without a start grades nothing")
+local rsum_grade = H.scenario_event(rog, 0.94, 0)
+H.record_session_attempt(rog, rsum_grade, nil)
+local rogue_sum = H.session_summary(rog)
+eq(rogue_sum.attempts, 1, "energy scoring: one spend recorded")
+eq(rogue_sum.score, 100, "energy scoring: the S spend scores 100")
+local rnone = H.new_session("rogue_energy_pool", 0, { tick_known = false })
+H.begin_session(rnone, 0)
+eq(H.query(rnone, "tick_marker", 0), nil, "an unknown tick query reads nil")
+eq(H.scenario_event(rnone, 0.94, 0), nil, "an unknown tick is unscored, never a guessed tick")
+end
+
+-- Era SS-after-swing: 0.1 s after the mainhand swing is ideal, 0.2 s is average; the
+-- window edge is the F mirror on both sides, and an unknown swing grades nil.
+do
+local ss_drill = H.new_session("rogue_ss_window", 0)
+H.begin_session(ss_drill, 0)
+local sswin = H.query(ss_drill, "window", 0)
+near(sswin.start_time, 0.1, "SS window starts 0.1 s after the swing")
+near(sswin.end_time, 0.2, "SS window ends 0.2 s after the swing")
+near(sswin.ideal, 0.1, "the perfect SS offset is 0.1 s")
+local sstate = ss_drill.state
+eq(H.grade_ss_after_swing(sstate, 0.11), "S", "SS: 0.11 s is S")
+eq(H.grade_ss_after_swing(sstate, 0.13), "A", "SS: 0.13 s is A")
+eq(H.grade_ss_after_swing(sstate, 0.15), "B", "SS: 0.15 s is B")
+eq(H.grade_ss_after_swing(sstate, 0.17), "C", "SS: 0.17 s is C")
+eq(H.grade_ss_after_swing(sstate, 0.19), "D", "SS: 0.19 s is D")
+eq(H.grade_ss_after_swing(sstate, 0.09), "F", "SS: an early cast (before 0.1 s) is F")
+eq(H.grade_ss_after_swing(sstate, 0.21), "F", "SS: a late cast (after 0.2 s) is F")
+eq(H.grade_ss_after_swing(sstate, nil), nil, "SS: an unmeasured offset grades nothing")
+eq(H.grade_ss_after_swing({ swing_known = false }, 0.15), nil, "SS: an unknown swing grades nothing")
+eq(H.scenario_event(ss_drill, 0.15, 0), "B", "SS event: a number key grades the offset")
+eq(H.scenario_event(ss_drill, 0.25, 0), "F", "SS event: a missed window is F")
+eq(H.scenario_event(ss_drill, "x", 0), nil, "SS event: a non-number key grades nothing")
+local ssnone = H.new_session("rogue_ss_window", 0, { swing_known = false })
+H.begin_session(ssnone, 0)
+eq(H.scenario_event(ssnone, 0.15, 0), nil, "an unknown mainhand swing is unscored")
+end
+
+-- consumer #1: the harness-driven paladin session matches the direct engine path -----
+local SIM_FIELDS = {
+    "n_active_seals", "seal_1_label", "seal_2_label", "fading_seal_label",
+    "fading_seal_expires", "effective_speed", "effective_gcd", "has_bloodlust",
+    "bl_buff_expires", "has_haste_pot", "haste_pot_buff_expires", "has_abacus",
+    "abacus_buff_expires", "abacus_cooldown_expires", "has_dst", "dst_buff_expires",
+    "dst_icd_expires", "cs_cooldown_expires", "judge_cooldown_expires",
+    "consec_cooldown_expires", "aw_cooldown_expires", "aw_buff_expires", "fight_active",
+    "fight_start_time", "fight_bl_delay", "fight_bl_fired", "attack_paused",
+    "attack_pause_pending", "swing_held", "twist_attempted", "queued_ability",
+    "queue_timestamp", "swing_active", "swing_ends_at", "gcd_active", "gcd_expires",
+    "queue_window", "locked_rotation",
+}
+local function sim_matches(a, b, label)
+    for i = 1, #SIM_FIELDS do
+        local field = SIM_FIELDS[i]
+        eq(a[field], b[field], label .. ": " .. field)
+    end
+    eq(a.active_seals.blood, b.active_seals.blood, label .. ": active_seals.blood")
+    eq(a.active_seals.command, b.active_seals.command, label .. ": active_seals.command")
+end
+local direct = pr.new_sim()
+local psess = H.new_session("paladin_twist", 0)
+H.begin_session(psess, 0, { bl_delay = 2 })
+pr.begin_fight(direct, 0, { bl_delay = 2 })
+pr.apply_haste(direct, 3.5, 0)
+pr.apply_haste(psess.state, 3.5, 0)
+sim_matches(direct, psess.state, "harness equivalence after begin")
+local d_out, s_out = {}, {}
+pr.cast(direct, "soc", 0.5, d_out)
+pr.cast(psess.state, "soc", 0.5, s_out)
+eq(d_out.gcd_started, s_out.gcd_started, "cast flags match: gcd_started")
+eq(d_out.seal_changed, s_out.seal_changed, "cast flags match: seal_changed")
+eq(d_out.twist_armed, s_out.twist_armed, "cast flags match: twist_armed (the first soc swap)")
+pr.tick(direct, 1.0, 0.05, d_out)
+H.tick_session(psess, 1.0, 0.05, s_out)
+eq(d_out.seal_faded, s_out.seal_faded, "tick flags match: seal_faded")
+eq(d_out.seal_faded, true, "the fade window expires on both paths")
+pr.cast(direct, "sob", 2.5, d_out)
+pr.cast(psess.state, "sob", 2.5, s_out)
+eq(d_out.twist_armed, s_out.twist_armed, "cast flags match: the sob swap arms the twist")
+eq(d_out.twist_armed, true, "the sob swap arms on both paths")
+pr.tick(direct, 2.7, 0.05, d_out)
+H.tick_session(psess, 2.7, 0.05, s_out)
+eq(d_out.bl_fired, s_out.bl_fired, "tick flags match: bl_fired")
+eq(d_out.buffs_changed, s_out.buffs_changed, "tick flags match: buffs_changed")
+eq(d_out.swing_ready, s_out.swing_ready, "tick flags match: swing_ready")
+pr.on_swing(direct, 2.7, d_out)
+pr.on_swing(psess.state, 2.7, s_out)
+eq(d_out.result, s_out.result, "on_swing result matches")
+eq(d_out.grade, s_out.grade, "on_swing grade matches")
+eq(d_out.grade, "A", "the 200 ms twist grades A on both paths")
+near(d_out.lead_ms, s_out.lead_ms, "on_swing lead matches")
+sim_matches(direct, psess.state, "harness equivalence after the twist")
+near(H.query(psess, "time_to_swing", 3), direct.swing_ends_at - 3, "the swing query mirrors the sim")
+eq(H.query(psess, "twist_window_remaining", 3), nil, "no fade window after the twist consumed it")
+eq(H.query(psess, "rotation", 3), pr.determine_rotation(direct), "the rotation query mirrors the engine")
+H.end_session(psess, 4)
+eq(psess.state.fight_active, false, "the harness finish ends the sim fight")
+eq(direct.fight_active, true, "the direct sim is untouched by the harness")
 
 if failures == 0 then
     print("PASS  practice_state.lua (" .. tostring(checks) .. " checks)")

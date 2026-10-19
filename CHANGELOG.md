@@ -5,7 +5,7 @@
 ### Added
 - One universal build for every supported client family, selected by per-flavor TOC dispatch:
   Classic Era / Season of Discovery (11509), TBC Anniversary (20506), WotLK Titanforge (38002),
-  WoW Forever (16001) and Retail (120100).
+  WoW Forever (16001) and Retail (120100, 120105).
 - Paladin seal twisting: twist window band, attempt/success feedback, lag calibration and
   an impossible-twist warning, driven by the live combat log on the classic client line.
 - Paladin next-action guide: an on-screen prompt (Crusader Strike / Command / Blood / twist)
@@ -17,6 +17,10 @@
   including Maelstrom Weapon stacks and live haste.
 - WoW Forever support: the addon now drives its swing timers from the client's native
   PLAYER_SWING events on that client (no classic combat log required).
+  Twisting attempt/success scoring stays classic-line-only (no combat log on
+  Mainline-code clients): on WoW Forever the twist band and next-action guide run
+  normally while the hit-rate badge shows a "twist scoring: classic-line only"
+  notice instead of a 0/0 score (UNCONFIRMED in-client).
 - Warrior, Druid and Hunter on-next-attack awareness: Heroic Strike / Cleave, Maul and
   Raptor Strike queue colours plus insufficient-rage indication where applicable.
 - Hunter queued Steady Shot detection (opt-in, disabled by default).
@@ -134,6 +138,67 @@
   LibRangeCheck checker fallback/guards were tightened, the practice panel retries its
   frame creation if the addon finishes initialising mid-combat, and the guide engine's
   per-tick closure allocation was hoisted.
+
+- Retail / WoW Forever: the 120105 (Retail 12.1.5) interface is now advertised
+  alongside 120100, so the addon loads as 12.1.x (120100, 120105) with no
+  out-of-date flag on either Retail patch (UNCONFIRMED in-client).
+
+### Build-out round + hardening (2026-10-17, verified offline, UNCONFIRMED in-client)
+
+- Bloodlust / Heroism lust window: `st.api.scan_player_aura` single-pass 1..40
+  HELPFUL scan over ids 2825 / 32182 (TBC+ families only; Era/UNKNOWN closed),
+  consumed by the hunter Steady-spam cue (H2, 0.5 s throttle) and the paladin
+  twist-window narrowing (P3, 0.6x scale, nil-safe passthrough).
+- Per-tick budget audit (C4): opt-in `/st diag` tick counters
+  (`diag_tick_counters`, default OFF, zero per-tick cost when off, applies at
+  next login/reload).
+- Unified swing-safe overlay service (C3) + snap-to-row template registration
+  (C6) + generic pips widget (D3); design mode gains snap templates and
+  mouse-anchored dragging (nil = existing grab-offset behaviour).
+- Paladin: live twist hit-rate badge (combat-only, optional session persist),
+  JotC uptime mini-bar (21183, 20 s max-rank melee refresh), Art of War +
+  Exorcism overlap pulse, seal-icon texture latch, adaptive CD icon row
+  (Avenging Wrath / Divine Shield / Hammer of Justice / BoP / Holy Wrath /
+  Lay on Hands + racial slot; Holy Wrath ranks and the racial list UNCONFIRMED).
+- Warrior: bank cue (nil-off), composite BT/WW rage gate with HS reserve,
+  Rampage tier badge, Battle Shout badge, Overpower glow-lifecycle fix, four
+  arms/SoD HUD slot toggles (Rend / Mortal Strike / Bladestorm / Raging Blow,
+  shipped true = no visible change).
+- Hunter: lust-driven Steady-spam cue, Feign Death display reset, Readiness
+  Rapid Fire refresh, safe-to-move cast zone, Bestial Wrath / Frenzy pet badges,
+  Aimed Shot re-point prompt.
+- Shaman: Stormstrike nature-vuln bar (17364, 12 s), Windfury-fishing SS HOLD
+  tint + final-fraction wash, MW5 Lava Burst choice (SoD rune-gated) + Flame
+  Shock collision guard, Rockbiter badge, shield-charge 3-charge standard
+  fallback; round 2 adds 2-3-stack weave markers with safe-start zone band,
+  per-spell clip state, Flurry ICD (0.5 s) + DW sync badges.
+- Druid: Tiger's Fury / Berserk HUD slots (glow when ready), combo-point pips,
+  EMA time-to-die, energy-cost countdown, GCD tick overlay, Omen glow,
+  Maul badge, name-based Tiger's Fury resolution.
+- Practice: generic scenario harness (C1) + P5/H5/W6/D7/S7 drills, panel reset
+  button (re-anchors immediately), timeline drag persistence + close button,
+  action-input paths for all four scenario shells.
+- Enemy swing bar (opt-in, default OFF): hostile-target mainhand swing bar on
+  the classic line only (Era / TBC / Wrath / Cata / Mists); inert on
+  Forever / Retail / UNKNOWN.
+- Options: 27 round toggles + 4 warrior slot toggles wired, all nil-safe
+  (nil = OFF except hide-on-false HUD slots shipped true); `hunter_multi_target`
+  ships with its toggle only — the multi-target engine is a future round;
+  `hunter_multi_target` copy marked "(future)".
+- Enterprise-grade wave: options-file warnings wired, practice panel/timeline/
+  scoring fixes, HUD provider-hidden slots now hide (no stale live-looking
+  icons) with hidden-slot row reflow deferred past combat lockdown, practice
+  rotation + timeline design targets (registry 7 -> 9), rest-of-tree warning
+  wiring per the trace-and-wire rule.
+- Hardening (oracle R1-R4): Anniversary string-payload fallbacks on the paladin
+  twist-success and warrior special-ability paths (numeric path byte-identical;
+  owner `/dump` of the CLEU spellId slot type still settles it); secret-hole
+  scan truncation closed in compat + paladin + warrior + shaman + druid aura
+  loops (full 1..40 walks, nil = no match at this index); lust gate
+  standardised on `st.lust_supported == true` (closed-on-unknown).
+- Harness: 35 steps, 0 failed; luacheck 2 warnings / 0 errors (both KEEP-ruled
+  standing). Every behavior above is verified offline only — the in-client
+  checklist in TESTING.md is the owner acceptance pass.
 
 ## [2.0.8] -- 2023-05-09
 

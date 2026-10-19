@@ -13,7 +13,7 @@ Supported clients under test:
 | TBC Anniversary | `20506` | vendored `LibClassicSwingTimerAPI` |
 | WotLK Titanforge | `38002` | vendored `LibClassicSwingTimerAPI` |
 | WoW Forever | `16001` | native `PLAYER_SWING` (`swing_source.lua`) |
-| Retail / Live (Midnight) | `120100` | inert stand-in (bars intentionally static) |
+| Retail / Live (Midnight) | `12.1.x (120100, 120105)` | inert stand-in (bars intentionally static) |
 
 ---
 
@@ -30,7 +30,7 @@ Supported clients under test:
 1. Log in. Expect **no Lua error** and the bars on screen.
 2. Run **`/st diag`**. Expected shape (values change per client):
    ```
-   SwedgeTimer diag: family=WRATH iface=38002 version=2.0.8 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:off DRUID:off SHAMAN:off HUNTER:off
+   SwedgeTimer diag: family=WRATH iface=38002 version=2.1.0 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:off DRUID:off SHAMAN:off HUNTER:off
    SwedgeTimer diag: flags stl_ready=true llm_ready=false lrc_ready=true lrc_unavailable=false deadline=no init=yes
    SwedgeTimer diag: modules practice=yes hud=yes rotation=yes design=yes providers=5/5
    SwedgeTimer diag: secrets api=no
@@ -53,8 +53,14 @@ Record: every diag line per client, verbatim (including the secrets line).
 ### Classic Era / SoD (11509) and TBC Anniversary (20506)
 - [ ] Swing timer moves; mainhand/offhand/ranged bars behave; GCD marker visible.
 - [ ] Paladin: twist window band appears in the last ~0.4 s of a swing; a successful twist shows
-      "Successful TWIST!" and (if enabled) the sound cue arrives just *before* the band.
+      "Successful TWIST!" (classic line only — on WoW Forever expect the
+      "twist scoring: classic-line only" notice instead, never a 0/0 score with no explanation).
+- [ ] Anniversary R1 check (settles the string-vs-numeric question): `/dump` the `spellId`
+      slot type on a `COMBAT_LOG_EVENT_UNFILTERED` SPELL_DAMAGE / SPELL_MISSED event —
+      record whether it is a number or a localized-name string.
 - [ ] Paladin guide (enable in options): CS/Command/Blood/twist icon switches; HOLD/RIDE appears.
+- [ ] Paladin P3: under a live Bloodlust/Heroism the twist window narrows (0.6x); Era never narrows.
+- [ ] Hunter H2: under a live Bloodlust/Heroism the Steady-spam cue fires; Era never fires.
 - [ ] Seal swipe on the guide's Command/Blood icons reads ~30 s (LibClassicDurations).
 - [ ] Shaman: weave marker shows; cast a Lightning Bolt that outlasts the swing — the spark must
       travel one way only (never jump back), and turn red when it would clip.
@@ -65,22 +71,42 @@ Record: every diag line per client, verbatim (including the secrets line).
       cast bar shows the "Auto Shot" window label in the last ~0.5 s + latency.
 
 ### WotLK Titanforge (38002) — the full pass
-Everything above, plus:
+Everything above (including the R1 `/dump` and the P3/H2 lust checks), plus:
+- [ ] Paladin: JotC mini-bar counts down from a Judgement and refreshes to 20 s on a
+      max-rank melee landing (lower ranks stay fixed at 10 s, never refresh).
+- [ ] Warrior: bank cue appears when banked rage is available (toggle-gated);
+      Battle Shout badge counts down; Shield Block bar appears while buffed.
+- [ ] Druid: TF/Berserk HUD slots show and glow while ready in combat; on runeless
+      Era Mangle hides and the row reflows closed (no gap); re-enable/revive closes
+      the gap without a settings change; a hide/show flip mid-combat defers the
+      reflow until combat exits.
 - [ ] Warrior: apply Rend/Sunder/Deep Wounds to a dummy → stacked bars above the mainhand bar;
       Sunder shows its stack count; Shield Block bar appears while buffed; casting Slam shows the
       "SLAM X.Xs" bar; get dodged → the Overpower flash ("OP") appears and clears when you cast it.
 - [ ] Druid: Mangle/Rip/Rake bars count down with a glow in the last 4 s; refresh thresholds fire.
 - [ ] Shaman: Windfury ICD strip (red → orange → green) after a swing; Flame Shock target bar;
-      `SS`/`SR` badges; Lightning Shield charge row.
+      `SS`/`SR` badges; Lightning Shield charge row; 2-3-stack weave icons sit in the
+      safe-start zone band with effective cast times; a cast started past its safe start
+      shows red icon/number (clip state); Flurry ICD readout and DW SYNC/DESYNC badges
+      track the offhand.
 - [ ] Hunter: the 4-state range helper strip (melee/sweet spot/ranged/OOR), Rapid Fire bar, aspect
-      icon; Steady/Aimed casts take over the cast bar from the Auto-Shot window.
+      icon, and the safe-to-move cast zone (green/red threshold marker); Aimed Shot re-points
+      the cast bar; Steady/Aimed casts take over the cast bar from the Auto-Shot window.
 - [ ] Cooldown HUD (enable): CS/Judgement/Consecration/Exorcism swipes, trinket cooldown/proc,
       Wings glow when ready, blue/red tints for no-mana / out-of-range.
 - [ ] Rotation label (enable): shows `2/3`-style text; all four formats; drag + lock.
 - [ ] Guides: enable warrior/druid/shaman/hunter one at a time and verify their prompt rules
       (see the class-specific criteria in the release notes).
 - [ ] Practice: start a fight, make a twist, stop; enter combat mid-session → "paused", leave →
-      resumes with timers shifted, no instant expiries.
+      resumes with timers shifted, no instant expiries; the panel reset button visibly
+      re-anchors the panel; the timeline drags and persists, and its X button closes it.
+- [ ] Design mode: `/st design` lists the practice rotation + timeline targets alongside
+      the panel, and both drop where dragged.
+
+### Enemy swing (classic line only: Era / TBC / Wrath / Cata / Mists)
+- [ ] With `enemy_swing_enabled` on and a hostile target selected: the enemy swing bar
+      moves on target swings; with no hostile target (or on Forever / Retail) nothing
+      draws and nothing errors.
 
 ### WoW Forever (16001)
 - [ ] Bars move — driven by the native `PLAYER_SWING` events (no classic combat log).
@@ -91,7 +117,8 @@ Everything above, plus:
       either is fine; record `lrc=` and whether range text ever fills.
 - [ ] Shaman weave, hunter cast bar, druid trackers and the guides all behave as on WotLK.
 
-### Retail / Live (120100)
+### Retail / Live (12.1.x — 120100, 120105)
+- [ ] Load on each live patch (12.1.0 and 12.1.5) — **no out-of-date flag**, no Lua errors.
 - [ ] Load, `/reload`, open options — **no Lua errors**.
 - [ ] A one-time notice says the swing timer bars are unavailable (inert stand-in) — expected.
 - [ ] HUD, rotation label, design mode and the options UI all work; bars deliberately do not move.

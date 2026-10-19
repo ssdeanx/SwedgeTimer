@@ -1,0 +1,24 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-17T14:06:10Z",
+  "run_id": "warrior-buildout-2026-10-17",
+  "agent_name": "warrior",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The failure was settled against external facts before raising: an instrumented PixelGlow_Stop on the /tmp/opencode/mut_warrior copy prints a traceback naming the exact caller of the extra stop.",
+    "what_was_hard": "The brief's 'bars_state glow: combat exit stops the glow (8 vs 7)' points at the PALADIN block (the only check with those numbers); the extra stop is classes/paladin.lua:422 aow_exo_pulse_stop <- classes/paladin.lua:1428 (paladin on_combat_exit) with the P6 pulse never started. warrior.lua appears nowhere in the trace.",
+    "skill_gap": "None for the lane; this is a dispatch-attribution question."
+  },
+  "escalation": {
+    "reason": "brief_warrior_2026-10-17 lists the bars_state 'glow: combat exit stops the glow (8 vs 7)' failure under 'failures you must clear', but it is the paladin P6 lifecycle bug (aow_exo_pulse_stop fires on combat exit even when the pulse was never started). Hard scope (classes/warrior.lua + tests/warrior_state.lua ONLY) cannot reach it, and paladin.lua is the paladin lane's writable file.",
+    "blocked_on": "paladin lane (guard aow_exo_pulse_stop to armed-only) or orchestrator reassignment",
+    "recommendation": "Have the paladin lane add the armed-state guard on the combat-exit pulse stop; the check then clears (twist glow stop alone = p4+1). The warrior lane's own two failure groups are cleared: warrior_state 620 PASS, hud_state 401 PASS."
+  },
+  "journal_marker": "desks/warrior/journal.md § 2026-10-17 finisher pass — HU-4 raised"
+}

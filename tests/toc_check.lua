@@ -195,13 +195,22 @@ for _, toc in ipairs(tocs) do
 
         -- P9 load order: swing_source.lua needs compat's st.family/st.api and must load
         -- before main.lua (which reads st.swing_source while it loads); weave.lua is pure
-        -- and loads before main.lua; class modules load after main.lua.
+        -- and loads before main.lua; class modules load after main.lua. The rogue's pure
+        -- guide (rogue_guide.lua) loads with the other guide modules, before practice.lua
+        -- and main.lua consume it; the class module loads after the warrior (the class
+        -- block's established tail).
         local swing_source_index, weave_index, twist_index, shaman_index
+        local hunter_guide_index, rogue_guide_index, practice_index, warrior_index, rogue_index
         for i, entry in ipairs(entries) do
             if entry == "swing_source.lua" and swing_source_index == nil then swing_source_index = i end
             if entry == "weave.lua" and weave_index == nil then weave_index = i end
             if entry == "twist.lua" and twist_index == nil then twist_index = i end
             if entry == "classes\\shaman.lua" and shaman_index == nil then shaman_index = i end
+            if entry == "hunter_guide.lua" and hunter_guide_index == nil then hunter_guide_index = i end
+            if entry == "rogue_guide.lua" and rogue_guide_index == nil then rogue_guide_index = i end
+            if entry == "practice.lua" and practice_index == nil then practice_index = i end
+            if entry == "classes\\warrior.lua" and warrior_index == nil then warrior_index = i end
+            if entry == "classes\\rogue.lua" and rogue_index == nil then rogue_index = i end
         end
         check(compat_index and swing_source_index and swing_source_index > compat_index
                 and main_index and swing_source_index < main_index,
@@ -211,6 +220,12 @@ for _, toc in ipairs(tocs) do
             toc .. ": twist.lua before weave.lua before main.lua")
         check(shaman_index and main_index and shaman_index > main_index,
             toc .. ": classes\\shaman.lua loads after main.lua")
+        check(hunter_guide_index and rogue_guide_index and practice_index and main_index
+                and rogue_guide_index > hunter_guide_index
+                and rogue_guide_index < practice_index and rogue_guide_index < main_index,
+            toc .. ": rogue_guide.lua sits in the guide group before practice.lua/main.lua")
+        check(warrior_index and rogue_index and rogue_index > warrior_index,
+            toc .. ": classes\\rogue.lua loads after classes\\warrior.lua")
 
         -- every addon .lua module on disk is listed
         for _, module_path in ipairs(root_modules) do
@@ -263,8 +278,8 @@ local INTERFACE_EXACT = {
     { toc = "SwedgeTimer_Wrath.toc", values = { "38002" } },
 }
 local INTERFACE_CONTAINS = {
-    { toc = "SwedgeTimer_Mainline.toc", values = { "120100", "16001" } },
-    { toc = "SwedgeTimer.toc", values = { "11509", "20506", "38002", "16001", "120100" } },
+    { toc = "SwedgeTimer_Mainline.toc", values = { "120100", "120105", "16001" } },
+    { toc = "SwedgeTimer.toc", values = { "11509", "20506", "38002", "16001", "120100", "120105" } },
 }
 local function interface_list(toc)
     local values = {}
@@ -298,10 +313,12 @@ for _, toc in ipairs(tocs) do
         toc .. ": does not advertise Interface 30401 (WotLK Classic is not a supported target)")
 end
 
--- Newest standalone modules: a missing toc line is a silent no-op at runtime, and
--- removing module and line together would slip past the disk-completeness check above,
--- so the names are pinned explicitly on every toc.
-local REQUIRED_MODULES = { "diag.lua", "hunter_window.lua" }
+-- Newest standalone modules / class modules: a missing toc line is a silent no-op at
+-- runtime, and removing module and line together would slip past the disk-completeness
+-- check above, so the names are pinned explicitly on every toc.
+local REQUIRED_MODULES = {
+    "diag.lua", "hunter_window.lua", "rogue_guide.lua", "classes\\rogue.lua",
+}
 for _, toc in ipairs(tocs) do
     for _, module_path in ipairs(REQUIRED_MODULES) do
         check(toc_lists[toc] ~= nil and toc_lists[toc][module_path] == true,

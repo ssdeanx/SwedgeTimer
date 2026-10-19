@@ -55,7 +55,10 @@ local function make_fontstring()
     function f:SetShadowColor() end
     function f:SetShadowOffset() end
     function f:SetFont(path, size, flags) f.font = { path, size, flags }; return true end
-    function f:SetText(text) f.text = text end
+    function f:SetText(text)
+        f.text = text
+        f.set_text_calls = (f.set_text_calls or 0) + 1
+    end
     function f:SetTextColor(r, g, b, a) f.color = { r, g, b, a } end
     function f:Hide() f.hidden = true end
     function f:Show() f.hidden = false end
@@ -311,7 +314,7 @@ ST.WARRIOR = nil
 local fake_state = { gather_calls = 0, eval_calls = 0 }
 local scenario = {
     action = nil, hold = false, hold_text = nil, riding = false, filler_slot = nil,
-    judge_slot = nil, rotation = nil,
+    judge_slot = nil, rotation = nil, inputs_unknown = false,
     alpha_remaining = 0, alpha_duration = nil, alpha_expires = nil,
     beta_remaining = 0, gamma_expires = nil,
 }
@@ -348,6 +351,7 @@ local function fake_provider()
             out.judge_slot = scenario.judge_slot
             out.rotation_key = scenario.rotation
             out.waiting_judgement = false
+            out.inputs_unknown = scenario.inputs_unknown
             return out
         end,
         rotation_key = function(inputs) return scenario.rotation end,
@@ -522,6 +526,30 @@ eq(fui.frame.label.hidden, true, "nextaction_show_label=false hides the label")
 fST.get_class_table().nextaction_show_label = true
 update_tick()
 eq(fui.frame.label.hidden, false, "the label returns when the gate reopens")
+
+-- M6: out.inputs_unknown suppresses every advice target and paints "…"; the state
+-- is a latch (one SetText) and restores the provider label when it clears.
+scenario.action = "alpha"
+scenario.rotation = "rot1"
+scenario.inputs_unknown = true
+update_tick()
+eq(target("alpha"), 0, "M6: unknown inputs light no action slot")
+eq(fui.frame.label.text, "…", "M6: unknown inputs paint the label as ...")
+eq(fui.frame.rotation_text.hidden, true, "M6: unknown inputs hide the rotation text")
+local unknown_label_sets = fui.frame.label.set_text_calls
+update_tick()
+eq(fui.frame.label.set_text_calls, unknown_label_sets, "M6: the ... latch does not re-SetText per tick")
+scenario.hold = true
+update_tick()
+eq(fui.frame.hold.fade.target, 0, "M6: unknown inputs suppress the hold overlay")
+scenario.hold = false
+scenario.inputs_unknown = false
+update_tick()
+eq(target("alpha"), 1, "M6: clearing the bit restores the action")
+eq(fui.frame.label.text, "NEXT", "M6: clearing the bit restores the provider label")
+eq(fui.frame.rotation_text.text, "Rotation One", "M6: the rotation text returns")
+scenario.rotation = nil
+scenario.action = nil
 
 -- Idle: all slots drop to their idle_alpha, swipes clear, rotation text stays live.
 scenario.alpha_remaining = 4
@@ -704,6 +732,7 @@ eq(gathered.creature_type, nil, "gather: no target -> no creature type")
 eq(gathered.filler_remaining, 0, "gather: the Consecration cooldown remaining")
 eq(gathered.waiting_judgement, false, "gather: the judgement carry")
 near(gathered.twist_window, 0.4, 1e-9, "gather: the twist window")
+eq(gathered.inputs_unknown, false, "M6: a live swing gathers inputs_unknown=false")
 
 -- Without an out table the module's own reused table is used (shipped path).
 local own = pST.PALADIN.gather_guide_inputs(pST)
@@ -720,6 +749,17 @@ local cleared = pST.PALADIN.guide.gather(pST, {})
 eq(cleared.seal, "none", "practice/cleared seals read as no seal")
 eq(cleared.soc_expires, nil, "practice/cleared seals clear the expiry")
 eq(cleared.soc_duration, nil, "practice/cleared seals clear the duration")
+
+-- M6: without a usable swing record the gather declares the inputs unknown (the
+-- frame then renders "…" instead of advice thresholded off speed = 0).
+local saved_swing = pST.mainhand
+pST.mainhand = {}
+local no_swing = pST.PALADIN.guide.gather(pST, {})
+eq(no_swing.speed, 0, "M6: no swing record reads speed 0")
+eq(no_swing.inputs_unknown, true, "M6: no swing record marks the inputs unknown")
+pST.mainhand = { speed = 3.0, ends_at = 3.0, start = 1.0, is_full = true }
+eq(pST.PALADIN.guide.gather(pST, {}).inputs_unknown, true, "M6: a full bar marks the inputs unknown")
+pST.mainhand = saved_swing
 
 --=========================================================================================
 -- 6) The paladin evaluate: parity with the pre-refactor display mapping

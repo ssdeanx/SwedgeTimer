@@ -1,0 +1,12 @@
+# competitor-scan — Journal
+
+## 2026-10-17 — Desk opened
+- **Purpose:** research round 2 — find competitor/exosystem features SwedgeTimer still lacks, beyond the already-inventoried set (SuperSwingTimer/TellMeWhen/Quartz/Gnosis/ClassTimer/40-bank). Audience: 99% parsers first, casuals second.
+- **Scope:** READ-ONLY on code; writes only bench/competitor_scan_2026-10-17.md + this journal + signals. Firecrawl MCP via execute, full 28-tool catalog.
+- **Next step:** execute brief_competitor-scan_2026-10-17.md; skip every item already in bench/discover_features.md or bench/verify_bank.md.
+
+## 2026-10-17 — research round 2 complete [signal:done]
+- **Worked on:** executed brief_competitor-scan_2026-10-17.md end-to-end. Enumerated all 28 Firecrawl tools; MCP search/agent/developer_search/find_tools are broken on this deployment (invalid body / 404 / Alexandria key), so research ran against the same self-hosted Firecrawl (:3002) via REST + SearxNG (:8069) — noted in the report. Scraped: Super Swing Timer v0.2.3 (dual-client CLEU name-vs-id, reseal marker, Ravage cue, 40%/20% parry-haste), WST fork family, SwingTime, Hunter Shot Timer, EllesmereUI (Forever swing timer), Icy Veins TBC ×5 classes, Wowhead hunter/warrior/paladin addon pages, wago.io flavors (Forever/Titan Reforged/SoD packs, weapon-sync WAs), CurseForge Forever wave (Counterclock, trinket menus, ForeverBuildLab, StatCoach, Class Guide, Polestar), rotation helpers (NAG/NextActionTBC, Hekili-Midnight), NugRunning/LoggerHead, reddit threads.
+- **Current state:** bench/competitor_scan_2026-10-17.md written — per-source findings with URLs, ranked TOP-15 (NEW vs COLLIDES-with-lane-plan vs BUILDING-now, referencing desks/journal.md lanes and bench ids), extend-not-repeat statement, explicit UNCONFIRMED list (Forever native swing timer details, Titanforge, SoD ids, wago pack features, NAG↔nextaction authorship). No code touched; no git mutations (one read-only `git status` for write-set verification).
+- **Open item for operator:** NAG/NextActionTBC (curseforge.com/wow/addons/next-action + nextaction.guide, commercial) collides by name and features with the in-repo paladin nextaction guide — authorship relation UNCONFIRMED, flagged in report §9.
+- **Next step:** operator triage of the TOP-15 (rows 2, 3, 4, 6, 8 are the parser-first candidates); if a build lane is dispatched, rows 3/4/8 are S-M and offline-testable.

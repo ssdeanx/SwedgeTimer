@@ -1,0 +1,45 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T10:06:30Z",
+  "agent_name": "fix-engine",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "bench-read before edits; scope-disjoint writer lane; every pin mutation-proven on /tmp/opencode copies (guard-stripped copies fail the new check). Full harness green after the concurrent fix-guides-weave lane landed its own weave_state pin.",
+    "what_was_hard": "The shared worktree went red mid-lane on tests/weave_state.lua because the other lane's H4 weave.lua change was half-landed; no scope-safe action existed, so the lane waited and re-ran (self-resolved: weave_state 441 checks PASS).",
+    "skill_gap": "No way to know when a sibling lane's in-flight edits have settled other than re-running the harness; a lane-status file would help."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "files_changed": [
+    "main.lua",
+    "bars.lua",
+    "swing_source.lua",
+    "enemy_swing.lua",
+    "tests/main_init_state.lua",
+    "tests/bars_state.lua",
+    "tests/swing_source_state.lua",
+    "tests/enemy_swing_state.lua",
+    "desks/fix-engine/journal.md"
+  ],
+  "items": {
+    "H1": "main.lua:19-29 stub nil-shaped; main.lua:630-646 per-hand engine_dead; bars.lua:579-590, 916-925 dim + engine offline; nil-speed guards bars.lua:927-932, 995, 846; pins main_init §1b/§6 + bars_state §2b; mutation bites (5+5 checks).",
+    "H2": "bars.lua:517-556 run_guarded; class hook bars.lua:681; zones bars.lua:566; first-error chat-once + ST.bar_hook_errors counts + 25-throw quarantine; pin bars_state §2b; mutation bites (tick throws).",
+    "H3": "main.lua:791-816 pcall fan-out + per-event counter + one notice; pin main_init §4c; mutation bites (error escapes).",
+    "H5": "swing_source.lua:97-141,206,211,233,238,244,271,277,314 counters + sustained-reject notice; main.lua:1662-1690/1729 /st diag runtime line; pin swing_source §12; mutation bites (rejects not counted).",
+    "H6": "main.lua:1113-1150 seven init guards; callee ST:class_on_spellcast_event (main.lua:1755) has no guard; pins main_init §5 pre-init lists + §Phase C; mutation bites (pre-init hook reached).",
+    "M1": "main.lua:1432-1510 bounded retry (3 tries, exponential backoff, reset on success, session-disable + notice after exhaustion); pin main_init §10; mutation bites (1-first-fail disable).",
+    "M2": "main.lua:1447-1456 lap cap 100 -> lrc_unavailable + rf_checker_exhausted + one-time notice; pin main_init §10; mutation bites (uncapped).",
+    "M7": "enemy_swing.lua:119-156 provenance, 355 arming, 452-495 fallback dim + name text + nil-clock hide, 574 live upgrade on rescale; pin enemy_swing §2b; mutation bites (fallback shows countdown)."
+  },
+  "harness": "bash tests/run.sh: 35 steps, 0 failed (confirmed 10:04Z and 10:09Z; a transient mid-lane red on tests/weave_state.lua / tests/paladin_state.lua was the fix-guides-weave lane editing its own files and self-resolved). Our four suites: 329/761/108/250 checks, 0 failures. luacheck 0 errors; in-scope files add no warning (main.lua pack + compat addon_name are the pre-existing floor; the extra warnings are other lanes' in-flight test files).",
+  "mutation_proofs": "8/8 on /tmp/opencode/mut_engine: H1 main (5 fails)+bars (5 fails), H2 bars (tick throws), H3 main (2 fails), H6 main (2 fails), M1 main (3+ fails), M2 main (4 fails), H5 swing_source (1 fail), M7 enemy_swing (2 fails)."
+}

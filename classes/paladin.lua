@@ -156,6 +156,33 @@ function ST.PALADIN.post_init(self)
     self.twist_extra_attacks_pending = 0
     self.twist_active_seals_count = 0
 
+    -- Twist hit-rate counters: per-session by default (reset on every load);
+    -- with the persistence option the counters are restored from (and mirrored
+    -- back to) the class profile so they survive relogs.
+    local score_db = self:get_class_table()
+    if score_db.twist_score_persist == true then
+        self.twist_score_attempts = type(score_db.twist_score_attempts) == "number"
+            and score_db.twist_score_attempts or 0
+        self.twist_score_successes = type(score_db.twist_score_successes) == "number"
+            and score_db.twist_score_successes or 0
+    else
+        self.twist_score_attempts = 0
+        self.twist_score_successes = 0
+    end
+
+    -- AoW+Exorcism overlap pulse state: the latch starts false so the first
+    -- ready overlap is a false->true transition, and no pulse runs at boot.
+    self.aow_exo_prev = false
+    self.aow_exo_pulse_until = 0
+
+    -- Judgement of the Crusader mini-bar state: nothing tracked until a debuff
+    -- scan or a melee refresh lands one; cleared again on combat exit.
+    self.jotc_tracked = false
+    self.jotc_expires = nil
+    self.jotc_id = nil
+    self.jotc_full = nil
+    self.jotc_scan_at = nil
+
     -- Parse auras after the state above so the seal count sticks.
     self.PALADIN.on_aura_change(self)
 
@@ -273,56 +300,57 @@ function ST.PALADIN.parse_seals(self)
     self.sob_duration = nil
     self.sor_duration = nil
 
-    -- Iterate all player auras
+    -- Iterate all player auras (1..40, no early break: a secret entry degrades to
+    -- absent in the wrapper, and breaking there would hide every seal above a
+    -- restricted row; nil is simply no match at this index).
     local i = 1
-    while true do
+    while i <= 40 do
         local name, _, _, _, _, expiration_time, _, _, _, spell_id = api.UnitAura("player", i)
-        if name == nil then
-            break
-        end
-        -- Seals
-        if soc_ids[spell_id] ~= nil then
-            self.has_soc = true
-            self.soc_expires = expiration_time
-            -- The library keys its records by the rank that was cast, which is the aura
-            -- id right here (the same reason soc_ids carries every rank).
-            self.soc_duration = get_tracked_aura_duration("player", spell_id, name)
-        end
-        if sov_ids[spell_id] ~= nil then
-            self.has_sov = true
-        end
-        if sol_ids[spell_id] ~= nil then
-            self.has_sol = true
-        end
-        if sow_ids[spell_id] ~= nil then
-            self.has_sow = true
-        end
-        -- Forever's own Righteousness ranks (empty until confirmed, see above)
-        -- latch the same flag, so a new Forever id degrades to silent rather
-        -- than latching the wrong seal. Gated on the family so every other
-        -- family ignores the table entirely.
-        if sor_ids[spell_id] ~= nil
-            or (is_forever_family and sor_forever_ids[spell_id] ~= nil) then
-            self.has_sor = true
-            self.sor_expires = expiration_time
-            -- Same rank-keyed lookup as Command above (sor_ids carries every rank).
-            self.sor_duration = get_tracked_aura_duration("player", spell_id, name)
-        end
-        if soj_ids[spell_id] ~= nil then
-            self.has_soj = true
-        end
-        if sob_ids[spell_id] ~= nil then
-            self.has_sob = true
-            self.sob_expires = expiration_time
-            self.sob_duration = get_tracked_aura_duration("player", spell_id, name)
-        end
-        if sotc_ids[spell_id] ~= nil then
-            self.has_sotc = true
-        end
+        if name ~= nil then
+            -- Seals
+            if soc_ids[spell_id] ~= nil then
+                self.has_soc = true
+                self.soc_expires = expiration_time
+                -- The library keys its records by the rank that was cast, which is the aura
+                -- id right here (the same reason soc_ids carries every rank).
+                self.soc_duration = get_tracked_aura_duration("player", spell_id, name)
+            end
+            if sov_ids[spell_id] ~= nil then
+                self.has_sov = true
+            end
+            if sol_ids[spell_id] ~= nil then
+                self.has_sol = true
+            end
+            if sow_ids[spell_id] ~= nil then
+                self.has_sow = true
+            end
+            -- Forever's own Righteousness ranks (empty until confirmed, see above)
+            -- latch the same flag, so a new Forever id degrades to silent rather
+            -- than latching the wrong seal. Gated on the family so every other
+            -- family ignores the table entirely.
+            if sor_ids[spell_id] ~= nil
+                or (is_forever_family and sor_forever_ids[spell_id] ~= nil) then
+                self.has_sor = true
+                self.sor_expires = expiration_time
+                -- Same rank-keyed lookup as Command above (sor_ids carries every rank).
+                self.sor_duration = get_tracked_aura_duration("player", spell_id, name)
+            end
+            if soj_ids[spell_id] ~= nil then
+                self.has_soj = true
+            end
+            if sob_ids[spell_id] ~= nil then
+                self.has_sob = true
+                self.sob_expires = expiration_time
+                self.sob_duration = get_tracked_aura_duration("player", spell_id, name)
+            end
+            if sotc_ids[spell_id] ~= nil then
+                self.has_sotc = true
+            end
 
-        -- Art of War
-        if spell_id == aow_id then
-            self.has_aow = true
+            -- Art of War
+            if spell_id == aow_id then
+                self.has_aow = true
+            end
         end
 
         i = i + 1
@@ -346,6 +374,53 @@ function ST.PALADIN.on_aura_change(self)
     self.PALADIN.parse_seals(self)
     -- Finally set the bar color
     self:set_bar_color("mainhand")
+end
+
+-- AoW + Exorcism overlap pulse: a one-shot gold Pixel glow on the mainhand bar,
+-- fired once on each false->true transition of "Art of War up AND its Exorcism
+-- is castable" (the shape process_aow computes for the AoW glow already). The
+-- enable is its own option, nil = off (the option pass lands the key); the key,
+-- the colour, the parameters and the 0.4 s length are constants so the pulse
+-- coexists with the AoW glow and the twist-success glow on the same frame.
+local AOW_EXO_PULSE_KEY = "AowExoOverlap"
+local AOW_EXO_PULSE_SECONDS = 0.4
+local AOW_EXO_PULSE_COLOR = {255, 215, 0, 0.9}
+local AOW_EXO_PULSE_LINES = 8
+local AOW_EXO_PULSE_FREQUENCY = 0.25
+local AOW_EXO_PULSE_THICKNESS = 2
+
+-- Twist hit-rate badge: a small summary line under the mainhand bar. Option
+-- nil = off; the badge font size and its offset below the bar are constants.
+local TWIST_SCORE_TEXT_SIZE = 12
+local TWIST_SCORE_TEXT_OFFSET = -4
+
+function ST.PALADIN.aow_exo_pulse_start(self)
+    -- Starts the overlap pulse on the mainhand bar (same LibCustomGlow call
+    -- shape as the AoW and twist-success glows, with its own key). Nil-safe
+    -- pre-construction: without the bar frame there is nothing to glow.
+    local frame = self.mainhand.anchor_frame and self:get_bar_frame("mainhand")
+    if not frame then
+        return
+    end
+    LCG.PixelGlow_Start(frame,
+        {self:convert_color(AOW_EXO_PULSE_COLOR)},
+        AOW_EXO_PULSE_LINES,
+        AOW_EXO_PULSE_FREQUENCY,
+        nil,
+        AOW_EXO_PULSE_THICKNESS,
+        0,
+        0,
+        false,
+        AOW_EXO_PULSE_KEY
+    )
+end
+
+function ST.PALADIN.aow_exo_pulse_stop(self)
+    local frame = self.mainhand.anchor_frame and self:get_bar_frame("mainhand")
+    if not frame then
+        return
+    end
+    LCG.PixelGlow_Stop(frame, AOW_EXO_PULSE_KEY)
 end
 
 function ST.PALADIN.glow_start(self)
@@ -377,25 +452,38 @@ end
 
 function ST.PALADIN.process_aow(self)
     local db = self:get_class_table()
-    if not self.has_aow then
+    -- Same three stops / one start as before, expressed as a single readiness
+    -- flag so the AoW+Exorcism overlap below reuses the exact shape: "stop"
+    -- everywhere the old nested gates stopped (no AoW, glow disabled, or the
+    -- Exorcism gate configured yet holding) and one "start" otherwise, so the
+    -- glow outcomes are byte-identical to the old control flow.
+    local exo_holds = db.require_exo_ready and self.exo_on_cooldown
+    local glow_on = self.has_aow and db.use_aow_glow and not exo_holds
+    -- AoW+Exorcism overlap pulse (one per false->true transition): the same
+    -- shape with the glow toggle left out, so the pulse describes the rotation
+    -- readiness, not the glow preference. Gated on the pulse option (nil =
+    -- off) and on the Retail gate the sibling paladin visuals share (Retail
+    -- has neither the proc nor the per-frame stop path); the transition latch
+    -- updates either way, so a later enable never fires on a stale overlap.
+    -- Started here at the transition, exactly like the twist-success glow
+    -- (the start is nil-safe pre-construction); the per-frame stop block owns
+    -- the teardown.
+    local overlap = self.has_aow and not exo_holds
+    if overlap and self.aow_exo_prev ~= true
+        and db.aow_exo_pulse_enabled == true and not st.is_retail then
+        self.PALADIN.aow_exo_pulse_start(self)
+        self.aow_exo_pulse_until = api.get_time() + AOW_EXO_PULSE_SECONDS
+    end
+    self.aow_exo_prev = overlap == true
+    if glow_on then
+        self.PALADIN.glow_start(self)
+    else
         self.PALADIN.glow_stop(self)
-        return
     end
-    if not db.use_aow_glow then
-        self.PALADIN.glow_stop(self)
-        return
-    end
-    if db.require_exo_ready then
-        if self.exo_on_cooldown then
-            self.PALADIN.glow_stop(self)
-            return
-        end
-    end
-    self.PALADIN.glow_start(self)
 end
 
 function ST.PALADIN.set_bar_color(self, hand)
-    -- Returns true if any special setting was applied to let the parent func know 
+    -- Returns true if any special setting was applied to let the parent func know
     -- to revert to default behaviour.
     -- Will set appropriate colors for seals and AoW procs if requested.
     local db_class = self:get_class_table()
@@ -404,7 +492,7 @@ function ST.PALADIN.set_bar_color(self, hand)
     -- Art of War glow
     self.PALADIN.process_aow(self)
 
-    -- Seal colors    
+    -- Seal colors
     if db_class.use_seal_colors then
         if self.has_soc then
             frame.bar:SetVertexColor(
@@ -459,6 +547,40 @@ function ST.PALADIN.set_bar_color(self, hand)
     return false
 end
 
+-- SoC proc localized names (R1): the client's own names for the proc ranks,
+-- resolved once through GetSpellInfo and retried at a throttled cadence while
+-- the client's spell data is not up yet (the warrior debuff-name discipline).
+-- Nil until the first answer; the literal English fallback in twist.lua still
+-- matches without any resolution.
+local soc_proc_localized_names
+local soc_proc_names_retry_at = 0
+local SOC_PROC_NAMES_RETRY_S = 5
+
+-- Unmatched twist-proc payload observability (M3): a SPELL_DAMAGE event whose payload
+-- carries no usable id/name field is counted for the session, and the first few are
+-- announced once. The score badge alone cannot distinguish "the player is missing
+-- twists" from "the addon cannot read the proc payload" - both sit at 0% (0/N) - so
+-- the sustained-blind case gets one chat line and a readable counter.
+local TWIST_PAYLOAD_NOTICE_AT = 3
+
+local function resolve_soc_proc_names(now)
+    if soc_proc_localized_names == nil and now >= soc_proc_names_retry_at then
+        local names = {}
+        for id in pairs(st.twist.SOC_PROC_IDS) do
+            local name = api.GetSpellInfo(id)
+            if name then
+                names[name] = true
+            end
+        end
+        if next(names) ~= nil then
+            soc_proc_localized_names = names
+        else
+            soc_proc_names_retry_at = now + SOC_PROC_NAMES_RETRY_S
+        end
+    end
+    return soc_proc_localized_names
+end
+
 function ST.PALADIN.on_combat_log_unfiltered(self, _, timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, ...)
     -- Twist Practice: the simulation owns the twist state while a session runs, so real
     -- combat-log events must not arm attempts or consume procs (they would also fight
@@ -484,6 +606,10 @@ function ST.PALADIN.on_combat_log_unfiltered(self, _, timestamp, event, hide_cas
             self.twist_extra_attacks_pending = self.twist_extra_attacks_pending - 1
             return
         end
+        -- JotC melee refresh: a plain weapon swing (extra-attack swings were
+        -- consumed above) extends the tracked debuff to its full length. No-op
+        -- when nothing is tracked.
+        self.PALADIN.note_swing_landed(self)
         -- Refresh seals without the full aura-change side effects (the AoW glow
         -- must not restart on every swing).
         local n = self.PALADIN.parse_seals(self)
@@ -502,12 +628,36 @@ function ST.PALADIN.on_combat_log_unfiltered(self, _, timestamp, event, hide_cas
     end
 
     if event == "SPELL_DAMAGE" then
-        local sid = select(1, ...)
+        -- Anniversary (UNCONFIRMED, R1) may send the spell name where classic
+        -- sends the numeric id: match the id first (the classic path, unchanged),
+        -- then fall back to the localized proc names plus the literal English
+        -- fallback. Either payload shape consumes the same pending attempt.
+        local sid, sname = select(1, ...), select(2, ...)
+        local success = false
         if type(sid) == "number" then
-            if st.twist.detect_twist_success(self.twist_attempt_pending == true, sid) then
-                self.twist_attempt_pending = false
-                self.PALADIN.on_successful_twist(self)
+            success = st.twist.detect_twist_success(self.twist_attempt_pending == true, sid)
+        elseif type(sid) == "string" then
+            success = st.twist.detect_twist_success_name(
+                self.twist_attempt_pending == true, sid,
+                resolve_soc_proc_names(api.get_time()))
+        elseif type(sname) == "string" then
+            success = st.twist.detect_twist_success_name(
+                self.twist_attempt_pending == true, sname,
+                resolve_soc_proc_names(api.get_time()))
+        else
+            -- M3: a third payload shape (nil id and name, a table payload). Count it
+            -- and announce once at the threshold: a sustained run of these is the
+            -- addon blind on an evolving CLEU contract, not the player missing twists.
+            self.twist_unmatched_payloads = (self.twist_unmatched_payloads or 0) + 1
+            if self.twist_unmatched_notified ~= true
+                and self.twist_unmatched_payloads >= TWIST_PAYLOAD_NOTICE_AT then
+                self.twist_unmatched_notified = true
+                st.utils.print_msg("SwedgeTimer: twist proc payloads could not be matched on this client; this session's twist score may sit at 0%.")
             end
+        end
+        if success then
+            self.twist_attempt_pending = false
+            self.PALADIN.on_successful_twist(self)
         end
         return
     end
@@ -637,6 +787,31 @@ end
 -- whenever the db key is missing or malformed.
 local TWIST_GLOW_COLOR = {0, 255, 0, 0.8}
 
+-- Explicit unknown-state band values (M4/M5). The band's normal vocabulary is
+-- "no twist now" (hidden) vs the window; a dead swing feed and a genuinely
+-- single-sealed swing have to stay distinguishable, so the degraded states reuse the
+-- band + success-text widgets with fixed copy and a dim, distinct alpha.
+local TWIST_STATE_TEXT_ALPHA = 0.7
+local TWIST_STATE_BAND_ALPHA = 0.10
+local TWIST_STATE_SWING_UNKNOWN = "seal data unknown"
+local TWIST_STATE_LUST_UNKNOWN = "lust unknown"
+
+-- Writes one of the unknown-state strings through the (reused) success-text widget.
+-- The value latch keeps SetText off the per-frame path while the state persists; the
+-- tint is the neutral white, distinct from every success/twist colour.
+local function set_twist_state_text(text, value)
+    if not text then
+        return
+    end
+    if text.text_value ~= value then
+        text.text_value = value
+        text:SetText(value)
+        text:SetTextColor(1, 1, 1, TWIST_STATE_TEXT_ALPHA)
+    end
+    text:SetAlpha(TWIST_STATE_TEXT_ALPHA)
+    text:Show()
+end
+
 --=========================================================================================
 -- Judgement marker line, seal icons, twist-success glow (archived TBC bar visuals)
 --=========================================================================================
@@ -765,7 +940,18 @@ function ST.PALADIN.update_seal_icons(self, hand)
         local state = live[i]
         local icon_texture
         if enabled and state.active then
-            icon_texture = select(3, api.GetSpellInfo(slot.spell_id))
+            -- Texture resolution is a rare event, not a per-frame one: each
+            -- slot lazily caches its spell texture (the id is constant per
+            -- slot) and only latches a non-nil answer, so cold spell data
+            -- keeps retrying instead of caching the miss.
+            if slot.cached_texture == nil or slot.tex_spell_id ~= slot.spell_id then
+                local texture = select(3, api.GetSpellInfo(slot.spell_id))
+                if texture ~= nil then
+                    slot.tex_spell_id = slot.spell_id
+                    slot.cached_texture = texture
+                end
+            end
+            icon_texture = slot.cached_texture
         end
         if icon_texture == nil then
             if slot.icon:IsShown() then
@@ -862,6 +1048,40 @@ function ST.PALADIN.twist_glow_stop(self)
     LCG.PixelGlow_Stop(frame, TWIST_GLOW_KEY)
 end
 
+-- Bloodlust / Heroism twist-window override (bench/verify_bank.md P3): the
+-- shaman haste buffs (2825 Bloodlust, 32182 Heroism) tighten the twist cadence,
+-- so the window computes over the non-hasted swing speed must narrow while one
+-- is up. Detection runs through compat's frozen player-aura scan (nil-safe:
+-- without the aura or without the API it returns nil, nil — never zero) and is
+-- throttled; the C2 family gate st.lust_supported closes Era (and the UNKNOWN
+-- fallback) before any read, and closed-on-unknown (R4) keeps nil (a pre-C2
+-- compat) off too — and a running practice session owns its own window, so
+-- the override skips that too.
+local LUST_RESCAN_INTERVAL = 0.5
+
+local function get_twist_lust_remaining(self, now)
+    if self.twist_lust_at and (now - self.twist_lust_at) < LUST_RESCAN_INTERVAL then
+        return self.twist_lust_remaining
+    end
+    self.twist_lust_at = now
+    self.twist_lust_remaining = nil
+    local remaining, _ = api.scan_player_aura(function(spell_id)
+        return spell_id == 2825 or spell_id == 32182
+    end)
+    if type(remaining) == "number" and remaining > 0 then
+        self.twist_lust_remaining = remaining
+    end
+    -- M5: a miss under a secret-aura regime is not the same as an honest "no lust".
+    -- compat's new observability probe answers whether restricted aura rows can be
+    -- hidden right now (nil on every classic client - the exact no-op); when it is
+    -- explicitly true and the scan found nothing, the consumer marks the reading
+    -- unknown so the band can say so instead of showing confident un-hasted advice.
+    local secrecy_probe = api.auras_may_be_secret
+    self.twist_lust_unknown = self.twist_lust_remaining == nil
+        and type(secrecy_probe) == "function" and secrecy_probe() == true
+    return self.twist_lust_remaining
+end
+
 function ST.PALADIN.get_twist_window_time_before_swing(self)
     -- Twist window duration (seconds before the swing lands): the 400 ms baseline
     -- plus the configured padding, per the archived build's helper. The lag used
@@ -871,8 +1091,23 @@ function ST.PALADIN.get_twist_window_time_before_swing(self)
     local db = self:get_class_table()
     local raw_ms = (self.latency and self.latency.world_ms) or 0
     local lag_ms = raw_ms * (db.lag_multiplier or 1.4) + (db.lag_offset or 15)
-    return st.twist.get_window_seconds(
+    local window = st.twist.get_window_seconds(
         db.twist_padding_mode, lag_ms, db.twist_window_padding_ms)
+    -- Lust override (nil = off): narrows the window through the pure engine
+    -- helper. The helper is nil-guarded so a build without nextaction.lua
+    -- (none shipped, but the archived loaders) degrades to the base window.
+    -- Closed-on-unknown (R4): only an explicit true arms the scan; nil (a
+    -- pre-C2 compat) or false stays off.
+    if db.twist_lust_override_enabled == true and st.lust_supported == true
+        and not (st.practice_ui and st.practice_ui.is_active()) then
+        local lust = get_twist_lust_remaining(self, api.get_time())
+        local scaled = st.nextaction and st.nextaction.apply_lust_window
+            and st.nextaction.apply_lust_window(window, lust ~= nil)
+        if scaled ~= nil then
+            window = scaled
+        end
+    end
+    return window
 end
 
 function ST.PALADIN.setup_twist_visuals(self)
@@ -903,6 +1138,17 @@ function ST.PALADIN.setup_twist_visuals(self)
     text:Hide()
     vf.twist_text = text
 
+    -- Hit-rate badge (below the bar, own line so it never overlaps the
+    -- success text above the bar): text built here, shown by the per-frame
+    -- updater only when the badge option is on, a count exists and we are in
+    -- combat.
+    local badge = vf:CreateFontString(nil, "OVERLAY")
+    badge:SetPoint("TOP", vf, "BOTTOM", 0, TWIST_SCORE_TEXT_OFFSET)
+    badge:SetJustifyH("CENTER")
+    badge:SetFont(font_path, TWIST_SCORE_TEXT_SIZE, "OUTLINE")
+    badge:Hide()
+    vf.twist_score_badge = badge
+
     -- Judgement marker line (archive bar.lua:270-272): a full-height line drawn at
     -- the swing position where Judgement comes off cooldown, like the GCD markers.
     -- Positioned per frame by update_judgement_marker below.
@@ -917,6 +1163,13 @@ function ST.PALADIN.setup_twist_visuals(self)
     -- a cooldown swipe and a timer text, attached right of the mainhand bar.
     -- Positioned per frame by update_seal_icons below.
     self.PALADIN.setup_seal_icons(self)
+
+    -- Judgement of the Crusader uptime mini-bar (left of the bar) and the
+    -- paladin CD icon group (left of the JotC bar): their updaters hide
+    -- everything while their options are off (nil = off), so both containers
+    -- are always built and the attachment chain stays stable.
+    self.PALADIN.setup_jotc_bar(self)
+    self.PALADIN.setup_cd_icons(self)
 end
 
 function ST.PALADIN.setup_seal_icons(self)
@@ -1025,19 +1278,53 @@ function ST.PALADIN.on_bar_update(self, hand)
         vf.twist_band:Hide()
         if vf.twist_text then
             vf.twist_text:Hide()
+            vf.twist_text.text_value = ""
             vf.twist_text:SetText("")
         end
         -- The judgement line and seal icons share the band's Retail gate (their
         -- updaters hide them through the same st.is_retail rule).
         self.PALADIN.update_judgement_marker(self, hand)
         self.PALADIN.update_seal_icons(self, hand)
+        -- The mini-bars (JotC uptime, CD icons) share the same Retail gate.
+        if vf.jotc_bar and vf.jotc_bar.frame:IsShown() then
+            vf.jotc_bar.frame:Hide()
+        end
+        if vf.cd_icons and vf.cd_icons.frame:IsShown() then
+            vf.cd_icons.frame:Hide()
+        end
         return
     end
 
     local db = self:get_class_table()
     local now = api.get_time()
+    local band = vf.twist_band
+    local d = self[hand]
 
-    -- Success text: fade out over its final 0.3 s, then clear it.
+    -- M4/M5 state-text decision. The aura mirror itself has no separate failure
+    -- signal (compat's whole-entry secret degrade returns a restricted row as absent,
+    -- compat.lua:440-463), so a broken mirror read and a genuine single-seal state
+    -- are indistinguishable and both stay hidden; this state covers the other
+    -- unknowable: seals readable but the swing record unusable (dead/stub engine).
+    -- M5 adds the lust-unknown reading: the override is armed but the last scan was
+    -- inconclusive under a secret-aura regime (self.twist_lust_unknown, set by
+    -- get_twist_lust_remaining).
+    local seals_active = st.twist.is_twist_seal_active(self.has_soc, self.has_sor)
+    local swing_usable = d and type(d.speed) == "number" and d.speed > 0
+        and d.ends_at and d.start
+    local band_available = db.twist_enabled ~= false
+        and db.twist_marker_enabled ~= false and seals_active
+    local state_text
+    if band_available then
+        if not swing_usable then
+            state_text = TWIST_STATE_SWING_UNKNOWN
+        elseif db.twist_lust_override_enabled == true
+            and self.twist_lust_unknown == true and not d.is_full then
+            state_text = TWIST_STATE_LUST_UNKNOWN
+        end
+    end
+
+    -- Success text: fade out over its final 0.3 s, then clear it. The unknown state
+    -- owns the same widget when no success animation is live.
     local text = vf.twist_text
     if text then
         local success_until = self.twist_success_until or 0
@@ -1047,14 +1334,17 @@ function ST.PALADIN.on_bar_update(self, hand)
             and now < success_until then
             text:SetAlpha(math.min(1, (success_until - now) / 0.3))
             text:Show()
+        elseif state_text then
+            set_twist_state_text(text, state_text)
         elseif text:IsShown() then
             text:Hide()
-            text:SetText("")
+            if text.text_value ~= "" then
+                text.text_value = ""
+                text:SetText("")
+            end
         end
     end
 
-    local band = vf.twist_band
-    local d = self[hand]
     -- Judgement marker, seal icons and glow expiry run on every mainhand tick,
     -- independent of the twist-band gates below: a Blood-only swing still times
     -- Judgement and still shows its seals.
@@ -1065,11 +1355,77 @@ function ST.PALADIN.on_bar_update(self, hand)
         self.twist_glow_until = 0
         self.PALADIN.twist_glow_stop(self)
     end
-    if db.twist_enabled == false
-        or db.twist_marker_enabled == false
-        or not st.twist.is_twist_seal_active(self.has_soc, self.has_sor)
-        or not (d and d.speed and d.speed > 0 and d.ends_at and d.start)
-        or d.is_full then
+    -- AoW+Exorcism overlap pulse: same expiry/teardown shape as the
+    -- twist-success glow above (turning the option off stops it immediately).
+    if (self.aow_exo_pulse_until or 0) > 0
+        and (db.aow_exo_pulse_enabled ~= true or now >= self.aow_exo_pulse_until) then
+        self.aow_exo_pulse_until = 0
+        self.PALADIN.aow_exo_pulse_stop(self)
+    end
+    -- Mini-bar ticks: the JotC uptime scan first (the CD group re-anchors
+    -- against its fresh visibility), then the hit-rate badge. Both hide
+    -- through their own option gates, so each stays out of the way by default.
+    self.PALADIN.update_jotc_bar(self, hand)
+    self.PALADIN.update_cd_icons(self, hand)
+    local badge = vf.twist_score_badge
+    if badge then
+        local attempts = self.twist_score_attempts or 0
+        local lit = false
+        if db.twist_score_enabled == true and self.in_combat then
+            if st.cleu_supported == true and attempts > 0 then
+                -- One quantised string per state change (the seal-icon text idiom):
+                -- the per-frame tick does nothing while the display is unchanged.
+                local quantised = string.format("%d%% (%d/%d)",
+                    math.floor(((self.twist_score_successes or 0) / attempts) * 100 + 0.5),
+                    self.twist_score_successes or 0, attempts)
+                if badge.text_value ~= quantised then
+                    badge.text_value = quantised
+                    badge:SetText(quantised)
+                end
+                lit = true
+            elseif st.cleu_supported ~= true then
+                -- R3: without the classic combat log no twist attempt can ever arm
+                -- (CLEU-only chain), so the numeric score would sit unexplained at
+                -- nothing. Say so instead of hiding silently. Gated on the
+                -- compat probe, never on st.is_mainline alone.
+                local notice = "twist scoring: classic-line only"
+                if badge.text_value ~= notice then
+                    badge.text_value = notice
+                    badge:SetText(notice)
+                end
+                lit = true
+            end
+        end
+        if lit then
+            if not badge:IsShown() then
+                badge:Show()
+            end
+        else
+            if badge:IsShown() then
+                badge:Hide()
+            end
+            badge.text_value = nil
+        end
+    end
+    if not band_available then
+        self.twist_impossible = false
+        band:Hide()
+        return
+    end
+    if not swing_usable then
+        -- M4: a distinct degraded state instead of the ordinary hidden "no twist
+        -- now" look. Full-width, dimmed band + "seal data unknown": the swing feed
+        -- (dead/stub engine, cleared cycle) cannot time the window, so nothing may
+        -- be drawn at a guessed fraction.
+        self.twist_impossible = false
+        local w, h = self:get_bar_visuals_width_and_height(hand)
+        band:SetWidth(max(1, w))
+        band:SetHeight(h)
+        band:SetVertexColor(self:convert_color(TWIST_MARKER_COLOR, TWIST_STATE_BAND_ALPHA))
+        band:Show()
+        return
+    end
+    if d.is_full then
         self.twist_impossible = false
         band:Hide()
         return
@@ -1133,6 +1489,14 @@ end
 
 function ST.PALADIN.on_twist_attempt(self)
     -- Called when a twist attempt registers (two seals active on the swing).
+    -- Twist hit-rate: attempts count first, ahead of every feedback gate, so
+    -- the badge numbers stay truthful even with all feedback toggled off.
+    -- Practice sessions never reach this handler (the CLEU path early-returns).
+    self.twist_score_attempts = (self.twist_score_attempts or 0) + 1
+    if self:get_class_table().twist_score_persist == true then
+        local score_db = self:get_class_table()
+        score_db.twist_score_attempts = (score_db.twist_score_attempts or 0) + 1
+    end
     local db = self:get_class_table()
     -- Attempt sound is its own toggle and stays independent of the visual feedback
     -- gates below (archive parity: the archived build played it at the top of its
@@ -1155,6 +1519,13 @@ end
 
 function ST.PALADIN.on_successful_twist(self)
     -- Called when a Command proc confirms a successful twist.
+    -- Twist hit-rate: successes count like the attempts, ahead of the feedback
+    -- gates (they only own the visuals/sounds, never the truth).
+    self.twist_score_successes = (self.twist_score_successes or 0) + 1
+    if self:get_class_table().twist_score_persist == true then
+        local score_db = self:get_class_table()
+        score_db.twist_score_successes = (score_db.twist_score_successes or 0) + 1
+    end
     local db = self:get_class_table()
     if db.twist_enabled == false
         or db.twist_feedback_enabled == false
@@ -1165,6 +1536,7 @@ function ST.PALADIN.on_successful_twist(self)
     local vf = self.mainhand.anchor_frame and self:get_visuals_frame("mainhand")
     local text = vf and vf.twist_text
     if text then
+        text.text_value = "Successful TWIST!"
         text:SetText("Successful TWIST!")
         text:SetTextColor(
             self:convert_color(twist_color(db, "twist_success_text_color", TWIST_SUCCESS_COLOR))
@@ -1194,6 +1566,24 @@ function ST.PALADIN.on_combat_exit(self)
     -- Combat-scoped JotC scan cache: a new fight re-scans the new target.
     self.guide_jotc_at = nil
     self.guide_jotc_value = nil
+    -- Combat-scoped JotC mini-bar state: the debuff dies with the fight, and
+    -- the next target re-scans from scratch.
+    self.jotc_tracked = false
+    self.jotc_expires = nil
+    self.jotc_id = nil
+    self.jotc_full = nil
+    self.jotc_scan_at = nil
+    -- AoW+Exorcism overlap pulse must not leak its stop into the next fight.
+    -- Only a live pulse needs the teardown (expiry and option-off are owned by
+    -- the per-frame block, which zeroes the latch), so a quiet combat exit
+    -- costs no glow call; the stop touches bar visuals, so it carries the init
+    -- guard.
+    if (self.aow_exo_pulse_until or 0) > 0 then
+        self.aow_exo_pulse_until = 0
+        if self.interfaces_are_initialised then
+            self.PALADIN.aow_exo_pulse_stop(self)
+        end
+    end
 end
 
 --=========================================================================================
@@ -1230,6 +1620,17 @@ end
 -- fields (soc_expires / soc_duration / sob_expires / sob_duration below) are the same
 -- kind of display-only inputs: they carry the seal mirror's aura expiry and the length
 -- LibClassicDurations reported (nil where it does not track the aura).
+-- FIELD PRESENCE (M6/H6, extends the frozen spec above; do not re-derive): every
+-- frozen input is assigned on every gather tick because the table is reused - a
+-- skipped assignment would leak the previous tick's value. The three fields the
+-- guidance itself leans on are the most constrained: `speed` is a positive number
+-- whenever the guide is allowed to run at all (nextaction_ui.should_show already
+-- gates on the same live mainhand fields at nextaction_ui.lua:443-447, and gather is
+-- only reached after that gate at nextaction_ui.lua:664-681), `G` is never nil
+-- (main.lua:get_spell_gcd_duration returns `self.gcd.spell_length or 1.5`), and
+-- `seal` is always one of "soc"/"sob"/"none" (get_seal_state is total). The explicit
+-- exception channel is `inputs_unknown` (M6): true whenever the swing record is not
+-- usable, and the engine/UI render "…" instead of advice on it.
 
 -- One reused input table: no per-frame allocations on the guide tick.
 ST.PALADIN.guide_inputs = {}
@@ -1253,10 +1654,10 @@ local jotc_ids = get_tab({
 local JOTC_RESCAN_INTERVAL = 0.5
 
 -- Target JotC time left (seconds) for the guide's Crusader-priority cue, or nil
--- when the target carries no JotC (or there is no target / no reading).
--- Best-effort like every other aura loop here: a secret entry truncates the
--- scan at the first unreadable row. The 40-row cap is the TBC debuff-slot
--- count and only bounds a misbehaving client.
+-- when the target carries no JotC (or there is no target / no reading). A secret
+-- entry degrades to absent and the walk continues past it (R2: no early break),
+-- so a restricted row above the debuff no longer truncates the scan. The 40-row
+-- cap is the TBC debuff-slot count and only bounds a misbehaving client.
 local function get_guide_jotc_remaining(self, now)
     if self.guide_jotc_at and (now - self.guide_jotc_at) < JOTC_RESCAN_INTERVAL then
         return self.guide_jotc_value
@@ -1269,13 +1670,12 @@ local function get_guide_jotc_remaining(self, now)
         while i <= 40 do
             local name, _, _, _, _, expiration, _, _, _, spell_id =
                 api.UnitAura("target", i, "HARMFUL")
-            if name == nil then
-                break
-            end
-            if spell_id and jotc_ids[spell_id] and expiration and expiration > 0 then
-                local remaining = expiration - now
-                if best == nil or remaining < best then
-                    best = remaining
+            if name ~= nil then
+                if spell_id and jotc_ids[spell_id] and expiration and expiration > 0 then
+                    local remaining = expiration - now
+                    if best == nil or remaining < best then
+                        best = remaining
+                    end
                 end
             end
             i = i + 1
@@ -1459,6 +1859,568 @@ local function resolve_hw_spell_id(now)
     return nil
 end
 
+--=========================================================================================
+-- Judgement of the Crusader mini-bar + paladin cooldown icon group
+--=========================================================================================
+-- JotC uptime mini-bar (bench/verify_bank.md §2, FS-bar clone): the max-rank
+-- debuff (21183) lasts 20 s and every plain weapon strike refreshes it to
+-- full; lower ranks (TBC/classic) are fixed at 10 s with no melee refresh.
+-- Authority is the 0.5 s-throttled HARMFUL aura scan on "target" (jotc_ids
+-- above; JOTC_RESCAN_INTERVAL is the guide scan's own throttle, shared here);
+-- on a swing, a tracked max-rank debuff extends to now + full length
+-- (note_swing_landed, wired from the combat-log swing branch). Families whose
+-- combat-log handler is not registered (Retail stand-in; the Retail gate below
+-- also hides the bar) degrade to scan-only; the swing-activity rule decides,
+-- never the family string.
+--
+-- CD icon group: the six core paladin cooldowns plus the racial, as one
+-- adaptive inverse-swipe row left of the bar (left of the JotC mini-bar when
+-- that is drawn), each icon pulsing gold through its final CD_GLOW_LEAD
+-- seconds. Cooldowns are read through compat's normalised
+-- api.GetSpellCooldown into absolute expiry stamps and re-scanned every
+-- CD_RESCAN_INTERVAL, so per-frame remaining stays smooth without re-querying
+-- every tick (duration <= 1.51 s is the GCD echo and never counts). The racial
+-- is probed through the spell book over an UNCONFIRMED candidate list; an
+-- unresolved probe keeps that slot hidden, never a wrong icon. Both features
+-- are nil-safe and off by default (their options read == true, nil = off).
+--=========================================================================================
+local JOTC_BAR_GAP = 4
+local JOTC_TIMER_TEXT_SIZE = 12
+local JOTC_MAX_RANK_ID = 21183
+local JOTC_MAX_RANK_FULL = 20
+local JOTC_DEFAULT_FULL = 10
+local JOTC_SCAN_INDEX_MAX = 40
+
+local CD_ICON_GAP = 4
+local CD_SLOT_SPACING = 2
+local CD_RESCAN_INTERVAL = 0.5
+local CD_GLOW_LEAD = 4
+local CD_GLOW_KEY = "CdReadySoon"
+local CD_GLOW_COLOR = {255, 215, 0, 0.9}
+local CD_GLOW_LINES = 8
+local CD_GLOW_FREQUENCY = 0.25
+local CD_GLOW_THICKNESS = 2
+local CD_RACIAL_RESOLVE_RETRY_S = 5
+
+-- Core row order (left to right): cooldowns first, the Holy Wrath slot reads
+-- its ranks through resolve_hw_spell_id above (rank-1 fallback id carries the
+-- texture until the book answers), and the racial slot appends last.
+local CD_CORE_SLOTS = {
+    { spell_id = 31884 },             -- Avenging Wrath
+    { spell_id = 642 },               -- Divine Shield
+    { spell_id = 853 },               -- Hammer of Justice
+    { spell_id = 1026 },              -- Hand of Protection
+    { spell_id = 2812, kind = "hw" }, -- Holy Wrath (resolver on top)
+    { spell_id = 633 },               -- Lay on Hands
+}
+
+-- UNCONFIRMED racial cooldown candidate ranks (bench/discover_features.md):
+-- classic racial ids shared across the classic-line families; the resolver
+-- picks the first one the client's spell book actually knows.
+local CD_RACIAL_CANDIDATES = {
+    20594,  -- Stoneform (Dwarf)
+    20572,  -- Blood Fury (Orc/Troll)
+    26297,  -- Berserking (Troll)
+    20549,  -- War Stomp (Tauren)
+    28730,  -- Arcane Torrent (Blood Elf)
+    20600,  -- Every Man for Himself (Human)
+    28880,  -- Gift of the Naaru (Draenei)
+    7744,   -- Will of the Forsaken (Undead)
+}
+
+local cd_racial_spell_id = nil
+local cd_racial_retry_at = 0
+
+local function resolve_cd_racial(now)
+    if cd_racial_spell_id then
+        return cd_racial_spell_id
+    end
+    if now < cd_racial_retry_at then
+        return nil
+    end
+    cd_racial_retry_at = now + CD_RACIAL_RESOLVE_RETRY_S
+    if api.is_spell_known == nil then
+        return nil
+    end
+    for i = 1, #CD_RACIAL_CANDIDATES do
+        if api.is_spell_known(CD_RACIAL_CANDIDATES[i]) then
+            cd_racial_spell_id = CD_RACIAL_CANDIDATES[i]
+            return cd_racial_spell_id
+        end
+    end
+    return nil
+end
+
+-- Lazy per-id texture caches (P7's rule: resolution is a rare event, not a
+-- per-frame one; only non-nil answers are latched so cold spell data retries).
+local jotc_icon_cache = { spell_id = nil, texture = nil }
+local cd_texture_cache = {}
+
+local function jotc_texture(spell_id)
+    if spell_id == nil then
+        return nil
+    end
+    if jotc_icon_cache.texture ~= nil and jotc_icon_cache.spell_id == spell_id then
+        return jotc_icon_cache.texture
+    end
+    local texture = select(3, api.GetSpellInfo(spell_id))
+    if texture ~= nil then
+        jotc_icon_cache.spell_id = spell_id
+        jotc_icon_cache.texture = texture
+    end
+    return texture
+end
+
+local function cd_texture(spell_id)
+    if spell_id == nil then
+        return nil
+    end
+    local cached = cd_texture_cache[spell_id]
+    if cached ~= nil then
+        return cached
+    end
+    local texture = select(3, api.GetSpellInfo(spell_id))
+    if texture ~= nil then
+        cd_texture_cache[spell_id] = texture
+    end
+    return texture
+end
+
+-- Absolute-expiry scan for the tracked debuff: the first matching rank wins
+-- and patches the tracked expiry (and the rank's full length) in place. A
+-- scan without a find untracks; the swing-refresh rule then can no longer
+-- extend a debuff that fell off. No early break (R2): a secret entry degrades
+-- to absent and the walk continues past it.
+local function pulse_jotc_scan(self, now)
+    if self.jotc_scan_at and (now - self.jotc_scan_at) < JOTC_RESCAN_INTERVAL then
+        return
+    end
+    self.jotc_scan_at = now
+    if not (UnitExists and UnitExists("target")) then
+        self.jotc_tracked = false
+        return
+    end
+    local i = 1
+    while i <= JOTC_SCAN_INDEX_MAX do
+        local name, _, _, _, _, expiration, _, _, _, spell_id =
+            api.UnitAura("target", i, "HARMFUL")
+        if name ~= nil then
+            if spell_id and jotc_ids[spell_id]
+                and type(expiration) == "number" and expiration > 0 then
+                self.jotc_tracked = true
+                self.jotc_id = spell_id
+                self.jotc_expires = expiration
+                self.jotc_full = spell_id == JOTC_MAX_RANK_ID
+                    and JOTC_MAX_RANK_FULL or JOTC_DEFAULT_FULL
+                return
+            end
+        end
+        i = i + 1
+    end
+    self.jotc_tracked = false
+end
+
+function ST.PALADIN.note_swing_landed(self)
+    -- Melee-refresh rule (see the section header): a plain weapon strike
+    -- extends only a live, tracked max-rank debuff to its full length. Called
+    -- from the combat-log swing branch, after the extra-attack swing
+    -- discipline (procedural extra attacks are not weapon strikes), ahead of
+    -- the twist-attempt gates, so a swing that also arms an attempt still
+    -- refreshes the debuff. No-op when nothing is tracked.
+    if self.jotc_tracked ~= true or self.jotc_id ~= JOTC_MAX_RANK_ID
+        or type(self.jotc_expires) ~= "number" then
+        return
+    end
+    local now = api.get_time()
+    if now >= self.jotc_expires then
+        return
+    end
+    self.jotc_expires = now + (self.jotc_full or JOTC_DEFAULT_FULL)
+end
+
+function ST.PALADIN.setup_jotc_bar(self)
+    -- Builds the JotC uptime mini-bar on the mainhand bar frame (seal-icon
+    -- idiom: icon + inverse swipe + timer text). Called from
+    -- setup_twist_visuals; nil-safe pre-construction like every sidebar here.
+    local vf = self:get_visuals_frame("mainhand")
+    local bar_frame = self.mainhand.anchor_frame and self:get_bar_frame("mainhand")
+    if not vf or not bar_frame or vf.jotc_bar then
+        return
+    end
+    local _, h = self:get_bar_visuals_width_and_height("mainhand")
+    local size = h or 16
+    local container = CreateFrame("Frame", addon_name .. "JotcBar", bar_frame)
+    container:SetSize(size, size)
+    container:SetPoint("RIGHT", bar_frame, "LEFT", -JOTC_BAR_GAP, 0)
+    container:Hide()
+    local icon = container:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(size, size)
+    icon:SetPoint("TOPLEFT", 0, 0)
+    icon:SetTexCoord(SEAL_ICON_TEXCROP[1], SEAL_ICON_TEXCROP[2],
+        SEAL_ICON_TEXCROP[3], SEAL_ICON_TEXCROP[4])
+    icon:Hide()
+    local cooldown = CreateFrame("Cooldown", nil, container, "CooldownFrameTemplate")
+    cooldown:SetSize(size, size)
+    cooldown:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
+    cooldown:SetReverse(true)
+    if cooldown.SetHideCountdownNumbers then
+        cooldown:SetHideCountdownNumbers(true)
+    end
+    cooldown:Hide()
+    -- The timer text needs its own frame above the cooldown swipe (the seal
+    -- icons' reason: a plain frame cannot out-draw a Cooldown otherwise).
+    local timer_frame = CreateFrame("Frame", nil, container)
+    timer_frame:SetSize(size, size)
+    timer_frame:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
+    timer_frame:SetFrameLevel(cooldown:GetFrameLevel() + 1)
+    local timer = timer_frame:CreateFontString(nil, "OVERLAY")
+    timer:SetPoint("CENTER", 0, 0)
+    timer:SetJustifyH("CENTER")
+    timer:SetShadowColor(0, 0, 0, 1)
+    timer:SetShadowOffset(2, -2)
+    timer:SetFont(STANDARD_TEXT_FONT, JOTC_TIMER_TEXT_SIZE, "THICKOUTLINE")
+    timer:Hide()
+    vf.jotc_bar = {
+        frame = container, icon = icon, cooldown = cooldown, timer = timer,
+        size = size, cd_start = nil, cd_full = nil, text_value = nil,
+        exp_key = nil, icon_key = nil,
+    }
+end
+
+function ST.PALADIN.update_jotc_bar(self, hand)
+    -- Per-frame JotC mini-bar update: the throttled scan is the authority and
+    -- every drawn field latches its own change (the seal-icon idiom), so a
+    -- still-hidden or unchanged bar costs no frame work beyond the scan gate.
+    local vf = self:get_visuals_frame(hand)
+    local bar = vf and vf.jotc_bar
+    if not bar then
+        return
+    end
+    local db = self:get_class_table()
+    local now = api.get_time()
+    local show = false
+    if db.jotc_bar_enabled == true and not st.is_retail then
+        pulse_jotc_scan(self, now)
+        if self.jotc_tracked == true and self.jotc_id
+            and self.jotc_expires and self.jotc_expires > now then
+            local texture = jotc_texture(self.jotc_id)
+            if texture then
+                show = true
+                if bar.icon_key ~= texture then
+                    bar.icon_key = texture
+                    bar.icon:SetTexture(texture)
+                end
+                local full = self.jotc_id == JOTC_MAX_RANK_ID
+                    and JOTC_MAX_RANK_FULL or JOTC_DEFAULT_FULL
+                local start = self.jotc_expires - full
+                if bar.cd_start ~= start or bar.cd_full ~= full then
+                    bar.cd_start, bar.cd_full = start, full
+                    bar.cooldown:SetCooldown(start, full)
+                end
+                local remaining = self.jotc_expires - now
+                local quantised = math.floor(remaining)
+                if bar.text_value ~= quantised then
+                    bar.text_value = quantised
+                    bar.timer:SetText(string.format("%d", remaining))
+                end
+            end
+        end
+    end
+    if show then
+        if not bar.frame:IsShown() then
+            bar.frame:Show()
+        end
+        if not bar.icon:IsShown() then
+            bar.icon:Show()
+        end
+        if not bar.cooldown:IsShown() then
+            bar.cooldown:Show()
+        end
+        if not bar.timer:IsShown() then
+            bar.timer:Show()
+        end
+    else
+        -- Full clear (option off, no target, untracked, expired, or cold
+        -- texture data); latched so a hidden bar costs no redraw churn.
+        if bar.cd_start ~= nil or bar.text_value ~= nil then
+            bar.cd_start, bar.cd_full = nil, nil
+            bar.cooldown:SetCooldown(0, 0)
+            bar.text_value = nil
+            bar.timer:SetText("")
+            bar.icon_key = nil
+            bar.exp_key = nil
+        end
+        if bar.frame:IsShown() then
+            bar.frame:Hide()
+        end
+        if bar.icon:IsShown() then
+            bar.icon:Hide()
+        end
+        if bar.cooldown:IsShown() then
+            bar.cooldown:Hide()
+        end
+        if bar.timer:IsShown() then
+            bar.timer:Hide()
+        end
+    end
+end
+
+-- Shared CD-row helpers -----------------------------------------------------------------
+-- Rebuilds the row geometry (icon frames left to right over the visible slots
+-- only; the container shrinks to match). Called on visible-count and size
+-- changes only, never every tick.
+local function relayout_cd_row(set)
+    local visible = set.visible_count or 0
+    local width = 0
+    if visible > 0 then
+        width = visible * set.size + (visible - 1) * CD_SLOT_SPACING
+    end
+    set.frame:SetSize(width, set.size)
+    local x = 0
+    for i = 1, #set.slots do
+        local slot = set.slots[i]
+        if slot.visible then
+            slot.icon_frame:ClearAllPoints()
+            slot.icon_frame:SetPoint("TOPLEFT", x, 0)
+            if not slot.icon_frame:IsShown() then
+                slot.icon_frame:Show()
+            end
+            x = x + set.size + CD_SLOT_SPACING
+        elseif slot.icon_frame:IsShown() then
+            slot.icon_frame:Hide()
+        end
+    end
+end
+
+-- One slot's cooldown read: throttled api.GetSpellCooldown -> absolute expiry
+-- on this slot, then the smooth per-frame remaining from the stamp. A GCD-echo
+-- read (duration <= 1.51) and an elapsed expiry both read as ready (nil).
+local function cd_slot_remaining(slot, spell_id, now)
+    if slot.scan_at == nil or (now - slot.scan_at) >= CD_RESCAN_INTERVAL then
+        slot.scan_at = now
+        local start_time, duration = api.GetSpellCooldown(spell_id)
+        if start_time and type(duration) == "number" and duration > 1.51 then
+            slot.cd_expires = start_time + duration
+            slot.cd_full = duration
+        else
+            slot.cd_expires = nil
+            slot.cd_full = nil
+        end
+    end
+    local expires = slot.cd_expires
+    if expires == nil then
+        return nil, nil
+    end
+    local remaining = expires - now
+    if remaining <= 0 then
+        slot.cd_expires = nil
+        slot.cd_full = nil
+        return nil, nil
+    end
+    return remaining, slot.cd_full
+end
+
+function ST.PALADIN.setup_cd_icons(self)
+    -- Builds the CD icon row on the mainhand bar frame, one slot per entry in
+    -- CD_CORE_SLOTS plus always one racial slot (hidden until the book probe
+    -- resolves one). Anchored left of the JotC mini-bar when that built; the
+    -- per-frame updater re-anchors if the two widgets are not paired.
+    local vf = self:get_visuals_frame("mainhand")
+    local bar_frame = self.mainhand.anchor_frame and self:get_bar_frame("mainhand")
+    if not vf or not bar_frame or vf.cd_icons then
+        return
+    end
+    local _, h = self:get_bar_visuals_width_and_height("mainhand")
+    local size = h or 16
+    local container = CreateFrame("Frame", addon_name .. "CdIcons", bar_frame)
+    local set = { frame = container, size = size, slots = {},
+        visible_count = -1, anchor = nil }
+    if vf.jotc_bar and vf.jotc_bar.frame then
+        set.anchor = "jotc"
+        container:SetPoint("RIGHT", vf.jotc_bar.frame, "LEFT", -CD_ICON_GAP, 0)
+    else
+        set.anchor = "bar"
+        container:SetPoint("RIGHT", bar_frame, "LEFT", -CD_ICON_GAP, 0)
+    end
+    for i = 1, #CD_CORE_SLOTS do
+        set.slots[i] = { spell_id = CD_CORE_SLOTS[i].spell_id,
+            kind = CD_CORE_SLOTS[i].kind }
+    end
+    set.slots[#CD_CORE_SLOTS + 1] = { spell_id = nil, kind = "racial" }
+    for i = 1, #set.slots do
+        local slot = set.slots[i]
+        local icon_frame = CreateFrame("Frame", nil, container)
+        icon_frame:SetSize(size, size)
+        icon_frame:Hide()
+        slot.icon_frame = icon_frame
+        local icon = icon_frame:CreateTexture(nil, "ARTWORK")
+        icon:SetSize(size, size)
+        icon:SetPoint("TOPLEFT", 0, 0)
+        icon:SetTexCoord(SEAL_ICON_TEXCROP[1], SEAL_ICON_TEXCROP[2],
+            SEAL_ICON_TEXCROP[3], SEAL_ICON_TEXCROP[4])
+        icon:Hide()
+        slot.icon = icon
+        local cooldown = CreateFrame("Cooldown", nil, icon_frame,
+            "CooldownFrameTemplate")
+        cooldown:SetSize(size, size)
+        cooldown:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
+        cooldown:SetReverse(true)
+        if cooldown.SetHideCountdownNumbers then
+            cooldown:SetHideCountdownNumbers(true)
+        end
+        cooldown:Hide()
+        slot.cooldown = cooldown
+        slot.visible = false
+        slot.texture_key = nil
+        slot.scan_at = nil
+        slot.cd_expires = nil
+        slot.cd_full = nil
+        slot.cd_start = nil
+        slot.glowing = false
+    end
+    vf.cd_icons = set
+end
+
+function ST.PALADIN.update_cd_icons(self, hand)
+    -- Per-frame CD row update: visibility rides the option (nil = off) and the
+    -- Retail gate; every state change is latched (texture, swipe, glow,
+    -- geometry, attachment), so a steady row costs no frame churn.
+    local vf = self:get_visuals_frame(hand)
+    local set = vf and vf.cd_icons
+    if not set then
+        return
+    end
+    local db = self:get_class_table()
+    local now = api.get_time()
+    local enabled = db.cd_icons_enabled == true and not st.is_retail
+    -- Keep sitting left of the JotC mini-bar whenever that is drawn; option-off
+    -- or hidden, the row hugs the bar instead.
+    local bar_frame = self.mainhand.anchor_frame and self:get_bar_frame("mainhand")
+    local jotc = vf.jotc_bar
+    local want_anchor = (jotc and jotc.frame and jotc.frame:IsShown()) and "jotc" or "bar"
+    if set.anchor ~= want_anchor and bar_frame then
+        set.anchor = want_anchor
+        set.frame:ClearAllPoints()
+        if want_anchor == "jotc" and jotc.frame then
+            set.frame:SetPoint("RIGHT", jotc.frame, "LEFT", -CD_ICON_GAP, 0)
+        else
+            set.frame:SetPoint("RIGHT", bar_frame, "LEFT", -CD_ICON_GAP, 0)
+        end
+    end
+    -- The racial slot fills from the book probe (UNCONFIRMED candidates); a
+    -- pending probe leaves it hidden without churning the spelling slots.
+    if enabled then
+        local racial = resolve_cd_racial(now)
+        local racial_slot = set.slots[#set.slots]
+        if racial and racial_slot and racial_slot.kind == "racial"
+            and racial_slot.spell_id ~= racial then
+            racial_slot.spell_id = racial
+        end
+        local _, h = self:get_bar_visuals_width_and_height(hand)
+        local size = h or 16
+        if size ~= set.size then
+            set.size = size
+            for i = 1, #set.slots do
+                local slot = set.slots[i]
+                slot.icon_frame:SetSize(size, size)
+                slot.icon:SetSize(size, size)
+                slot.cooldown:SetSize(size, size)
+            end
+        end
+    end
+    for i = 1, #set.slots do
+        local slot = set.slots[i]
+        local eff_id = slot.spell_id
+        if slot.kind == "hw" then
+            eff_id = resolve_hw_spell_id(now) or slot.spell_id
+        end
+        local texture = enabled and cd_texture(eff_id) or nil
+        local stop_glow = true
+        if texture then
+            if slot.texture_key ~= texture then
+                slot.texture_key = texture
+                slot.icon:SetTexture(texture)
+            end
+            if not slot.icon:IsShown() then
+                slot.icon:Show()
+            end
+            local remaining = enabled and cd_slot_remaining(slot, eff_id, now) or nil
+            if remaining then
+                stop_glow = false
+                slot.visible = true
+                local start = slot.cd_expires - slot.cd_full
+                local full = slot.cd_full
+                if slot.cd_start ~= start or slot.cd_run_full ~= full then
+                    slot.cd_start, slot.cd_run_full = start, full
+                    slot.cooldown:SetCooldown(start, full)
+                end
+                if not slot.cooldown:IsShown() then
+                    slot.cooldown:Show()
+                end
+                -- Gold pulse through the final CD_GLOW_LEAD seconds.
+                if remaining <= CD_GLOW_LEAD and not slot.glowing then
+                    slot.glowing = true
+                    LCG.PixelGlow_Start(slot.icon_frame,
+                        {self:convert_color(CD_GLOW_COLOR)},
+                        CD_GLOW_LINES,
+                        CD_GLOW_FREQUENCY,
+                        nil,
+                        CD_GLOW_THICKNESS,
+                        0,
+                        0,
+                        false,
+                        CD_GLOW_KEY
+                    )
+                end
+            else
+                slot.visible = false
+                if slot.cd_start ~= nil then
+                    slot.cd_start, slot.cd_run_full = nil, nil
+                    slot.cooldown:SetCooldown(0, 0)
+                end
+                if slot.cooldown:IsShown() then
+                    slot.cooldown:Hide()
+                end
+            end
+        else
+            slot.visible = false
+            slot.texture_key = nil
+            if slot.icon:IsShown() then
+                slot.icon:Hide()
+            end
+            if slot.cd_start ~= nil then
+                slot.cd_start, slot.cd_run_full = nil, nil
+                slot.cooldown:SetCooldown(0, 0)
+            end
+            if slot.cooldown:IsShown() then
+                slot.cooldown:Hide()
+            end
+        end
+        if stop_glow and slot.glowing then
+            slot.glowing = false
+            LCG.PixelGlow_Stop(slot.icon_frame, CD_GLOW_KEY)
+        end
+    end
+    local visible = 0
+    for i = 1, #set.slots do
+        if set.slots[i].visible then
+            visible = visible + 1
+        end
+    end
+    if set.visible_count ~= visible then
+        set.visible_count = visible
+        relayout_cd_row(set)
+    end
+    local any_shown = enabled and visible > 0
+    if any_shown then
+        if not set.frame:IsShown() then
+            set.frame:Show()
+        end
+    elseif set.frame:IsShown() then
+        set.frame:Hide()
+    end
+end
+
 -- Target health percent for the Era execute cue, or nil when there is no
 -- target or the client cannot answer (secret reads degrade to nil in compat,
 -- like every other gather reading here).
@@ -1513,6 +2475,12 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     inputs.speed = (d and d.speed) or 0
     inputs.swing_remaining = math.max(0, ((d and d.ends_at) or now) - now)
     inputs.G = self:get_spell_gcd_duration()
+    -- M6: the explicit unusable-inputs signal the engine threads into out and the
+    -- guide renders as "…". The swing record is the guide's clock: without a live
+    -- one (dead engine, cleared cycle, full bar) every landmark below is fiction.
+    -- G and seal cannot be unknown here (see the field-presence note above).
+    inputs.inputs_unknown = not (d and type(d.speed) == "number" and d.speed > 0
+        and d.ends_at and d.start and not d.is_full)
     inputs.gcd_remaining = (gcd and gcd.expires and math.max(0, gcd.expires - now)) or 0
     inputs.twist_window = self.PALADIN.get_twist_window_time_before_swing(self)
     inputs.reaction = (db.nextaction_reaction_time_ms or 100) / 1000
@@ -1776,6 +2744,9 @@ ST.PALADIN.guide = {
         out.hold_text = raw.riding and "RIDE" or "HOLD"
         out.filler_slot = raw.filler_kind
         out.judge_slot = raw.judge_call and "judge" or nil
+        -- M6: the engine threads the provider's inputs_unknown; copy it into the
+        -- display table so the frame can render "…" instead of an action.
+        out.inputs_unknown = raw.inputs_unknown == true or inputs.inputs_unknown == true
         -- Era and Forever show no rotation pattern: the keys name CS-cycle
         -- cadences that do not exist without Crusader Strike. (The filler_kind
         -- "how" passes through untouched to the HoW slot above.)

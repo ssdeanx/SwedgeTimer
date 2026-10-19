@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.0.8"
+local version = "2.1.1"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -20,9 +20,11 @@ local function make_swing_stub()
 	return {
 		RegisterCallback = function(...) end,
 		UnregisterCallback = function(...) end,
-		-- Same shape as the library: speed, expiration time, start time.
+		-- Unknown (no engine), never a plausible 1 s cycle: the old fake shape made a
+		-- dead engine indistinguishable from a live idle swing. init_timers turns the
+		-- nil shape into the per-hand engine_dead state the bars render (H1).
 		SwingTimerInfo = function(...)
-			return 1, GetTime() + 1, GetTime()
+			return nil, nil, nil
 		end,
 	}
 end
@@ -67,6 +69,8 @@ local SwingTimerInfo = function(hand)
     return STL:SwingTimerInfo(hand)
 end
 
+-- Lua 5.1 has no table.pack (pinned by tests/main_init_state.lua and the
+-- enemy_swing.lua header note): this shim provides it for 5.1 clients.
 function table.pack(...)
 	return { n = select("#", ...), ... }
 end
@@ -104,13 +108,13 @@ function ST:get_class_hands()
 end
 
 function ST:iter_hands()
-	-- Iterates over melee/ranged/offhand 
+	-- Iterates over melee/ranged/offhand
 	local i = 0
 	local hands = self:get_class_hands()
 	local n = #hands
 	return function ()
 		i = i + 1
-		while i <= n do
+		if i <= n then
 			return hands[i]
 		end
 		return nil
@@ -122,7 +126,7 @@ function ST:generic_iter(array)
 	local n = #array
 	return function()
 		i = i + 1
-		while i <= n do
+		if i <= n then
 			return array[i]
 		end
 	end
@@ -393,7 +397,7 @@ function ST:OnInitialize()
 	-----------------------------------------------------------
 	-- The set of containers and frames used in the addon.
 	-- Even though many are nilled, this collates them so
-	-- we have a reference to each container visually 
+	-- we have a reference to each container visually
 	-- in the code.
 	-----------------------------------------------------------
 	-- Character info containers
@@ -623,18 +627,33 @@ function ST:init_timers()
 	self:check_weapons()
 	for hand in self:iter_hands() do
 		local t = {SwingTimerInfo(hand)}
-		-- If the player has a shield, the below check prevents zero
-		-- division errors in the offhand timer bar initialisation.
-		if t[1] == 0 then
-			t[1] = 0.1
+		if type(t[1]) ~= "number" then
+			-- Unknown engine shape (the inert stand-in returns nil): never invent a
+			-- cycle. The per-hand flag is what bars.lua renders as "engine offline".
+			self[hand].speed = nil
+			self[hand].ends_at = nil
+			self[hand].start = nil
+			self[hand].engine_dead = (SWING_ENGINE_AVAILABLE == false)
+		else
+			-- If the player has a shield, the below check prevents zero
+			-- division errors in the offhand timer bar initialisation.
+			if t[1] == 0 then
+				t[1] = 0.1
+			end
+			self[hand].engine_dead = false
+			self[hand].speed = t[1]
+			self[hand].ends_at = t[2]
+			self[hand].start = t[3]
 		end
-		self[hand].speed = t[1]
-		self[hand].ends_at = t[2]
-		self[hand].start = t[3]
 		ST:init_visuals_template(hand)
 		ST:set_bar_texts(hand)
-		-- hook the onupdate
-		self:get_bar_frame(hand):SetScript("OnUpdate", self[hand].onupdate)
+		-- hook the onupdate (st.diag may install a per-tick counter wrapper; default OFF
+		-- installs the original untouched - see diag.lua's wrap_onupdate)
+		local onupdate = self[hand].onupdate
+		if st.diag and st.diag.wrap_onupdate then
+			onupdate = st.diag.wrap_onupdate(self, hand, onupdate)
+		end
+		self:get_bar_frame(hand):SetScript("OnUpdate", onupdate)
 	end
 end
 
@@ -651,7 +670,7 @@ function ST:check_weapons()
 	-- Detect what weapon types are equipped.
 	-- Before we used the LibClassicSwinngTimer function to get the attack speeds.
 	-- This lib used the same events that this function is triggered on internally,
-	-- which led to inconsistencies depending on callback order. Using the basic 
+	-- which led to inconsistencies depending on callback order. Using the basic
 	-- WoW API to make these checks fixes the issue.
 	local _, speed_offhand = api.UnitAttackSpeed("player")
 	speed_offhand = speed_offhand or 0
@@ -770,7 +789,9 @@ function ST:COMBAT_LOG_EVENT_UNFILTERED(event, ...)
 end
 
 function ST.callback_event_handler(event, ...)
-	-- Func to pass all callbacks to their relevant handler
+	-- Func to pass all callbacks to their relevant handler. A throwing handler must
+	-- not break the library's own dispatch (H3): isolate it, count it per event, and
+	-- say so once per event - never silently resume without the counter.
 	-- if string.find(event, "GCD") then
 	-- 	print('<===============')
 	-- 	print(event)
@@ -780,7 +801,24 @@ function ST.callback_event_handler(event, ...)
 	-- 	end
 	-- 	print('--------------->')
 	-- end
-	ST[event](ST, event, ...)
+	local handler = ST[event]
+	if type(handler) ~= "function" then
+		return
+	end
+	local ok, err = pcall(handler, ST, event, ...)
+	if not ok then
+		local counts = ST.callback_errors
+		if not counts then
+			counts = {}
+			ST.callback_errors = counts
+		end
+		local n = (counts[event] or 0) + 1
+		counts[event] = n
+		if n == 1 then
+			ST:Print("Swing timer callback '" .. tostring(event)
+				.. "' failed and was isolated: " .. tostring(err))
+		end
+	end
 end
 
 -----------------------------------------------------------
@@ -880,6 +918,7 @@ function ST:SWING_TIMER_START(_, speed, expiration_time, hand)
 	end
 	self[hand].is_full = false
 	self[hand].is_paused = false
+	self[hand].engine_dead = false
 	self[hand].start = GetTime()
 	self[hand].speed = speed
 	self[hand].ends_at = expiration_time
@@ -921,6 +960,7 @@ function ST:SWING_TIMER_UPDATE(_, speed, expiration_time, hand)
 		expiration_time = t
 	end
 	self[hand].is_paused = false
+	self[hand].engine_dead = false
 	self[hand].speed = speed
 	self[hand].start = expiration_time - speed
 	self[hand].ends_at = expiration_time
@@ -1068,32 +1108,55 @@ end
 -- Player spellcast lifecycle events: one thin handler per event, each forwarded to
 -- the class module's on_spellcast_event hook when it has one. cast_guid/spell_id
 -- can be nil on some clients (e.g. UNIT_SPELLCAST_STOP may omit the spell id) and
--- are passed through as received.
+-- are passed through as received. The early return matches the two sibling handlers
+-- above (H6): ST:class_on_spellcast_event (below) has no callee-side init guard,
+-- and a cast inside the ~5 s init window can reach visuals that do not exist yet.
 function ST:UNIT_SPELLCAST_START(event, unit_id, cast_guid, spell_id)
+	if not self.interfaces_are_initialised then
+		return
+	end
 	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
 end
 
 function ST:UNIT_SPELLCAST_DELAYED(event, unit_id, cast_guid, spell_id)
+	if not self.interfaces_are_initialised then
+		return
+	end
 	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
 end
 
 function ST:UNIT_SPELLCAST_STOP(event, unit_id, cast_guid, spell_id)
+	if not self.interfaces_are_initialised then
+		return
+	end
 	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
 end
 
 function ST:UNIT_SPELLCAST_INTERRUPTED(event, unit_id, cast_guid, spell_id)
+	if not self.interfaces_are_initialised then
+		return
+	end
 	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
 end
 
 function ST:UNIT_SPELLCAST_FAILED(event, unit_id, cast_guid, spell_id)
+	if not self.interfaces_are_initialised then
+		return
+	end
 	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
 end
 
 function ST:UNIT_SPELLCAST_CHANNEL_START(event, unit_id, cast_guid, spell_id)
+	if not self.interfaces_are_initialised then
+		return
+	end
 	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
 end
 
 function ST:UNIT_SPELLCAST_CHANNEL_STOP(event, unit_id, cast_guid, spell_id)
+	if not self.interfaces_are_initialised then
+		return
+	end
 	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
 end
 
@@ -1171,7 +1234,7 @@ function ST:STOP_AUTOREPEAT_SPELL()
 end
 
 function ST:determine_form_visibility_flag()
-	-- function called on form or settings change to 
+	-- function called on form or settings change to
 	-- set the form visibility flag
 	local i = api.GetShapeshiftForm()
 	local db = self:get_class_table()
@@ -1361,6 +1424,15 @@ function ST:init_range_finders()
 	self:rf_update()
 end
 
+-- Range-poll resilience (M1/M2). A transient throw retries a bounded number of times
+-- with exponential backoff before the session-disable; an unresolvable melee checker is
+-- capped instead of re-arming every 50 ms forever. Both terminal paths fold into the
+-- existing lrc_unavailable state (one-time notice + diag lrc=fallback) and leave their
+-- counters for /st diag's runtime line.
+local RF_MAX_POLL_FAILURES = 3
+local RF_MAX_RETRY_DELAY = 0.4
+local RF_CHECKER_MAX_LAPS = 100
+
 function ST:rf_update()
 	if self.lrc_unavailable then
 		-- Range checking was disabled by the init deadline (or an earlier poll
@@ -1373,6 +1445,15 @@ function ST:rf_update()
 	-- then resume normal function.
 	if self.melee_range_checker_func == nil then
 		-- self:Print("Range checker offline")
+		self.rf_checker_laps = (self.rf_checker_laps or 0) + 1
+		if self.rf_checker_laps >= RF_CHECKER_MAX_LAPS then
+			-- Cap the re-arm loop (M2): a client where the checkers never resolve
+			-- must end in the same session-disable the other paths use, with the
+			-- one-time notice, instead of churning a timer for the whole session.
+			self.rf_checker_exhausted = true
+			self:disable_range_checking()
+			return
+		end
 		C_Timer.After(self.rangefinder_interval, function()
 				self.melee_range_checker_func = LRC:GetHarmMaxChecker(LRC.MeleeRange)
 					or LRC:GetHarmMinChecker(LRC.MeleeRange)
@@ -1392,10 +1473,11 @@ function ST:rf_update()
 	-- The vendored LibRangeCheck-2.0 is maintained for classic-line clients; the
 	-- just-landed IsEventValid event guards let its internals run on Retail/WoW
 	-- Forever for the first time, where a classic-only global can still make a poll
-	-- throw. Dead-man: a throwing poll disables range checking for the session and
-	-- stops the retry loop instead of erroring every interval. On success the state
-	-- writes below and the reschedule are exactly as before.
-	local ok = pcall(function()
+	-- throw. Bounded dead-man (M1): a transient throw retries with backoff; after
+	-- RF_MAX_POLL_FAILURES consecutive throws range checking is disabled for the
+	-- session and the retry loop stops. On success the state writes below and the
+	-- reschedule are exactly as before.
+	local ok, err = pcall(function()
 		self.in_melee_range = self.melee_range_checker_func("target")
 		-- print(self.melee_result)
 		-- The ranged checker can still be nil on clients whose checkers resolve later than
@@ -1409,9 +1491,23 @@ function ST:rf_update()
 		-- print(self.target_max_range)
 	end)
 	if not ok then
-		self:disable_range_checking()
+		self.rf_failure_count = (self.rf_failure_count or 0) + 1
+		self.rf_last_error = tostring(err)
+		if self.rf_failure_count >= RF_MAX_POLL_FAILURES then
+			self.rf_disabled_after_failures = true
+			self:disable_range_checking()
+			return
+		end
+		local delay = self.rangefinder_interval * (2 ^ (self.rf_failure_count - 1))
+		if delay > RF_MAX_RETRY_DELAY then
+			delay = RF_MAX_RETRY_DELAY
+		end
+		self.rf_retry_delay = delay
+		C_Timer.After(delay, function() self:rf_update() end)
 		return
 	end
+	self.rf_failure_count = 0
+	self.rf_retry_delay = nil
 	self:set_bar_visibilities()
 	self:handle_oor()
 	C_Timer.After(self.rangefinder_interval, function() self:rf_update() end)
@@ -1560,6 +1656,40 @@ end
 ------------------------------------------------------------------------------------
 -- Slashcommands
 ------------------------------------------------------------------------------------
+-- Runtime half of /st diag verbose: the counters the guarded call sites write. One
+-- line on every client, plus the Forever engine's payload/speed-read counters when
+-- that engine is the live one (H5). print-only, like diag.lua.
+function ST:print_runtime_diag()
+	local parts = {}
+	local bar = self.bar_hook_errors
+	if type(bar) == "table" then
+		parts[#parts + 1] = "bar_hook_errors=" .. tostring(bar.count or 0)
+	else
+		parts[#parts + 1] = "bar_hook_errors=0"
+	end
+	local callback_total = 0
+	if type(self.callback_errors) == "table" then
+		for _, count in pairs(self.callback_errors) do
+			if type(count) == "number" then
+				callback_total = callback_total + count
+			end
+		end
+	end
+	parts[#parts + 1] = "callback_errors=" .. tostring(callback_total)
+	parts[#parts + 1] = "rf_failures=" .. tostring(self.rf_failure_count or 0)
+	parts[#parts + 1] = "rf_checker_laps=" .. tostring(self.rf_checker_laps or 0)
+	parts[#parts + 1] = "rf_checker_exhausted=" .. tostring(self.rf_checker_exhausted == true)
+	parts[#parts + 1] = "rf_disabled_after_failures=" .. tostring(self.rf_disabled_after_failures == true)
+	self:Print("diag runtime " .. table.concat(parts, " "))
+	if st.swing_source and st.swing_source.available
+		and type(st.swing_source.diagnostic_text) == "function" then
+		local ok, text = pcall(st.swing_source.diagnostic_text)
+		if ok and type(text) == "string" then
+			self:Print(text)
+		end
+	end
+end
+
 function ST:register_slashcommands()
 	local register_func_string = "open_menu"
 	self:RegisterChatCommand("st", register_func_string)
@@ -1596,6 +1726,7 @@ function ST:open_menu(input)
 	elseif arg == "diag" then
 		if st.diag then
 			st.diag.report(self, true)
+			self:print_runtime_diag()
 		else
 			self:Print("Diagnostics are not available on this client.")
 		end
@@ -1636,4 +1767,4 @@ end
 --=========================================================================================
 -- For debug and lua syntax errors
 --=========================================================================================
-if st.debug then st.utils.print_msg('-- Parsed main1.lua module correctly') end
+if st.debug then print('-- Parsed main1.lua module correctly') end

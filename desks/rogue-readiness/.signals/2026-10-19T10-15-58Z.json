@@ -1,0 +1,14 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T10-15-58Z",
+  "run_id": "rogue-readiness-2026-10-19",
+  "agent_name": "rogue-readiness",
+  "self_assessment": { "intent": 5, "confidence": 4, "accuracy": 4, "completeness": 5 },
+  "patterns": {
+    "what_worked": "bench-read first (journal, both fix-lane journals/buildouts, both rogue files, both audit files, lessons); every claim anchored file:line in the fixed tree; residuals framed as build prerequisites.",
+    "what_was_hard": "Config already contains a bar-only ST.ROGUE.defaults stub and main.lua already declares ST.ROGUE+hands — the wiring list had to distinguish present-vs-missing precisely.",
+    "skill_gap": "None for a read-only lane."
+  },
+  "escalation": { "reason": null, "blocked_on": null, "recommendation": null }
+}

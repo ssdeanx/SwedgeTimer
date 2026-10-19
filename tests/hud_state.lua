@@ -1307,9 +1307,9 @@ do
     check(type(DST.DRUID.get_hud_state) == "function", "druid: the class defines the provider")
     check(type(DST.DRUID.HUD_SLOTS) == "table", "druid: the class defines HUD_SLOTS")
     local slots = DST.DRUID.HUD_SLOTS
-    eq(#slots, 8, "druid: six ability slots plus the two trinket slots")
+    eq(#slots, 10, "druid: eight ability slots plus the two trinket slots")
     local expected = { "maul", "mangle", "rip", "rake", "bite", "shred",
-        "trinket1", "trinket2" }
+        "tf", "berserk", "trinket1", "trinket2" }
     local by_key, keys_ok, desc_ok = {}, true, true
     for i = 1, #slots do
         by_key[slots[i].key] = slots[i]
@@ -1322,8 +1322,10 @@ do
 
     DHUD.init(DST)
     check(DHUD.frame ~= nil, "druid: the HUD builds")
-    eq(#DHUD.icons, 8, "druid: all eight valid slots build an icon")
-    eq(DHUD.frame.width, 6 * 36 + 5 * 2, "druid: the row sizes to the six shown slots")
+    eq(#DHUD.icons, 10, "druid: all ten valid slots build an icon")
+    -- The creation paint (apply_settings' trailing update_display) already observes
+    -- the dead TF/Berserk probes and reflows: six live slots, no gap from first paint.
+    eq(DHUD.frame.width, 6 * 36 + 5 * 2, "druid: the row sizes to the six live slots")
 
     clock = 700
     DST.gcd = {}
@@ -1430,6 +1432,100 @@ do
         check(src:find("get_rotation_key", 1, true) ~= nil,
             "classes/" .. wired[i] .. ".lua defines the rotation source")
     end
+end
+
+--=========================================================================================
+-- 18) Hidden-flip reflow: provider-hidden slots reserve no row width
+--=========================================================================================
+do
+    -- Druid end-to-end (no stubbing): the sandbox client carries no TF/Berserk
+    -- spell data, so both probes stay negative and both slots hide on the tick.
+    local d = build({ class = "DRUID" })
+    local dst, DST = d.st, d.ST
+    local DHUD = dst.hud
+    DHUD.init(DST)
+    -- The creation paint (apply_settings' trailing update_display) already observes
+    -- the dead TF/Berserk probes and reflows: six live slots, no gap from first paint.
+    eq(DHUD.frame.width, 6 * 36 + 5 * 2,
+        "reflow: the first paint already closes the dead slots' gap")
+    eq(DHUD.icons[7].last_hidden, true, "reflow: the dead TF slot records its liveness")
+    eq(DHUD.icons[8].last_hidden, true, "reflow: the dead Berserk slot records its liveness")
+    eq(DHUD.icons[2].last_hidden, false, "reflow: the live Mangle slot records its liveness")
+    check(not DHUD.icons[7]:IsShown(), "reflow: the dead TF icon hides")
+    check(not DHUD.icons[8]:IsShown(), "reflow: the dead Berserk icon hides")
+    near(DHUD.icons[3].point[4], 2 * (36 + 2), 1e-9,
+        "reflow: survivors shift left into the closed gap")
+
+    -- A further identical tick flips nothing: providers still run exactly once
+    -- each, and the row stays put.
+    clock = 800
+    DST.gcd = {}
+    DST.in_combat = false
+    local provider_calls = 0
+    local real_druid = DST.DRUID.get_hud_state
+    DST.DRUID.get_hud_state = function(self2, slot2, now2)
+        provider_calls = provider_calls + 1
+        return real_druid(self2, slot2, now2)
+    end
+    DHUD.update_display(DST)
+    eq(provider_calls, 8, "reflow: a tick still runs each wanted provider exactly once")
+    eq(DHUD.frame.width, 6 * 36 + 5 * 2, "reflow: a flip-less tick leaves the row alone")
+    DST.DRUID.get_hud_state = real_druid
+end
+
+do
+    -- Hide / revive / combat-deferral on a fresh paladin row (stubbed provider).
+    local r = build()
+    local rst, RST = r.st, r.ST
+    local RHUD = rst.hud
+    RHUD.init(RST)
+    eq(RHUD.frame.width, 5 * 36 + 4 * 2, "reflow: the paladin row starts five wide")
+    local real_paladin = RST.PALADIN.get_hud_state
+    local hide_cs = false
+    RST.PALADIN.get_hud_state = function(self2, slot2, now2)
+        if slot2.key == "cs" and hide_cs then
+            return { hidden = true }
+        end
+        return real_paladin(self2, slot2, now2)
+    end
+    clock = 900
+    RST.gcd = {}
+    local provider_calls = 0
+    local counting = RST.PALADIN.get_hud_state
+    RST.PALADIN.get_hud_state = function(self2, slot2, now2)
+        provider_calls = provider_calls + 1
+        return counting(self2, slot2, now2)
+    end
+    hide_cs = true
+    RHUD.update_display(RST)
+    eq(provider_calls, 5, "reflow: the hiding tick runs each wanted provider exactly once")
+    check(not RHUD.icons[1]:IsShown(), "reflow: the hidden CS icon hides on the tick")
+    eq(RHUD.frame.width, 4 * 36 + 3 * 2, "reflow: the row closes the hidden slot's gap")
+    near(RHUD.icons[2].point[4], 0, 1e-9, "reflow: the row re-flows without the hidden slot")
+
+    -- Revive rejoins the row without a settings change.
+    hide_cs = false
+    provider_calls = 0
+    RHUD.update_display(RST)
+    eq(provider_calls, 5, "reflow: the revive tick runs each wanted provider exactly once")
+    check(RHUD.icons[1]:IsShown(), "reflow: the revived slot re-shows without a settings change")
+    eq(RHUD.frame.width, 5 * 36 + 4 * 2, "reflow: the revive restores the row width")
+    near(RHUD.icons[2].point[4], 38, 1e-9, "reflow: the revive pushes survivors back over")
+
+    -- Combat: the icon still hides (non-secure frames), but the geometry waits.
+    hide_cs = true
+    lockdown = true
+    RHUD.update_display(RST)
+    eq(RHUD.pending_apply, true, "reflow: a combat flip defers through the pending latch")
+    eq(RHUD.frame.width, 5 * 36 + 4 * 2,
+        "reflow: the row geometry never shifts mid-fight")
+    check(not RHUD.icons[1]:IsShown(), "reflow: the icon itself still hides in combat")
+    lockdown = false
+    RHUD.on_update(RST, 0.06)
+    eq(RHUD.pending_apply, false, "reflow: the combat exit clears the pending latch")
+    eq(RHUD.frame.width, 4 * 36 + 3 * 2,
+        "reflow: the combat exit applies the deferred reflow")
+    RST.PALADIN.get_hud_state = real_paladin
 end
 
 if failures == 0 then

@@ -48,13 +48,13 @@ function lib:latency_checker()
     self.bandwidth_up_KBps = up
     self.home_latency_ms = home
     self.world_latency_ms = world
-	
+
     if old_home ~= self.home_latency_ms or old_world ~= self.world_latency_ms then
         -- print('new latency')
         -- print('old_home says: '..tostring(old_home))
         -- print(old_home == nil)
         -- print(lib.time_since_last_update == nil)
-        if lib.time_since_last_update == nil and not (old_home == nil) then
+        if lib.time_since_last_update == nil and old_home ~= nil then
             -- We'll poll every 1s until we detect a change, then we know subsequent
             -- changes are on a 30s timer.
             -- We'll also book a C_Timer to timestamp the lag updates,

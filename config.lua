@@ -2,10 +2,11 @@
 -- Module to contain config default
 ------------------------------------------------------------------------------------
 local addon_name, st = ...
-local LSM = LibStub("LibSharedMedia-3.0")
+-- No LSM/LWIN fetch here: defaults are plain media-key strings and positions; the
+-- only LSM/LWIN handles live in option_table_presets.lua / option_tables.lua and
+-- bars.lua, which resolve them at runtime.
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 -- local print = st.utils.print_msg
-local LWIN = LibStub("LibWindow-1.1")
 
 ---@class AceAddon
 ---@field defaults? table
@@ -22,6 +23,15 @@ ST.defaults = {
 		-- Top level
 		welcome_message = true,
 		enabled = true, -- top level control
+
+		-- Per-tick budget counters (diag.lua). Off by default; true enables the counting
+		-- wrappers for /st diag at the next login or reload (the off path installs the
+		-- original OnUpdate handlers untouched).
+		diag_tick_counters = false,
+
+		-- Enemy swing bar (enemy_swing.lua). Off by default; the top-level toggle arms
+		-- the hostile-target swing bar on the classic-line families (inert elsewhere).
+		enemy_swing_enabled = false,
 
 		-- Frame strata/draw level
 		frame_strata = "MEDIUM",

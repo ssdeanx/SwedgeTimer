@@ -63,6 +63,13 @@ local function eq(got, want, label)
         print("FAIL  " .. label .. "  (got " .. tostring(got) .. ", want " .. tostring(want) .. ")")
     end
 end
+local function near(got, want, tol, label)
+    checks = checks + 1
+    if type(got) ~= "number" or math.abs(got - want) > (tol or 1e-9) then
+        failures = failures + 1
+        print("FAIL  " .. label .. "  (got " .. tostring(got) .. ", want " .. tostring(want) .. ")")
+    end
+end
 
 --=========================================================================================
 -- Frame / region stubs (record what design mode draws and moves)
@@ -76,6 +83,8 @@ local function make_texture()
     end
     function t:ClearAllPoints() t.points = {} end
     function t:SetColorTexture(r, g, b, a) t.color = { r, g, b, a } end
+    function t:SetTexture(texture) t.texture = texture end
+    function t:SetVertexColor(r, g, b, a) t.vertex = { r, g, b, a } end
     function t:SetSize(w, h) t.w, t.h = w, h end
     function t:SetWidth(w) t.w = w end
     function t:SetHeight(h) t.h = h end
@@ -172,6 +181,7 @@ local function build(opts)
         lwin_saved = {}, lwin_restored = {},
         visibilities = 0, lock_frames = 0, unlock_frames = 0,
         hud_apply = 0, rottext_apply = 0, nag_apply = 0, practice_apply = 0, practice_saves = 0,
+        glow_starts = 0, glow_stops = 0,
         practice_active = opts.practice_active,
     }
     if sb.practice_active == nil then sb.practice_active = opts.practice ~= false end
@@ -206,11 +216,19 @@ local function build(opts)
     if opts.practice ~= false then element.practice = make_frame("PracticePanel", "practice") end
     sb.element = element
 
-    -- The frames set_bars_designing shows while designing / hands back on exit.
+    -- The frames set_bars_designing shows while designing / hands back on exit. The
+    -- real bars.lua accessors (loaded below) walk anchor -> bar_frame -> visuals_frame,
+    -- so the fixture wires that chain and the hand's measured visuals size.
     local bar_frames, hiding_frames = {}, {}
     for _, hand in ipairs(opts.hands or { "mainhand", "offhand" }) do
         bar_frames[hand] = make_frame(hand .. "Bar", "bar_visual")
         hiding_frames[hand] = make_frame(hand .. "Hiding", "bar_hiding")
+        local vf = make_frame(hand .. "Visuals", "bar_visuals")
+        vf.derive_rect = true
+        vf.w, vf.h = 200, 20
+        bar_frames[hand].visuals_frame = vf
+        element["bar_" .. hand].bar_frame = bar_frames[hand]
+        element["bar_" .. hand].hiding_anchor_frame = hiding_frames[hand]
     end
 
     local ST = {
@@ -227,11 +245,14 @@ local function build(opts)
             nextaction_x = 7, nextaction_y = -180 },
         bar_defaults = { x = 0, y = -120 },
     }
-    for _, hand in ipairs(opts.hands or { "mainhand", "offhand" }) do
-        ST[hand] = { anchor_frame = element["bar_" .. hand] }
-    end
     function ST:Print(msg) sb.prints[#sb.prints + 1] = tostring(msg) end
     function ST:get_class_table() return class_db end
+    -- main.lua's converter, mirrored (0-255 rgb, alpha passthrough; new_alpha overrides).
+    function ST:convert_color(t, new_alpha)
+        local r, g, b, a = unpack(t)
+        a = new_alpha or a
+        return r / 255, g / 255, b / 255, a
+    end
     function ST:get_hand_table(hand)
         hand_dbs[hand] = hand_dbs[hand] or {}
         return hand_dbs[hand]
@@ -264,6 +285,19 @@ local function build(opts)
     local ACR = { NotifyChange = function(_, name) sb.notify[#sb.notify + 1] = name end }
     sb.LWIN, sb.ACR = LWIN, ACR
 
+    local LCG = {
+        PixelGlow_Start = function(frame, color, n, freq, length, th, x, y, border, key)
+            sb.glow_starts = sb.glow_starts + 1
+            sb.glow_last = { frame = frame, color = color, n = n, freq = freq,
+                length = length, th = th, key = key }
+        end,
+        PixelGlow_Stop = function(frame, key)
+            sb.glow_stops = sb.glow_stops + 1
+            sb.glow_stop = { frame = frame, key = key }
+        end,
+    }
+    sb.LCG = LCG
+
     local env = setmetatable({}, { __index = _G })
     env.WOW_PROJECT_ID = 11
     env.WOW_PROJECT_CLASSIC = 2
@@ -282,7 +316,11 @@ local function build(opts)
     env.IsShiftKeyDown = function() return sb.shift end
     env.IsAltKeyDown = function() return sb.alt end
     env.GameTooltip = {
-        SetOwner = function() end, SetText = function() end, AddLine = function() end,
+        SetOwner = function() end, SetText = function() end,
+        AddLine = function(_, line)
+            sb.tooltip_lines = sb.tooltip_lines or {}
+            sb.tooltip_lines[#sb.tooltip_lines + 1] = line
+        end,
         Show = function() end, Hide = function() sb.tooltip_hidden = true end,
     }
     env.C_Timer = {
@@ -301,11 +339,12 @@ local function build(opts)
         if major == "AceAddon-3.0" then return { GetAddon = function() return ST end } end
         if major == "LibWindow-1.1" then return LWIN end
         if major == "AceConfigRegistry-3.0" then return ACR end
+        if major == "LibCustomGlow-1.0" then return LCG end
         return {}
     end
 
     local st = {}
-    for _, path in ipairs({ "compat.lua", "utils.lua", "design.lua", "designmode.lua" }) do
+    for _, path in ipairs({ "compat.lua", "utils.lua", "design.lua", "bars.lua", "designmode.lua" }) do
         local chunk = assert(loadfile(ROOT .. path))
         setfenv(chunk, env)
         local ok, err = pcall(chunk, "SwedgeTimer", st)
@@ -313,6 +352,12 @@ local function build(opts)
             print("FAIL  " .. path .. " does not load under the sandbox: " .. tostring(err))
             os.exit(1)
         end
+    end
+
+    -- bars.lua wipes the hand tables at load (ST.mainhand = {} etc.), so the fixture's
+    -- hand state is installed after the modules load - exactly as main.lua does in-game.
+    for _, hand in ipairs(opts.hands or { "mainhand", "offhand" }) do
+        ST[hand] = { anchor_frame = element["bar_" .. hand], vf_width = 200, vf_height = 20 }
     end
     env.DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) sb.prints[#sb.prints + 1] = tostring(msg) end }
 
@@ -335,6 +380,59 @@ local function build(opts)
         apply_settings = function() sb.practice_apply = sb.practice_apply + 1 end,
         save_position = function() sb.practice_saves = sb.practice_saves + 1 end,
     } or nil
+
+    -- Practice rotation/timeline frames (opt-in): mirrors practice_ui.lua's own
+    -- ui.design_targets table so the suite drives designmode's real delegation
+    -- path (single source) instead of a parallel stub. Only the new section 16
+    -- sets practice_extras; every other section keeps the panel-only fixture.
+    if opts.practice_extras and st.practice_ui then
+        local pui = st.practice_ui
+        local rot = make_frame("PracticeRotation")
+        rot.derive_rect = true
+        rot.w, rot.h = 200, 40
+        local tl = make_frame("PracticeTimeline")
+        tl.derive_rect = true
+        tl.w, tl.h = 400, 60
+        pui.rotation_display = rot
+        pui.timeline_frame = tl
+        sb.rot_saves, sb.tl_saves, sb.rot_resets, sb.tl_resets = 0, 0, 0, 0
+        pui.design_targets = {
+            {
+                key = "practice_rotation",
+                title = "Practice rotation display",
+                get_frame = function() return pui.rotation_display end,
+                available = function() return pui.is_active() end,
+                save = function(x, y)
+                    sb.rot_saves = sb.rot_saves + 1
+                    sb.rot_saved = { x, y }
+                    rot:ClearAllPoints()
+                    rot:SetPoint("CENTER", UIParent, "CENTER", x, y)
+                end,
+                reset = function()
+                    sb.rot_resets = sb.rot_resets + 1
+                    rot:ClearAllPoints()
+                    rot:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+                end,
+            },
+            {
+                key = "practice_timeline",
+                title = "Practice timeline",
+                get_frame = function() return pui.timeline_frame end,
+                available = function() return pui.is_active() end,
+                save = function(x, y)
+                    sb.tl_saves = sb.tl_saves + 1
+                    sb.tl_saved = { x, y }
+                    tl:ClearAllPoints()
+                    tl:SetPoint("CENTER", UIParent, "CENTER", x, y)
+                end,
+                reset = function()
+                    sb.tl_resets = sb.tl_resets + 1
+                    tl:ClearAllPoints()
+                    tl:SetPoint("CENTER", UIParent, "CENTER", 0, -200)
+                end,
+            },
+        }
+    end
 
     sb.env, sb.st, sb.DM, sb.D = env, st, st.designmode, st.design
 
@@ -435,13 +533,19 @@ check(type(st.utils) == "table", "utils.lua loaded (st.utils)")
 check(type(st.design) == "table", "design.lua loaded (st.design)")
 check(type(DM) == "table", "designmode.lua defines st.designmode")
 for _, name in ipairs({ "enter", "exit", "stop", "toggle", "refresh", "refresh_grid",
-    "is_active", "on_combat_start", "registry" }) do
+    "is_active", "on_combat_start", "registry", "register_template",
+    "unregister_template" }) do
     check(DM[name] ~= nil, "designmode.lua exposes " .. name)
 end
+check(type(DM.templates) == "table" and DM.templates.count == 0,
+    "the snap-template registry starts empty")
+check(type(base.ST.register_zone) == "function", "bars.lua loaded (ST:register_zone)")
+check(type(base.ST.new_pips) == "function", "bars.lua loaded (ST:new_pips)")
 eq(sb.created_frames, 0, "no frames are created at file load")
 eq(DM.is_active(), false, "design mode starts inactive")
-eq(DM.registry.count, 7, "the registry holds the seven real elements")
-local keys = { "bar_mainhand", "bar_offhand", "bar_ranged", "hud", "rottext", "nag", "practice_panel" }
+eq(DM.registry.count, 9, "the registry holds the nine real elements")
+local keys = { "bar_mainhand", "bar_offhand", "bar_ranged", "hud", "rottext", "nag", "practice_panel",
+    "practice_rotation", "practice_timeline" }
 for i = 1, #keys do
     check(DM.registry.by_key[keys[i]] ~= nil, "registry element: " .. keys[i])
 end
@@ -450,7 +554,16 @@ eq(DM.registry.by_key.hud.title, "Cooldown HUD", "hud element title")
 eq(DM.registry.by_key.rottext.title, "Rotation label", "rotation element title")
 eq(DM.registry.by_key.nag.title, "Next action guide", "guide element title")
 eq(DM.registry.by_key.practice_panel.title, "Practice panel", "practice element title")
+eq(DM.registry.by_key.practice_rotation.title, "Practice rotation display", "rotation element title")
+eq(DM.registry.by_key.practice_timeline.title, "Practice timeline", "timeline element title")
 eq(DM.registry.by_key.practice_panel.lock, nil, "the practice element has no lock seam")
+eq(DM.registry.by_key.practice_rotation.lock, nil, "the rotation element has no lock seam either")
+-- Without the practice module's own design_targets table the two delegated
+-- targets degrade silently: no frame, unavailable, stable count.
+eq(DM.registry.by_key.practice_rotation.get_frame(), nil, "rotation: no delegate -> no frame")
+eq(DM.registry.by_key.practice_rotation.available(), false, "rotation: no delegate -> unavailable")
+eq(DM.registry.by_key.practice_timeline.get_frame(), nil, "timeline: no delegate -> no frame")
+eq(DM.registry.by_key.practice_timeline.available(), false, "timeline: no delegate -> unavailable")
 eq(DM.stop(true), false, "stop while inactive is a no-op returning false")
 
 --=========================================================================================
@@ -1014,6 +1127,407 @@ do
     local idle = build()
     idle.st.designmode.refresh()
     eq(#idle.sb.frames, 0, "refresh while inactive creates nothing")
+end
+
+--=========================================================================================
+-- 12) the C3 zone service: registration, priority order, dispatch, removal
+--=========================================================================================
+do
+    -- Nothing registered: dispatch reads no frame and raises nothing.
+    local idle = build()
+    idle.ST:update_zones("mainhand")
+    check(true, "update_zones with no zones is a no-op")
+
+    local b = build()
+    local F, ST = b.sb, b.ST
+
+    local calls = {}
+    local h_late = ST:register_zone("late",
+        function(ctx) calls[#calls + 1] = "late:" .. ctx.hand end, 20)
+    ST:register_zone("early", function() calls[#calls + 1] = "early" end, -5)
+    local h_mid = ST:register_zone("mid", function() calls[#calls + 1] = "mid" end, 0)
+    check(type(h_late) == "table" and h_late.zone_id == "late", "register_zone returns a handle")
+    eq(h_late.priority, 20, "the handle carries the priority")
+    eq(ST.zones.count, 3, "the zone count tracks registrations")
+    check(h_late.unregister ~= nil and h_late.set_priority ~= nil, "the handle exposes its seams")
+
+    -- Invalid registrations are rejected without touching the registry.
+    local bad, err = ST:register_zone("", function() end)
+    eq(bad, nil, "an empty zone id is rejected")
+    check(type(err) == "string" and err:find("zone_id") ~= nil, "...naming zone_id")
+    eq(ST:register_zone("x", nil), nil, "a non-function draw_fn is rejected")
+    local dup, duperr = ST:register_zone("mid", function() end, 5)
+    eq(dup, nil, "a duplicate zone id is rejected")
+    check(type(duperr) == "string" and duperr:find("duplicate") ~= nil, "...naming the duplicate")
+    eq(ST.zones.count, 3, "a rejected registration changes nothing")
+
+    -- Dispatch: ascending priority, ctx filled from the hand state (one reused table).
+    ST.mainhand.current_progress = 0.25
+    ST:update_zones("mainhand")
+    eq(#calls, 3, "dispatch calls every zone once")
+    eq(calls[1], "early", "the lowest priority runs first")
+    eq(calls[2], "mid", "the default priority runs in the middle")
+    eq(calls[3], "late:mainhand", "the highest priority runs last and sees the hand")
+
+    local seen
+    ST:register_zone("probe", function(ctx) seen = ctx; calls[#calls + 1] = "probe" end, 1)
+    ST:update_zones("mainhand")
+    eq(seen.hand, "mainhand", "ctx.hand is the dispatched hand")
+    eq(seen.frame, F.bar_frames.mainhand.visuals_frame, "ctx.frame is the hand's visuals frame")
+    eq(seen.state, ST.mainhand, "ctx.state is the hand state")
+    eq(seen.db, F.hand_dbs.mainhand, "ctx.db is the hand table")
+    eq(seen.width, 200, "ctx.width is the measured visuals width")
+    eq(seen.height, 20, "ctx.height is the measured visuals height")
+    eq(seen.progress, 0.25, "ctx.progress is the bar fill fraction")
+    check(type(seen.time) == "number", "ctx.time comes from the aligned clock")
+
+    -- Reprioritising re-sorts; a junk priority is refused.
+    h_mid:set_priority(99)
+    calls = {}
+    ST:update_zones("mainhand")
+    eq(calls[1], "early", "after set_priority the order re-sorts (early)")
+    eq(calls[2], "probe", "...then the probe")
+    eq(calls[3], "late:mainhand", "...then late")
+    eq(calls[4], "mid", "the reprioritised zone runs last")
+    eq(h_mid:set_priority("junk"), false, "a junk priority is refused")
+    eq(h_mid.priority, 99, "the refused priority leaves the handle unchanged")
+
+    -- Unregistration removes the zone from list and map; a second call is a no-op.
+    eq(h_late:unregister(), true, "unregister removes the zone")
+    eq(h_late:unregister(), false, "a second unregister is a no-op")
+    eq(ST.zones.by_id["late"], nil, "the removed zone leaves the id map")
+    eq(ST.zones.count, 3, "the count drops")
+    calls = {}
+    ST:update_zones("mainhand")
+    eq(#calls, 3, "the removed zone is not dispatched")
+    eq(h_late:set_priority(0), false, "a removed handle cannot reprioritise itself back in")
+    check(ST:register_zone("late", function() end, 0) ~= nil, "a freed zone id can register again")
+end
+
+--=========================================================================================
+-- 13) the D3 pips widget: the frozen contract (set 0-5, glow_full) and geometry
+--=========================================================================================
+do
+    local b = build()
+    local ST, F = b.ST, b.sb
+
+    eq(ST:new_pips(nil, {}), nil, "new_pips without a parent -> nil")
+    eq(ST:new_pips({}, {}), nil, "new_pips with a non-frame parent -> nil")
+
+    local pips = ST:new_pips(F.element.hud, { design = false })
+    check(type(pips) == "table", "new_pips returns a frame")
+    eq(type(pips.set), "function", "the pips frame exposes set")
+    eq(type(pips.glow_full), "function", "the pips frame exposes glow_full")
+    eq(#pips.textures, 5, "five pip textures are created")
+    eq(pips.w, 58, "the default row is five 10 px pips with 2 px gaps")
+    eq(pips.h, 10, "the row is one pip tall")
+    eq(pips.points[1][1], "BOTTOM", "the row anchors to the parent's bottom by default")
+    eq(pips.points[1][4], 0, "the default x offset is 0")
+    for i = 1, 5 do
+        eq(pips.textures[i].w, 10, "pip " .. i .. " takes the default size")
+        eq(pips.textures[i].points[1][4], (i - 1) * 12, "pip " .. i .. " steps by size + gap")
+        eq(pips.textures[i].color[1], 1, "pip " .. i .. " is a white base texture")
+    end
+
+    -- set(0..5): filled pips take the fill colour, the rest the dimmed hue.
+    local function cell(i) return pips.textures[i].vertex end
+    pips:set(3)
+    near(cell(1)[1], 1, 1e-9, "set(3): pip 1 fill red")
+    near(cell(1)[2], 210 / 255, 1e-9, "set(3): pip 1 fill green")
+    near(cell(1)[3], 64 / 255, 1e-9, "set(3): pip 1 fill blue")
+    near(cell(1)[4], 1, 1e-9, "set(3): pip 1 is opaque")
+    near(cell(3)[4], 1, 1e-9, "set(3): pip 3 is filled")
+    near(cell(4)[4], 0.15, 1e-9, "set(3): pip 4 is empty (dimmed)")
+    near(cell(5)[4], 0.15, 1e-9, "set(3): pip 5 is empty (dimmed)")
+
+    pips:set(5)
+    near(cell(5)[4], 1, 1e-9, "set(5): every pip is filled")
+    pips:set(9)
+    near(cell(5)[4], 1, 1e-9, "set(9): clamps to the pip count")
+    pips:set(-3)
+    near(cell(1)[4], 0.15, 1e-9, "set(-3): clamps to 0")
+    pips:set(nil)
+    near(cell(1)[4], 0.15, 1e-9, "set(nil): reads as 0 (never stale pips)")
+    pips:set("junk")
+    near(cell(1)[4], 0.15, 1e-9, "set('junk'): reads as 0")
+    pips:set(2.6)
+    near(cell(3)[4], 1, 1e-9, "set(2.6): rounds to the nearest pip")
+
+    -- glow_full(bool): the gold pulse shows only while the count is full.
+    local starts = b.sb.glow_starts
+    pips:set(5)
+    pips:glow_full(true)
+    eq(b.sb.glow_starts, starts + 1, "glow_full(true) at full starts the pulse")
+    eq(b.sb.glow_last.frame, pips, "the pulse targets the pips frame")
+    near(b.sb.glow_last.color[1], 1, 1e-9, "the pulse is gold (red)")
+    pips:set(4)
+    eq(b.sb.glow_stops, 1, "dropping below full stops the pulse")
+    pips:set(5)
+    eq(b.sb.glow_starts, starts + 2, "returning to full restarts the pulse")
+    pips:glow_full(false)
+    eq(b.sb.glow_stops, 2, "glow_full(false) stops it")
+    pips:set(5)
+    eq(b.sb.glow_starts, starts + 2, "a disarmed pulse never restarts")
+
+    -- Custom geometry and colours.
+    local custom = ST:new_pips(F.element.hud, { design = false, count = 3, size = 8, gap = 1,
+        point = "TOP", x = 5, y = -3, color = { 255, 0, 0, 0.5 } })
+    eq(#custom.textures, 3, "opts.count builds a shorter row")
+    eq(custom.w, 26, "opts.size/gap size the row (3 * 8 + 2 * 1)")
+    eq(custom.points[1][1], "TOP", "opts.point anchors the row")
+    eq(custom.points[1][4], 5, "opts.x offsets the row")
+    custom:set(3)
+    near(custom.textures[1].vertex[1], 1, 1e-9, "opts.color: red")
+    near(custom.textures[1].vertex[2], 0, 1e-9, "opts.color: no green")
+    near(custom.textures[1].vertex[4], 0.5, 1e-9, "opts.color: alpha")
+    custom:glow_full(true)
+    eq(b.sb.glow_starts, starts + 3, "a full 3-pip row glows at its own count")
+end
+
+--=========================================================================================
+-- 14) the pips as a design target and a snap-to-row template (C6)
+--=========================================================================================
+do
+    local b = build()
+    local ST, dm, F = b.ST, b.st.designmode, b.sb
+    local pips = ST:new_pips(F.element.hud,
+        { design = { key = "test_pips", title = "Test pips" } })
+    check(dm.registry.by_key.test_pips ~= nil, "the pips registers as a design target")
+    eq(dm.registry.by_key.test_pips.title, "Test pips", "the design target carries the title")
+    eq(dm.registry.count, 10, "the registry grew by the pips element")
+    local desc = dm.registry.by_key.test_pips
+    eq(desc.get_frame(), pips, "the design target resolves the pips frame")
+
+    -- The generic save centres the row on the dropped offsets; reset re-anchors it.
+    desc.save(120, 60)
+    eq(last_point(pips)[1], "CENTER", "pips save: a centre anchor")
+    eq(last_point(pips)[4], 120, "pips save: the snapped x")
+    eq(last_point(pips)[5], 60, "pips save: the snapped y")
+    desc.reset()
+    eq(last_point(pips)[1], "BOTTOM", "pips reset: the construction anchor point")
+    eq(last_point(pips)[2], F.element.hud, "pips reset: re-anchored to the parent")
+
+    -- A caller's own save/reset seams win.
+    local saved, reset = 0, 0
+    ST:new_pips(F.element.hud, { design = { key = "custom_pips",
+        save = function() saved = saved + 1 end,
+        reset = function() reset = reset + 1 end } })
+    local d2 = dm.registry.by_key.custom_pips
+    d2.save(1, 2)
+    eq(saved, 1, "a caller save seam replaces the generic one")
+    d2.reset()
+    eq(reset, 1, "a caller reset seam replaces the generic one")
+
+    -- design = false opts out; an unnamed pips takes an auto key.
+    ST:new_pips(F.element.hud, { design = false })
+    eq(dm.registry.by_key.pips_3, nil, "design = false opts out of registration")
+    check(ST:new_pips(F.element.hud) ~= nil, "an unnamed pips still builds")
+    check(dm.registry.by_key.pips_4 ~= nil, "an unnamed pips takes an auto design key")
+
+    -- The row also registers a snap template of its own cells.
+    local tpl = dm.templates.by_id.test_pips_cells
+    check(tpl ~= nil, "the pips row registers a snap template")
+    eq(dm.templates.count, 3, "every registered pips row contributes a template")
+    local pf = desc.get_frame()
+    pf.cx, pf.cy = 300, 100
+    local cells = tpl.get_cells()
+    eq(#cells, 5, "the template exposes the row's five cells")
+    eq(cells[1].l, 271, "cell 1: left edge")
+    eq(cells[1].r, 281, "cell 1: right edge")
+    eq(cells[1].t, 105, "cell 1: top")
+    eq(cells[1].b, 95, "cell 1: bottom")
+    eq(cells[3].l, 295, "cell 3: left edge")
+    eq(cells[5].r, 329, "cell 5: right edge")
+    check(tpl.get_cells() == cells, "the template reuses its cell slots")
+    pf.cx, pf.cy = nil, nil
+    eq(tpl.get_cells(), nil, "an unreadable frame -> no cells")
+
+    -- Template registration validation and removal.
+    eq(dm.register_template(nil), nil, "register_template: nil is refused")
+    eq(dm.register_template({ id = "x" }), nil, "register_template: a missing get_cells is refused")
+    local dup = dm.register_template({ id = "test_pips_cells", get_cells = function() return {} end })
+    eq(dup, nil, "register_template: a duplicate id is refused")
+    eq(dm.unregister_template("test_pips_cells"), true, "unregister_template removes by id")
+    eq(dm.unregister_template("test_pips_cells"), false, "a second removal is a no-op")
+    eq(dm.templates.count, 2, "the template count drops")
+end
+
+--=========================================================================================
+-- 15) snap-to-row template integration and mouse anchoring
+--=========================================================================================
+do
+    local b = build({ hands = { "mainhand" }, practice = false })
+    local d, F = b.st.designmode, b.sb
+    local bar = F.element.bar_mainhand
+    bar.cx, bar.cy = 50, 60
+    bar.w, bar.h = 200, 20
+    local vf = F.bar_frames.mainhand.visuals_frame
+    local pips = b.ST:new_pips(vf, { design = { key = "drag_pips" } })
+    pips.cx, pips.cy = 300, 100
+    pips.derive_rect = true
+
+    d.enter()
+    local o = overlay_for(F, "Mainhand bar")
+    check(o ~= nil, "the bar overlay exists")
+    local guides
+    for _, f in ipairs(F.frames) do
+        if f.kind == "Frame" and f.name == nil and f.all_points and f.mouse == false then guides = f end
+    end
+    check(guides ~= nil, "the guide frame exists")
+
+    -- Raw centre (207, 100): the right edge 307 is exactly the fourth pip cell's left
+    -- edge, which only the template offers (the row frame's own lines are 271/300/329).
+    F.cursor_x, F.cursor_y = 200, 100
+    o:GetScript("OnDragStart")(o)
+    F.cursor_x, F.cursor_y = 357, 140
+    o:GetScript("OnUpdate")(o)
+    eq(last_point(bar)[4], 207, "template snap: the bar's edge lands on a pip cell edge (x)")
+    eq(last_point(bar)[5], 100, "template snap: the row's centre line holds y")
+    eq(guides.shown, true, "template snap: the guide lines are shown")
+    eq(guides.textures[1].points[1][4], 307, "template snap: the vertical guide sits on the cell edge")
+    eq(guides.textures[2].points[1][5], 100, "template snap: the horizontal guide sits on the row centre")
+    o:GetScript("OnDragStop")(o)
+    eq(F.lwin_saved[1].point[4], 207, "template snap: the snapped x is saved")
+
+    -- Control: without the template the same drag can only reach the row frame's mid
+    -- line (300), so the drop differs and no cell-edge guide appears.
+    eq(d.unregister_template("drag_pips_cells"), true, "the snap template is removed")
+    bar.cx, bar.cy = 50, 60
+    F.cursor_x, F.cursor_y = 200, 100
+    o:GetScript("OnDragStart")(o)
+    F.cursor_x, F.cursor_y = 357, 140
+    o:GetScript("OnUpdate")(o)
+    eq(last_point(bar)[4], 200, "control: without the template the row frame's mid line wins")
+    eq(guides.textures[1].points[1][4], 300, "control: the guide sits on the frame mid line")
+    o:GetScript("OnDragStop")(o)
+end
+
+do
+    local b = build({ hands = { "mainhand" }, practice = false })
+    local d, F = b.st.designmode, b.sb
+    d.enter()
+    local bar = F.element.bar_mainhand
+    bar.cx, bar.cy = 50, 60
+    bar.w, bar.h = 200, 20
+    local o = overlay_for(F, "Mainhand bar")
+
+    -- Default OFF: the grab offset is preserved (raw 170,100 -> grid 172,110).
+    F.class_db.design_mouse_anchor = nil
+    F.cursor_x, F.cursor_y = 200, 100
+    o:GetScript("OnDragStart")(o)
+    F.cursor_x, F.cursor_y = 320, 140
+    o:GetScript("OnUpdate")(o)
+    eq(last_point(bar)[4], 172, "mouse anchor off: the grab offset is preserved (x)")
+    eq(last_point(bar)[5], 110, "mouse anchor off: the grab offset is preserved (y)")
+
+    -- ON: the element's centre follows the cursor (raw 320,140 -> grid 316,134).
+    F.class_db.design_mouse_anchor = true
+    bar.cx, bar.cy = 50, 60
+    F.cursor_x, F.cursor_y = 200, 100
+    o:GetScript("OnDragStart")(o)
+    F.cursor_x, F.cursor_y = 320, 140
+    o:GetScript("OnUpdate")(o)
+    eq(last_point(bar)[4], 316, "mouse anchor on: the centre follows the cursor (x)")
+    eq(last_point(bar)[5], 134, "mouse anchor on: the centre follows the cursor (y)")
+
+    -- Shift keeps the free placement: the centre sits exactly on the cursor.
+    F.shift = true
+    bar.cx, bar.cy = 50, 60
+    F.cursor_x, F.cursor_y = 200, 100
+    o:GetScript("OnDragStart")(o)
+    F.cursor_x, F.cursor_y = 320.3, 140.3
+    o:GetScript("OnUpdate")(o)
+    eq(last_point(bar)[4], 320.5, "mouse anchor + Shift: the centre half-rounds at the cursor (x)")
+    eq(last_point(bar)[5], 140.5, "mouse anchor + Shift: the centre half-rounds at the cursor (y)")
+    F.shift = false
+    o:GetScript("OnDragStop")(o)
+
+    -- The tooltip announces the mode while it is on.
+    F.tooltip_lines = nil
+    o:GetScript("OnEnter")(o)
+    local found = false
+    for i = 1, #(F.tooltip_lines or {}) do
+        if F.tooltip_lines[i]:find("Mouse anchoring", 1, true) then found = true end
+    end
+    eq(found, true, "the tooltip announces mouse anchoring while on")
+    F.class_db.design_mouse_anchor = nil
+    F.tooltip_lines = nil
+    o:GetScript("OnEnter")(o)
+    found = false
+    for i = 1, #(F.tooltip_lines or {}) do
+        if F.tooltip_lines[i]:find("Mouse anchoring", 1, true) then found = true end
+    end
+    eq(found, false, "the tooltip stays quiet while off")
+end
+
+--=========================================================================================
+-- 16) practice rotation + timeline as design targets (C6 handoff completion)
+--=========================================================================================
+do
+    -- Delegation: the registry descriptors resolve through the practice
+    -- module's own design_targets table (single source, never a parallel copy).
+    local b = build({ practice_extras = true })
+    local d, F = b.st.designmode, b.sb
+    local rot_desc = d.registry.by_key.practice_rotation
+    local tl_desc = d.registry.by_key.practice_timeline
+    check(rot_desc ~= nil and tl_desc ~= nil, "rotation + timeline descriptors are registered")
+    check(rot_desc.get_frame() ~= nil, "rotation resolves its frame through the delegate")
+    check(tl_desc.get_frame() ~= nil, "timeline resolves its frame through the delegate")
+    eq(rot_desc.available(), true, "rotation is available while the session runs")
+    eq(tl_desc.available(), true, "timeline is available while the session runs")
+    F.practice_active = false
+    eq(rot_desc.available(), false, "rotation hides when the session ends")
+    eq(tl_desc.available(), false, "timeline hides when the session ends")
+    F.practice_active = true
+
+    d.enter()
+    local titles = shown_overlay_titles(F)
+    eq(#titles, 8, "enter with a running session shows all eight overlays")
+    eq(titles[6], "Practice panel", "overlay 6 is the practice panel")
+    eq(titles[7], "Practice rotation display", "overlay 7 is the rotation display")
+    eq(titles[8], "Practice timeline", "overlay 8 is the timeline")
+    eq(F.created_frames, 2 + 8, "enter creates only the layer, guides and the 8 overlays")
+
+    -- The session ends: availability hides both without touching the pool.
+    F.practice_active = false
+    d.refresh()
+    eq(#shown_overlay_titles(F), 5, "a stopped session loses panel + rotation + timeline overlays")
+    eq(F.created_frames, 2 + 8, "hiding reuses the pool (no new frame)")
+    F.practice_active = true
+    d.refresh()
+    eq(#shown_overlay_titles(F), 8, "a new session brings both overlays back")
+    eq(F.created_frames, 2 + 8, "reappearing reuses the pooled overlays")
+
+    -- Drag save runs the practice module's own save seam with snapped coords:
+    -- raw (-40, -200) on a 400x60 frame grids to (-40, -198); raw (100, 50)
+    -- on a 200x40 frame grids to (100, 52). Timeline first: at the origin the
+    -- rotation frame is too far vertically to offer lines, and once the
+    -- timeline sits at (-40, -198) it is too far to disturb the rotation drag.
+    local to = overlay_for(F, "Practice timeline")
+    F.cursor_x, F.cursor_y = 0, 0
+    to:GetScript("OnDragStart")(to)
+    F.cursor_x, F.cursor_y = -40, -200
+    to:GetScript("OnUpdate")(to)
+    to:GetScript("OnDragStop")(to)
+    eq(F.tl_saves, 1, "timeline drag runs the delegate save once")
+    eq(F.tl_saved[1], -40, "timeline drag saves the snapped x")
+    eq(F.tl_saved[2], -198, "timeline drag saves the grid-snapped y")
+    to:GetScript("OnDoubleClick")(to)
+    eq(F.tl_resets, 1, "timeline reset runs the delegate reset once")
+
+    local ro = overlay_for(F, "Practice rotation display")
+    F.cursor_x, F.cursor_y = 0, 0
+    ro:GetScript("OnDragStart")(ro)
+    F.cursor_x, F.cursor_y = 100, 50
+    ro:GetScript("OnUpdate")(ro)
+    ro:GetScript("OnDragStop")(ro)
+    eq(F.rot_saves, 1, "rotation drag runs the delegate save once")
+    eq(F.rot_saved[1], 100, "rotation drag saves the snapped x")
+    eq(F.rot_saved[2], 52, "rotation drag saves the grid-snapped y")
+
+    -- Double-click reset runs the module's own reset seam.
+    ro:GetScript("OnDoubleClick")(ro)
+    eq(F.rot_resets, 1, "rotation reset runs the delegate reset once")
 end
 
 --=========================================================================================

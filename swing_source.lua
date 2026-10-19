@@ -88,6 +88,54 @@ local HANDS = { "mainhand", "offhand", "ranged" }
 -- PLAYER_SWING normally lands first and supersedes the scheduled stop.
 local STOP_GRACE_SECONDS = 0.1
 
+-- Sustained-reject notice threshold: combat + no valid swing for this long while the
+-- feed keeps rejecting payloads means the bars are stale, so say so once (H5).
+local SUSTAINED_REJECT_SECONDS = 5
+
+-- Session counters for /st diag (H5). The reject paths keep their existing behaviour
+-- (ignore the payload, keep the old cycle); these only make the failure observable.
+local stats = {
+	payload_rejects = 0,
+	unknown_swing_type = 0,
+	malformed_duration = 0,
+	speed_read_keeps = 0,
+	valid_swings = 0,
+	last_valid_swing_at = nil,
+	first_reject_at = nil,
+	reject_notice_shown = false,
+	in_combat = false,
+}
+swing_source.stats = stats
+
+local function print_notice(message)
+	if st.utils and type(st.utils.print_msg) == "function" then
+		pcall(st.utils.print_msg, message)
+	end
+end
+
+-- Record one rejected payload, and raise the one-time chat notice when the reject has
+-- lasted SUSTAINED_REJECT_SECONDS in combat. The counters are always written first so
+-- /st diag can explain the state even when the notice has been dismissed.
+local function note_payload_reject()
+	stats.payload_rejects = stats.payload_rejects + 1
+	local t = now()
+	if type(t) ~= "number" then
+		return
+	end
+	if stats.first_reject_at == nil then
+		stats.first_reject_at = t
+	end
+	if stats.in_combat and not stats.reject_notice_shown then
+		local reference = stats.last_valid_swing_at or stats.first_reject_at
+		if type(reference) == "number" and t - reference >= SUSTAINED_REJECT_SECONDS then
+			stats.reject_notice_shown = true
+			print_notice("The Forever swing feed has rejected PLAYER_SWING payloads for "
+				.. SUSTAINED_REJECT_SECONDS
+				.. "+ seconds; the swing bars may be stale. /st diag reports the counts.")
+		end
+	end
+end
+
 -- hand -> { counter, start, speed, expiration } while a swing is in flight. Counters
 -- only ever increase, so a scheduled stop fires only while its counter is still the
 -- live cycle's - supersession without any timer-cancel machinery.
@@ -154,13 +202,20 @@ end
 local function on_player_swing(swing_duration, swing_type)
 	local hand = hand_for_swing_type(swing_type)
 	if not hand then
+		stats.unknown_swing_type = stats.unknown_swing_type + 1
+		note_payload_reject()
 		return -- unknown swing type: ignore
 	end
 	if type(swing_duration) ~= "number" or swing_duration <= 0 then
+		stats.malformed_duration = stats.malformed_duration + 1
+		note_payload_reject()
 		return -- malformed payload: nothing to time
 	end
 
 	local cycle = begin_cycle(hand, now(), swing_duration)
+	stats.valid_swings = stats.valid_swings + 1
+	stats.last_valid_swing_at = cycle.start
+	stats.first_reject_at = nil
 	callbacks:Fire("SWING_TIMER_START", swing_duration, cycle.expiration, hand)
 
 	-- A newer swing bumps the counter, so a superseded stop timer is a no-op.
@@ -175,15 +230,18 @@ local function on_unit_attack_speed()
 	-- and update every in-flight cycle whose speed moved. A missing or throwing reader
 	-- keeps every cycle on its scheduled speed, like a secret reading does below.
 	if type(UnitAttackSpeed) ~= "function" then
+		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
 	end
 	local ok, main_speed, off_speed, ranged_speed = pcall(UnitAttackSpeed, "player")
 	if not ok then
+		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
 	end
 	-- A restricted reading keeps every cycle on its scheduled speed: an opaque value
 	-- must never reach the rescale arithmetic below.
 	if is_secret(main_speed) or is_secret(off_speed) or is_secret(ranged_speed) then
+		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
 	end
 	local speeds = {
@@ -207,11 +265,16 @@ local function on_unit_attack_speed()
 			cycle.speed = new_speed
 			cycle.expiration = t + remaining * (new_speed / old_speed)
 			callbacks:Fire("SWING_TIMER_UPDATE", cycle.speed, cycle.expiration, hand)
+		elseif not new_speed or new_speed <= 0 then
+			-- The read could not describe this hand (nil/zero): the cycle keeps its
+			-- schedule, and the keep is counted for /st diag (H5).
+			stats.speed_read_keeps = stats.speed_read_keeps + 1
 		end
 	end
 end
 
 local function on_combat_changed(in_combat)
+	stats.in_combat = in_combat == true
 	if in_combat ~= false then
 		return
 	end
@@ -245,6 +308,20 @@ end
 --------------------------------------------------------------------------------
 -- Public read API (same contract/shape as LibClassicSwingTimerAPI:SwingTimerInfo)
 --------------------------------------------------------------------------------
+
+-- Volatile diagnostic counters for /st diag verbose (H5): rejected payloads and
+-- speed-read keeps. The behaviour they observe is unchanged.
+function swing_source:diagnostic_text()
+	return string.format(
+		"swing source payload_rejects=%d unknown_type=%d malformed_duration=%d"
+			.. " speed_read_keeps=%d valid_swings=%d notice=%s",
+		stats.payload_rejects,
+		stats.unknown_swing_type,
+		stats.malformed_duration,
+		stats.speed_read_keeps,
+		stats.valid_swings,
+		stats.reject_notice_shown and "shown" or "no")
+end
 
 function swing_source:SwingTimerInfo(hand)
 	local cycle = active_cycles[hand]

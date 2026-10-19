@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:24:15Z",
+  "run_id": "druid-buildout-2026-10-17",
+  "agent_name": "druid",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Keeping every new widget behind an explicit == true toggle kept the existing call-count assertions intact (no default-visible change, no extra reads in the all-off configurations). The D4 sampler living in the guide gather made the frozen time_to_die integration point testable end-to-end (the new W8 Bite check), and the mutation proof on the final tree caught both a constant break and the Era gate break. Re-checking the shared tree before the pips wiring let me confirm the installed ST:new_pips signature and prune the probe to the real colon path instead of guessing.",
+    "what_was_hard": "Two real bugs found by the new checks: the first TTD sample never stored its baseline (throttle branch swallowed it), and the power-type read gate initially omitted the omen toggle so the glow could never see cat form. Also, adding HUD slots is a cross-lane artifact: hud_state pins the druid slot list exactly, so its 4 rows now fail until the reconcile pass (bars_state's DRUID count row likewise - both exact updates are in the bench report).",
+    "skill_gap": "Offline harness cannot load the addon: every new visual (pips row, countdown text, badge, omen halo, GCD marker), the design reset anchor and the TF/Berserk off-GCD status stay UNCONFIRMED until an in-client check."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/druid/journal.md § 2026-10-17 [signal:done] Build-out round 1 complete (offline-verified)"
+}

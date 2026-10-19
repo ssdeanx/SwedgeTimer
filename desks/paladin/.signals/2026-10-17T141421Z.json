@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-17T14:14:21Z",
+  "run_id": "paladin-buildout-2026-10-17",
+  "agent_name": "paladin",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Inspecting the dead attempt's files before editing kept all of its correct work (P1/P2/P3/P7/CD) and reduced the finisher job to three surgical fixes: the P6 dead hook (start call at the transition, Retail-gated like its sibling visuals), the P3 gate re-pointed at the landed C2 contract (st.lust_supported), and a conditional combat-exit pulse teardown that un-broke an existing bars_state glow pin. The real-module sandbox (compat+utils+twist+nextaction+paladin over frame stubs, hud_state pattern) let one suite pin behavior and wiring together.",
+    "what_was_hard": "Throttled paths need clock discipline in tests: the 0.5 s lust/JotC/CD re-scan throttles and the quantised timer-text latch made three initial fixtures read stale state; every failure was a test-side timing mistake, not a code defect. bars_state cannot go green this wave by design (count reconciliation deferred), so 'all green' was scoped to the paladin-owned suites.",
+    "skill_gap": "Offline harness cannot prove in-client id resolution (racial candidates, Holy Wrath ranks) or the real SWING_DAMAGE refresh cadence; those stay on the in-client list."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/paladin/journal.md § 2026-10-17 build-out round 1 (finisher)"
+}

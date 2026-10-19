@@ -11,12 +11,18 @@
 --   * the secrets line: api=no without C_Secrets (and for a non-table C_Secrets), api=yes
 --     with the six restriction probes rendered true/false/?, including a throwing probe
 --     and a hostile C_Secrets metatable;
+--   * the ticks line: "?" sites in a default OFF session, the per-site counts and the
+--     seconds attribution after wrap_onupdate ran with the profile gate on, the on=yes/no
+--     marker, and a junk tick_sites never throwing;
+--   * wrap_onupdate: the disabled gate returns the original function object untouched
+--     (flat-zero overhead), the enabled gate counts per hand, passes elapsed through,
+--     sums st.api.get_time attribution, and degrades when the clock is absent;
 --   * family rendering for all eight compat families and the three swing-engine modes;
 --   * the guide summary for all five provider classes (on/off/none/?) and the provider
 --     count;
---   * static wiring: main.lua's init report call, the /st diag route, the engine tokens,
---     addon_version exposure, init_deadline_fired, diag.lua's purity, and its TOC
---     placement.
+--   * static wiring: main.lua's init report call, the /st diag route, the OnUpdate hook
+--     line's st.diag.wrap_onupdate gate, the engine tokens, addon_version exposure,
+--     init_deadline_fired, diag.lua's purity, and its TOC placement.
 -- Run from the repo root: lua5.1 tests/diag_state.lua  (any cwd works).
 
 local script_dir = (arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
@@ -383,7 +389,7 @@ do
     eq(#captured, 1, "non-verbose: exactly one line")
 
     check(run_report(st, self, true), "verbose: no throw")
-    eq(#captured, 4, "verbose: exactly four lines")
+    eq(#captured, 5, "verbose: exactly five lines")
     eq(captured[1], login_line, "verbose: line 1 is the same login line")
     eq(captured[2],
         "SwedgeTimer diag: flags stl_ready=true llm_ready=false lrc_ready=true "
@@ -393,8 +399,11 @@ do
         "SwedgeTimer diag: modules practice=yes hud=yes rotation=yes design=yes providers=5/5",
         "verbose line 3 is the exact module/provider line")
     eq(captured[4],
+        "SwedgeTimer diag: ticks on=no mainhand=? offhand=? ranged=? cpu=?",
+        "verbose line 4 is the exact ticks line (default OFF session: no counters installed)")
+    eq(captured[5],
         "SwedgeTimer diag: secrets api=no",
-        "verbose line 4 is the exact secrets line (no C_Secrets in this sandbox)")
+        "verbose line 5 is the exact secrets line (no C_Secrets in this sandbox)")
 
     self = healthy_self()
     self.init_deadline_fired = true
@@ -402,7 +411,7 @@ do
     contains(captured[2], "deadline=fired", "the fired init deadline is reported")
 
     check(run_report(st, {}, true), "verbose over an empty state: no throw")
-    eq(#captured, 4, "verbose over an empty state still prints four lines")
+    eq(#captured, 5, "verbose over an empty state still prints five lines")
     contains(captured[2], "stl_ready=? llm_ready=? lrc_ready=? lrc_unavailable=?",
         "unset readiness flags render ?")
     contains(captured[2], "deadline=no init=no", "empty state: deadline/init render no")
@@ -423,7 +432,7 @@ do
     eq(#captured, 2, "MAX_LINES = 2 caps the verbose report at two lines")
     st.diag.MAX_LINES = "junk"
     run_report(st, healthy_self(), true)
-    eq(#captured, 4, "a non-numeric MAX_LINES falls back to the default cap")
+    eq(#captured, 5, "a non-numeric MAX_LINES falls back to the default cap")
     st.diag.MAX_LINES = 6
 end
 
@@ -434,8 +443,8 @@ do
     -- Absent (every classic client, and the offline harness): api=no, no probes touched.
     local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
     check(run_report(st, healthy_self(), true), "no C_Secrets: verbose does not throw")
-    eq(#captured, 4, "no C_Secrets: verbose still prints four lines")
-    eq(captured[4], "SwedgeTimer diag: secrets api=no",
+    eq(#captured, 5, "no C_Secrets: verbose still prints five lines")
+    eq(captured[5], "SwedgeTimer diag: secrets api=no",
         "no C_Secrets: the secrets line reports api=no")
 
     -- Present: readable booleans render true/false; a throwing probe, a non-boolean
@@ -450,7 +459,7 @@ do
         -- ShouldUnitSpellCastingBeSecret missing on purpose.
     }
     check(run_report(st2, healthy_self(), true), "C_Secrets present: verbose does not throw")
-    eq(captured[4],
+    eq(captured[5],
         "SwedgeTimer diag: secrets api=yes restrictions=true cd=false aura=? power=true stats=? cast=?",
         "the secrets line renders api=yes and every predicate (readable/missing/throwing)")
 
@@ -458,7 +467,7 @@ do
     local st3, env3 = load_diag({ st = healthy_st(), libstub = function() return nil end })
     env3.C_Secrets = "junk"
     check(run_report(st3, healthy_self(), true), "non-table C_Secrets: verbose does not throw")
-    eq(captured[4], "SwedgeTimer diag: secrets api=no",
+    eq(captured[5], "SwedgeTimer diag: secrets api=no",
         "a non-table C_Secrets renders api=no")
 
     -- A hostile C_Secrets whose probe access throws: every probe renders ?.
@@ -467,13 +476,103 @@ do
         __index = function() error("hostile C_Secrets") end,
     })
     check(run_report(st4, healthy_self(), true), "hostile C_Secrets: verbose does not throw")
-    eq(captured[4],
+    eq(captured[5],
         "SwedgeTimer diag: secrets api=yes restrictions=? cd=? aura=? power=? stats=? cast=?",
         "a hostile C_Secrets renders ? for every probe")
 end
 
 --=========================================================================================
--- 11. Static wiring: main.lua hooks, purity, TOC placement
+-- 11. Per-tick counters: wrap_onupdate and the ticks line
+--=========================================================================================
+do
+    local original = function(elapsed) end
+
+    -- Disabled gate: every non-true value (nil default, false, junk) installs the original
+    -- function object untouched - the hook is byte-identical and adds zero per-tick cost.
+    local st = load_diag()
+    check(st.diag.wrap_onupdate({}, "mainhand", original) == original,
+        "wrap_onupdate without a profile gate returns the original function")
+    check(st.diag.wrap_onupdate({ db = { profile = {} } }, "mainhand", original) == original,
+        "wrap_onupdate with an unset gate returns the original function")
+    check(st.diag.wrap_onupdate(
+            { db = { profile = { diag_tick_counters = false } } }, "mainhand", original) == original,
+        "wrap_onupdate with the gate false returns the original function")
+    check(st.diag.wrap_onupdate(
+            { db = { profile = { diag_tick_counters = "yes" } } }, "mainhand", original) == original,
+        "wrap_onupdate with a non-boolean gate returns the original function")
+    check(st.diag.wrap_onupdate({}, "mainhand", nil) == nil,
+        "wrap_onupdate passes through a missing original")
+    eq(next(st.diag.tick_sites), nil, "a default OFF session never records a tick site")
+    check(run_report(st, {}, true), "verbose over an OFF session: no throw")
+    eq(captured[4], "SwedgeTimer diag: ticks on=no mainhand=? offhand=? ranged=? cpu=?",
+        "the OFF ticks line renders ? per site and ? cpu")
+end
+
+do
+    -- Enabled gate: the wrapper counts per hand, forwards elapsed, and measures seconds
+    -- through the injected st.api clock.
+    local st = load_diag()
+    local ran = {}
+    local original = function(elapsed) ran[#ran + 1] = elapsed end
+    local now = 100.0
+    st.api = { get_time = function() now = now + 0.001; return now end }
+    local self = { db = { profile = { diag_tick_counters = true } } }
+    local mainhand = st.diag.wrap_onupdate(self, "mainhand", original)
+    check(type(mainhand) == "function" and mainhand ~= original,
+        "wrap_onupdate with the gate true installs a counting wrapper")
+    mainhand(0.016)
+    mainhand(0.017)
+    mainhand(0.018)
+    local offhand_local = st.diag.wrap_onupdate(self, "offhand", original)
+    offhand_local(0.019)
+    eq(ran[1], 0.016, "the wrapper forwards the elapsed argument to the original")
+    eq(#ran, 4, "the original ran exactly once per wrapped tick")
+    eq(st.diag.tick_sites.mainhand.ticks, 3,
+        "the mainhand counter counts every wrapped tick")
+    eq(st.diag.tick_sites.offhand.ticks, 1, "the offhand counter counts separately")
+    check(type(st.diag.tick_sites.mainhand.seconds) == "number"
+        and math.abs(st.diag.tick_sites.mainhand.seconds - 0.003) < 1e-9,
+        "the measured seconds accumulate across the wrapped ticks")
+    check(st.diag.tick_sites.ranged == nil,
+        "an unwrapped hand has no tick site")
+
+    -- The ticks line: stable labels, per-site counts, unknown hands as ?, seconds summed.
+    run_report(st, self, true)
+    eq(captured[4], "SwedgeTimer diag: ticks on=yes mainhand=3 offhand=1 ranged=? cpu=0.00s",
+        "the ON ticks line renders the counts and the summed seconds at two decimals")
+    eq(st.diag.tick_sites.mainhand.ticks, 3,
+        "the report is print-only: reading it never advances a counter")
+end
+
+do
+    -- Degraded attribution: no st.api clock - ticks keep counting, seconds stay unknown.
+    local st = load_diag()
+    local original = function() end
+    local self = { db = { profile = { diag_tick_counters = true } } }
+    local wrapper = st.diag.wrap_onupdate(self, "ranged", original)
+    wrapper(nil)
+    wrapper(nil)
+    eq(st.diag.tick_sites.ranged.ticks, 2, "the counter runs without a clock")
+    check(st.diag.tick_sites.ranged.seconds == nil,
+        "an unmeasured clock leaves the seconds unknown, not zero")
+    run_report(st, self, true)
+    eq(captured[4], "SwedgeTimer diag: ticks on=yes mainhand=? offhand=? ranged=2 cpu=?",
+        "without a clock the seconds render ? instead of a fake zero")
+end
+
+do
+    -- Never throws: junk module state degrades to "?" rather than erroring.
+    local st = load_diag()
+    st.diag.tick_sites = "junk"
+    check(run_report(st, {}, true), "a junk tick_sites table: verbose does not throw")
+    contains(captured[4], "ticks on=no mainhand=?", "a junk tick_sites renders the ? line")
+    st.diag.tick_sites = setmetatable({}, { __index = function() error("hostile") end })
+    check(run_report(st, {}, true), "a hostile tick_sites metatable: verbose does not throw")
+    contains(captured[4], "mainhand=?", "a hostile tick_sites renders ? per site")
+end
+
+--=========================================================================================
+-- 12. Static wiring: main.lua hooks, purity, TOC placement
 --=========================================================================================
 do
     local main = read("main.lua")
@@ -493,8 +592,16 @@ do
         "/st diag calls the verbose report")
     check(main:find('arg == "diag"', 1, true) ~= nil,
         "main.lua handles the diag argument")
+    check(main:find('if st.diag and st.diag.wrap_onupdate then', 1, true) ~= nil,
+        "main.lua's OnUpdate hook line gates the counting wrapper on st.diag")
+    check(main:find('st.diag.wrap_onupdate(self, hand, onupdate)', 1, true) ~= nil,
+        "main.lua passes the addon self, the hand and the original to wrap_onupdate")
+    check(main:find('SetScript("OnUpdate", onupdate)', 1, true) ~= nil,
+        "main.lua installs the (possibly counted) onupdate as the bar frame's script")
 
     local diag_src = read("diag.lua")
+    check(diag_src:find("function diag.wrap_onupdate", 1, true) ~= nil,
+        "diag.lua exposes the OnUpdate counting wrapper")
     -- Purity is checked against executable code: whole-line comments (the header explains
     -- these rules and may name them) are stripped first.
     local code_only = {}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T10:34:35Z",
+  "run_id": "rogue-practice-polish-2026-10-19",
+  "agent_name": "rogue-practice",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Two ROGUE scenarios registered through the shared harness with nil-state unscored paths; grade pins cover S/A/B/C/D plus both F mirrors and the nil-tick/nil-swing cases; options copy updated without touching any toggle key or behavior.",
+    "what_was_hard": "Keeping the energy tick model honest: the marker is one latency before the 2 s tick, so the drill grades spend-start fractions without pretending to read live energy. Late SS-window F grades come from the band fallback, so the window-end guard is defensive rather than separately mutation-provable.",
+    "skill_gap": "None material; mutation proof for the late SS window edge is indirect (fallback F) rather than a distinct guard."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

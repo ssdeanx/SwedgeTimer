@@ -1,9 +1,10 @@
 -- tests/druid_energy_state.lua: offline tests for the pure druid maths module
 -- (druid_energy.lua): the energy tick cycle fraction and its modulo/negative-clamp
--- behaviour, the 19-22 natural-gain classifier, the form-label power-type mapping and
--- the debuff bar display helpers (remaining/total, fallback durations, glow window).
--- The module is loaded in a bare sandbox - no WoW globals at all - so a stray global
--- read inside it raises instead of silently passing.
+-- behaviour, the 19-22 natural-gain classifier, the form-label power-type mapping, the
+-- debuff bar display helpers (remaining/total, fallback durations, glow window), the
+-- D4 TTD EMA step and estimate, the D5 energy-deficit countdown and the GCD-tick
+-- fraction. The module is loaded in a bare sandbox - no WoW globals at all - so a
+-- stray global read inside it raises instead of silently passing.
 local script_dir = (arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
 local ROOT = script_dir .. "/../"
 
@@ -50,6 +51,9 @@ eq(de.ENERGY_TICK_SECONDS, 2.0, "the energy tick cycle is the reference's 2.0 s"
 eq(de.ENERGY_GAIN_MIN, 19, "the natural-gain window starts at 19")
 eq(de.ENERGY_GAIN_MAX, 22, "the natural-gain window ends at 22")
 eq(de.DEBUFF_GLOW_SECONDS, 4, "the debuff glow window is the reference's final 4 s")
+eq(de.ENERGY_TICK_GAIN, 20, "one natural tick grants the flat 20 energy")
+eq(de.TTD_EMA_ALPHA, 0.25, "the TTD EMA weights the newest sample 0.25 (D4)")
+eq(de.TTD_SAMPLE_SECONDS, 0.25, "the TTD sampler throttles to 0.25 s (D4)")
 
 --=========================================================================================
 -- 2) get_energy_tick_fraction: the reference's elapsed-modulo-cycle maths
@@ -156,6 +160,143 @@ eq(de.should_debuff_glow(0), false, "an expired debuff does not glow")
 eq(de.should_debuff_glow(-1), false, "a negative remainder does not glow")
 eq(de.should_debuff_glow(nil), false, "a missing remainder does not glow")
 eq(de.should_debuff_glow("4"), false, "a non-number remainder does not glow")
+
+--=========================================================================================
+-- 7) update_hp_velocity: the D4 EMA step (verify_bank §4.1 - raw velocity is banned)
+--=========================================================================================
+do
+    -- First sample seeds from the raw velocity (no smoothing yet).
+    near(de.update_hp_velocity(nil, 900, 1000, 1, 0.25), 100, 1e-9,
+        "the first sample seeds the EMA from the raw HP/s")
+    -- Later samples smooth: 0.25 * new + 0.75 * old (a 200 HP/s sample over a
+    -- 100 HP/s EMA lands at 125).
+    near(de.update_hp_velocity(100, 800, 1000, 1, 0.25), 125, 1e-9,
+        "a later sample smooths with the 0.25 weight")
+    near(de.update_hp_velocity(100, 900, 900, 1, 0.25), 75, 1e-9,
+        "a zero-velocity sample decays the EMA toward 0")
+    -- The BINDING correction: one raw spike must not become the velocity.
+    local smoothed = de.update_hp_velocity(10, 800, 900, 1, 0.25)
+    check(smoothed ~= 100, "a raw +100 spike never lands raw in the EMA")
+    near(smoothed, 0.25 * 100 + 0.75 * 10, 1e-9, "the spike is damped by the EMA weight")
+    -- Heals contribute zero velocity (never negative).
+    near(de.update_hp_velocity(50, 1000, 900, 1, 0.25), 37.5, 1e-9,
+        "a heal contributes zero velocity and decays the EMA")
+    -- The alpha falls back to the shipped constant on junk.
+    near(de.update_hp_velocity(100, 800, 900, 1, nil), 0.25 * 100 + 0.75 * 100, 1e-9,
+        "a missing alpha falls back to the shipped 0.25")
+    near(de.update_hp_velocity(100, 800, 900, 1, 0), 100, 1e-9,
+        "a zero alpha falls back to the shipped 0.25")
+    near(de.update_hp_velocity(100, 800, 900, 1, 2), 100, 1e-9,
+        "an out-of-range alpha falls back to the shipped 0.25")
+    -- Unreadable samples return nil (the caller drops the baseline).
+    eq(de.update_hp_velocity(100, nil, 900, 1, 0.25), nil, "a missing hp reads nil")
+    eq(de.update_hp_velocity(100, 800, nil, 1, 0.25), nil, "a missing prev_hp reads nil")
+    eq(de.update_hp_velocity(100, 800, 900, 0, 0.25), nil, "a zero dt reads nil")
+    eq(de.update_hp_velocity(100, 800, 900, -1, 0.25), nil, "a negative dt reads nil")
+    eq(de.update_hp_velocity(100, 800, 900, nil, 0.25), nil, "a missing dt reads nil")
+    eq(de.update_hp_velocity(100, 0 / 0, 900, 1, 0.25), nil, "a NaN hp reads nil")
+    eq(de.update_hp_velocity(100, 800, 0 / 0, 1, 0.25), nil, "a NaN prev_hp reads nil")
+    -- A poisoned EMA re-seeds instead of propagating.
+    near(de.update_hp_velocity(0 / 0, 800, 900, 1, 0.25), 100, 1e-9,
+        "a NaN EMA re-seeds from the raw velocity")
+end
+
+--=========================================================================================
+-- 8) get_time_to_die: hp / smoothed velocity, unknown stays nil
+--=========================================================================================
+near(de.get_time_to_die(1000, 100), 10, 1e-9, "1000 hp at 100 HP/s dies in 10 s")
+near(de.get_time_to_die(50, 25), 2, 1e-9, "the estimate scales with the hp")
+near(de.get_time_to_die(0, 100), 0, 1e-9, "zero hp reads zero seconds")
+eq(de.get_time_to_die(1000, 0), nil, "a zero velocity has no crossing")
+eq(de.get_time_to_die(1000, -5), nil, "a negative velocity has no crossing")
+eq(de.get_time_to_die(nil, 100), nil, "a missing hp reads nil")
+eq(de.get_time_to_die(1000, nil), nil, "a missing velocity reads nil")
+eq(de.get_time_to_die(0 / 0, 100), nil, "a NaN hp reads nil")
+eq(de.get_time_to_die(1000, 0 / 0), nil, "a NaN velocity reads nil")
+
+--=========================================================================================
+-- 9) get_time_to_energy_cost: the D5 "Shred in Xs" countdown maths
+--=========================================================================================
+do
+    -- Affordability is 0 (the caller hides the text).
+    near(de.get_time_to_energy_cost(0, 0.5, 42, 42, 2, 20), 0, 1e-9,
+        "energy exactly at the cost is affordable now")
+    near(de.get_time_to_energy_cost(0, 0.5, 50, 42, 2, 20), 0, 1e-9,
+        "energy above the cost is affordable now")
+    -- A deficit inside one tick waits for the next boundary: anchor at 0, now 0.5 ->
+    -- 1.5 s to the tick.
+    near(de.get_time_to_energy_cost(0, 0.5, 30, 42, 2, 20), 1.5, 1e-9,
+        "one tick of deficit waits for the next tick boundary")
+    near(de.get_time_to_energy_cost(0, 0, 30, 42, 2, 20), 2.0, 1e-9,
+        "a fresh anchor waits a full cycle")
+    near(de.get_time_to_energy_cost(0, 1.999, 30, 42, 2, 20), 0.001, 1e-9,
+        "the boundary is the wait floor")
+    -- Two ticks of deficit: next boundary plus one more cycle.
+    near(de.get_time_to_energy_cost(0, 0.5, 20, 42, 2, 20), 3.5, 1e-9,
+        "two ticks of deficit add one full cycle")
+    near(de.get_time_to_energy_cost(0, 0.5, 2.0, 42, 2, 20), 3.5, 1e-9,
+        "exactly two ticks of deficit (40) stays two ticks")
+    near(de.get_time_to_energy_cost(0, 0.5, 1.9, 42, 2, 20), 5.5, 1e-9,
+        "a fractional third tick still rounds up")
+    -- The deficit boundary: exactly one tick of deficit (22) is two ticks.
+    near(de.get_time_to_energy_cost(0, 0.5, 20, 42, 2, 20), 3.5, 1e-9,
+        "exactly 22 energy short is two ticks (ceil)")
+    near(de.get_time_to_energy_cost(0, 0.5, 22.001, 42, 2, 20), 1.5, 1e-9,
+        "21.999 short is one tick")
+    -- An anchor in the future clamps to a fresh phase.
+    near(de.get_time_to_energy_cost(10, 5, 30, 42, 2, 20), 2.0, 1e-9,
+        "an anchor in the future reads as a fresh cycle")
+    -- A missed reset keeps cycling.
+    near(de.get_time_to_energy_cost(0, 5, 30, 42, 2, 20), 1.0, 1e-9,
+        "the wait is modulo the cycle")
+    -- Cycle/gain fallbacks.
+    near(de.get_time_to_energy_cost(0, 0.5, 30, 42, 0, 20), 1.5, 1e-9,
+        "a zero cycle falls back to the shipped 2 s")
+    near(de.get_time_to_energy_cost(0, 0.5, 30, 42, nil, 20), 1.5, 1e-9,
+        "a missing cycle falls back to the shipped 2 s")
+    near(de.get_time_to_energy_cost(0, 0.5, 30, 42, 2, 0), 1.5, 1e-9,
+        "a zero gain falls back to the shipped 20")
+    near(de.get_time_to_energy_cost(0, 0.5, 30, 42, 2, nil), 1.5, 1e-9,
+        "a missing gain falls back to the shipped 20")
+    near(de.get_time_to_energy_cost(0, 0.5, 30, 42, 2, 40), 1.5, 1e-9,
+        "a wider gain keeps the same one-tick wait")
+    -- Unknown shapes read nil (the caller hides).
+    eq(de.get_time_to_energy_cost(0, 0.5, nil, 42, 2, 20), nil, "a missing energy reads nil")
+    eq(de.get_time_to_energy_cost(0, 0.5, 30, nil, 2, 20), nil, "a missing cost reads nil")
+    eq(de.get_time_to_energy_cost(nil, 0.5, 30, 42, 2, 20), nil, "a missing anchor reads nil")
+    eq(de.get_time_to_energy_cost(0, nil, 30, 42, 2, 20), nil, "a missing clock reads nil")
+    eq(de.get_time_to_energy_cost("0", 0.5, 30, 42, 2, 20), nil, "a non-number anchor reads nil")
+    eq(de.get_time_to_energy_cost(0, 0.5, 0 / 0, 42, 2, 20), nil, "a NaN energy reads nil")
+    eq(de.get_time_to_energy_cost(0 / 0, 0.5, 30, 42, 2, 20), nil, "a NaN anchor reads nil")
+end
+
+--=========================================================================================
+-- 10) get_gcd_tick_fraction: the GCD tick overlay on the energy column
+--=========================================================================================
+do
+    -- Anchor at 0, now 0.5 (quarter cycle): a 1.5 s GCD ends at 0.25 + 0.75 = 1.0.
+    near(de.get_gcd_tick_fraction(0, 0.5, 1.5, 2), 1.0, 1e-9,
+        "a GCD running past the tick clamps to the column top")
+    near(de.get_gcd_tick_fraction(0, 0.5, 0.5, 2), 0.5, 1e-9,
+        "a GCD ending inside the cycle sits at its fraction")
+    near(de.get_gcd_tick_fraction(0, 0, 1.0, 2), 0.5, 1e-9,
+        "a fresh anchor puts a 1 s GCD half-way up")
+    near(de.get_gcd_tick_fraction(100, 101, 0.5, 2), 0.75, 1e-9,
+        "the fraction is anchor-relative")
+    -- No GCD running (or an unknown one) reads nil (the caller hides the marker).
+    eq(de.get_gcd_tick_fraction(0, 0.5, 0, 2), nil, "no running GCD reads nil")
+    eq(de.get_gcd_tick_fraction(0, 0.5, -1, 2), nil, "a negative GCD reads nil")
+    eq(de.get_gcd_tick_fraction(0, 0.5, nil, 2), nil, "a missing GCD reads nil")
+    eq(de.get_gcd_tick_fraction(nil, 0.5, 1.0, 2), nil, "a missing anchor reads nil")
+    eq(de.get_gcd_tick_fraction(0, nil, 1.0, 2), nil, "a missing clock reads nil")
+    eq(de.get_gcd_tick_fraction(0 / 0, 0.5, 1.0, 2), nil, "a NaN anchor reads nil")
+    eq(de.get_gcd_tick_fraction(0, 0.5, 0 / 0, 2), nil, "a NaN GCD reads nil")
+    -- Cycle fallback and the bottom clamp.
+    near(de.get_gcd_tick_fraction(0, 0.5, 0.5, 0), 0.5, 1e-9,
+        "a zero cycle falls back to the shipped 2 s")
+    near(de.get_gcd_tick_fraction(0, 1.99, 0.001, 2), 0.9955, 1e-9,
+        "a tiny GCD near the boundary keeps its fraction")
+end
 
 if failures == 0 then
     print("PASS  druid_energy_state.lua (" .. tostring(checks) .. " checks)")

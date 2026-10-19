@@ -61,6 +61,23 @@ local WARRIOR_RAMPAGE_SPELL_ID = 29838
 local WARRIOR_RAMPAGE_NAME = "Rampage"
 local WARRIOR_RAMPAGE_MAX_STACKS = 5
 
+-- Battle Shout uptime (discover #9): rank ids carried with the other aura ids
+-- (on_aura_change below reads them before the tracker-constant block is defined).
+-- A remembered id is a rumor, so every rank here cites the client-family audit
+-- page that confirmed it (bench/buildout_warrior_2026-10-17.md): 6673 / 5242 /
+-- 6192 (classic + Forever pages), 11551 / 25289 / 2048 / 47436 (wotlk-classic
+-- pages, up to rank 9). A rank id the running client does not know simply never
+-- matches; the literal English fallback below still covers the buff, and a
+-- localized client matches by the ids it does know (the Rampage scan's pattern).
+local WARRIOR_BATTLE_SHOUT_IDS = get_tab({
+    6673, 5242, 6192, 11551, 25289, 2048, 47436
+})
+local WARRIOR_BATTLE_SHOUT_NAME = "Battle Shout"
+-- The fallback covers auras the client reports without an expiry (2 min is the
+-- audit pages' classic/WotLK duration; the Forever client lists 3 min, so a
+-- client that answers always wins and this only covers an omission).
+local WARRIOR_BATTLE_SHOUT_FALLBACK = 120
+
 -- Bloodthirst and Whirlwind, all ranks across the classic families (the TBC fury
 -- core): rank 1 first, the WotLK max last; get_family_spell_id picks the highest
 -- id that exists on the running client (the current rank). Ranks from other
@@ -345,6 +362,12 @@ function ST.WARRIOR.on_aura_change(self)
     -- expiration stamp for the badge's refresh window. A count the client omits
     -- still means one stack (the shaman's max(1, count) handling).
     local rampage_stacks, rampage_expires = nil, nil
+    -- Battle Shout uptime rides the same walk (no extra client reads): the
+    -- later-expiring matching aura stamp - or, when the client omits the expiry,
+    -- now + the audit fallback duration - feeds the badge's countdown. Cleared
+    -- whenever the buff is absent; never cleared in on_combat_exit (the buff
+    -- persists between fights).
+    local battle_shout_expires = nil
     -- Iterate all player auras
     local i = 1
     while true do
@@ -380,10 +403,26 @@ function ST.WARRIOR.on_aura_change(self)
                 rampage_expires = expiration
             end
         end
+        -- Battle Shout: rank ids first, then the literal English fallback (the
+        -- Rampage scan's convention). The later-expiring stamp wins; a client
+        -- that reports no expiry still arms the audit-duration shadow.
+        if (spell_id and WARRIOR_BATTLE_SHOUT_IDS[spell_id])
+            or name == WARRIOR_BATTLE_SHOUT_NAME then
+            local bs_expires
+            if type(expiration) == "number" and expiration > 0 then
+                bs_expires = expiration
+            else
+                bs_expires = api.get_time() + WARRIOR_BATTLE_SHOUT_FALLBACK
+            end
+            if battle_shout_expires == nil or bs_expires > battle_shout_expires then
+                battle_shout_expires = bs_expires
+            end
+        end
         i = i + 1
     end
     self.warrior_rampage_stacks = rampage_stacks
     self.warrior_rampage_expires = rampage_expires
+    self.warrior_battle_shout_expires = battle_shout_expires
     self.has_sudden_death = sd_found
     self.has_tfb = tfb_found
     -- Forever Bloodthrill (UNCONFIRMED name): a second Overpower source. The
@@ -462,6 +501,13 @@ function ST.WARRIOR.post_init(self)
     self.warrior_rampage_stacks = nil
     self.warrior_rampage_expires = nil
     self.warrior_rampage_text_shown = nil
+    -- Build-out round 1 state: the W3 tier colour currently applied to the
+    -- badge, the W1 bank cue's visibility (churn-guarded) and the Battle Shout
+    -- badge's shadow state (capture timestamp + last written read-out).
+    self.warrior_rampage_tier_applied = nil
+    self.warrior_bank_shown = false
+    self.warrior_battle_shout_text_shown = nil
+    self.warrior_battle_shout_expires = nil
     self.has_sudden_death = false
     self.has_tfb = false
     -- Frozen branch (Mortal Strike known = arms; ERA + SoD rune = SoD): the
@@ -509,7 +555,7 @@ function ST.WARRIOR.on_combat_exit(self)
 end
 
 function ST.WARRIOR.set_bar_color(self, hand)
-    -- Returns true if any special setting was applied to let the parent func know 
+    -- Returns true if any special setting was applied to let the parent func know
     -- to revert to default behaviour.
     -- Will set appropriate colors for HS/Cleave queued if requested in the settings,
     -- and will set a special color when the player has one of those queued up but has
@@ -536,7 +582,7 @@ function ST.WARRIOR.set_bar_color(self, hand)
         )
         return true
     end
-    
+
     -- Insufficient rage for queue.
     if (self.cleave_queued or self.hs_queued) and self.insufficient_rage then
         frame.bar:SetVertexColor(
@@ -553,10 +599,13 @@ end
 -- Warrior trackers (reference SuperSwingTimer_ClassMods.lua warrior block 1689-3333)
 --=========================================================================================
 -- The Shield Block duration bar, the Slam cast bar, the Overpower dodge-proc flash,
--- the Rampage upkeep badge and the Deep Wounds / Sunder Armor / Rend / Thunder Clap /
+-- the Rampage upkeep badge, the Battle Shout badge, the W1 rage-bank cue and the
+-- Deep Wounds / Sunder Armor / Rend / Thunder Clap / Demo Shout bars live here.
 -- The pure maths lives next to the widgets (this class has no separate pure module):
 -- ST.WARRIOR.get_debuff_remaining / should_debuff_glow / get_overpower_remaining /
--- is_overpower_cast are directly unit-tested. One throttled scan (0.05 s) of the target's
+-- is_overpower_cast / get_rampage_display / get_rampage_tier / get_bank_state /
+-- get_battle_shout_display / composite_rage_gate / gate_composite_action are
+-- directly unit-tested. One throttled scan (0.05 s) of the target's
 -- harmful auras feeds all five debuff bars; the player's helpful auras are read on the
 -- same cadence for Shield Block. Every read is gated on the options that consume it.
 
@@ -612,6 +661,37 @@ local WARRIOR_SLAM_CLASH_COLOR = { 217, 38, 26, 0.90 }
 -- Rampage upkeep badge (the Shamanistic Rage badge pattern in
 -- classes/shaman.lua: a right-edge FontString with a countdown text).
 local WARRIOR_RAMPAGE_BADGE_COLOR = { 255, 140, 26, 0.95 }
+
+-- Rampage tier colours (buildout W3): the badge recolours by how well the
+-- buff is maintained - green while the refresh window is far, amber inside
+-- the final glow window, red inside the final 2 s. Green and amber reuse the
+-- Slam safe-window colour and the badge's original colour; red is the Slam
+-- clash hue at full alpha.
+local WARRIOR_RAMPAGE_TIER_COLORS = {
+    green = WARRIOR_SLAM_SAFE_COLOR,
+    amber = WARRIOR_RAMPAGE_BADGE_COLOR,
+    red = { 217, 38, 26, 1.0 },
+}
+
+-- W1 rage-bank cue (buildout W1): a 2 px amber top edge plus a centred "BANK"
+-- label on the mainhand visuals frame while in combat the target sits inside
+-- the pre-Execute band ([threshold, threshold + 15 %) - the band the verifier
+-- described) and rage has reached the floor. Static powerset of the Overpower
+-- flash (edge + centred text), no pulse: the cue is a sustained condition.
+local WARRIOR_BANK_BAND = 15
+local WARRIOR_BANK_RAGE_FLOOR = 60
+local WARRIOR_BANK_EDGE_COLOR = { 255, 170, 0, 0.95 }
+local WARRIOR_BANK_TEXT_COLOR = { 255, 170, 0, 1.0 }
+
+-- Battle Shout uptime badge (the Rampage badge pattern, one widget above it).
+local WARRIOR_BATTLE_SHOUT_BADGE_COLOR = { 240, 200, 60, 0.95 }
+
+-- W2 composite fallback costs (verify §4.2 - BINDING): the class's known rank
+-- costs stand in when a family's cooldown read answers but its power-cost read
+-- stays muted (the gate then still protects the rage floor; the costs are the
+-- vanilla-line Bloodthirst/Whirlwind ranks the classic families carry).
+local WARRIOR_COMPOSITE_BT_COST = 30
+local WARRIOR_COMPOSITE_WW_COST = 25
 
 -- Ordered bottom-to-top exactly like the reference restack list (ClassMods.lua:3000-3005):
 -- Deep Wounds, Sunder Armor, Rend, Thunder Clap, Demo Shout. Heights (6 px), fallback
@@ -736,6 +816,121 @@ function ST.WARRIOR.get_rampage_display(stacks, expires, now)
     return string.format("RAMPAGE x%d", stacks)
 end
 
+--=========================================================================================
+-- Build-out round 1 pure helpers (referenced rows in bench/verify_bank.md);
+-- all directly unit-tested in tests/warrior_state.lua
+--=========================================================================================
+
+-- Rampage refresh tier (buildout W3): the badge recolours by how well the buff
+-- is maintained - nil with no buff, "red" inside the final 2 s, "amber" inside
+-- the final glow window, "green" while well-maintained. A client that never
+-- reported an expiry reads amber (the refresh window is unknown, not maintained).
+function ST.WARRIOR.get_rampage_tier(stacks, expires, now)
+    if type(stacks) ~= "number" or stacks < 1 then
+        return nil
+    end
+    if type(expires) ~= "number" or expires <= 0 then
+        return "amber"
+    end
+    local remaining = expires - now
+    if remaining <= 2 then
+        return "red"
+    elseif remaining <= WARRIOR_GLOW_WINDOW then
+        return "amber"
+    end
+    return "green"
+end
+
+-- W1 rage-bank state: true while in combat, the PLAYER'S health percentage sits
+-- inside the pre-Execute band [threshold, threshold + band) and rage has reached
+-- the floor. An unreadable health or rage never arms the cue: the state would
+-- have to claim the band without seeing it, and a wrongly shown cue is costlier
+-- than a missed one (the W2 gate degrades the opposite way on purpose - there
+-- the withhold is the risk, here the false show is).
+function ST.WARRIOR.get_bank_state(health_pct, execute_pct, rage, in_combat)
+    if in_combat ~= true then
+        return false
+    end
+    if type(health_pct) ~= "number" or type(execute_pct) ~= "number" then
+        return false
+    end
+    if type(rage) ~= "number" or rage < WARRIOR_BANK_RAGE_FLOOR then
+        return false
+    end
+    return health_pct >= execute_pct and health_pct < execute_pct + WARRIOR_BANK_BAND
+end
+
+-- W2 composite rage gate (verify §4.2 - BINDING): true when rage covers the
+-- prompt's cost plus the reserve the composite must protect. Unknown reads
+-- degrade to ALLOW (unknown is not a shortage - the rotation label pins that
+-- Bloodthirst stays the default with no power read), so a nil cost or an
+-- unknown reserve is treated as absent. The caller substitutes the class's
+-- fixed fallback costs first (the authoritative rank cost on a muted client),
+-- so in the composite path none of the costs are nil.
+function ST.WARRIOR.composite_rage_gate(rage, cost, reserve)
+    if type(rage) ~= "number" or type(cost) ~= "number" then
+        return true
+    end
+    local reserved = type(reserve) == "number" and reserve or 0
+    return rage >= cost + reserved
+end
+
+-- Cost substitute: a numeric client read wins, otherwise the documented fixed
+-- cost (the reserve uses 0 - an unjudgeable read cannot reserve what it cannot
+-- see, so the composite degrades to the ungated core comparison).
+local function composite_cost(cost, fallback)
+    if type(cost) == "number" then
+        return cost
+    end
+    return fallback
+end
+
+-- The gate over the engine's composite pick (buildout W2): the engine orders
+-- the TBC core by cooldown alone, so its Bloodthirst prompt can be fired while
+-- the rage a queued Heroic Strike/Cleave needs is already promised. Only a
+-- Bloodthirst prompt is re-judged (the engine's own HS-cancel cue and the rule
+-- order it feeds the queue into keep the other actions coherent); a gated BT
+-- falls back "BT first, WW next": Whirlwind is the next core, so the prompt
+-- shifts to WW when that core is ready AND still affordable after the same
+-- reserve - otherwise no prompt at all. Touches out.action only.
+function ST.WARRIOR.gate_composite_action(inputs, out)
+    if out.action ~= "bt" then
+        return out
+    end
+    local reserve = 0
+    if inputs.hs_queued == true then
+        reserve = composite_cost(inputs.hs_cost, 0)
+    elseif inputs.cleave_queued == true then
+        reserve = composite_cost(inputs.cleave_cost, 0)
+    end
+    local bt_cost = composite_cost(inputs.bt_cost, WARRIOR_COMPOSITE_BT_COST)
+    if ST.WARRIOR.composite_rage_gate(inputs.rage, bt_cost, reserve) then
+        return out
+    end
+    local ww_cost = composite_cost(inputs.ww_cost, WARRIOR_COMPOSITE_WW_COST)
+    if type(inputs.ww_remaining) == "number" and inputs.ww_remaining <= 0
+        and ST.WARRIOR.composite_rage_gate(inputs.rage, ww_cost, reserve) then
+        out.action = "ww"
+    else
+        out.action = nil
+    end
+    return out
+end
+
+-- Battle Shout badge text: "BS <seconds>s" while the buff's window is live,
+-- nil when the badge should hide (no capture, or the window already elapsed).
+-- The fallback shadow is applied by the aura scan, never here.
+function ST.WARRIOR.get_battle_shout_display(expires, now)
+    if type(expires) ~= "number" or expires <= 0 then
+        return nil
+    end
+    local remaining = expires - now
+    if remaining <= 0 then
+        return nil
+    end
+    return string.format("BS %.0fs", remaining)
+end
+
 -- True when a successful-cast payload is an Overpower cast: the rank-1 id, the literal or
 -- localized name token, or any rank whose resolved name matches (the reference matches id
 -- + name, State.lua:1418-1421). The localized name is resolved lazily and never retried
@@ -832,23 +1027,25 @@ local function scan_target_warrior_debuffs(now)
     while index <= 40 and pending > 0 do
         local name, _, count, _, aura_duration, aura_expiration, source, _, _, spell_id =
             api.UnitAura("target", index, "HARMFUL")
-        if name == nil then
-            break
-        end
-        if source == "player" or source == nil then
-            for i = 1, #warrior_debuff_defs do
-                local def = warrior_debuff_defs[i]
-                local key = def.key
-                if found[key] == nil then
-                    local is_match = (type(spell_id) == "number" and def.ids[spell_id] ~= nil)
-                        or def.fallback_names[name] == true
-                        or (def.localized_names ~= nil and def.localized_names[name] == true)
-                    if is_match then
-                        found[key] = true
-                        duration[key] = aura_duration
-                        expiration[key] = aura_expiration
-                        stacks[key] = tonumber(count)
-                        pending = pending - 1
+        -- No early break (R2): a secret entry degrades to absent and the walk
+        -- continues past it, so a restricted row above the debuffs no longer
+        -- truncates the scan.
+        if name ~= nil then
+            if source == "player" or source == nil then
+                for i = 1, #warrior_debuff_defs do
+                    local def = warrior_debuff_defs[i]
+                    local key = def.key
+                    if found[key] == nil then
+                        local is_match = (type(spell_id) == "number" and def.ids[spell_id] ~= nil)
+                            or def.fallback_names[name] == true
+                            or (def.localized_names ~= nil and def.localized_names[name] == true)
+                        if is_match then
+                            found[key] = true
+                            duration[key] = aura_duration
+                            expiration[key] = aura_expiration
+                            stacks[key] = tonumber(count)
+                            pending = pending - 1
+                        end
                     end
                 end
             end
@@ -883,15 +1080,16 @@ local function scan_player_shield_block(now)
     while i <= 40 do
         -- "HELPFUL" explicitly: the Retail wrapper forwards the filter into
         -- C_UnitAuras.GetAuraDataByIndex, where it is a typed enum argument.
+        -- No early break (R2): a secret entry degrades to absent and the walk
+        -- continues past it.
         local name, _, _, _, duration, expiration, _, _, _, spell_id =
             api.UnitAura("player", i, "HELPFUL")
-        if name == nil then
-            break
-        end
-        if spell_id == shield_block_id
-            or (shield_block_name_resolved ~= nil and name == shield_block_name_resolved)
-            or name == "Shield Block" then
-            return duration, expiration
+        if name ~= nil then
+            if spell_id == shield_block_id
+                or (shield_block_name_resolved ~= nil and name == shield_block_name_resolved)
+                or name == "Shield Block" then
+                return duration, expiration
+            end
         end
         i = i + 1
     end
@@ -934,6 +1132,47 @@ local function is_warrior_slam_token(token, now)
     end
     resolve_slam_names(now)
     return slam_localized_names ~= nil and slam_localized_names[token] == true
+end
+
+-- Queued-melee localized names (R1): the client's own names for every Heroic
+-- Strike / Cleave rank, resolved once through GetSpellInfo and retried at the
+-- shared throttled cadence while the client's spell data is not up yet (the
+-- debuff-name discipline). Anniversary (UNCONFIRMED) may send the spell name
+-- where classic sends the numeric id in the SPELL_MISSED dodge branch below.
+local WARRIOR_HS_NAME = "Heroic Strike"
+local WARRIOR_CLEAVE_NAME = "Cleave"
+local hs_cleave_localized_names
+local hs_cleave_names_retry_at = 0
+
+local function resolve_hs_cleave_names(now)
+    if hs_cleave_localized_names == nil and now >= hs_cleave_names_retry_at then
+        local names = {}
+        for id in pairs(hs_ids) do
+            local name = api.GetSpellInfo(id)
+            if name then
+                names[name] = true
+            end
+        end
+        for id in pairs(cleave_ids) do
+            local name = api.GetSpellInfo(id)
+            if name then
+                names[name] = true
+            end
+        end
+        if next(names) ~= nil then
+            hs_cleave_localized_names = names
+        else
+            hs_cleave_names_retry_at = now + WARRIOR_NAMES_RETRY_S
+        end
+    end
+end
+
+local function is_warrior_queued_melee_proc_name(name, now)
+    if name == WARRIOR_HS_NAME or name == WARRIOR_CLEAVE_NAME then
+        return true
+    end
+    resolve_hs_cleave_names(now)
+    return hs_cleave_localized_names ~= nil and hs_cleave_localized_names[name] == true
 end
 
 -- Fallback cast duration when the client has no live cast window: the resolved rank's
@@ -1041,11 +1280,22 @@ function ST.WARRIOR.on_combat_log_unfiltered(self, _, timestamp, event, hide_cas
     end
     if event == "SPELL_MISSED" then
         -- Payload: spellId, spellName, spellSchool, missType. Only the queued melee
-        -- abilities can dodge-proc Overpower (reference State.lua:1343).
-        local spell_id = select(1, ...)
+        -- abilities can dodge-proc Overpower (reference State.lua:1343). Anniversary
+        -- (UNCONFIRMED, R1) may send the spell name where classic sends the numeric
+        -- id: match the id first (the classic path, unchanged), then fall back to
+        -- the localized ability names plus the literal English fallbacks. A nil id
+        -- never matches, as before.
+        local spell_id, spell_name = select(1, ...), select(2, ...)
         local miss_type = select(4, ...)
-        if miss_type == "DODGE" and spell_id ~= nil
-            and (hs_ids[spell_id] ~= nil or cleave_ids[spell_id] ~= nil) then
+        local proc_match = (type(spell_id) == "number"
+            and (hs_ids[spell_id] ~= nil or cleave_ids[spell_id] ~= nil))
+        if not proc_match and type(spell_id) == "string"
+            and type(spell_name) == "string" then
+            -- String id slot: the payload carries the name twice; match either slot.
+            proc_match = is_warrior_queued_melee_proc_name(spell_id, api.get_time())
+                or is_warrior_queued_melee_proc_name(spell_name, api.get_time())
+        end
+        if miss_type == "DODGE" and proc_match then
             self.warrior_overpower_proc_until = api.get_time() + WARRIOR_OVERPOWER_PROC_WINDOW
         end
     end
@@ -1228,6 +1478,43 @@ function ST.WARRIOR.setup_warrior_visuals(self)
         rampage_text:SetTextColor(self:convert_color(WARRIOR_RAMPAGE_BADGE_COLOR))
         rampage_text:Hide()
         vf.warrior_rampage_text = rampage_text
+    end
+
+    if not vf.warrior_bank then
+        -- W1 rage-bank cue (buildout W1): the Overpower flash's static powerset
+        -- - a 2 px amber top edge plus a centred 12 px "BANK" label. Colour and
+        -- geometry are fixed at creation; the per-frame path only flips their
+        -- visibility (GetTimePreciseSec-free, allocation-free).
+        local edge = vf:CreateTexture(nil, "OVERLAY")
+        edge:SetPoint("BOTTOMLEFT", vf, "TOPLEFT", -1, 0)
+        edge:SetPoint("BOTTOMRIGHT", vf, "TOPRIGHT", 1, 0)
+        edge:SetHeight(2)
+        edge:SetColorTexture(self:convert_color(WARRIOR_BANK_EDGE_COLOR))
+        edge:Hide()
+
+        local text = vf:CreateFontString(nil, "OVERLAY")
+        text:SetPoint("CENTER", vf, "CENTER", 0, 0)
+        text:SetJustifyH("CENTER")
+        text:SetFont(get_tracker_font_path(self), 12, "OUTLINE")
+        text:SetTextColor(self:convert_color(WARRIOR_BANK_TEXT_COLOR))
+        -- Static label: the per-frame path only flips visibility, so the text
+        -- is written once here and never re-set on the draw path.
+        text:SetText("BANK")
+        text:Hide()
+
+        vf.warrior_bank = { edge = edge, text = text }
+    end
+
+    if not vf.warrior_battle_shout_text then
+        -- Battle Shout uptime badge (buildout - the Rampage badge pattern one
+        -- widget above the rampage text; same font, same right-edge anchor).
+        local battle_shout_text = vf:CreateFontString(nil, "OVERLAY")
+        battle_shout_text:SetPoint("TOPLEFT", vf, "TOPRIGHT", 3, 16)
+        battle_shout_text:SetJustifyH("LEFT")
+        battle_shout_text:SetFont(get_tracker_font_path(self), 9, "OUTLINE")
+        battle_shout_text:SetTextColor(self:convert_color(WARRIOR_BATTLE_SHOUT_BADGE_COLOR))
+        battle_shout_text:Hide()
+        vf.warrior_battle_shout_text = battle_shout_text
     end
 end
 
@@ -1525,6 +1812,81 @@ local function update_warrior_rampage_badge(self, vf, db, now)
         self.warrior_rampage_text_shown = text
         badge:SetText(text)
     end
+    -- W3 tier colours: the badge recolours only on a tier change (the text
+    -- re-set above is unaffected by it). tier is never nil on this path (a
+    -- live badge always has stacks), so the lookup below always resolves.
+    local tier = self.WARRIOR.get_rampage_tier(
+        self.warrior_rampage_stacks, self.warrior_rampage_expires, now)
+    if tier ~= self.warrior_rampage_tier_applied then
+        self.warrior_rampage_tier_applied = tier
+        badge:SetTextColor(self:convert_color(WARRIOR_RAMPAGE_TIER_COLORS[tier]))
+    end
+    badge:Show()
+end
+
+-- W1 rage-bank cue (verify W1): the amber top edge + centred "BANK" while the
+-- bank state holds in combat. Default OFF (show_warrior_bank_cue ~= true: nil
+-- stays off like every other new toggle) and every client read sits behind the
+-- toggle, so an all-off configuration reads nothing. Visibility only flips on
+-- a transition; no per-frame colour or text write.
+local function update_warrior_bank_cue(self, vf, db, now)
+    local widgets = vf.warrior_bank
+    if not widgets then
+        return
+    end
+    if db.show_warrior_bank_cue ~= true then
+        self.warrior_bank_shown = false
+        widgets.edge:Hide()
+        widgets.text:Hide()
+        return
+    end
+    -- Player reads behind the toggle: an unreadable percentage never arms the
+    -- state (see get_bank_state). Rage is the warrior's primary power read.
+    local health_max = api.UnitHealthMax("player")
+    local health = api.UnitHealth("player")
+    local health_pct
+    if type(health_max) == "number" and health_max > 0 and type(health) == "number" then
+        health_pct = health / health_max * 100
+    end
+    local show = ST.WARRIOR.get_bank_state(health_pct, db.guide_execute_pct or 20,
+        api.UnitPower("player"), self.in_combat) == true
+    if show then
+        self.warrior_bank_shown = true
+        widgets.edge:Show()
+        widgets.text:Show()
+    else
+        self.warrior_bank_shown = false
+        widgets.edge:Hide()
+        widgets.text:Hide()
+    end
+end
+
+-- Battle Shout uptime badge: the "BS xxs" count-down beside the bar's right
+-- edge, one widget above the rampage text. Default OFF
+-- (show_warrior_battle_shout_badge ~= true: nil stays off). The capture rides
+-- the aura walk regardless (it adds no client read); this toggles only the
+-- drawing. Deliberately NOT cleared in on_combat_exit.
+local function update_warrior_battle_shout_badge(self, vf, db, now)
+    local badge = vf.warrior_battle_shout_text
+    if not badge then
+        return
+    end
+    if db.show_warrior_battle_shout_badge ~= true then
+        self.warrior_battle_shout_text_shown = nil
+        badge:Hide()
+        return
+    end
+    local text = self.WARRIOR.get_battle_shout_display(
+        self.warrior_battle_shout_expires, now)
+    if text == nil then
+        self.warrior_battle_shout_text_shown = nil
+        badge:Hide()
+        return
+    end
+    if self.warrior_battle_shout_text_shown ~= text then
+        self.warrior_battle_shout_text_shown = text
+        badge:SetText(text)
+    end
     badge:Show()
 end
 
@@ -1582,6 +1944,10 @@ function ST.WARRIOR.on_bar_update(self, hand)
     update_warrior_overpower_flash(self, vf, db, now)
     update_warrior_bars(self, vf, db, now, w)
     update_warrior_rampage_badge(self, vf, db, now)
+    -- Build-out round 1: the W1 bank cue and the Battle Shout badge below the
+    -- rampage call, in the same draw pass (visibility-only churn for the cue).
+    update_warrior_bank_cue(self, vf, db, now)
+    update_warrior_battle_shout_badge(self, vf, db, now)
 end
 
 --=========================================================================================
@@ -1766,27 +2132,28 @@ local function get_rend_debuff_window(now)
     while index <= 40 do
         local name, _, _, _, aura_duration, aura_expiration, source, _, _, spell_id =
             api.UnitAura("target", index, "HARMFUL")
-        if name == nil then
-            break
-        end
-        if source == "player" or source == nil then
-            local match = (type(spell_id) == "number" and rend_ids[spell_id] ~= nil)
-                or name == "Rend"
-            if not match then
-                if localized == nil then
-                    localized = {}
-                    for id in pairs(rend_ids) do
-                        local resolved = api.GetSpellInfo(id)
-                        if resolved then
-                            localized[resolved] = true
+        -- No early break (R2): a secret entry degrades to absent and the walk
+        -- continues past it.
+        if name ~= nil then
+            if source == "player" or source == nil then
+                local match = (type(spell_id) == "number" and rend_ids[spell_id] ~= nil)
+                    or name == "Rend"
+                if not match then
+                    if localized == nil then
+                        localized = {}
+                        for id in pairs(rend_ids) do
+                            local resolved = api.GetSpellInfo(id)
+                            if resolved then
+                                localized[resolved] = true
+                            end
                         end
                     end
+                    match = localized[name] == true
                 end
-                match = localized[name] == true
-            end
-            if match then
-                return ST.WARRIOR.get_debuff_remaining(
-                    aura_duration, aura_expiration, now, 15)
+                if match then
+                    return ST.WARRIOR.get_debuff_remaining(
+                        aura_duration, aura_expiration, now, 15)
+                end
             end
         end
         index = index + 1
@@ -2027,9 +2394,15 @@ ST.WARRIOR.guide = {
 
     -- Pure: the frozen warrior rule matrix (st.warrior_guide in warrior_guide.lua);
     -- guarded so a flavor without that module stays inert rather than erroring.
+    -- The composite rage gate (verify §4.2 - BINDING) post-processes the pick:
+    -- the engine orders the TBC core by cooldown alone, the gate re-judges the
+    -- Bloodthirst prompt against rage (cost + the queued HS/Cleave reserve)
+    -- before it reaches the frame, so the label and the guide can never
+    -- disagree (this same wrapper feeds get_rotation_key).
     evaluate = function(inputs, out)
         if st.warrior_guide and st.warrior_guide.evaluate then
-            return st.warrior_guide.evaluate(inputs, out)
+            st.warrior_guide.evaluate(inputs, out)
+            return ST.WARRIOR.gate_composite_action(inputs, out)
         end
         return out
     end,
@@ -2208,6 +2581,21 @@ local function hud_no_mana(slot)
     return ok and insufficient == true
 end
 
+-- W7 readiness-glow fallback (verify W7): IsUsableSpell's first return through
+-- the same pcall'd wrapper as hud_no_mana above. When the Overpower proc stamp
+-- is UNSET (nil - no window was ever armed; the Mainline-code path where the
+-- classic dodge window cannot exist), a client that probes the spell as usable
+-- right now still gets the glow; a stamp that was armed and has elapsed keeps
+-- the window's own verdict instead (the call site's rule). PROBE-ONLY by
+-- mandate: never gated on st.is_mainline (the Forever client is Mainline-code
+-- but is exactly the client this fallback targets), and a client with no probe
+-- - or a secret-guarded unknown - reports "no fallback", never a forced glow.
+local function hud_usable_now(slot)
+    local name = hud_slot_name(slot)
+    local ok, usable = pcall(api.IsSpellUsable, name or slot.spell)
+    return ok and usable == true
+end
+
 -- WA "spellInRange == 0" (classes/paladin.lua hud_out_of_range, verbatim):
 -- api.IsSpellInRange returns 0 out of range, 1/true in range, nil unknown (treated
 -- as "not out of range").
@@ -2274,8 +2662,23 @@ function ST.WARRIOR.get_hud_state(self, slot, now)
     end
 
     if slot.key == "op" then
-        s.glow = (self.WARRIOR.get_overpower_remaining(
-            self.warrior_overpower_proc_until, now) ~= nil) or false
+        -- The dodge window (the module's own proc stamp) arms the glow; the W7
+        -- fallback arms it too while the client probes the spell as usable
+        -- right now. A live window short-circuits the probe (one fewer read
+        -- while the stamp is live); a stamp that is set but elapsed is the
+        -- window's own verdict and stops the glow - the probe only covers a
+        -- client that never armed a window at all (the Mainline-code path
+        -- where the classic dodge window cannot exist), never a window that
+        -- came and went.
+        local op_remaining = self.WARRIOR.get_overpower_remaining(
+            self.warrior_overpower_proc_until, now)
+        if op_remaining ~= nil then
+            s.glow = true
+        elseif self.warrior_overpower_proc_until == nil then
+            s.glow = hud_usable_now(slot)
+        else
+            s.glow = false
+        end
     elseif slot.key == "execute" then
         s.glow = (remaining <= 0 and self.in_combat == true
             and hud_execute_range(self)) or false
