@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:23:50Z",
+  "agent_name": "sod-practice-font",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "hud.lua create_icon pattern mirrored exactly; SoD-faithful stub made the live crash reproducible offline (mutant dies with the exact reported signature)",
+    "what_was_hard": "sandbox _G leak kept STANDARD_TEXT_FONT visible so the fallback-literal mutant survived; scoped STANDARD-hidden pins to the result-helper update path instead of full init (full init trips out-of-scope panel SetFont sites)",
+    "skill_gap": "none"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

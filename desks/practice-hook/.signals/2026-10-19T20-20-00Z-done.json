@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T20:20:00Z",
+  "run_id": "practice-gamification-hook-2026-10-19",
+  "agent_name": "practice-hook",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "One public entry point (ui.record_graded_attempt) for every graded attempt kept the session score and the progression state from drifting apart, and it made the whole hook testable offline. Replacing the profile KEY (never editing it in place) plus the 'a newer build owns the blob' guard made the persistence safe without touching the AceDB default.",
+    "what_was_hard": "The panel has no free layout space (the title, the icon grid and the rotation grid span its whole width), so the badge had to become an overlay hanging UNDER the panel instead of a new row - otherwise the panel's height would change for every existing user. The step-3 lane landed its module, its TOC lines and its suite while this lane was running; its suite was red for a few minutes and it needed a second full-harness run to prove the crossfire.",
+    "skill_gap": "The achievement predicates read a FLAT snapshot (best_grade, attempts, time_active_seconds next to level and drills) while the foundation's profile_snapshot only carried the stats side under .stats - the contract between the pure modules and the caller was not written down anywhere, so it had to be inferred from the foundation test's own comment."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

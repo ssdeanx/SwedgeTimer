@@ -1,0 +1,18 @@
+# class-activation — Journal
+
+## 2026-10-21 — Desk opened (A1: mechanism + the rogue class)
+- **Purpose:** the operator's order (2026-10-21): only the SELECTED class's module executes; the selection is an options dropdown (Auto = your class, default; + the six class names). Class files register their body as a loader; main.lua activates the selected one at init; the other five stay EMPTY.
+- **Scope (A1):** `classes/rogue.lua`, `tests/rogue_state.lua`, `main.lua`, `option_tables.lua`, `config_presets.lua`, `tests/main_init_state.lua`, `tests/wiring_check.lua`.
+- **Contract:** `bench/briefs/brief_class-activation-a1_2026-10-21.md`.
+- **Next step:** read the existing shared-option mechanism + init order, then implement the loader wrapper, activation, option, and the pins.
+
+## 2026-10-21 — A1 landed: mechanism + the rogue class
+- **Worked on:** wrapped `classes/rogue.lua`'s body in `st.class_loaders["ROGUE"]` (header + closing `end` only); added `ST:activate_class()` and its call in `init_libs` before `post_init`; added the `class_activation` dropdown (`Auto` default in `ST.class_defaults`); pinned the order/fail-closed in `tests/main_init_state.lua` §7c and the contract in `tests/wiring_check.lua` §9; activated the loader in `tests/rogue_state.lua`; six shared suites that load `classes/rogue.lua` got the same activation snippet (R5).
+- **Current state:** `bash tests/run.sh` = **43 steps, 0 failed**; luacheck **2 warnings / 0 errors in 85 files**. Rogue 1116/0, main_init 946/0, wiring 794/0 (3 accepted). 10 mutation proofs on `/tmp/opencode/class-activation-a1` all fail the owning suite when the guard is removed. Bench: `bench/class_activation_2026-10-21.md`.
+- **Next step (A2):** wrap the other five class files (same two edits), add the all-six proof suite + its run.sh line (orchestrator), and decide the `Auto` + missing-module notice (A1 fires the notice only for an explicit pick / a throwing loader). FILE-OWED: `tests/toc_check.lua:991-999` must count the MAX locals across prototypes (the wrapper now reports 3 while the body closure is 71). In-client confirmation of the whole contract is owed (offline proof only).
+
+
+## 2026-10-21 — A2 landed: five classes wrapped + all-six proof suite + toc guard fixed
+- **Worked on:** wrapped classes/{druid,hunter,paladin,shaman,warrior}.lua in st.class_loaders (same two edits as A1; endings preserved; paladin body 182 is the tightest); activated the loader in the five class suites (hunter has a second sandbox, build_ui); added tests/class_activation_state.lua (70 checks: all six load with empty tables, Auto -> playing class, explicit pick, throwing loader fail-closed, no-loader report, Auto-unsupported silent); fixed tests/toc_check.lua's local guard to take the MAX across luac prototypes + pin (rogue reports 71, not the wrapper's 3; class counts 180/166/182/71/176/178).
+- **Current state:** copy at /tmp/opencode/class-activation-a2 WITH the filed run.sh line: 44 steps, 0 failed; luacheck 2 warnings / 0 errors in 86 files (new suite file). Working tree without the line: 43 steps, 1 failed — only toc_check's unregistered-suite guards. 11 mutation proofs on /tmp/opencode/a2-mut all fail the owning suite. Bench: bench/class_activation_2026-10-21.md (A2 section appended).
+- **Next step:** orchestrator adds the run.sh line (after the rogue_state line) and re-runs; operator in-client check of the five classes with Auto/explicit picks. Collateral: seven additional suites that load class files got the same generic activation snippet (smoke, four *_guide_state, bars_state, secret_guard_state) — test-only, no assertions changed; bars_state also sets ST.class_activated (fixture boots main.lua).

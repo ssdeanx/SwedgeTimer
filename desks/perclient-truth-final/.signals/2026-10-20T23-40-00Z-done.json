@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T23:40:00Z",
+  "run_id": "perclient-truth-final-2026-10-20",
+  "agent_name": "perclient-truth-final",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "git show + git grep answered every doc row that ast-grep structurally cannot see (Name = \"...\" inside a table constructor). The load-gating hunt (AllowLoadGameType headers, [Game]/[Family] selectors, per-flavor tocs) turned 'which file runs on this client' from a guess into a citation. The operator's own export carried the spell names inside description text ($5720s1 health), which turned two tree claims from web-page hearsay into client-proven facts.",
+    "what_was_hard": "The classic global GetSpellInfo is native: no definition, no doc entry, and no call site on any of the five branches unpacks more than three values, so slots 4-7 of the tree's 7-value shape are unreachable from the source tree. Separating 'the file exists on the branch' from 'the file loads on this client' took a whole pass of toc-level evidence.",
+    "skill_gap": "I nearly reported the Cata/Mists TalentUI id-form call as if it were loaded evidence; the load-gating check (## AllowLoadGameType / [Game] / [Family] / [AllowLoadGameType ...]) had to be applied to every call site, not just the interesting one. A second pass over the same tocs corrected two rows before the file was filed."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Operator: run the P9-P12 rows in bench/perclient_truth_final_2026-10-20.md section 6, especially P12-a (the arity probe) on EVERY client - the tree's compat.lua:157-176 7-value assumption is neither refuted nor confirmed offline, and its failure mode is a silent nil, not a crash."
+  }
+}

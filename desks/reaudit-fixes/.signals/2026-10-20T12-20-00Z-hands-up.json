@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T12:20:00Z",
+  "run_id": "reaudit-fixes-2026-10-20",
+  "agent_name": "reaudit-fixes",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-verifying each finding against the live source before editing caught the real shape of M-3: the brief's first option would have zeroed the bonus on exactly the session it exists for and broken three existing pins. The share-of-awarded-XP option satisfied both of the brief's pins AND kept every existing pin green.",
+    "what_was_hard": "The re-audit's own report file is not on disk - the findings came from the dispatch brief and each had to be re-verified against the source. Whether that report carries findings BEYOND the five in this brief cannot be settled from the tree.",
+    "skill_gap": "Distinguishing 'the work is done' from 'every finding is known' - and raising the second honestly instead of letting a done signal imply the first."
+  },
+  "escalation": {
+    "reason": "The re-audit's report file is NOT on disk (searched every desk journal and every bench file). The lane worked from the dispatch brief and re-verified each finding against the source, but if that report carries findings beyond the three MEDIUM and two LOW named here, they are unaddressed - the sibling publish-gate re-audit recorded seven LOWs and only two practice-persistence LOWs were in this brief.",
+    "blocked_on": "The operator: file the re-audit's report text on the bench (a dispatch cited a file that does not exist on disk) and confirm the finding set this brief names is the whole set.",
+    "recommendation": "Treat the five findings here as CLOSED and the remaining finding set as UNVERIFIED until the report is filed and checked against bench/reaudit_fixes_2026-10-20.md. Hands-up row HU-16 carries the detail."
+  }
+}

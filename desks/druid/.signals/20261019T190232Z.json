@@ -1,0 +1,13 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T19:02:32Z",
+  "agent_name": "druid",
+  "self_assessment": {"intent": 5, "confidence": 4, "accuracy": 4, "completeness": 4},
+  "patterns": {
+    "what_worked": "wait-recipe scrapes (URL + waitFor only) returned full wago pages; 3 screenshots viewed and matched descriptions",
+    "what_was_hard": "firecrawl_agent rejected, firecrawl_search invalid-body, SearXNG rate-limited; two pages shell even with wait",
+    "skill_gap": "class-Discord pins not surveyed (filed, not blocked)"
+  },
+  "escalation": {"reason": null, "blocked_on": null, "recommendation": null}
+}

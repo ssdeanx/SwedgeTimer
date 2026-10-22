@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T16:05:00Z",
+  "run_id": "shaman-family-scope-2026-10-20",
+  "agent_name": "shaman-family-scope",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "One source of truth: the rotation table's per-row `families` list now drives BOTH the rotation slice and the guide slot cut, so the two vocabularies cannot drift. The family-scoped accessor, the family guide-slot sets and the published-list narrowing are all `ST.SHAMAN` table fields (the chunk is at Lua 5.1's 199/200 local cap), and the applied token keeps the cut idempotent so the SoD build can re-cut it when the MW-rune latch fires at runtime.",
+    "what_was_hard": "The guide frame's own icon set cannot be family-scoped without breaking tests/guide_contract.lua's 22-slot pin (another lane's file, out of scope). Resolved by narrowing the published list AFTER the frame is built - the frame stacks one icon per slot and fades in only the current action's, so the family's cut changes nothing the player sees there, while the panel (which reads the list live) gets the family's vocabulary.",
+    "skill_gap": "The ERA token carries two games and the shipped table's ERA rows are the token's truth, so an Era-base client is still offered the SoD-only rows (the table would need a per-row build marker to split them). Left filed rather than silently changing the shipped table."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

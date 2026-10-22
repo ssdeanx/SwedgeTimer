@@ -14,29 +14,32 @@
 --     survive into a reused out table) and nil inputs never error,
 --   * the TBC cat branch (inputs.family == "TBC"): Rake never prompted, the
 --     4+ CP expiry-only Rip, the long-fight 5CP Rip (never Bite), the
---     short-lived-only Bite, the 40/42 energy gates, the wait terminal and
---     the TBC constants (the old >20-short SHIFT hold was removed with its
---     constant: no honest shift probe exists),
+--     short-lived-only Bite (10 s sim threshold), the 40/42 energy gates, the
+--     wait terminal and the TBC constants (the old >20-short SHIFT hold was
+--     removed with its constant: no honest shift probe exists),
 --   * Tiger's Fury is never an ACTION anywhere (no slot exists); the families
 --     without a mid-rotation TF rule never hold for it either (WRATH and
 --     ERA-with-runes hold TIGER'S FURY by design),
---   * the ERA cat branch (inputs.family == "ERA"): never Mangle/Rip/Rake, the
---     5CP Ferocious Bite (4CP still builds), the ungated Shred, the bear wait
---     terminal, and the exact-match gate (lowercase stays legacy),
+--   * the ERA cat branch (inputs.family == "ERA"): Clearcasting first, the
+--     5CP expiry-only Rip (never Bite - the sim has no Bite branch), the
+--     ungated Shred, the bear wait terminal, and the exact-match gate
+--     (lowercase stays legacy),
 --   * every non-TBC, non-Era, non-Wrath family (and a missing family) runs the
 --     legacy matrix byte-for-byte: the refresh windows, the untracked Rake, the
 --     ungated Mangle/Shred and the default Bite,
---   * the WRATH cat branch (inputs.family == "WRATH"): the <30-energy TF hold,
---     the <=85-energy Berserk hold off a 15 s TF cooldown, the >=1 CP Savage
---     Roar upkeep hold, Clearcasting ahead of the finishers, the 5 CP
---     expiry-only Rip, Mangle above Rake, the Rip+Roar-guarded Bite, the Shred
---     default - and never a SHIFT hold (no powershifting) nor a TF/Berserk/Roar
---     action (no slot exists; the hold overlay carries them),
+--   * the WRATH cat branch (inputs.family == "WRATH"): the dynamic TF hold
+--     (40 - 10 * leeway), the Berserk hold off a 15 s TF cooldown with Rip up
+--     and no proc (no energy gate), the >=1 CP Savage Roar upkeep hold,
+--     Clearcasting ahead of the finishers, the 5 CP expiry-only Rip, Mangle
+--     above Rake, the Rip+Roar-guarded 4 s Bite, the Shred default - and never
+--     a SHIFT hold (no powershifting) nor a TF/Berserk/Roar action (no slot
+--     exists; the hold overlay carries them),
 --   * the SOD cat branch (inputs.family == "ERA" with sod_runes): the <=40
---     TF hold, Berserk-after-TF, the Roar refresh, Omen Shred, the 5 CP Rip
---     with the under-TF snapshot preference, the Mangle/Rake order, the
---     capped-CP Bite, the ungated Shred - and the strict
---     sod_runes == true gate plus the SoD bear Mangle (never the Era wait),
+--     TF hold, Berserk-after-TF, the Roar refresh plus the cover-to-end clip,
+--     Omen Shred, the 5 CP expiry-only Rip (never clipped for TF), the
+--     Mangle/Rake order, the ungated Shred (no Bite branch at all) - and the
+--     strict sod_runes == true gate plus the SoD bear Mangle (never the Era
+--     wait),
 --   * the gather writes the family plus the finisher inputs - the D4 EMA-smoothed
 --     time_to_die (seeded, smoothed, throttled, reset per target/heal/death; nil
 --     whenever the target's health is unreadable) - and the explicit
@@ -154,7 +157,10 @@ do
     eq(out.waiting_judgement, false, "baseline: waiting_judgement stays false")
 end
 
--- Rule 1: the queued Maul ride.
+-- Rule 1: the queued Maul ride. RIDE is the guide's PRESS-NOTHING hold: the queued
+-- Maul already rides the next swing, so the player presses NO key. The verdict names
+-- no action - the practice layer states it as a hold, never as an action (the
+-- deep-audit's H1).
 do
     local out = evaluate({ maul_queued = true })
     eq(out.action, nil, "rule 1: a queued Maul is not re-suggested")
@@ -303,13 +309,14 @@ local SPELL_INFOS = {
     [1822] = { name = "Rake", icon = "icon_rake" },
     [22568] = { name = "Ferocious Bite", icon = "icon_bite" },
     [5221] = { name = "Shred", icon = "icon_shred" },
+    [9850] = { name = "Claw", icon = "icon_claw" },
     [5217] = { name = "Tiger's Fury", icon = "icon_tf" },
     [50334] = { name = "Berserk", icon = "icon_berserk" },
     [52610] = { name = "Savage Roar", icon = "icon_sr" },
     [16870] = { name = "Clearcasting", icon = "icon_omen" },
 }
 
-local MODULES = { "compat.lua", "utils.lua", "nextaction_ui.lua", "druid_guide.lua",
+local MODULES = { "compat.lua", "utils.lua", "guard.lua", "nextaction_ui.lua", "druid_guide.lua",
     "druid_energy.lua", "classes/druid.lua" }
 
 local function make_fontstring()
@@ -619,6 +626,14 @@ local function build(opts)
         local chunk = assert(loadfile(ROOT .. modules[i]))
         setfenv(chunk, env)
         chunk("SwedgeTimer", st)
+        -- Class files register their body as a loader (operator order 2026-10-21:
+        -- only the selected class executes). This sandbox activates the class it
+        -- loads, exactly as main.lua does at init.
+        local class = modules[i]:match("classes/(%a+)%.lua")
+        if class and type(st.class_loaders) == "table"
+            and type(st.class_loaders[class:upper()]) == "function" then
+            st.class_loaders[class:upper()]()
+        end
     end
 
     for name, previous in pairs(mirrored) do
@@ -655,11 +670,11 @@ check(ui.inert ~= true, "the druid provider is live")
 eq(ui.get_provider(ST), ST.DRUID.guide, "the druid guide resolves as the frame's provider")
 
 local slots = ST.DRUID.guide.slots
-eq(#slots, 6, "six slots are declared")
-check(#slots <= 6, "the slot set stays at the contract's six or fewer")
-local expected_keys = { "maul", "mangle", "rip", "rake", "bite", "shred" }
+eq(#slots, 7, "seven slots are declared (six originals + Claw)")
+check(#slots <= 8, "the slot set stays within the frame's contract (paladin ships eight)")
+local expected_keys = { "maul", "mangle", "rip", "rake", "bite", "shred", "claw" }
 local expected_icons = { "icon_maul", "icon_mangle_bear", "icon_rip", "icon_rake",
-    "icon_bite", "icon_shred" }
+    "icon_bite", "icon_shred", "icon_claw" }
 for i = 1, #expected_keys do
     eq(slots[i].key, expected_keys[i], "slot " .. i .. " is " .. expected_keys[i])
 end
@@ -678,6 +693,8 @@ eq(slots[3].spell_id, 1079, "rip keeps the spec's id")
 eq(slots[4].spell_id, 1822, "rake keeps the spec's id")
 eq(slots[5].spell_id, 22568, "bite keeps the spec's id")
 eq(slots[6].spell_id, 5221, "shred keeps the spec's id")
+eq(slots[7].key, "claw", "the seventh slot is the Forever builder Claw")
+eq(slots[7].spell_id, 9850, "claw keeps the sim's Forever id (no rank table)")
 eq(ST.DRUID.guide.labels.next_action, "Next action:", "labels.next_action is the default")
 eq(ST.DRUID.guide.labels.hold, "HOLD", "labels.hold is the default")
 eq(ST.DRUID.guide.labels.ride, "RIDE", "labels.ride is the default")
@@ -685,8 +702,8 @@ eq(ST.DRUID.guide.rotation_key, nil, "no rotation text source is declared")
 eq(ST.DRUID.guide.rotation_names, nil, "no rotation name map is declared")
 
 -- The frame: one icon per slot, in order.
-eq(#ui.icons, 6, "the frame holds one icon per slot")
-eq(sandbox.frames, 17, "frame count: group + 6 icons/borders + 3 cooldowns + hold")
+eq(#ui.icons, 7, "the frame holds one icon per slot")
+eq(sandbox.frames, 19, "frame count: group + 7 icons/borders + 3 cooldowns + hold")
 for i = 1, #slots do
     eq(ui.icons[i].slot, slots[i], "icon " .. i .. " follows the slot declaration order")
     eq(ui.icons[i].icon.texture.texture, expected_icons[i],
@@ -696,6 +713,8 @@ eq(ui.frame.label.text, "Next action:", "the label carries the default caption")
 eq(ui.icons[2].remaining_key, "mangle_remaining", "the swipe field names derive from the key")
 eq(ui.icons[4].expires_key, "rake_expires", "the expiry field name derives from the key")
 eq(ui.icons[1].remaining_key, nil, "the unwiped slots carry no swipe fields")
+eq(ui.icons[7].remaining_key, nil, "the Claw slot carries no swipe (no cooldown)")
+eq(ui.icons[7].expires_key, nil, "the Claw slot carries no expiry channel")
 eq(ui.icons[3].glow_key, nil, "the druid slots carry no glow")
 
 -- Every possible action output names a declared slot (through the real provider).
@@ -819,6 +838,27 @@ eq(ST.DRUID.guide.gather(ST, gathered_target).rake_refresh, 4,
     "a missing Rake option falls back to the 4 s default")
 class_db.guide_rip_refresh = 4
 class_db.guide_rake_refresh = 4
+
+-- RipCP override wiring (filed follow-up built): the gather feeds the future
+-- db.guide_rip_min_cp raw (nil until the widget ships); the engine clamps 2-5
+-- and defaults to 4 (pinned in §17).
+eq(ST.DRUID.guide.gather(ST, gathered_target).rip_min_cp, nil,
+    "gather: no RipCP option -> nil (engine defaults to 4)")
+class_db.guide_rip_min_cp = 2
+eq(ST.DRUID.guide.gather(ST, gathered_target).rip_min_cp, 2,
+    "gather: the low-end RipCP override rides the options")
+class_db.guide_rip_min_cp = 3
+eq(ST.DRUID.guide.gather(ST, gathered_target).rip_min_cp, 3,
+    "gather: a mid RipCP override rides the options")
+class_db.guide_rip_min_cp = 5
+eq(ST.DRUID.guide.gather(ST, gathered_target).rip_min_cp, 5,
+    "gather: the high-end RipCP override rides the options")
+class_db.guide_rip_min_cp = 1
+eq(ST.DRUID.guide.gather(ST, gathered_target).rip_min_cp, 1,
+    "gather: a below-range RipCP passes through raw (the engine clamps to 4)")
+class_db.guide_rip_min_cp = nil
+eq(ST.DRUID.guide.gather(ST, gathered_target).rip_min_cp, nil,
+    "a missing RipCP option clears back to nil (engine defaults to 4)")
 
 -- Direct calls without an out table use the module's own reused table.
 local own = ST.DRUID.gather_guide_inputs(ST)
@@ -1115,7 +1155,7 @@ do
     local druid_opts = options:match("function ST%.class_opts_funcs%.DRUID%((.-)function ST%.class_opts_funcs%.SHAMAN%(") or ""
 
     local expected_defaults = {
-        nextaction_enabled = "false",
+        nextaction_enabled = "true",
         nextaction_locked = "true",
         nextaction_visibility_key = "\"in_combat\"",
         nextaction_icon_size = "45",
@@ -1185,7 +1225,7 @@ end
 eq(dg.MANGLE_COST_TBC, 40, "the TBC Mangle cost is 40 energy")
 eq(dg.SHRED_COST_TBC, 42, "the TBC Shred cost is 42 energy")
 eq(dg.POWERSHIFT_SHORTFALL_TBC, nil, "the TBC powershift shortfall constant is removed (no honest shift probe)")
-eq(dg.SHORT_LIVED_TTD_SECONDS, 12, "short-lived means dying inside one full Rip")
+eq(dg.SHORT_LIVED_TTD_SECONDS, 10, "short-lived means dying inside the sim's 10 s end threshold")
 
 -- A TBC input set: the legacy baseline plus the family flag. NONE clears a key.
 local function tin(overrides)
@@ -1268,11 +1308,11 @@ do
         mangle_remaining = 6, energy = 100, time_to_die = 10 }).action, "bite",
         "T3: dying inside one full Rip -> Bite")
     eq(tevaluate({ form_index = 3, rip_remaining = 8, combo_points = 5,
-        mangle_remaining = 6, energy = 100, time_to_die = 12 }).action, "bite",
-        "T3 boundary: exactly 12 s to die is still short-lived")
+        mangle_remaining = 6, energy = 100, time_to_die = 10 }).action, "bite",
+        "T3: dying inside the 10 s threshold -> Bite")
     eq(tevaluate({ form_index = 3, rip_remaining = 8, combo_points = 5,
-        mangle_remaining = 6, energy = 100, time_to_die = 12.0001 }).action, "rip",
-        "T4: just over 12 s to die is a long fight -> Rip")
+        mangle_remaining = 6, energy = 100, time_to_die = 10.0001 }).action, "rip",
+        "T4: just over 10 s to die is a long fight -> Rip")
     eq(tevaluate({ form_index = 3, rip_remaining = 8, combo_points = 5,
         mangle_remaining = 6, energy = 100, time_to_die = 30 }).action, "rip",
         "T4: a long time-to-die defaults to Rip")
@@ -1387,7 +1427,7 @@ end
 -- 6) Every other family runs the legacy matrix unchanged (energy ignored, windows kept)
 --=========================================================================================
 do
-    local families = { "CATA", "MISTS", "FOREVER", "UNKNOWN" }
+    local families = { "CATA", "MISTS", "UNKNOWN" }
     for _, family in ipairs(families) do
         eq(evaluate({ family = family, form_index = 3, rip_remaining = 2,
             combo_points = 0, mangle_remaining = 6, energy = 0 }).action, "rip",
@@ -1466,22 +1506,36 @@ do
         "Era bear: the shortfall veto waits instead of Mangling")
 end
 
--- E1: the 5CP Ferocious Bite, ungated by energy or debuffs.
+-- E0/E1: the Omen Shred, then the 5CP expiry-only Rip (never Bite - the sim
+-- has no Bite branch at all).
 do
     eq(eevaluate({ family = "ERA", form_index = 3, rip_remaining = NONE,
         rake_remaining = NONE, mangle_remaining = NONE, combo_points = 5,
-        energy = 0 }).action, "bite",
-        "E1: 5 CP Bites with no debuffs tracked and no energy")
+        energy = 0 }).action, "rip",
+        "E1: 5 CP with no Rip tracked -> Rip (ungated by energy)")
+    eq(eevaluate({ family = "ERA", form_index = 3, rip_remaining = 0,
+        rake_remaining = NONE, mangle_remaining = NONE, combo_points = 5,
+        energy = 100 }).action, "rip",
+        "E1: a remaining of exactly 0 is expired")
     eq(eevaluate({ family = "ERA", form_index = 3, rip_remaining = 8,
         rake_remaining = 8, mangle_remaining = 6, combo_points = 5,
-        energy = 100 }).action, "bite",
-        "E1: 5 CP Bites past healthy debuffs (no refresh model on Era)")
+        energy = 100 }).action, "shred",
+        "E1 contrast: a healthy Rip at 5 CP is never clipped -> Shred")
     eq(eevaluate({ family = "ERA", form_index = 3, rip_remaining = 8,
-        rake_remaining = 8, mangle_remaining = 6, combo_points = 5.5 }).action, "bite",
-        "E1: above 5 CP still Bites")
+        rake_remaining = 8, mangle_remaining = 6, combo_points = 5.5 }).action,
+        "shred",
+        "E1: above 5 CP still never clips a healthy Rip")
+    eq(eevaluate({ family = "ERA", form_index = 3, rip_remaining = NONE,
+        rake_remaining = NONE, mangle_remaining = NONE, combo_points = 5,
+        energy = 100, clearcast = true }).action, "shred",
+        "E0 outranks E1: the Omen proc is a free Shred even at 5 CP")
+    eq(eevaluate({ family = "ERA", form_index = 3, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6, combo_points = 2,
+        clearcast = true }).action, "shred",
+        "E0: the Omen proc builds with Shred")
     eq(eevaluate({ family = "ERA", form_index = 3, rip_remaining = NONE,
         rake_remaining = NONE, mangle_remaining = NONE, combo_points = 4 }).action, "shred",
-        "E1 boundary: 4 CP cannot Bite -> Shred")
+        "E1 boundary: 4 CP cannot Rip -> Shred")
     eq(eevaluate({ family = "ERA", form_index = 3, rip_remaining = NONE,
         rake_remaining = NONE, mangle_remaining = NONE,
         combo_points = NONE }).action, "shred",
@@ -1510,14 +1564,14 @@ do
     eq(eevaluate({ family = "ERA", form_index = 3, combo_points = 2,
         energy = NONE, can_powershift = true }).hold, false,
         "removed E2: unreadable energy never holds")
-    -- E1 outranks everything: a capped bar with a claimed shift still finishes first.
+    -- E1 outranks everything: a capped bar with a claimed shift still Rips first.
     eq(eevaluate({ family = "ERA", form_index = 3, combo_points = 5, energy = 0,
-        can_powershift = true }).action, "bite",
-        "E1 outranks removed E2: 5 CP Bites even with a claimed shift")
+        rip_remaining = NONE, can_powershift = true }).action, "rip",
+        "E1 outranks removed E2: 5 CP Rips even with a claimed shift")
 end
 
 -- E2 and the Era absences: Shred is the default, and no input prompts
--- Mangle, Rip or Rake on Era (the sweep below pins the whole input space).
+-- Mangle, Rake or Bite on Era (the sweep below pins the whole input space).
 do
     eq(eevaluate({ family = "ERA", form_index = 3, rip_remaining = NONE,
         rake_remaining = NONE, mangle_remaining = NONE, combo_points = 0,
@@ -1529,6 +1583,7 @@ do
     local cps = { NONE, 0, 3, 4, 5 }
     local energies = { NONE, 0, 21, 22, 41, 42, 100 }
     local shifts = { NONE, true }
+    local procs = { NONE, true }
     local swept = 0
     for _, rip in ipairs(rips) do
         for _, rake in ipairs(rakes) do
@@ -1536,31 +1591,38 @@ do
                 for _, cp in ipairs(cps) do
                     for _, energy in ipairs(energies) do
                         for _, shift in ipairs(shifts) do
-                            swept = swept + 1
-                            local out = eevaluate({
-                                form_index = 3, rip_remaining = rip,
-                                rake_remaining = rake,
-                                mangle_remaining = mangle,
-                                combo_points = cp, energy = energy,
-                                can_powershift = shift,
-                            })
-                            check(out.action ~= "mangle",
-                                "Era sweep: Mangle is never prompted")
-                            check(out.action ~= "rake",
-                                "Era sweep: Rake is never prompted")
-                            check(out.action ~= "rip",
-                                "Era sweep: Rip is never prompted")
-                            -- No SHIFT rule exists anymore (removed E2):
-                            -- the Era chain only acts, never holds.
-                            check(out.hold == false,
-                                "Era sweep: Era never holds")
+                            for _, proc in ipairs(procs) do
+                                swept = swept + 1
+                                local out = eevaluate({
+                                    form_index = 3, rip_remaining = rip,
+                                    rake_remaining = rake,
+                                    mangle_remaining = mangle,
+                                    combo_points = cp, energy = energy,
+                                    can_powershift = shift,
+                                    clearcast = proc,
+                                })
+                                check(out.action ~= "mangle",
+                                    "Era sweep: Mangle is never prompted")
+                                check(out.action ~= "rake",
+                                    "Era sweep: Rake is never prompted")
+                                check(out.action ~= "bite",
+                                    "Era sweep: Bite is never prompted (no sim branch)")
+                                if out.action ~= nil then
+                                    check(out.action == "rip" or out.action == "shred",
+                                        "Era sweep: only Rip or Shred ever prompt")
+                                end
+                                -- No SHIFT rule exists anymore (removed E2):
+                                -- the Era chain only acts, never holds.
+                                check(out.hold == false,
+                                    "Era sweep: Era never holds")
+                            end
                         end
                     end
                 end
             end
         end
     end
-    eq(swept, 5 * 4 * 3 * 5 * 7 * 2, "the Era sweep covered every combination")
+    eq(swept, 5 * 4 * 3 * 5 * 7 * 2 * 2, "the Era sweep covered every combination")
 end
 
 -- The Era gate is an exact family match, and the provider delegates to it.
@@ -1575,12 +1637,12 @@ do
     local out = {}
     provider.evaluate(ein({ form_index = 3, rip_remaining = NONE,
         rake_remaining = NONE, mangle_remaining = NONE, combo_points = 5 }), out)
-    eq(out.action, "bite", "the provider delegates the Era Bite")
+    eq(out.action, "rip", "the provider delegates the Era Rip")
     provider.evaluate(ein({ form_index = 1, rage = 5, maul_cost = 15 }), out)
     eq(out.action, nil, "the provider delegates the Era bear wait")
 end
 
--- The Era display through a real Era sandbox: the Mangle/Rip/Rake icons stay dark.
+-- The Era display through a real Era sandbox: the Mangle/Rake/Bite icons stay dark.
 do
     local era = build({ project = 2 })
     eq(era.st.family, "ERA", "the Era sandbox reports the ERA family")
@@ -1591,7 +1653,7 @@ do
     EST.DRUID.post_init(EST)
     check(eui.frame ~= nil, "the Era sandbox builds the guide frame")
     local eslots = EST.DRUID.guide.slots
-    eq(#eslots, 6, "the Era slot set stays at six (the Mangle slot stays dark)")
+    eq(#eslots, 7, "the Era slot set stays at seven (Claw declared, dark until its probe lands)")
     EST.form_index = 3
     era.energy = 100
     era.combo = 0
@@ -1608,10 +1670,14 @@ do
     eq(etarget("rip"), 0, "Era display: an untracked Rip never lights")
     eq(etarget("shred"), 1, "Era display: the empty bar builds with Shred")
     eq(etarget("mangle"), 0, "Era display: the Mangle icon stays dark")
+    -- Age the fight past the 8 s Rip gate (the first tick latched the fight
+    -- clock): a young fight withholds the 5CP Rip and pools instead.
+    era.advance(8.1)
     era.combo = 5
     etick()
-    eq(etarget("bite"), 1, "Era display: 5 CP lights Ferocious Bite")
+    eq(etarget("rip"), 1, "Era display: 5 CP with no Rip lights Rip")
     eq(etarget("shred"), 0, "Era display: the finisher replaces the builder")
+    eq(etarget("bite"), 0, "Era display: the Bite icon stays dark (no sim branch)")
     era.combo = 0
     era.target_auras = {
         { name = "Rip", count = 1, duration = 12, expiration = era.clock + 10,
@@ -1662,13 +1728,15 @@ do
         "TBC bear: the queue outranks the rage rules")
 
     -- Equivalence sweep: every bear input shape decides identically on TBC and
-    -- on every other non-Era family, while Era waits wherever the rest Mangle
-    -- (RIDE and Maul agree everywhere).
+    -- on every other family that HAS a Mangle, while Era waits wherever the rest
+    -- Mangle (RIDE and Maul agree everywhere). The FOREVER client has NO Mangle
+    -- spell at all (HU-14, closed 2026-10-20), so it waits like runeless Era.
     local rages = { NONE, 0, 5, 14.999, 15, 50, 0 / 0 }
     local costs = { NONE, 0, 15, 30 }
     local queues = { false, true }
     local shorts = { NONE, false, true }
     local families = { "TBC", "WRATH", "CATA", "MISTS", "FOREVER" }
+    local mangle_families = { "TBC", "WRATH", "CATA", "MISTS" }
     local swept = 0
     for _, rage in ipairs(rages) do
         for _, cost in ipairs(costs) do
@@ -1681,7 +1749,7 @@ do
                             rage = rage, maul_cost = cost, maul_queued = queued,
                             insufficient_rage = short })
                     end
-                    for _, family in ipairs(families) do
+                    for _, family in ipairs(mangle_families) do
                         eq(results[family].action, results["WRATH"].action,
                             "TBC bear parity: " .. family .. " matches Wrath")
                         eq(results[family].hold, results["WRATH"].hold,
@@ -1696,11 +1764,25 @@ do
                         eq(era.action, nil, "Era bear contrast: waits where Wrath Mangles")
                         eq(era.hold, false, "Era bear contrast: the wait carries no hold")
                         eq(era.hold_text, nil, "Era bear contrast: the wait carries no hold text")
+                        -- HU-14 (closed 2026-10-20): the FOREVER client carries no
+                        -- Mangle spell at all, so its bear chain waits exactly like
+                        -- the runeless Era one - the guide must never name a spell
+                        -- the client cannot cast.
+                        eq(results["FOREVER"].action, nil,
+                            "Forever bear contrast: waits where Wrath Mangles (no Mangle on that client)")
+                        eq(results["FOREVER"].hold, false,
+                            "Forever bear contrast: the wait carries no hold")
+                        eq(results["FOREVER"].hold_text, nil,
+                            "Forever bear contrast: the wait carries no hold text")
                     else
                         eq(era.action, results["WRATH"].action,
                             "Era bear parity: shares the Maul/RIDE outcome with Wrath")
                         eq(era.hold, results["WRATH"].hold,
                             "Era bear parity: shares the hold outcome with Wrath")
+                        eq(results["FOREVER"].action, results["WRATH"].action,
+                            "Forever bear parity: shares the Maul/RIDE outcome with Wrath")
+                        eq(results["FOREVER"].hold, results["WRATH"].hold,
+                            "Forever bear parity: shares the hold outcome with Wrath")
                     end
                 end
             end
@@ -1825,11 +1907,11 @@ end
 --=========================================================================================
 -- 9) The WRATH cat branch through the pure engine (inputs.family == "WRATH")
 --=========================================================================================
-eq(dg.TF_ENERGY_WRATH, 40, "Tiger's Fury fires under 40 energy on Wrath (the research tree step 1)")
-eq(dg.BERSERK_ENERGY_WRATH, 85, "Berserk fires at or under 85 energy on Wrath")
+eq(dg.TF_ENERGY_WRATH, 40, "Tiger's Fury base line is 40 energy on Wrath (minus 10 per leeway second)")
+eq(dg.BERSERK_ENERGY_WRATH, nil, "the 85-energy Berserk cap is removed (the sim has no energy gate)")
 eq(dg.TF_CD_GATE_BERSERK_SECONDS, 15, "Berserk needs Tiger's Fury on cooldown 15 s")
-eq(dg.FB_RIP_MIN_SECONDS, 8, "the Bite needs 8 s of Rip left")
-eq(dg.FB_SR_MIN_SECONDS, 8, "the Bite needs 8 s of Savage Roar left")
+eq(dg.FB_RIP_MIN_SECONDS, 4, "the Bite needs 4 s of Rip left (the sim's BiteTime)")
+eq(dg.FB_SR_MIN_SECONDS, 4, "the Bite needs 4 s of Savage Roar left (the sim's BiteTime)")
 eq(dg.FB_EXECUTE_TTD_SECONDS, 10, "the Wrath Bite execute window is the last 10 s")
 eq(dg.TF_ENERGY_SOD, 40, "Tiger's Fury fires at or under 40 energy on SoD")
 eq(dg.SOD_POWERSHIFT_MAX_ENERGY, nil, "the SoD powershift constant is removed with its branch")
@@ -1846,7 +1928,9 @@ local function wevaluate(overrides)
     return evaluate(win(overrides))
 end
 
--- W1: Tiger's Fury under 40 energy rides the hold overlay (no TF slot exists).
+-- W1: Tiger's Fury under the dynamic 40 - 10 * leeway line rides the hold
+-- overlay (no TF slot exists). Baseline gcd_remaining is 0, so the static 40
+-- pins below ride the degenerated line; the leeway pins follow.
 do
     local out = wevaluate({ form_index = 3, energy = 39.999, tf_ready = true,
         combo_points = 0 })
@@ -1870,18 +1954,48 @@ do
     eq(wevaluate({ form_index = 3, energy = 20, tf_ready = true, combo_points = 5,
         sr_remaining = NONE }).hold_text, "TIGER'S FURY",
         "W1 outranks the SR upkeep")
+    -- Leeway: 1.5 s of GCD remainder lowers the line to 25.
+    eq(wevaluate({ form_index = 3, energy = 24.999, tf_ready = true,
+        combo_points = 0, gcd_remaining = 1.5 }).hold_text, "TIGER'S FURY",
+        "W1 leeway: 1.5 s GCD moves the line to 25")
+    eq(wevaluate({ form_index = 3, energy = 25, tf_ready = true,
+        combo_points = 0, gcd_remaining = 1.5 }).action, "shred",
+        "W1 leeway boundary: exactly 25 energy with 1.5 s GCD -> Shred")
+    -- Clearcasting adds a second of leeway (the proc keeps filling the bar).
+    eq(wevaluate({ form_index = 3, energy = 29.999, tf_ready = true,
+        combo_points = 0, clearcast = true }).hold_text, "TIGER'S FURY",
+        "W1 leeway: Clearcasting moves the idle line to 30")
+    eq(wevaluate({ form_index = 3, energy = 30, tf_ready = true,
+        combo_points = 0, clearcast = true }).action, "shred",
+        "W1 leeway boundary: exactly 30 energy on a proc -> the free Shred")
+    -- An unreadable GCD contributes nothing: the line degrades to the frozen 40.
+    eq(wevaluate({ form_index = 3, energy = 39.999, tf_ready = true,
+        combo_points = 0, gcd_remaining = NONE }).hold_text, "TIGER'S FURY",
+        "W1 leeway: an unknown GCD keeps the 40 line")
+    eq(wevaluate({ form_index = 3, energy = 39.999, tf_ready = true,
+        combo_points = 0, gcd_remaining = 0 / 0 }).hold_text, "TIGER'S FURY",
+        "W1 leeway: a NaN GCD keeps the 40 line")
 end
 
--- W2: Berserk at or under 85 energy with TF 15 s onto cooldown.
+-- W2: Berserk with TF 15 s onto cooldown, Rip up and no proc (no energy gate).
 do
-    local out = wevaluate({ form_index = 3, energy = 85, berserk_ready = true,
+    local out = wevaluate({ form_index = 3, energy = 100, berserk_ready = true,
         tf_cd_remaining = 15, combo_points = 0 })
     eq(out.action, nil, "W2: the Berserk call is a hold, never an action")
     eq(out.hold, true, "W2: the Berserk call rides the hold overlay")
     eq(out.hold_text, "BERSERK", "W2: the Berserk call reads BERSERK")
-    eq(wevaluate({ form_index = 3, energy = 85.0001, berserk_ready = true,
-        tf_cd_remaining = 30, combo_points = 0 }).hold, false,
-        "W2 boundary: just over 85 energy never Berserks")
+    eq(wevaluate({ form_index = 3, energy = 100, berserk_ready = true,
+        tf_cd_remaining = 15, combo_points = 0, rip_remaining = NONE }).hold,
+        false,
+        "W2: an untracked Rip withholds Berserk (unknown never prompts)")
+    eq(wevaluate({ form_index = 3, energy = 100, berserk_ready = true,
+        tf_cd_remaining = 15, combo_points = 0, rip_remaining = 0 }).hold,
+        false,
+        "W2: an expired Rip withholds Berserk")
+    eq(wevaluate({ form_index = 3, energy = 100, berserk_ready = true,
+        tf_cd_remaining = 15, combo_points = 0, clearcast = true }).hold,
+        false,
+        "W2: a Clearcasting proc withholds Berserk (the free Shred comes first)")
     eq(wevaluate({ form_index = 3, energy = 20, berserk_ready = true,
         tf_cd_remaining = 14.999, combo_points = 0 }).hold, false,
         "W2 boundary: TF 14.999 s onto cooldown is not 15")
@@ -1889,8 +2003,8 @@ do
         tf_cd_remaining = NONE, combo_points = 0 }).hold, false,
         "W2: an unknown TF cooldown never Berserks")
     eq(wevaluate({ form_index = 3, energy = NONE, berserk_ready = true,
-        tf_cd_remaining = 30, combo_points = 0 }).hold, false,
-        "W2: unreadable energy never Berserks")
+        tf_cd_remaining = 30, combo_points = 0 }).hold_text, "BERSERK",
+        "W2: unreadable energy never withholds the cooldown call (no energy gate)")
     eq(wevaluate({ form_index = 3, energy = 20, berserk_ready = true,
         tf_cd_remaining = 30, tf_ready = true, combo_points = 0 }).hold_text,
         "TIGER'S FURY",
@@ -1966,10 +2080,10 @@ end
 -- last-10-seconds execute window (the research removed it from the mid-fight
 -- rotation; an unknown target defaults to the long fight and builds).
 do
-    eq(wevaluate({ form_index = 3, energy = 90, combo_points = 5, sr_remaining = 8,
-        rip_remaining = 8, rake_remaining = 8, mangle_remaining = 6,
+    eq(wevaluate({ form_index = 3, energy = 90, combo_points = 5, sr_remaining = 4,
+        rip_remaining = 4, rake_remaining = 8, mangle_remaining = 6,
         target_short_lived = true }).action, "bite",
-        "W8 boundary: 8 s of Rip and Roar on an execute-flagged target -> Ferocious Bite")
+        "W8 boundary: 4 s of Rip and Roar on an execute-flagged target -> Ferocious Bite")
     eq(wevaluate({ form_index = 3, energy = 90, combo_points = 5, sr_remaining = 30,
         rip_remaining = 10, rake_remaining = 8, mangle_remaining = 6,
         time_to_die = 10 }).action, "bite",
@@ -1987,13 +2101,13 @@ do
         time_to_die = 0 / 0 }).action, "shred",
         "W8: a NaN time-to-die cannot prove execute")
     eq(wevaluate({ form_index = 3, energy = 90, combo_points = 5, sr_remaining = 30,
-        rip_remaining = 7.999, rake_remaining = 8, mangle_remaining = 6,
+        rip_remaining = 3.999, rake_remaining = 8, mangle_remaining = 6,
         target_short_lived = true }).action, "shred",
-        "W8: 7.999 s of Rip withholds the Bite even on an execute target")
-    eq(wevaluate({ form_index = 3, energy = 90, combo_points = 5, sr_remaining = 7.999,
+        "W8: 3.999 s of Rip withholds the Bite even on an execute target")
+    eq(wevaluate({ form_index = 3, energy = 90, combo_points = 5, sr_remaining = 3.999,
         rip_remaining = 10, rake_remaining = 8, mangle_remaining = 6,
         target_short_lived = true }).action, "shred",
-        "W8: 7.999 s of Savage Roar withholds the Bite even on an execute target")
+        "W8: 3.999 s of Savage Roar withholds the Bite even on an execute target")
     eq(wevaluate({ form_index = 3, energy = 90, combo_points = 5.5, sr_remaining = 30,
         rip_remaining = 10, rake_remaining = 8, mangle_remaining = 6,
         time_to_die = 5 }).action, "bite",
@@ -2133,7 +2247,7 @@ do
         "S4 outranks S5: the free Shred comes before even a missing Rip")
 end
 
--- S5: the 5 CP Rip, preferred under Tiger's Fury (the KotJ snapshot).
+-- S5: the 5 CP Rip, expiry-only (the sim has no TF-snapshot term).
 do
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
         combo_points = 5, sr_remaining = 30, rip_remaining = NONE,
@@ -2141,16 +2255,16 @@ do
         "S5: 5 CP with no Rip -> Rip")
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
         combo_points = 5, sr_remaining = 30, rip_remaining = 10,
-        mangle_remaining = 6, rake_remaining = 8, tf_active = true }).action, "rip",
-        "S5 snapshot: 5 CP with a healthy Rip still Rips under Tiger's Fury")
+        mangle_remaining = 6, rake_remaining = 8, tf_active = true }).action, "shred",
+        "S5 contrast: a healthy Rip under Tiger's Fury is kept, not clipped")
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
         combo_points = 5, sr_remaining = 30, rip_remaining = 0.5,
-        mangle_remaining = 6, rake_remaining = 8, tf_active = true }).action, "rip",
-        "S5 snapshot: TF overrides a non-expired Rip")
+        mangle_remaining = 6, rake_remaining = 8, tf_active = true }).action, "shred",
+        "S5 contrast: TF never overrides a non-expired Rip")
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
-        combo_points = 5, sr_remaining = 30, rip_remaining = 10,
-        mangle_remaining = 6, rake_remaining = 8 }).action, "bite",
-        "S5 contrast: a healthy Rip with no TF snapshot to take is not refreshed")
+        combo_points = 5, sr_remaining = 30, rip_remaining = 0,
+        mangle_remaining = 6, rake_remaining = 8, tf_active = true }).action, "rip",
+        "S5: an expired Rip still Rips under Tiger's Fury")
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
         combo_points = 4, sr_remaining = 30, rip_remaining = NONE,
         mangle_remaining = 6, rake_remaining = 8 }).action, "shred",
@@ -2185,7 +2299,61 @@ do
         "removed S6: at ~0 energy the absent Mangle prompts, never a shift")
 end
 
--- S6/S7/S8/S9: Mangle, then Rake, then the capped-CP Bite, then Shred.
+-- S3b: the Roar clip (cover-to-end): the current Roar expires before the fight
+-- ends but one fresh Roar covers it - refreshing early saves a full cast.
+do
+    eq(dg.SOD_SR_DURATION[1], 14, "SoD SR lasts 14 s at 1 CP")
+    eq(dg.SOD_SR_DURATION[5], 34, "SoD SR lasts 34 s at 5 CP")
+    -- 5 CP, Roar with 10 s left, 20 s to die: the 34 s fresh Roar covers the
+    -- end, the current one does not -> clip now.
+    local out = sevaluate({ form_index = 3, energy = 90, combo_points = 5,
+        sr_remaining = 10, rip_remaining = 10, rake_remaining = 8,
+        mangle_remaining = 6, time_to_die = 20 })
+    eq(out.action, nil, "S3b: the clip call is a hold, never an action")
+    eq(out.hold, true, "S3b: the clip rides the hold overlay")
+    eq(out.hold_text, "SAVAGE ROAR", "S3b: the clip reads SAVAGE ROAR")
+    -- The current Roar already covers the end: no clip (normal upkeep later).
+    eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
+        combo_points = 5, sr_remaining = 25, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6, time_to_die = 20 }).action,
+        "shred",
+        "S3b contrast: a Roar covering the end never clips early")
+    -- Even a fresh Roar cannot cover the end: no clip (refresh at expiry).
+    eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
+        combo_points = 5, sr_remaining = 10, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6, time_to_die = 60 }).action,
+        "shred",
+        "S3b contrast: a fight outlasting a fresh Roar never clips")
+    -- Unknown time-to-die: expiry-only, never a clip.
+    eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
+        combo_points = 5, sr_remaining = 10, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6 }).action, "shred",
+        "S3b: an unknown time-to-die never clips")
+    -- No combo points: no fresh length to compare, never clips.
+    eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
+        combo_points = 0, sr_remaining = 10, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6, time_to_die = 20 }).hold,
+        false,
+        "S3b: no combo points cannot prove a clip")
+    -- An expired Roar belongs to S3, not the clip (same hold either way).
+    eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
+        combo_points = 2, sr_remaining = 0, time_to_die = 20 }).hold_text,
+        "SAVAGE ROAR",
+        "S3 outranks S3b: an expired Roar refreshes, never clips")
+    -- 1 CP fresh length (14 s): 10 s left with 12 s to die clips; 15 s does not.
+    eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
+        combo_points = 1, sr_remaining = 10, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6, time_to_die = 12 }).hold_text,
+        "SAVAGE ROAR",
+        "S3b: the 1 CP fresh length (14 s) covers 12 s -> clip")
+    eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
+        combo_points = 1, sr_remaining = 10, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6, time_to_die = 15 }).hold,
+        false,
+        "S3b: 15 s to die needs more than a fresh 1 CP Roar -> Shred")
+end
+
+-- S6/S7/S8: Mangle, then Rake, then the ungated Shred (no Bite branch at all).
 do
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
         combo_points = 2, sr_remaining = 30, rip_remaining = 10,
@@ -2197,15 +2365,15 @@ do
         "S7: a present Mangle falls through to an expired Rake")
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
         combo_points = 5, sr_remaining = 30, rip_remaining = 10,
-        mangle_remaining = 6, rake_remaining = 8 }).action, "bite",
-        "S8: capped CP with a healthy Rip and no TF Bites (the Era-loop dump)")
+        mangle_remaining = 6, rake_remaining = 8 }).action, "shred",
+        "S8: capped CP with a healthy Rip pools with Shred (no Bite branch)")
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 90,
         combo_points = 4, sr_remaining = 30, rip_remaining = 10,
         mangle_remaining = 6, rake_remaining = 8 }).action, "shred",
-        "S9: anything else builds with Shred")
+        "S8: anything else builds with Shred")
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 60,
         combo_points = 0 }).action, "shred",
-        "S9: the bare SoD baseline builds (ungated, the E2 convention)")
+        "S8: the bare SoD baseline builds (ungated, the E2 convention)")
     eq(sevaluate({ family = "ERA", sod_runes = true, form_index = 3, energy = 0,
         combo_points = 2, sr_remaining = 30, rip_remaining = 10,
         mangle_remaining = NONE, rake_remaining = 8 }).action, "mangle",
@@ -2252,10 +2420,10 @@ do
     end
     eq(swept, 5 * 3 * 4 * 6 * 3, "the SoD sweep covered every combination")
     eq(evaluate({ family = "ERA", sod_runes = "true", form_index = 3,
-        combo_points = 5, energy = 90 }).action, "bite",
+        combo_points = 5, energy = 90 }).action, "shred",
         "the sod gate is strict: a non-true flag stays on the Era chain")
     eq(evaluate({ family = "ERA", sod_runes = false, form_index = 3,
-        combo_points = 5, energy = 90 }).action, "bite",
+        combo_points = 5, energy = 90 }).action, "shred",
         "a false flag stays on the Era chain too")
     eq(sevaluate({ form_index = 1, rage = 50, maul_cost = 15 }).action, "maul",
         "SoD bear: proven rage still Mauls")
@@ -2369,6 +2537,35 @@ do
     eq(gcd_echo.tf_ready, true, "the filtered echo reads ready")
     sandbox.known_names = {}
     sandbox.cooldowns_by_query = {}
+
+    -- The APL utility layer's gather reads (the rotation table's utility spine):
+    -- every one of them is knowledge-gated or tri-state, and an unreadable read
+    -- stays unknown (the engine never prompts off a guess).
+    local util = ST.DRUID.guide.gather(ST, {})
+    eq(util.lop_known, false, "utility gather: an unproven Leader of the Pack is not known")
+    eq(util.lop_active, false,
+        "utility gather: a scanned player without the Leader of the Pack reads proven absent")
+    eq(util.feral_ff_ready, nil, "utility gather: an unknown Feral Faerie Fire stays unknown")
+    eq(util.innervate_ready, nil, "utility gather: an unknown Innervate stays unknown")
+    eq(util.elunes_light_ready, nil, "utility gather: the Elune's Light is the Forever row")
+    eq(util.ff_debuff_remaining, false,
+        "utility gather: the target walk answered - the target carries no Faerie Fire")
+    eq(util.mana_percent, nil, "utility gather: an unreadable mana pool stays unknown")
+    -- The form upkeep's reads: the Feral-tree spec probe and the Cat Form aura.
+    -- The WotLK client has no Cat Form row, so the spec probe stays unknown there.
+    eq(util.feral_spec, nil,
+        "utility gather: a family with no Cat Form row has no spec probe")
+    eq(util.cat_form_active, false,
+        "utility gather: a scanned player without the Cat Form aura reads proven absent")
+    -- A known Innervate with no cooldown reads ready.
+    sandbox.known_names = { ["Innervate"] = true }
+    local inn = ST.DRUID.guide.gather(ST, {})
+    eq(inn.innervate_ready, true, "utility gather: a known Innervate with no cooldown reads ready")
+    sandbox.cooldowns_by_query = { ["Innervate"] = { sandbox.clock, 180 } }
+    local inn_burning = ST.DRUID.guide.gather(ST, {})
+    eq(inn_burning.innervate_ready, false, "utility gather: a burning Innervate reads false")
+    sandbox.known_names = {}
+    sandbox.cooldowns_by_query = {}
 end
 
 --=========================================================================================
@@ -2413,8 +2610,8 @@ do
     eq(NST.DRUID.guide.gather(NST, {}).sod_runes, true,
         "the probe latches per session: forgetting mid-session needs /reload")
 
-    -- The SoD display: 5 CP with a healthy Rip under Tiger's Fury refreshes Rip
-    -- (the KotJ snapshot), and the Mangle HUD slot stays live.
+    -- The SoD display: 5 CP with a healthy Rip pools with Shred (no TF clip,
+    -- no Bite branch), and the Mangle HUD slot stays live with the rune.
     local sod, SST, sui = id_sod, IST, id_sod.st.nextaction_ui
     SST.form_index = 3
     sod.energy = 90
@@ -2443,8 +2640,8 @@ do
     }
     stick()
     stick()
-    eq(starget("rip"), 1, "SoD display: 5 CP with TF up refreshes Rip (snapshot)")
-    eq(starget("bite"), 0, "SoD display: the snapshot replaces the CP dump")
+    eq(starget("rip"), 0, "SoD display: a healthy Rip is kept, not clipped for TF")
+    eq(starget("shred"), 1, "SoD display: the capped bar pools with Shred")
     local mangle_slot = { key = "mangle", title = "Mangle", kind = "spell", spell = 33878 }
     eq(SST.DRUID.get_hud_state(SST, mangle_slot, sod.clock).hidden, nil,
         "SoD display: the Mangle HUD slot stays live with the rune")
@@ -2509,14 +2706,16 @@ do
 end
 
 --=========================================================================================
--- 14) The FOREVER cat branch: F1 Shifting Power, then the legacy chain;
+-- 14) The FOREVER cat branch: F1 Shifting Power, then the Forever chain F2-F7;
 --     never Tiger's Fury, never powershift (all UNCONFIRMED - see the
 --     FOREVER APPENDIX in druid_guide.lua)
 --=========================================================================================
 eq(dg.SP_ENERGY_GAIN_FOREVER, 40, "Shifting Power grants 40 energy (UNCONFIRMED)")
-eq(dg.SP_ENERGY_FOREVER, 60, "Shifting Power fires with room for 40 (100 - 40)")
-eq(dg.SP_ENERGY_FOREVER, 100 - dg.SP_ENERGY_GAIN_FOREVER,
-    "the 60 room threshold fits the assumed 40 gain (100 - 40)")
+eq(dg.SP_ENERGY_FOREVER, 50, "Shifting Power fires with room for 40 (ceiling 50)")
+eq(dg.SP_ENERGY_FOREVER_CLEARCAST, 40, "the ceiling drops to 40 on Clearcasting")
+eq(dg.SP_ENERGY_FOREVER, 100 - dg.SP_ENERGY_GAIN_FOREVER - 10,
+    "the 50 ceiling leaves 10-regen headroom over the GCD (100 - 50 - 40)")
+eq(dg.FOREVER_BITE_LOW_TTD_SECONDS, 3, "the Forever bite-low window is 3 s")
 
 -- A Forever input set: the legacy baseline plus the family flag. NONE clears a key.
 local function fin(overrides)
@@ -2532,17 +2731,28 @@ end
 
 do
     -- F1: proven-ready Shifting Power with room rides the hold overlay (no
-    -- slot exists for it).
-    local out = fevaluate({ form_index = 3, energy = 60, sp_ready = true,
+    -- slot exists for it). Baseline cp is 0, Rip/Rake/Mangle healthy.
+    local out = fevaluate({ form_index = 3, energy = 50, sp_ready = true,
         combo_points = 0 })
     eq(out.action, nil, "F1: the Shifting Power call is a hold, never an action")
     eq(out.hold, true, "F1: the call rides the hold overlay")
     eq(out.hold_text, "SHIFTING POWER", "F1: the call reads SHIFTING POWER")
     eq(out.filler_slot, nil, "F1: the call carries no filler")
     eq(out.judge_slot, nil, "F1: the call carries no judge cue")
-    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 60.0001,
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 50.0001,
         sp_ready = true, combo_points = 0 }).action, "shred",
-        "F1 boundary: 60.0001 energy has no room -> Shred")
+        "F1 boundary: 50.0001 energy has no room -> Shred")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 40,
+        sp_ready = true, combo_points = 0, clearcast = true }).hold_text,
+        "SHIFTING POWER",
+        "F1 boundary: exactly 40 energy on a proc still holds")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 40.0001,
+        sp_ready = true, combo_points = 0, clearcast = true }).action, "shred",
+        "F1 boundary: 40.0001 energy on a proc falls to the free Shred")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 39.999,
+        sp_ready = true, combo_points = 0, clearcast = true }).hold_text,
+        "SHIFTING POWER",
+        "F1: 39.999 energy on a proc still holds SHIFTING POWER")
     eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 20,
         sp_ready = false, combo_points = 0 }).hold, false,
         "F1: a Shifting Power on cooldown never calls (false is not true)")
@@ -2574,14 +2784,49 @@ do
     eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 20,
         tf_ready = true, combo_points = 0 }).hold_text, nil,
         "Forever: no TF hold text either")
-    -- Past F1 the legacy chain runs unchanged.
-    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 2,
-        combo_points = 0, mangle_remaining = 6, energy = 0 }).action, "rip",
-        "Forever fallthrough: the Rip window still refreshes")
+    -- Past F1 the Forever chain F2-F7 runs (expiry-only, Bite end-only).
+    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = NONE,
+        combo_points = 5, mangle_remaining = 6, energy = 100 }).action, "rip",
+        "F3: 5 CP with no Rip tracked Rips (no window, no CP gate beyond 5)")
     eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 8,
-        rake_remaining = 8, mangle_remaining = 6, combo_points = 5,
-        energy = 0 }).action, "bite",
-        "Forever fallthrough: 5 CP still Bites by default")
+        combo_points = 5, mangle_remaining = 6, energy = 100 }).action, "shred",
+        "F3 contrast: a healthy Rip is never clipped -> Shred")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 8,
+        combo_points = 5, mangle_remaining = 6, energy = 100,
+        target_short_lived = true }).action, "bite",
+        "F6a: 5 CP on an execute-flagged target Bites")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 8,
+        combo_points = 5, mangle_remaining = 6, energy = 100 }).action, "shred",
+        "F6a contrast: no execute evidence never Bites mid-fight")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 8,
+        combo_points = 4, mangle_remaining = 6, rake_remaining = 8,
+        energy = 100, time_to_die = 2 }).action, "bite",
+        "F6b: 4 CP inside 3 s dumps the Bite")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 8,
+        combo_points = 2, mangle_remaining = 6, rake_remaining = 8,
+        energy = 100, time_to_die = 2 }).action, "shred",
+        "F6b boundary: 2 CP cannot dump even inside 3 s")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 8,
+        combo_points = 0, mangle_remaining = 6, rake_remaining = 8,
+        energy = 100, clearcast = true }).action, "shred",
+        "F2: the Omen proc builds with Shred")
+    -- HU-14 (closed 2026-10-20): the FOREVER client carries NO Mangle spell, so
+    -- the chain must never name one. The slot the Mangle row stood in falls
+    -- through to the APL's own order (the Bite, then the builder).
+    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 8,
+        combo_points = 2, mangle_remaining = NONE, rake_remaining = 8,
+        energy = 100 }).action, "shred",
+        "HU-14: the Forever chain never answers Mangle - it builds with Shred")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 8,
+        combo_points = 5, mangle_remaining = NONE, rake_remaining = 8,
+        energy = 100, target_short_lived = true }).action, "bite",
+        "HU-14: the F6 Bite branch is reachable again on the Forever client")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, rip_remaining = 8,
+        combo_points = 2, mangle_remaining = 6, rake_remaining = NONE,
+        energy = 100 }).action, "rake",
+        "F4: an untracked Rake prompts it")
+    eq(fevaluate({ family = "FOREVER", form_index = 3 }).action, "shred",
+        "F7: the bare Forever baseline builds")
     eq(fevaluate({ family = "FOREVER", form_index = 1 }).action, "maul",
         "Forever bear: the bear rules are untouched")
 end
@@ -2590,7 +2835,7 @@ end
 -- vocabulary sweep over the whole Forever input space.
 do
     local rips = { NONE, 0, 8 }
-    local energies = { NONE, 0, 20, 60, 60.0001, 100 }
+    local energies = { NONE, 0, 20, 50, 50.0001, 100 }
     local cps = { NONE, 0, 5 }
     local flags = { NONE, true, false }
     local swept = 0
@@ -2604,13 +2849,16 @@ do
                         rake_remaining = rip, mangle_remaining = rip,
                         combo_points = cp, energy = energy,
                         sp_ready = flag, can_powershift = flag,
-                        tf_ready = flag,
+                        tf_ready = flag, clearcast = flag,
                     })
                     check(out.hold_text ~= "SHIFT",
                         "Forever sweep: powershifting never prompts")
                     check(out.hold_text ~= "TIGER'S FURY",
                         "Forever sweep: Tiger's Fury never prompts")
-                    if out.hold == true then
+                    -- HU-14 (closed 2026-10-20): the Forever client has NO Mangle
+                    -- spell, so no input combination may ever name one.
+                    check(out.action ~= "mangle",
+                        "Forever sweep: the chain never answers Mangle (no such spell)")                    if out.hold == true then
                         check(out.hold_text == "SHIFTING POWER",
                             "Forever sweep: the only hold is SHIFTING POWER")
                     end
@@ -2623,6 +2871,31 @@ do
         end
     end
     eq(swept, 3 * 6 * 3 * 3, "the Forever sweep covered every combination")
+    -- HU-14 (closed 2026-10-20): the Mangle debuff is walked on its own here
+    -- (the Mangle branch sits BEHIND the Rip and the Rake branches, so the sweep
+    -- above - where all three move together - never reaches it). No input
+    -- combination may ever answer a Mangle on the Forever client.
+    local mangles = { NONE, 0, 8 }
+    local mangle_swept = 0
+    for _, mangle in ipairs(mangles) do
+        for _, rake in ipairs({ NONE, 0, 8 }) do
+            for _, rip in ipairs({ NONE, 0, 8 }) do
+                for _, cp in ipairs({ 0, 5 }) do
+                    for _, clearcast in ipairs({ true, false }) do
+                        mangle_swept = mangle_swept + 1
+                        local out = fevaluate({
+                            form_index = 3, rip_remaining = rip, rake_remaining = rake,
+                            mangle_remaining = mangle, combo_points = cp, energy = 60,
+                            clearcast = clearcast,
+                        })
+                        check(out.action ~= "mangle",
+                            "Forever Mangle sweep: the chain never answers Mangle (no such spell)")
+                    end
+                end
+            end
+        end
+    end
+    eq(mangle_swept, 3 * 3 * 3 * 2 * 2, "the Forever Mangle sweep covered every combination")
     local provider = ST.DRUID.guide
     local out = {}
     provider.evaluate(fin({ form_index = 3, energy = 20, sp_ready = true,
@@ -2838,6 +3111,914 @@ do
     TST.DRUID.guide.evaluate(inputs, out)
     eq(out.action, "bite", "D4: the estimate drives the Wrath W8 execute Bite")
     eq(out.hold, false, "D4: the Bite carries no hold")
+end
+
+--=========================================================================================
+-- 17) Follow-up groundwork: the TBC RipCP override, the fight-elapsed gates,
+--     the W1 latency term and the Forever Berserk hold
+--=========================================================================================
+eq(dg.RIP_MIN_CP_TBC, 4, "the TBC Rip threshold default is 4 CP")
+eq(dg.FIGHT_ELAPSED_ERA_SECONDS, 8, "the Era/SoD 5CP Rip gate is 8 s")
+eq(dg.FIGHT_ELAPSED_FOREVER_SECONDS, 10, "the Forever 5CP Rip gate is 10 s")
+
+-- T1 rip_min_cp: nil/NaN/junk degrade to 4; 2-5 override; T4 stays 5.
+do
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 4,
+        mangle_remaining = 6, energy = 100 }).action, "rip",
+        "T1 default: 4 CP Rips with a nil override")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 4,
+        mangle_remaining = 6, energy = 100, rip_min_cp = NONE }).action, "rip",
+        "T1: a cleared override falls back to 4")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 4,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 0 / 0 }).action, "rip",
+        "T1: a NaN override falls back to 4")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 4,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 1 }).action, "rip",
+        "T1: a below-range override clamps to 4 (4 CP still Rips)")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 3,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 1 }).action, "shred",
+        "T1 clamp: 3 CP cannot Rip on a clamped-4 line")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 3,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 3 }).action, "rip",
+        "T1 override: 3 CP Rips with rip_min_cp = 3")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 2,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 3 }).action, "shred",
+        "T1 override boundary: 2 CP cannot Rip with rip_min_cp = 3")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 2,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 2 }).action, "rip",
+        "T1 override: 2 CP Rips with rip_min_cp = 2")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 4,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 5 }).action, "shred",
+        "T1 override: 4 CP cannot Rip with rip_min_cp = 5")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 5 }).action, "rip",
+        "T1 override: 5 CP Rips with rip_min_cp = 5")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 6 }).action, "rip",
+        "T1: an above-range override clamps to 4 (5 CP still Rips)")
+    eq(tevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 4,
+        mangle_remaining = 6, energy = 100, rip_min_cp = "4" }).action, "rip",
+        "T1: a non-number override falls back to 4")
+    -- T4 is the 5CP long-fight finisher regardless of the override.
+    eq(tevaluate({ form_index = 3, rip_remaining = 8, combo_points = 5,
+        mangle_remaining = 6, energy = 100, rip_min_cp = 2 }).action, "rip",
+        "T4: 5 CP Rips on a long fight even with rip_min_cp = 2")
+end
+
+-- Fight-elapsed gates (pure): unknown (nil/NaN) defaults to the long fight
+-- and Rips; a proven-young fight pools to the builder below.
+do
+    -- Era E1: 8 s gate.
+    eq(eevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        energy = 100 }).action, "rip",
+        "E1: an unknown fight clock Rips (long-fight default)")
+    eq(eevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        energy = 100, fight_elapsed = 0 / 0 }).action, "rip",
+        "E1: a NaN fight clock Rips (unknown)")
+    eq(eevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        energy = 100, fight_elapsed = 8 }).action, "rip",
+        "E1 boundary: exactly 8 s is a proven-old fight -> Rip")
+    eq(eevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        energy = 100, fight_elapsed = 7.999 }).action, "shred",
+        "E1: 7.999 s withholds the Rip -> Shred (E2)")
+    eq(eevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        energy = 100, fight_elapsed = 0 }).action, "shred",
+        "E1: a fresh pull pools with Shred")
+    -- SoD S5: same 8 s gate (pools to the builder chain, not necessarily
+    -- Shred: with an absent Mangle the S6 fallback prompts).
+    eq(sevaluate({ form_index = 3, energy = 90, combo_points = 5,
+        sr_remaining = 30, rip_remaining = NONE, mangle_remaining = 6,
+        rake_remaining = 8 }).action, "rip",
+        "S5: an unknown fight clock Rips")
+    eq(sevaluate({ form_index = 3, energy = 90, combo_points = 5,
+        sr_remaining = 30, rip_remaining = NONE, mangle_remaining = 6,
+        rake_remaining = 8, fight_elapsed = 7.999 }).action, "shred",
+        "S5: 7.999 s withholds the Rip -> Shred (healthy chain pools)")
+    eq(sevaluate({ form_index = 3, energy = 90, combo_points = 5,
+        sr_remaining = 30, rip_remaining = NONE, mangle_remaining = NONE,
+        rake_remaining = 8, fight_elapsed = 0 }).action, "mangle",
+        "S5 young-fight fallthrough: an absent Mangle prompts (S6 order kept)")
+    -- Forever F3: 10 s gate.
+    eq(fevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        mangle_remaining = 6, energy = 100 }).action, "rip",
+        "F3: an unknown fight clock Rips")
+    eq(fevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        mangle_remaining = 6, energy = 100, fight_elapsed = 10 }).action, "rip",
+        "F3 boundary: exactly 10 s Rips")
+    eq(fevaluate({ form_index = 3, rip_remaining = NONE, combo_points = 5,
+        mangle_remaining = 6, energy = 100, fight_elapsed = 9.999 }).action,
+        "shred",
+        "F3: 9.999 s withholds the Rip -> Shred")
+end
+
+-- W1 latency term: leeway is max(gcd_remaining, latency) + 1 s on Clearcasting.
+do
+    eq(wevaluate({ form_index = 3, energy = 24.999, tf_ready = true,
+        combo_points = 0, gcd_remaining = 0, latency = 1.5 }).hold_text,
+        "TIGER'S FURY",
+        "W1 latency: 1.5 s latency moves the line to 25")
+    eq(wevaluate({ form_index = 3, energy = 25, tf_ready = true,
+        combo_points = 0, gcd_remaining = 0, latency = 1.5 }).action, "shred",
+        "W1 latency boundary: exactly 25 energy with 1.5 s latency -> Shred")
+    eq(wevaluate({ form_index = 3, energy = 24.999, tf_ready = true,
+        combo_points = 0, gcd_remaining = 1.5, latency = 0.5 }).hold_text,
+        "TIGER'S FURY",
+        "W1 max: the GCD wins over a smaller latency (line 25)")
+    eq(wevaluate({ form_index = 3, energy = 24.999, tf_ready = true,
+        combo_points = 0, gcd_remaining = 0.5, latency = 1.5 }).hold_text,
+        "TIGER'S FURY",
+        "W1 max: the latency wins over a smaller GCD (line 25)")
+    eq(wevaluate({ form_index = 3, energy = 39.999, tf_ready = true,
+        combo_points = 0, gcd_remaining = 0, latency = 0 / 0 }).hold_text,
+        "TIGER'S FURY",
+        "W1 latency: a NaN latency contributes nothing (line 40)")
+    eq(wevaluate({ form_index = 3, energy = 14.999, tf_ready = true,
+        combo_points = 0, gcd_remaining = 1.5, latency = 1.5,
+        clearcast = true }).hold_text, "TIGER'S FURY",
+        "W1 latency + proc: max(1.5, 1.5) + 1 moves the line to 15")
+end
+
+-- Forever F1b: Berserk with Rip up and no proc (no energy gate, no TF phasing).
+do
+    local out = fevaluate({ form_index = 3, energy = 100,
+        berserk_ready = true, rip_remaining = 8, mangle_remaining = 6,
+        rake_remaining = 8 })
+    eq(out.action, nil, "F1b: the Forever Berserk call is a hold, never an action")
+    eq(out.hold, true, "F1b: the call rides the hold overlay")
+    eq(out.hold_text, "BERSERK", "F1b: the call reads BERSERK")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 100,
+        berserk_ready = true, rip_remaining = NONE, mangle_remaining = 6,
+        rake_remaining = 8 }).action, "shred",
+        "F1b: an untracked Rip withholds Berserk")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 100,
+        berserk_ready = true, rip_remaining = 0, mangle_remaining = 6,
+        rake_remaining = 8 }).action, "shred",
+        "F1b: an expired Rip withholds Berserk")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 100,
+        berserk_ready = true, rip_remaining = 8, mangle_remaining = 6,
+        rake_remaining = 8, clearcast = true }).action, "shred",
+        "F1b: a Clearcasting proc withholds Berserk (the free Shred first)")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 100,
+        berserk_ready = NONE, rip_remaining = 8, mangle_remaining = 6,
+        rake_remaining = 8 }).hold, false,
+        "F1b: an unknown Berserk never calls")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 20,
+        sp_ready = true, berserk_ready = true, rip_remaining = 8,
+        mangle_remaining = 6, rake_remaining = 8 }).hold_text,
+        "SHIFTING POWER",
+        "F1 outranks F1b: room for the gain comes first")
+    eq(fevaluate({ family = "FOREVER", form_index = 3, energy = 100,
+        berserk_ready = true, rip_remaining = 8, mangle_remaining = 6,
+        rake_remaining = 8, clearcast = NONE }).hold_text, "BERSERK",
+        "F1b outranks the maintenance chain")
+    eq(evaluate({ form_index = 3, energy = 100, berserk_ready = true,
+        rip_remaining = 8 }).hold, false,
+        "F1b is Forever-gated: a missing family never holds")
+    eq(tevaluate({ form_index = 3, energy = 100, berserk_ready = true,
+        rip_remaining = 8 }).hold, false,
+        "F1b is Forever-gated: TBC never holds BERSERK")
+end
+
+--=========================================================================================
+-- 18) The gather writes the follow-up inputs (unknown stays nil, stale clears)
+--=========================================================================================
+do
+    -- The WRATH sandbox is in-combat from §3, so park it out of combat first:
+    -- every new input is then the unknown shape, and stale values clear.
+    local was_combat = ST.in_combat
+    ST.in_combat = false
+    local g = ST.DRUID.guide.gather(ST, {})
+    eq(g.fight_elapsed, nil, "gather: out of combat the fight clock is nil")
+    eq(g.tick_remaining, nil, "gather: no tracker anchor yet -> nil tick phase")
+    eq(g.latency, nil, "gather: no latency probe -> nil")
+    eq(g.ff_ready, nil, "gather: unknown Faerie Fire -> nil (never a guess)")
+    eq(g.ff_cd_remaining, nil, "gather: unknown FF cooldown -> nil")
+    eq(g.can_shred, nil, "gather: no position probe -> nil (assume Shred lands)")
+    eq(g.rip_min_cp, nil, "gather: no RipCP option -> nil (engine defaults to 4)")
+    local reused = { fight_elapsed = 5, tick_remaining = 1, latency = 0.5,
+        ff_ready = true, ff_cd_remaining = 0, can_shred = false,
+        rip_min_cp = 3 }
+    local g2 = ST.DRUID.guide.gather(ST, reused)
+    eq(g2.fight_elapsed, nil, "a stale fight clock is cleared out of combat")
+    eq(g2.tick_remaining, nil, "a stale tick phase is cleared with no anchor")
+    eq(g2.latency, nil, "a stale latency is cleared")
+    eq(g2.ff_ready, nil, "a stale FF ready is cleared when unknown")
+    eq(g2.ff_cd_remaining, nil, "a stale FF cooldown is cleared when unknown")
+    eq(g2.can_shred, nil, "a stale position flag is cleared")
+    eq(g2.rip_min_cp, nil, "a stale RipCP override is cleared")
+    -- Back in combat the clock latches (0 on its first tick) and ticks on.
+    ST.in_combat = true
+    local g3 = ST.DRUID.guide.gather(ST, {})
+    eq(g3.fight_elapsed, 0, "gather: the first in-combat tick latches the clock at 0")
+    sandbox.advance(2.5)
+    local g4 = ST.DRUID.guide.gather(ST, {})
+    near(g4.fight_elapsed, 2.5, 0.2, "gather: the fight clock ticks with api.get_time()")
+    ST.in_combat = was_combat
+end
+
+--=========================================================================================
+-- 19) The gather proves Faerie Fire and the tick phase when the client answers
+--=========================================================================================
+do
+    -- Faerie Fire: knowledge-gated like TF (the fixture answers 0,0 for
+    -- everything unlisted, so knowledge alone decides).
+    sandbox.known_names = {}
+    sandbox.cooldowns_by_query = {}
+    local unknown = ST.DRUID.guide.gather(ST, {})
+    eq(unknown.ff_ready, nil, "FF: no spell knowledge stays nil (never a guess)")
+    eq(unknown.ff_cd_remaining, nil, "FF: an unknown cooldown stays nil")
+    sandbox.known_names = { ["Faerie Fire"] = true }
+    local ready = ST.DRUID.guide.gather(ST, {})
+    eq(ready.ff_ready, true, "FF: a known FF with no cooldown reads ready")
+    eq(ready.ff_cd_remaining, 0, "FF: a ready FF reports a zero cooldown")
+    sandbox.cooldowns_by_query = { ["Faerie Fire"] = { sandbox.clock, 6 } }
+    local burning = ST.DRUID.guide.gather(ST, {})
+    near(burning.ff_cd_remaining, 6, 0.2, "FF: a burning FF reports its cooldown")
+    eq(burning.ff_ready, false, "FF: a burning FF reads explicitly false")
+    sandbox.cooldowns_by_query = { ["Faerie Fire"] = { sandbox.clock, 1.2 } }
+    local echo = ST.DRUID.guide.gather(ST, {})
+    eq(echo.ff_cd_remaining, 0, "FF: the 1.2 s GCD echo is filtered, not a cooldown")
+    eq(echo.ff_ready, true, "FF: the filtered echo reads ready")
+    sandbox.known_names = {}
+    sandbox.cooldowns_by_query = {}
+    local cleared = ST.DRUID.guide.gather(ST, { ff_ready = true, ff_cd_remaining = 0 })
+    eq(cleared.ff_ready, nil, "FF: a stale ready is cleared when unknown")
+    eq(cleared.ff_cd_remaining, nil, "FF: a stale cooldown is cleared when unknown")
+
+    -- Tick phase: the tracker's anchor when the sampler runs (cat form, tick
+    -- bar on), else nil. The WRATH sandbox seats its anchor on the per-frame
+    -- hook, then the gather reads the remaining phase off it.
+    ST.form_index = 3
+    sandbox.power_type = 3
+    sandbox.power = 40
+    sandbox.clock = 500
+    ST.mainhand.ends_at = sandbox.clock + 3.0
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    sandbox.clock = 501
+    local ticked = ST.DRUID.guide.gather(ST, {})
+    near(ticked.tick_remaining, 1.0, 0.2, "gather: the anchor feeds tick_remaining")
+end
+
+--=========================================================================================
+-- 20) Faerie Fire Omen-fishing (Wrath W1b + waitForFf, Forever F6c) and the
+--     Claw slot (sim wowsims/wotlk feral/rotation.go ffNow/waitForFf +
+--     wowsims/forever feralcat/apl_sweep_test.go omenFish +
+--     TestMonocatClawsWhenShredCannotLand)
+--=========================================================================================
+eq(dg.FF_ENERGY_WRATH, 87, "the Wrath FF fish line is 87 energy (the sim's ffThresh)")
+eq(dg.FF_WAIT_SECONDS, 1, "the FF soon/wait horizon is 1 s")
+eq(dg.FF_MAX_DELAY_SECONDS, 0.1, "the FF wait keeps the sim's 0.1 s MaxFfDelay")
+eq(dg.FF_SP_LEFT_SECONDS, 1, "the Forever SP-left gate is 1 s (the sim's spellLeft(SP))")
+eq(dg.FF_REGEN_ENERGY, 10, "the post-GCD regen is 10 energy")
+eq(dg.FF_SHRED_COST, 42, "the FF Shred cost is frozen at 42 (UNCONFIRMED Wrath/Forever)")
+eq(dg.FF_RIP_COST, 30, "the FF Rip cost is frozen at 30 (UNCONFIRMED Wrath/Forever)")
+eq(dg.FF_RAKE_COST, 40, "the FF Rake cost is frozen at 40 (UNCONFIRMED Forever)")
+
+-- W1b: the FF fish rides the hold overlay (no FF slot exists), ahead of
+-- Berserk like the sim. Baseline: healthy SR/Rip/Rake/Mangle, no proc.
+do
+    local out = wevaluate({ form_index = 3, energy = 80, ff_ready = true,
+        combo_points = 0, sr_remaining = 30, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6 })
+    eq(out.action, nil, "W1b: the FF call is a hold, never an action")
+    eq(out.hold, true, "W1b: the call rides the hold overlay")
+    eq(out.hold_text, "FAERIE FIRE", "W1b: the call reads FAERIE FIRE")
+    eq(wevaluate({ form_index = 3, energy = 86.999, ff_ready = true,
+        combo_points = 0, sr_remaining = 30, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6 }).hold_text, "FAERIE FIRE",
+        "W1b boundary: 86.999 energy still fishes")
+    eq(wevaluate({ form_index = 3, energy = 87, ff_ready = true,
+        combo_points = 0, sr_remaining = 30, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6 }).action, "shred",
+        "W1b boundary: exactly 87 energy falls through to the builder")
+    eq(wevaluate({ form_index = 3, energy = 20, tf_ready = true,
+        ff_ready = true, combo_points = 0 }).hold_text, "TIGER'S FURY",
+        "W1 outranks W1b: a ready TF is taken before the fish")
+    eq(wevaluate({ form_index = 3, energy = 80, ff_ready = true,
+        berserk_ready = true, tf_cd_remaining = 30, combo_points = 0,
+        rip_remaining = 8 }).hold_text, "FAERIE FIRE",
+        "W1b outranks W2: the fish comes before Berserk")
+    eq(wevaluate({ form_index = 3, energy = 80, ff_ready = true,
+        combo_points = 0, sr_remaining = 30, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6, clearcast = true }).action,
+        "shred",
+        "W1b: a Clearcasting proc withholds the fish (the free Shred first)")
+    eq(wevaluate({ form_index = 3, energy = 80, ff_ready = false,
+        combo_points = 0, sr_remaining = 30, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6 }).hold, false,
+        "W1b: an FF on cooldown never calls (false is not true)")
+    eq(wevaluate({ form_index = 3, energy = 80, combo_points = 0,
+        sr_remaining = 30, rip_remaining = 10, rake_remaining = 8,
+        mangle_remaining = 6 }).hold, false,
+        "W1b: an unknown FF never calls (nil is not true)")
+    eq(wevaluate({ form_index = 3, energy = NONE, ff_ready = true,
+        combo_points = 0 }).hold, false,
+        "W1b: unreadable energy cannot prove the line")
+    eq(wevaluate({ form_index = 3, energy = 0 / 0, ff_ready = true,
+        combo_points = 0 }).hold, false,
+        "W1b: NaN energy cannot prove the line")
+end
+
+-- W1b Rip deferral (sim (!ripNow || energy < ripCost)) and the end-of-fight
+-- spend math (an extra FF GCD must buy an extra Shred).
+do
+    eq(wevaluate({ form_index = 3, energy = 80, ff_ready = true,
+        combo_points = 5, sr_remaining = 30, rip_remaining = NONE,
+        mangle_remaining = 6 }).action, "rip",
+        "W1b deferral: a 5CP Rip due with room outranks the fish")
+    eq(wevaluate({ form_index = 3, energy = 20, ff_ready = true,
+        combo_points = 5, sr_remaining = 30, rip_remaining = NONE,
+        mangle_remaining = 6 }).hold_text, "FAERIE FIRE",
+        "W1b deferral boundary: a due Rip the bar cannot cover still fishes")
+    eq(wevaluate({ form_index = 3, energy = 80, ff_ready = true,
+        combo_points = 0, sr_remaining = 30, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6,
+        time_to_die = 2 }).action, "shred",
+        "W1b spend math: 80 energy with 2 s left buys no extra Shred -> Shred")
+    eq(wevaluate({ form_index = 3, energy = 80, ff_ready = true,
+        combo_points = 0, sr_remaining = 30, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6,
+        time_to_die = 30 }).hold_text, "FAERIE FIRE",
+        "W1b spend math: a long fight still fishes")
+    eq(wevaluate({ form_index = 3, energy = 80, ff_ready = true,
+        combo_points = 0, sr_remaining = 30, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6,
+        target_short_lived = true }).action, "shred",
+        "W1b spend math: an explicit short-lived flag with no clock spends nothing")
+    eq(wevaluate({ form_index = 3, energy = 80, ff_ready = true,
+        combo_points = 0, sr_remaining = 30, rip_remaining = 10,
+        rake_remaining = 8, mangle_remaining = 6,
+        time_to_die = 0 / 0 }).hold_text, "FAERIE FIRE",
+        "W1b spend math: a NaN clock defaults to the long fight and fishes")
+    local provider = ST.DRUID.guide
+    local out = {}
+    provider.evaluate(win({ form_index = 3, energy = 80, ff_ready = true,
+        combo_points = 0 }), out)
+    eq(out.hold_text, "FAERIE FIRE", "the provider delegates the Wrath FF hold")
+end
+
+-- waitForFf (sim wotlk waitForFf): FF imminent pools Mangle/Rake/Shred.
+do
+    local function waiting(overrides)
+        overrides.form_index = 3
+        overrides.energy = overrides.energy or 80
+        overrides.combo_points = 0
+        overrides.sr_remaining = 30
+        overrides.rip_remaining = overrides.rip_remaining or 10
+        overrides.rake_remaining = 8
+        overrides.ff_ready = false
+        return wevaluate(overrides)
+    end
+    local out = waiting({ mangle_remaining = NONE, ff_cd_remaining = 0.5 })
+    eq(out.action, nil, "waitForFf: FF inside the second pools the Mangle")
+    eq(out.hold, false, "waitForFf: the pool carries no hold")
+    eq(waiting({ mangle_remaining = NONE, ff_cd_remaining = 0.9 }).action,
+        "mangle",
+        "waitForFf boundary: 0.9 s out is not imminent (1 - 0.1)")
+    eq(waiting({ mangle_remaining = NONE, ff_cd_remaining = 0.899,
+        energy = 70 }).action,
+        nil,
+        "waitForFf boundary: 0.899 s out pools")
+    eq(waiting({ mangle_remaining = NONE, ff_cd_remaining = 0.5,
+        rip_remaining = 0.5 }).action, "mangle",
+        "waitForFf: a Rip falling inside the second outranks the wait")
+    eq(waiting({ mangle_remaining = NONE, ff_cd_remaining = 0.5,
+        energy = 82 }).action, "mangle",
+        "waitForFf: 82 energy cannot stay under 87 past the GCD")
+    eq(waiting({ mangle_remaining = NONE, ff_cd_remaining = 0 / 0 }).action,
+        "mangle",
+        "waitForFf: a NaN FF cooldown never waits")
+    eq(waiting({ mangle_remaining = NONE }).action, "mangle",
+        "waitForFf: an unknown FF cooldown never waits")
+    eq(waiting({ mangle_remaining = NONE, ff_cd_remaining = 0.5,
+        clearcast = true }).action, "shred",
+        "waitForFf: a proc never waits (the free Shred first)")
+    eq(waiting({ mangle_remaining = 6, ff_cd_remaining = 0.5 }).action,
+        nil,
+        "waitForFf: the Shred default pools too while FF is imminent")
+end
+
+-- F6c: the Forever Omen-fishing call (the APL omenFish). Dormant in game
+-- until the Omen-ICD probe lands (nil ICD never fishes); the offline pins
+-- prove the spend math.
+do
+    local function fishing(overrides)
+        overrides.family = "FOREVER"
+        overrides.form_index = 3
+        return evaluate(overrides)
+    end
+    local out = fishing({ energy = 20, ff_ready = true,
+        omen_icd_ready = true, sp_cd_remaining = 5, combo_points = 0,
+        rip_remaining = 8, rake_remaining = 8, mangle_remaining = 6 })
+    eq(out.action, nil, "F6c: the FF call is a hold, never an action")
+    eq(out.hold, true, "F6c: the call rides the hold overlay")
+    eq(out.hold_text, "FAERIE FIRE", "F6c: the call reads FAERIE FIRE")
+    eq(fishing({ energy = 20, ff_ready = true, combo_points = 0,
+        rip_remaining = 8, rake_remaining = 8, mangle_remaining = 6,
+        sp_cd_remaining = 5 }).action, "shred",
+        "F6c: a nil Omen ICD never fishes (dormant in game)")
+    eq(fishing({ energy = 20, ff_ready = true, omen_icd_ready = false,
+        sp_cd_remaining = 5, combo_points = 0, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6 }).action, "shred",
+        "F6c: a cooling Omen ICD never fishes")
+    eq(fishing({ energy = 20, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 0, combo_points = 0, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6 }).action, "shred",
+        "F6c: a ready Shifting Power outranks the fish (SP-left 0 < 1)")
+    eq(fishing({ energy = 20, ff_ready = true, omen_icd_ready = true,
+        combo_points = 0, rip_remaining = 8, rake_remaining = 8,
+        mangle_remaining = 6 }).action, "shred",
+        "F6c: an unknown Shifting Power never fishes (nil SP-left)")
+    eq(fishing({ energy = 40, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 0, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6 }).action, "shred",
+        "F6c: 40 energy leaves the Shred affordable after regen (50 >= 42)")
+    eq(fishing({ energy = 31, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 0, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6 }).hold_text, "FAERIE FIRE",
+        "F6c boundary: 31 energy regens under the Shred cost (41 < 42)")
+    eq(fishing({ energy = 32, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 0, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6 }).action, "shred",
+        "F6c boundary: 32 energy regens exactly the Shred cost (42 >= 42 blocks)")
+    eq(fishing({ energy = 20, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 0, rip_remaining = 8,
+        rake_remaining = 0.5, mangle_remaining = 6 }).hold_text, "FAERIE FIRE",
+        "F6c rakeSoon: a due Rake the regen cannot cover still fishes")
+    eq(fishing({ energy = 35, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 0, rip_remaining = 8,
+        rake_remaining = 0.5, mangle_remaining = 6 }).action, "shred",
+        "F6c rakeSoon: a due Rake the regen covers outranks the fish")
+    eq(fishing({ energy = 19, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 5, rip_remaining = 0.5,
+        rake_remaining = 8, mangle_remaining = 6 }).hold_text, "FAERIE FIRE",
+        "F6c ripSoon: a due Rip the regen cannot cover still fishes")
+    eq(fishing({ energy = 20, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 5, rip_remaining = 0.5,
+        rake_remaining = 8, mangle_remaining = 6 }).action, "shred",
+        "F6c ripSoon: a due Rip the regen covers outranks the fish")
+    eq(fishing({ energy = 20, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 5, rip_remaining = 0.5,
+        rake_remaining = 8, mangle_remaining = 6,
+        fight_elapsed = 5 }).hold_text, "FAERIE FIRE",
+        "F6c ripSoon: a young fight is not Rip-due, so the fish stands")
+    eq(fishing({ energy = 20, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 5, rip_remaining = NONE,
+        mangle_remaining = 6 }).action, "rip",
+        "F3 outranks F6c: an expired Rip on a proven-old fight Rips first")
+    eq(fishing({ energy = 20, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 0, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6,
+        clearcast = true }).action, "shred",
+        "F2 outranks F6c: a proc is a free Shred, never a fish")
+    eq(fishing({ energy = 80, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 0, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6, clearcast = NONE }).action,
+        "shred",
+        "F6c: a capped bar keeps building (regen far over cost)")
+    eq(fishing({ energy = 20, ff_ready = false, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 0 }).hold, false,
+        "F6c: an FF on cooldown never calls (false is not true)")
+    eq(fishing({ energy = 20, sp_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 0, combo_points = 0, ff_ready = true }).hold_text,
+        "SHIFTING POWER",
+        "F1 outranks F6c: room for the gain comes first")
+    eq(fishing({ energy = 100, ff_ready = true, omen_icd_ready = true,
+        sp_cd_remaining = 5, combo_points = 5, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6,
+        target_short_lived = true }).action, "bite",
+        "F6a outranks F6c: the execute Bite comes before any fish")
+    local provider = ST.DRUID.guide
+    local fout = {}
+    provider.evaluate(fin({ form_index = 3, energy = 20, ff_ready = true,
+        omen_icd_ready = true, sp_cd_remaining = 5, combo_points = 0,
+        rip_remaining = 8, rake_remaining = 8, mangle_remaining = 6 }), fout)
+    eq(fout.hold_text, "FAERIE FIRE", "the provider delegates the Forever FF hold")
+end
+
+-- The Wolfshead Helm input (bench/filed_closure_sweep_2026-10-19.md §7 BS-2): the
+-- gather publishes the tri-state (classes/druid.lua, pinned by tests/druid_state.lua
+-- §38), but it is a RESERVED plug-in point - the Furor half of the powershift basis
+-- is still unproven (DU-16), so the SHIFT branch stays removed and NO rule reads it.
+do
+    -- The engine's answer never moves with the input: same action, same hold, same
+    -- hold text, with the Helm worn and with it proven absent.
+    local cases = {
+        { form_index = 1, rage = 50, maul_cost = 15 },
+        { form_index = 3, energy = 90, combo_points = 2, rip_remaining = 10,
+            rake_remaining = 8, mangle_remaining = 6 },
+        { family = "TBC", form_index = 3, energy = 40, combo_points = 5,
+            rip_remaining = 0, rake_remaining = NONE, mangle_remaining = 6 },
+        { family = "ERA", form_index = 3, energy = 60, combo_points = 0,
+            rip_remaining = NONE, rake_remaining = NONE, mangle_remaining = NONE },
+        { family = "WRATH", form_index = 3, energy = 80, combo_points = 5,
+            rip_remaining = 0, rake_remaining = 8, mangle_remaining = 6,
+            time_to_die = 5 },
+        { family = "FOREVER", form_index = 3, energy = 30, combo_points = 0,
+            rip_remaining = 8, rake_remaining = 8, mangle_remaining = 6 },
+    }
+    for index, case in ipairs(cases) do
+        local plain = evaluate(case)
+        for _, value in ipairs({ true, false }) do
+            local variant = {}
+            for key, entry in pairs(case) do variant[key] = entry end
+            variant.wolfshead_equipped = value
+            local out = evaluate(variant)
+            eq(out.action, plain.action,
+                "no rule reads wolfshead_equipped (case " .. index .. ", action)")
+            eq(out.hold, plain.hold,
+                "no rule reads wolfshead_equipped (case " .. index .. ", hold)")
+            eq(out.hold_text, plain.hold_text,
+                "no rule reads wolfshead_equipped (case " .. index .. ", hold text)")
+        end
+    end
+    -- And the source may only NAME the input in a comment: no code reads it.
+    local path = ROOT .. "druid_guide.lua"
+    local fh = io.open(path, "r")
+    local src = fh and fh:read("*a")
+    if fh then fh:close() end
+    check(src ~= nil, "the reserved-input pin: druid_guide.lua is readable")
+    if src then
+        local hits = 0
+        for line in src:gmatch("[^\r\n]+") do
+            local code = line:gsub("%-%-.*$", "")
+            if code:find("wolfshead_equipped", 1, true) then
+                hits = hits + 1
+            end
+        end
+        eq(hits, 0, "no rule reads wolfshead_equipped (code references: " .. hits .. ")")
+    end
+end
+
+-- The Claw slot: declared so the contract names it, dark until its position
+-- probe lands (no rule reads can_shred yet - filed follow-up).
+do
+    eq(slots[7].key, "claw", "the seventh slot key is claw")
+    eq(slots[7].cooldown_key, nil, "claw carries no cooldown key (a builder)")
+    eq(ui.slot_index.claw ~= nil, true, "every declared slot key is frame-addressable (claw)")
+    eq(ui.icons[ui.slot_index.claw].glow_key, nil, "the Claw slot carries no glow")
+    -- No engine rule reads can_shred: whatever the position probe claims,
+    -- the builder chain is unchanged (the sim's CannotShredTarget has no
+    -- client counterpart - filed follow-up).
+    eq(wevaluate({ form_index = 3, energy = 90, combo_points = 2,
+        sr_remaining = 30, rip_remaining = 10, rake_remaining = 8,
+        mangle_remaining = 6, can_shred = false }).action, "shred",
+        "no Claw rule: a claimed front still builds (nil-safe dormancy)")
+    eq(wevaluate({ form_index = 3, energy = 90, combo_points = 2,
+        sr_remaining = 30, rip_remaining = 10, rake_remaining = 8,
+        mangle_remaining = 6, can_shred = true }).action, "shred",
+        "no Claw rule: a claimed behind still builds")
+    eq(fevaluate({ form_index = 3, energy = 100, combo_points = 2,
+        rip_remaining = 8, rake_remaining = 8, mangle_remaining = 6,
+        can_shred = false }).action, "shred",
+        "no Claw rule on Forever either: the default still builds")
+    -- No action the engine can return is Claw: the slot stays dark.
+    local seen_claw = false
+    for _, family in ipairs({ "TBC", "ERA", "WRATH", "FOREVER", "CATA" }) do
+        local out = evaluate({ family = family, form_index = 3,
+            rip_remaining = NONE, rake_remaining = NONE,
+            mangle_remaining = NONE, combo_points = 0, energy = 90,
+            can_shred = false })
+        if out.action == "claw" then
+            seen_claw = true
+        end
+    end
+    check(not seen_claw, "no Claw rule: no family ever prompts Claw")
+end
+
+-- Name-vs-id classification (bench/lessons.md): the pure engine has NO
+-- spell-id uses in scope (no GetSpellInfo / GetSpellCooldown / is_spell_known /
+-- spell_id reads) — all TBC-name vs Era-id resolution lives in the gather
+-- (classes/druid.lua, pinned by tests/druid_state.lua §31). Pinned here
+-- statically so a future id probe cannot slip into the pure module.
+do
+    local path = ROOT .. "druid_guide.lua"
+    local fh = io.open(path, "r")
+    local src = fh and fh:read("*a")
+    if fh then fh:close() end
+    check(src ~= nil, "name-vs-id: druid_guide.lua is readable")
+    if src then
+        check(not src:find("api.GetSpellInfo(", 1, true), "name-vs-id: pure engine never calls GetSpellInfo")
+        check(not src:find("api.GetSpellCooldown(", 1, true), "name-vs-id: pure engine never calls GetSpellCooldown")
+        check(not src:find("api.is_spell_known(", 1, true), "name-vs-id: pure engine never probes known spells")
+        check(not src:find("api.GetSpellPowerCost(", 1, true), "name-vs-id: pure engine never reads power costs")
+    end
+end
+
+-- The APL utility layer's arms (the rotation table's utility spine in
+-- classes/druid.lua): the Faerie Fire upkeep, the Leader of the Pack, the
+-- Innervate and the Elune's Light. Every one of them is a HOLD (no guide slot
+-- exists), and every one of them hides on an unreadable input.
+do
+    -- The Faerie Fire upkeep (the Era APL's i=0/i=8 and the TBC APL's i=2).
+    local era_ff = {
+        family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        has_target = true, feral_ff_ready = true, ff_debuff_remaining = false,
+    }
+    local out = evaluate(era_ff)
+    eq(out.hold, true, "utility: the Era Faerie Fire upkeep holds")
+    eq(out.hold_text, "FAERIE FIRE", "utility: the Era Faerie Fire hold text")
+    eq(out.action, nil, "utility: a hold never carries an action")
+    -- The debuff still fresh: no prompt (the Era row refreshes at 14 s or less).
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        has_target = true, feral_ff_ready = true, ff_debuff_remaining = 20 })
+    eq(out.hold_text, nil, "utility: a fresh Faerie Fire debuff holds no call")
+    -- The debuff about to drop: the Era refresh row fires (14 s or less).
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        has_target = true, feral_ff_ready = true, ff_debuff_remaining = 10 })
+    eq(out.hold_text, "FAERIE FIRE", "utility: the Era Faerie Fire refresh row fires")
+    -- Unknown hides: no target, an unreadable cooldown, an unanswered debuff.
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        has_target = false, feral_ff_ready = true, ff_debuff_remaining = false })
+    eq(out.hold_text, nil, "utility: no target, no Faerie Fire call")
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        has_target = true, feral_ff_ready = NONE, ff_debuff_remaining = false })
+    eq(out.hold_text, nil, "utility: an unreadable cooldown, no Faerie Fire call")
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        has_target = true, feral_ff_ready = true, ff_debuff_remaining = NONE })
+    eq(out.hold_text, nil, "utility: an unanswered debuff never prompts")
+    -- The TBC row: cast it only when the debuff is inactive.
+    out = evaluate({ family = "TBC", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        has_target = true, feral_ff_ready = true, ff_debuff_remaining = false })
+    eq(out.hold_text, "FAERIE FIRE", "utility: the TBC Faerie Fire upkeep holds")
+    out = evaluate({ family = "TBC", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        has_target = true, feral_ff_ready = true, ff_debuff_remaining = 5 })
+    eq(out.hold_text, nil, "utility: the TBC row waits for the debuff to drop")
+    -- The SoD shares the Era token but its APL carries no Faerie Fire row.
+    out = evaluate({ family = "ERA", sod_runes = true, form_index = 3, combo_points = 0,
+        energy = 60, rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        has_target = true, feral_ff_ready = true, ff_debuff_remaining = false })
+    eq(out.hold_text, nil, "utility: the SoD carries no Faerie Fire row")
+    -- The bear form never runs the cat upkeep.
+    out = evaluate({ family = "ERA", form_index = 1, rage = 50, maul_cost = 15,
+        has_target = true, feral_ff_ready = true, ff_debuff_remaining = false })
+    eq(out.hold_text, nil, "utility: the bear form never runs the cat upkeep")
+
+    -- The Leader of the Pack (the Era APL's i=1 row).
+    local lop = {
+        family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        lop_known = true, lop_active = false, fight_elapsed = 10,
+    }
+    out = evaluate(lop)
+    eq(out.hold_text, "LEADER OF THE PACK", "utility: the Leader of the Pack holds")
+    eq(out.action, nil, "utility: the Leader of the Pack never carries an action")
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        lop_known = true, lop_active = true, fight_elapsed = 10 })
+    eq(out.hold_text, nil, "utility: the Leader of the Pack is up - no call")
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        lop_known = false, lop_active = false, fight_elapsed = 10 })
+    eq(out.hold_text, nil, "utility: an unknown Leader of the Pack - no call")
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        lop_known = true, lop_active = false, fight_elapsed = 200 })
+    eq(out.hold_text, nil, "utility: past the Leader of the Pack's own window - no call")
+    out = evaluate({ family = "ERA", sod_runes = true, form_index = 3, combo_points = 0,
+        energy = 60, rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        lop_known = true, lop_active = false, fight_elapsed = 10 })
+    eq(out.hold_text, nil, "utility: the SoD carries no Leader of the Pack row")
+
+    -- The Innervate (the mana row): the cooldown is ready and the mana is short.
+    local inn = {
+        family = "ERA", form_index = 0, innervate_ready = true, mana_percent = 0.3,
+    }
+    out = evaluate(inn)
+    eq(out.hold_text, "INNERVATE", "utility: the Innervate holds")
+    out = evaluate({ family = "ERA", form_index = 0, innervate_ready = true,
+        mana_percent = 0.5 })
+    eq(out.hold_text, nil, "utility: a healthy mana pool - no Innervate")
+    out = evaluate({ family = "ERA", form_index = 0, innervate_ready = NONE,
+        mana_percent = 0.3 })
+    eq(out.hold_text, nil, "utility: an unknown Innervate - no call")
+    out = evaluate({ family = "ERA", form_index = 0, innervate_ready = true,
+        mana_percent = NONE })
+    eq(out.hold_text, nil, "utility: an unreadable mana pool - no Innervate")
+    out = evaluate({ family = "ERA", form_index = 1, rage = 50, maul_cost = 15,
+        innervate_ready = true, mana_percent = 0.3 })
+    eq(out.hold_text, nil, "utility: the bear form never calls the Innervate")
+    -- The Era row is a caster row (outside the cat form); the SoD row is a cat row.
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        innervate_ready = true, mana_percent = 0.3 })
+    eq(out.hold_text, nil, "utility: the Era Innervate row is a caster row")
+    out = evaluate({ family = "ERA", sod_runes = true, form_index = 3, combo_points = 0,
+        energy = 60, rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        innervate_ready = true, mana_percent = 0.3 })
+    eq(out.hold_text, "INNERVATE", "utility: the SoD Innervate row is a cat row")
+    -- The TBC APL carries no Innervate row.
+    out = evaluate({ family = "TBC", form_index = 0, innervate_ready = true,
+        mana_percent = 0.3 })
+    eq(out.hold_text, nil, "utility: the TBC carries no Innervate row")
+
+    -- The Elune's Light (the Forever APL's i=3).
+    out = evaluate({ family = "FOREVER", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        elunes_light_ready = true })
+    eq(out.hold_text, "ELUNE'S LIGHT", "utility: the Elune's Light holds")
+    out = evaluate({ family = "FOREVER", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        elunes_light_ready = NONE })
+    eq(out.hold_text, nil, "utility: an unknown Elune's Light - no call")
+    out = evaluate({ family = "ERA", form_index = 3, combo_points = 0, energy = 60,
+        rip_remaining = 8, rake_remaining = 7, mangle_remaining = 6,
+        elunes_light_ready = true })
+    eq(out.hold_text, nil, "utility: the Elune's Light is the Forever row")
+end
+
+-- The Cat Form upkeep (the rotation table's cat_form row - the APL's form row:
+-- the Era APL's i=14, the SoD APL's i=0, the TBC APL's Powershifting group and
+-- the Forever APL's i=1). The arm wants THREE proofs: a proven Feral-tree spec
+-- (the class's own probe), a proven-absent Cat Form aura (the APL's own
+-- condition) and a form the cat rotation uses but the other chains do not own.
+do
+    local cform = {
+        family = "ERA", form_index = 0, feral_spec = true, cat_form_active = false,
+    }
+    local out = evaluate(cform)
+    eq(out.hold, true, "U-CF: the Cat Form upkeep holds")
+    eq(out.hold_text, "CAT FORM", "U-CF: the hold text reads CAT FORM")
+    eq(out.action, nil, "U-CF: a hold never carries an action")
+    -- Unknown hides: an unproven spec, an unanswered aura walk.
+    out = evaluate({ family = "ERA", form_index = 0, feral_spec = false,
+        cat_form_active = false })
+    eq(out.hold_text, nil, "U-CF: a proven non-feral player is never asked to shift")
+    out = evaluate({ family = "ERA", form_index = 0, feral_spec = true,
+        cat_form_active = NONE })
+    eq(out.hold_text, nil, "U-CF: an unanswered Cat Form aura never prompts")
+    out = evaluate({ family = "ERA", form_index = 0, feral_spec = NONE,
+        cat_form_active = false })
+    eq(out.hold_text, nil, "U-CF: an unproven spec never prompts")
+    -- The Cat Form aura is up: there is nothing to call.
+    out = evaluate({ family = "ERA", form_index = 0, feral_spec = true,
+        cat_form_active = true })
+    eq(out.hold_text, nil, "U-CF: the Cat Form aura is up - no call")
+    -- The forms: the bear and the cat chain own theirs, the tree/moonkin and the
+    -- flight forms are not the cat rotation's, and an unreadable form hides.
+    out = evaluate({ family = "ERA", form_index = 1, feral_spec = true,
+        cat_form_active = false, rage = 50, maul_cost = 15 })
+    eq(out.hold_text, nil, "U-CF: the bear form never runs the form upkeep")
+    out = evaluate({ family = "ERA", form_index = 3, feral_spec = true,
+        cat_form_active = false, combo_points = 0, energy = 60, rip_remaining = 8,
+        rake_remaining = 8, mangle_remaining = 6 })
+    eq(out.hold_text, nil, "U-CF: the cat form is already there")
+    out = evaluate({ family = "ERA", form_index = 4, feral_spec = true,
+        cat_form_active = false })
+    eq(out.hold_text, "CAT FORM", "U-CF: the travel form asks for the cat form")
+    out = evaluate({ family = "ERA", form_index = 5, feral_spec = true,
+        cat_form_active = false })
+    eq(out.hold_text, nil, "U-CF: a caster form is not the cat rotation's")
+    out = evaluate({ family = "ERA", form_index = 6, feral_spec = true,
+        cat_form_active = false })
+    eq(out.hold_text, nil, "U-CF: the flight form is not the cat rotation's")
+    out = evaluate({ family = "ERA", form_index = NONE, feral_spec = true,
+        cat_form_active = false })
+    eq(out.hold_text, nil, "U-CF: an unreadable form never prompts")
+    -- The families: the row belongs to Era (and the SoD), TBC and Forever - never
+    -- to WotLK, whose APL carries no Cat Form row.
+    out = evaluate({ family = "TBC", form_index = 0, feral_spec = true,
+        cat_form_active = false })
+    eq(out.hold_text, "CAT FORM", "U-CF: the TBC row fires")
+    out = evaluate({ family = "FOREVER", form_index = 0, feral_spec = true,
+        cat_form_active = false })
+    eq(out.hold_text, "CAT FORM", "U-CF: the Forever row fires")
+    out = evaluate({ family = "WRATH", form_index = 0, feral_spec = true,
+        cat_form_active = false })
+    eq(out.hold_text, nil, "U-CF: the WotLK APL carries no Cat Form row")
+    -- The bear form belongs to the bear chain on EVERY family - including the
+    -- two whose APL puts the Cat Form row above the Innervate (the arm is
+    -- checked before the form dispatch there, so it must exclude the bear form
+    -- by itself).
+    out = evaluate({ family = "FOREVER", form_index = 1, feral_spec = true,
+        cat_form_active = false, rage = 50, maul_cost = 15 })
+    eq(out.hold_text, nil, "U-CF: the bear form never runs the form upkeep (Forever)")
+    eq(out.action, "maul", "U-CF: the Forever bear chain still owns the bear form")
+    out = evaluate({ family = "ERA", sod_runes = true, form_index = 1,
+        feral_spec = true, cat_form_active = false, rage = 50, maul_cost = 15 })
+    eq(out.hold_text, nil, "U-CF: the bear form never runs the form upkeep (SoD)")
+    eq(out.action, "maul", "U-CF: the SoD bear chain still owns the bear form")
+    -- The APL order against the Innervate row: the Cat Form row sits above the
+    -- Innervate on SoD (i=0 vs i=4) and below it on Era (i=14 vs i=13).
+    out = evaluate({ family = "ERA", sod_runes = true, form_index = 0,
+        feral_spec = true, cat_form_active = false, innervate_ready = true,
+        mana_percent = 0.3 })
+    eq(out.hold_text, "CAT FORM", "U-CF: on SoD the Cat Form row outranks the Innervate")
+    out = evaluate({ family = "ERA", form_index = 0, feral_spec = true,
+        cat_form_active = false, innervate_ready = true, mana_percent = 0.3 })
+    eq(out.hold_text, "INNERVATE", "U-CF: on Era the Innervate row outranks the Cat Form")
+end
+
+-- The form upkeep's class-side reads: the Feral-tree spec probe (the family's
+-- Feral-tree talent) and the Cat Form aura (the player's own aura walk).
+do
+    local function fresh_gather(opts)
+        local fresh = build(opts)
+        local FST = fresh.ST
+        FST.interfaces_are_initialised = true
+        FST.DRUID.post_init(FST)
+        return FST.DRUID.guide.gather(FST, {})
+    end
+    -- The Era client's probe is the Faerie Fire (Feral) (17392), a Feral-tree
+    -- talent; the TBC client's is the Faerie Fire (Feral) r5 (27011); the
+    -- Forever client's is the Leader of the Pack (17007).
+    local era_feral = fresh_gather({ project = 2, known_ids = { [17392] = true } })
+    eq(era_feral.feral_spec, true,
+        "U-CF gather: a known Faerie Fire (Feral) proves the Feral tree on Era")
+    local era_caster = fresh_gather({ project = 2 })
+    eq(era_caster.feral_spec, false,
+        "U-CF gather: an unknown Faerie Fire (Feral) never proves the Feral tree")
+    local tbc_feral = fresh_gather({ project = 5, known_ids = { [27011] = true } })
+    eq(tbc_feral.feral_spec, true,
+        "U-CF gather: a known Faerie Fire (Feral) proves the Feral tree on TBC")
+    local forever_feral = fresh_gather({ project = 18, known_ids = { [17007] = true } })
+    eq(forever_feral.feral_spec, true,
+        "U-CF gather: a known Leader of the Pack proves the Feral tree on Forever")
+    local wrath = fresh_gather({ project = 11, known_ids = { [17007] = true } })
+    eq(wrath.feral_spec, nil,
+        "U-CF gather: the WotLK client has no Cat Form row, so no spec probe")
+end
+
+--=========================================================================================
+-- 21) The hold vocabulary is closed, and RIDE is the one press-nothing hold
+--=========================================================================================
+-- The guide's holds are not one thing: NINE of its ten hold texts name the spell to
+-- PRESS (the guide has no slot for the spell, so the hold overlay carries the call),
+-- while "RIDE" means PRESS NOTHING (the bear chain's queued Maul - the guide rides
+-- the queue the player already placed). The deep-audit's H1 was the class turning
+-- that one press-nothing hold into a synthetic action.
+--
+-- The vocabulary is pinned HERE (the guide owns the texts): every hold text the guide
+-- can write is covered by exactly one of the class's two tables, and "RIDE" is the
+-- only press-nothing one. A new hold text in the guide fails this pin, so it can
+-- never be graded by a guessed slug.
+do
+    local function read(path)
+        local f = assert(io.open(ROOT .. path, "r"))
+        local text = f:read("*a")
+        f:close()
+        return text
+    end
+
+    -- The guide's own hold texts, read out of the source (every `hold_text = "..."`).
+    local source = read("druid_guide.lua")
+    local texts = {}
+    for text in source:gmatch('hold_text%s*=%s*"([^"]*)"') do
+        texts[text] = true
+    end
+    local known = {
+        ["CAT FORM"] = true,
+        ["INNERVATE"] = true,
+        ["RIDE"] = true,
+        ["FAERIE FIRE"] = true,
+        ["TIGER'S FURY"] = true,
+        ["BERSERK"] = true,
+        ["SAVAGE ROAR"] = true,
+        ["LEADER OF THE PACK"] = true,
+        ["SHIFTING POWER"] = true,
+        ["ELUNE'S LIGHT"] = true,
+    }
+    local count = 0
+    for text in pairs(texts) do
+        count = count + 1
+        check(known[text] == true,
+            "hold vocabulary: the guide's hold text is a known one (" .. text .. ")")
+    end
+    eq(count, 10, "hold vocabulary: the guide writes ten hold texts")
+
+    -- The class's two tables: the spell-naming holds and the press-nothing holds.
+    local sb = build()
+    local keys = sb.ST.DRUID.PRACTICE_HOLD_KEYS
+    local nothing = sb.ST.DRUID.PRACTICE_HOLD_PRESSES_NOTHING
+    check(type(keys) == "table" and type(nothing) == "table",
+        "hold vocabulary: the class publishes both hold tables")
+    for text in pairs(texts) do
+        local spell_named = keys[text] ~= nil
+        local press_nothing = nothing[text] == true
+        check(spell_named ~= press_nothing,
+            "hold vocabulary: " .. text .. " is covered by exactly one of the two tables")
+    end
+    -- RIDE is the press-nothing hold, and never a spell to press.
+    eq(nothing["RIDE"], true, "hold vocabulary: RIDE is the press-nothing hold")
+    eq(keys["RIDE"], nil, "hold vocabulary: RIDE is never a spell-naming hold")
+    local nothing_count = 0
+    for _ in pairs(nothing) do nothing_count = nothing_count + 1 end
+    eq(nothing_count, 1, "hold vocabulary: the guide has exactly one press-nothing hold")
+    -- No hold text maps to the "ride" key: that key would be a button the player can
+    -- only press dishonestly (points for idling) and would bank a false mis-pick in
+    -- the priority drill for every real pick.
+    for text, key in pairs(keys) do
+        check(key ~= "ride",
+            "hold vocabulary: no hold text maps to the 'ride' key (" .. text .. ")")
+    end
 end
 
 if failures == 0 then

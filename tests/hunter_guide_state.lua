@@ -28,7 +28,8 @@
 --     hidden window, the GCD-echo filter on every cooldown (1.51/1.52 boundary), the
 --     family gates (TBC-only rules known=false off-TBC, the Era Aimed rule
 --     known=false off-Era, Steady on its known-rank gate), stale-field overwrites,
---     the world-latency basis and the rank-resolution fallback,
+--     the compensated-latency basis (calibrated when usable, raw fallback) and
+--     the rank-resolution fallback,
 --   * the provider contract shape (base slot keys, six slots; the Era three-slot
 --     set with its aimed live-cast swipe; the steady cooldown_key resolving into the
 --     gathered inputs, possible actions naming declared slots),
@@ -102,6 +103,44 @@ eq(hg.KILL_SHOT_EXECUTE_FRAC, 0.20, "the Kill Shot execute threshold is 0.20")
 eq(hg.SNIPER_CAST_SECONDS_DEFAULT, 4.0, "the Sniper cast-time default is 4.0 s")
 eq(hg.HAWK_MAX_ACTIVE, 2, "the Summon Hawk upkeep cap is 2")
 check(type(pure.hunter_window) == "table", "the reused hunter_window maths load alongside")
+
+-- The pure clip-margin helper (the practice clip drill's maths): the seconds between
+-- the press and the LATEST safe start. Its arithmetic must agree with is_cast_safe
+-- exactly, or the drill would grade a cast the engine calls unsafe.
+do
+    check(type(hg.cast_margin) == "function", "the engine exports the pure cast_margin")
+    local margin = hg.cast_margin
+    -- A steady cast (1.5 s) under the steady grace (0.5) with no latency: the
+    -- deadline is 1.5 + 0 - 0.5 + 0.03 = 1.03 s, so a 2 s window leaves 0.97 s.
+    near(margin(1.5, 0, 2.0, 0.5), 0.97, 1e-9,
+        "cast_margin: the steady deadline is the cast plus the latency minus the grace")
+    -- Exactly on the deadline: the margin is zero (the last safe start).
+    near(margin(1.5, 0, 1.03, 0.5), 0, 1e-9, "cast_margin: the deadline is the zero margin")
+    -- Past the deadline: negative (the cast would clip).
+    check(margin(1.5, 0, 1.0, 0.5) < 0, "cast_margin: a cast past the deadline clips")
+    -- The latency floor: is_cast_safe floors its buffer at 0.03 s, so a latency
+    -- below the floor still leaves the full buffer (only the cast term grows).
+    near(margin(1.5, 0.01, 2.0, 0.5), 0.96, 1e-9,
+        "cast_margin: the latency buffer is floored at 0.03 s like is_cast_safe")
+    -- The Multi-Shot grace is 0, so its deadline is the cast itself.
+    near(margin(0.5, 0, 0.53, 0), 0, 1e-9, "cast_margin: the Multi grace is zero")
+    -- The engine's verdict and the margin never disagree: a positive margin is
+    -- clip-safe, a negative one is not.
+    local window = pure.hunter_window
+    for _, ttl in ipairs({ 0.5, 1.0, 1.03, 2.0, 3.5 }) do
+        local m = margin(1.5, 0.05, ttl, 0.5)
+        local safe = window.is_cast_safe(1.5 + 0.05, ttl, 0.5, 0.05)
+        eq((m ~= nil and m >= 0), safe, "cast_margin agrees with is_cast_safe at ttl " .. tostring(ttl))
+    end
+    -- Unknown inputs never guess.
+    eq(margin(nil, 0, 2.0, 0.5), nil, "cast_margin: an unknown cast time reports nil")
+    eq(margin(1.5, 0, nil, 0.5), nil, "cast_margin: an unknown window reports nil")
+    eq(margin(0 / 0, 0, 2.0, 0.5), nil, "cast_margin: a NaN cast time reports nil")
+    eq(margin(1.5, 0, 0 / 0, 0.5), nil, "cast_margin: a NaN window reports nil")
+    -- A missing grace reads the steady-shot default (the engine's own fallback).
+    near(margin(1.5, 0, 2.0, nil), margin(1.5, 0, 2.0, 0.5), 1e-9,
+        "cast_margin: a missing grace reads the steady-shot grace")
+end
 
 -- Rule-matrix inputs: everything the frozen input set names, with a baseline that lands
 -- on rule 6c (no cast, no window, nothing known/on cooldown, ttl 2 s, cast 1.5 + 0.05
@@ -714,6 +753,171 @@ do
         "restoring the family restores the filler baseline")
 end
 
+--=========================================================================================
+-- 0b) The APL UTILITY layer's arms (the utility lane, 2026-10-20)
+--=========================================================================================
+-- Every line the class's APL asks for now has an engine arm, and every arm
+-- reads the live inputs only:
+--   * a COOLDOWN line: known on this client and off cooldown.
+--   * an AURA line (a buff or a debuff the line maintains): known on this
+--     client and the buff is KNOWN DOWN. A buff that is UP is NEVER asked for,
+--     and an UNKNOWN buff never prompts (unknown hides).
+-- The melee rows also read the weave band ("melee"), the aspect swaps read
+-- the mana fraction, and every arm keeps its family gate.
+do
+    local saved = pure.family
+
+    -- The Serpent Sting upkeep (the ERA APL's i=4, the WotLK i=5/i=7, the
+    -- Forever i=8): the sting on the target is KNOWN DOWN.
+    pure.family = "ERA"
+    eq(evaluate({ serpent_known = true, serpent_active = false }).action, "serpent",
+        "utility: the Era Serpent asks when the sting is known down")
+    eq(evaluate({ serpent_known = true, serpent_active = true }).action, "steady",
+        "utility: the Era Serpent is NEVER asked for while the sting is up")
+    eq(evaluate({ serpent_known = true, serpent_active = nil }).action, "steady",
+        "utility: an unreadable sting never prompts (unknown hides)")
+    eq(evaluate({ serpent_known = false, serpent_active = false }).action, "steady",
+        "utility: a client that knows no Serpent rank never asks for it")
+
+    -- The Rapid Fire burst (the ERA APL's i=1, the SOD i=7, the TBC layer).
+    eq(evaluate({ rf_known = true, rf_remaining_cd = 0 }).action, "rapid_fire",
+        "utility: the Era Rapid Fire pops when it is off cooldown")
+    eq(evaluate({ rf_known = true, rf_remaining_cd = 30 }).action, "steady",
+        "utility: the Rapid Fire on cooldown leaves the filler baseline")
+    eq(evaluate({ rf_known = false, rf_remaining_cd = 0 }).action, "steady",
+        "utility: an unknown Rapid Fire never prompts")
+
+    -- The aspect swaps (the TBC mana group, the SoD i=22/i=24, the WotLK i=1/i=2):
+    -- the buff is KNOWN DOWN and the mana answers.
+    pure.family = "TBC"
+    eq(evaluate({ aspect_viper_known = true, aspect_viper_active = false,
+        mana_frac = 0.02 }).action, "aspect_viper",
+        "utility: the TBC Viper swaps when it is down and the mana is under the start")
+    eq(evaluate({ aspect_viper_known = true, aspect_viper_active = true,
+        mana_frac = 0.02 }).action, "steady",
+        "utility: the TBC Viper is NEVER asked for while the buff is up")
+    eq(evaluate({ aspect_viper_known = true, aspect_viper_active = false,
+        mana_frac = nil }).action, "steady",
+        "utility: an unknown mana never prompts a swap")
+    eq(evaluate({ aspect_hawk_known = true, aspect_hawk_active = false,
+        mana_frac = 0.6 }).action, "aspect_hawk",
+        "utility: the TBC Hawk swaps back when it is down and the mana is over the stop")
+    eq(evaluate({ aspect_hawk_known = true, aspect_hawk_active = true,
+        mana_frac = 0.6 }).action, "steady",
+        "utility: the TBC Hawk is NEVER asked for while the buff is up")
+
+    -- The WotLK arms: the Silencing Shot (i=3), the Serpent (i=5), the Explosive
+    -- Trap (i=6), the Black Arrow (SV i=8) and the Multi-Shot (i=9/i=10).
+    pure.family = "WRATH"
+    eq(evaluate({ chimera_known = true, silencing_shot_known = true,
+        silencing_shot_remaining_cd = 0 }).action, "silencing_shot",
+        "utility: the WotLK Silencing Shot asks when it is off cooldown")
+    eq(evaluate({ chimera_known = true, silencing_shot_known = true,
+        silencing_shot_remaining_cd = 12 }).action, "chimera",
+        "utility: the Silencing Shot on cooldown hands the step to the Chimera")
+    eq(evaluate({ aspect_viper_known = true, aspect_viper_active = false,
+        mana_frac = 0.02 }).action, "aspect_viper",
+        "utility: the WotLK Viper swaps when it is down and the mana is under 10%")
+    eq(evaluate({ aspect_viper_known = true, aspect_viper_active = true,
+        mana_frac = 0.02 }).action, "steady",
+        "utility: the WotLK Viper is NEVER asked for while the buff is up")
+    eq(evaluate({ aspect_dragonhawk_known = true, aspect_dragonhawk_active = false,
+        mana_frac = 0.6 }).action, "aspect_dragonhawk",
+        "utility: the WotLK Dragonhawk swaps when it is down and the mana is over 30%")
+    eq(evaluate({ aspect_dragonhawk_known = true, aspect_dragonhawk_active = true,
+        mana_frac = 0.6 }).action, "steady",
+        "utility: the WotLK Dragonhawk is NEVER asked for while the buff is up")
+    eq(evaluate({ chimera_known = true, explosive_trap_known = true,
+        explosive_trap_remaining_cd = 0 }).action, "explosive_trap",
+        "utility: the WotLK Explosive Trap asks when it is off cooldown")
+    eq(evaluate({ explosive_known = true, explosive_remaining_cd = 6,
+        black_arrow_known = true, black_arrow_remaining_cd = 0 }).action, "black_arrow",
+        "utility: the WotLK Black Arrow asks when the Explosive Shot is on cooldown")
+    eq(evaluate({ utility_multi_known = true, utility_multi_remaining_cd = 0 }).action, "multi",
+        "utility: the WotLK Multi-Shot asks when it is off cooldown")
+    eq(evaluate({ utility_multi_known = true,
+        utility_multi_remaining_cd = 6 }).action, "steady",
+        "utility: the WotLK Multi-Shot on cooldown leaves the filler baseline")
+
+    -- The SoD arms: the execute (i=12), the melee rows (i=16/i=17/i=27) and the
+    -- Aspect of the Falcon (i=24).
+    pure.family = "ERA"
+    eq(evaluate({ chimera_known = true, chimera_remaining_cd = 6,
+        killshot_known = true, killshot_remaining_cd = 0,
+        target_hp_frac = 0.15 }).action, "kill_shot",
+        "utility: the SoD execute asks at the E20")
+    eq(evaluate({ chimera_known = true, chimera_remaining_cd = 6,
+        killshot_known = true, killshot_remaining_cd = 0,
+        target_hp_frac = 0.5 }).action, "steady",
+        "utility: the SoD execute waits for the execute window")
+    eq(evaluate({ chimera_known = true, chimera_remaining_cd = 6,
+        raptor_strike_known = true,
+        raptor_strike_remaining_cd = 0, weave_band = "melee" }).action, "raptor_strike",
+        "utility: the SoD Raptor Strike asks in melee range")
+    eq(evaluate({ chimera_known = true, chimera_remaining_cd = 6,
+        raptor_strike_known = true,
+        raptor_strike_remaining_cd = 0, weave_band = "ranged" }).action, "steady",
+        "utility: the SoD Raptor Strike waits for melee range")
+    eq(evaluate({ chimera_known = true, chimera_remaining_cd = 6,
+        raptor_strike_known = true,
+        raptor_strike_remaining_cd = 0 }).action, "steady",
+        "utility: an unknown weave band never asks for a melee row")
+    eq(evaluate({ chimera_known = true, chimera_remaining_cd = 6,
+        aspect_falcon_known = true,
+        aspect_falcon_active = false, aspect_viper_known = true,
+        aspect_viper_active = false }).action, "aspect_falcon",
+        "utility: the SoD Falcon asks when neither the Viper nor the Falcon is up")
+    eq(evaluate({ chimera_known = true, chimera_remaining_cd = 6,
+        aspect_falcon_known = true,
+        aspect_falcon_active = true, aspect_viper_known = true,
+        aspect_viper_active = false }).action, "steady",
+        "utility: the SoD Falcon is NEVER asked for while the buff is up")
+
+    -- The Forever arms: the Raptor Strike (i=1), the Hunter's Mark (i=2), the
+    -- Mongoose Bite (i=3), the Immolation Trap (i=5), the Wing Clip (i=6) and
+    -- the Serpent (i=8).
+    pure.family = "FOREVER"
+    eq(evaluate({ raptor_strike_known = true, raptor_strike_remaining_cd = 0,
+        weave_band = "melee" }).action, "raptor_strike",
+        "utility: the Forever Raptor Strike asks in melee range")
+    eq(evaluate({ hunters_mark_known = true, hunters_mark_active = false }).action, "hunters_mark",
+        "utility: the Forever Hunter's Mark asks when the mark is known down")
+    eq(evaluate({ hunters_mark_known = true, hunters_mark_active = true }).action, "steady",
+        "utility: the Forever Hunter's Mark is NEVER asked for while the mark is up")
+    eq(evaluate({ mongoose_bite_known = true, mongoose_bite_remaining_cd = 0,
+        weave_band = "melee" }).action, "mongoose_bite",
+        "utility: the Forever Mongoose Bite asks in melee range")
+    eq(evaluate({ immolation_trap_known = true, immolation_trap_remaining_cd = 0,
+        weave_band = "melee" }).action, "immolation_trap",
+        "utility: the Forever Immolation Trap asks in melee range")
+    eq(evaluate({ wing_clip_known = true, wing_clip_remaining_cd = 0,
+        weave_band = "melee" }).action, "wing_clip",
+        "utility: the Forever Wing Clip asks in melee range")
+
+    -- The family gates: a forged input never reaches another family's arm.
+    pure.family = "FOREVER"
+    eq(evaluate({ silencing_shot_known = true,
+        silencing_shot_remaining_cd = 0 }).action, "steady",
+        "utility: the WotLK Silencing Shot never prompts off-Wrath")
+    eq(evaluate({ aspect_hawk_known = true, aspect_hawk_active = false,
+        mana_frac = 0.6 }).action, "steady",
+        "utility: the TBC Aspect of the Hawk never prompts off-TBC")
+    pure.family = "WRATH"
+    eq(evaluate({ hunters_mark_known = true, hunters_mark_active = false }).action, "steady",
+        "utility: the Forever Hunter's Mark never prompts off-Forever")
+    pure.family = "ERA"
+    eq(evaluate({ aspect_dragonhawk_known = true,
+        aspect_dragonhawk_active = false, mana_frac = 0.6 }).action, "steady",
+        "utility: the WotLK Aspect of the Dragonhawk never prompts off-Wrath")
+    eq(evaluate({ aspect_falcon_known = true, aspect_falcon_active = false,
+        aspect_viper_known = true, aspect_viper_active = false }).action, "steady",
+        "utility: the SoD Aspect of the Falcon never prompts on a plain Era client")
+
+    pure.family = saved
+    eq(hg.evaluate(inp({})).action, "steady",
+        "restoring the family restores the filler baseline")
+end
+
 -- Rule 6b: the Multi-Shot weave (Era and TBC, 0 grace, shadows Steady while due).
 do
     eq(evaluate({ multi_known = true }).action, "multi",
@@ -846,52 +1050,204 @@ do
         "rule 2b: a boolean false spelling is not the byte-exact 0")
 end
 
--- H2: the Bloodlust/Heroism window suppresses the weave arms only (rules 6a/6b),
--- with Steady Shot kept as the spam cue; every other rule stays live.
+-- H2 CUT (operator order 2026-10-19, bench/hunter_open_2026-10-19.md section 5):
+-- no Bloodlust/Heroism-family suppression anywhere. A live window (a positive
+-- lust_remaining overlooked from an older gather) changes nothing: the
+-- synced-duration clip math alone decides. Every pin pairs a windowed call
+-- against its windowless twin; a reintroduced suppression flips the windowed
+-- half back to the Steady spam cue and fails loudly. Source pins at the end
+-- prove the machinery is gone from hunter_guide.lua.
 do
-    -- A due clip-safe Aimed Shot (3 s cast + 0.03 latency vs a 3.06 ttl: swing_start
-    -- 99 + 4.06 - now 100) fires without a window; inside one it falls through to the
-    -- Steady spam cue.
+    -- A due clip-safe Aimed Shot (3 s cast + 0.03 latency vs a 3.06 ttl) fires
+    -- with and without a window.
     eq(evaluate({ aimed_known = true, aimed_cast_seconds = 3.0, latency = 0.03,
         synced_duration = 4.06 }).action, "aimed",
-        "H2: a due clip-safe Aimed fires without a window")
+        "H2 CUT: a due clip-safe Aimed fires without a window")
     eq(evaluate({ aimed_known = true, aimed_cast_seconds = 3.0, latency = 0.03,
-        synced_duration = 4.06, lust_remaining = 30 }).action, "steady",
-        "H2: the Aimed weave suppressed, Steady Shot carries the window")
-    -- A due clip-safe Multi-Shot (0.5 s cast vs a 1.06 ttl) is suppressed too, and the
-    -- suppressed arm falls through to the Steady spam cue.
+        synced_duration = 4.06, lust_remaining = 30 }).action, "aimed",
+        "H2 CUT: the same Aimed fires with a live window (no suppression)")
+    -- A due clip-safe Multi-Shot (0.5 s cast vs a 1.06 ttl) fires with and
+    -- without a window.
     eq(evaluate({ multi_known = true, latency = 0.03,
         synced_duration = 2.06 }).action, "multi",
-        "H2: a due clip-safe Multi fires without a window")
+        "H2 CUT: a due clip-safe Multi fires without a window")
     eq(evaluate({ multi_known = true, latency = 0.03,
-        synced_duration = 2.06, lust_remaining = 30 }).action, "steady",
-        "H2: the Multi weave suppressed, Steady Shot becomes the spam cue")
-    -- Only a positive remaining suppresses: 0 and negatives read as no window.
+        synced_duration = 2.06, lust_remaining = 30 }).action, "multi",
+        "H2 CUT: the same Multi fires with a live window (no suppression)")
+    -- The clip math still withholds unsafe casts, window or not: the 6a
+    -- equality pair (3.56 safe, 3.55 withheld) under a live window.
+    eq(evaluate({ aimed_known = true, steady_known = false, latency = 0.03,
+        synced_duration = 3.56, lust_remaining = 30 }).action, "aimed",
+        "H2 CUT: the 6a boundary still prompts under a live window when safe")
+    eq(evaluate({ aimed_known = true, steady_known = false, latency = 0.03,
+        synced_duration = 3.55, lust_remaining = 30 }).action, nil,
+        "H2 CUT: the 6a boundary still withholds under a live window when unsafe")
+    -- Every spelling is ignored now (never a gate).
     eq(evaluate({ multi_known = true, latency = 0.03,
         synced_duration = 1.56, lust_remaining = 0 }).action, "multi",
-        "H2: a zero remaining is not a window")
+        "H2 CUT: a zero reading is not a gate")
     eq(evaluate({ multi_known = true, latency = 0.03,
         synced_duration = 1.56, lust_remaining = -5 }).action, "multi",
-        "H2: a negative remaining is not a window")
+        "H2 CUT: a negative reading is not a gate")
     eq(evaluate({ multi_known = true, latency = 0.03,
         synced_duration = 1.56, lust_remaining = NONE }).action, "multi",
-        "H2: an absent reading is not a window")
+        "H2 CUT: an absent reading is not a gate")
 
-    -- The suppression never touches the other rules.
+    -- Every other rule is unchanged with a window present.
     eq(evaluate({ lust_remaining = 30, kc_known = true }).action, "kill_command",
-        "H2: the TBC Kill Command priority stays live in the window")
+        "H2 CUT: the TBC Kill Command priority is unchanged in the window")
     eq(evaluate({ lust_remaining = 30, hidden_window_start = 99.9,
         hidden_window_duration = 0.5 }).hold_text, "HOLD",
-        "H2: the hidden-window hold stays live in the window")
+        "H2 CUT: the hidden-window hold is unchanged in the window")
     eq(evaluate({ lust_remaining = 30, steady_remaining = 0.3 }).hold_text, "RIDE",
-        "H2: the live-cast ride stays live in the window")
+        "H2 CUT: the live-cast ride is unchanged in the window")
     eq(evaluate({ lust_remaining = 30, target_in_range = 0 }).hold_text, "HOLD",
-        "H2: the range gate stays live in the window")
+        "H2 CUT: the range gate is unchanged in the window")
     local saved = pure.family
     pure.family = "WRATH"
     eq(evaluate({ lust_remaining = 30 }).action, "steady",
-        "H2: the Wrath filler is never suppressed")
+        "H2 CUT: the Wrath filler is unchanged in the window")
     pure.family = saved
+
+    -- Source pins: the suppression machinery is gone from the engine (a
+    -- reintroduced branch fails here even before behaviour is read).
+    do
+        local f = assert(io.open(ROOT .. "hunter_guide.lua", "r"))
+        local src = f:read("*a")
+        f:close()
+        check(src:find("lust_window", 1, true) == nil,
+            "H2 CUT: no lust window local remains in hunter_guide.lua")
+        check(src:find("lust_remaining", 1, true) == nil,
+            "H2 CUT: no lust input read remains in hunter_guide.lua")
+    end
+end
+
+-- Lock and Load, the Serpent guard, TBC Arcane (dormant) and the Sniper-range
+-- bypass (bench/hunter_rotation_audit_2026-10-19.md findings 1, 2, 4, 5, 8).
+do
+    -- W-LnL (SV): the free Explosive ignores the cooldown, below the execute.
+    local saved = pure.family
+    pure.family = "WRATH"
+    eq(evaluate({ lnl_ready = true, explosive_known = true,
+        explosive_remaining_cd = 6 }).action, "explosive",
+        "W-LnL: a live LnL window fires Explosive past its cooldown")
+    eq(evaluate({ lnl_ready = true, explosive_known = true,
+        explosive_remaining_cd = 6, killshot_known = true,
+        target_hp_frac = 0.10 }).action, "kill_shot",
+        "W-LnL: the execute still outranks the free Explosive")
+    eq(evaluate({ lnl_ready = true, arcane_known = true,
+        arcane_remaining_cd = 6 }).action, "arcane",
+        "W-LnL MM: the free window spends Arcane with no Explosive")
+    eq(evaluate({ lnl_ready = true, explosive_known = true,
+        explosive_remaining_cd = 6, steady_remaining = 0.3 }).hold_text, "RIDE",
+        "rule 1 outranks W-LnL: a live cast rides first")
+    eq(evaluate({ explosive_known = true, explosive_remaining_cd = 6 }).action, "steady",
+        "W-LnL: without the window the cooldown gates as before")
+    eq(evaluate({ lnl_ready = true, explosive_known = true,
+        explosive_remaining_cd = 6, target_in_range = 0 }).hold_text, "HOLD",
+        "rule 2b outranks W-LnL: out of range still holds")
+
+    -- The Serpent guard on W2: a known-down sting withholds the naked Chimera.
+    eq(evaluate({ chimera_known = true, serpent_known = true,
+        serpent_active = false }).action, "serpent",
+        "serpent: a known-down sting withholds the naked Wrath Chimera (the upkeep asks instead)")
+    eq(evaluate({ chimera_known = true, serpent_known = true,
+        serpent_active = true }).action, "chimera",
+        "serpent: a live sting keeps the Wrath Chimera prompt")
+    eq(evaluate({ chimera_known = true }).action, "chimera",
+        "serpent: unknown sting state allows the Chimera (never guess)")
+    -- The knowledge alone must never silence the Chimera: the guard withholds the
+    -- prompt only when the sting is KNOWN to be down (serpent_active == false), so
+    -- an unknown debuff is "allow" (the header's own wording).
+    eq(evaluate({ chimera_known = true, serpent_known = true }).action, "chimera",
+        "serpent: a known sting with an unknown debuff keeps the Chimera prompt")
+    eq(evaluate({ chimera_known = true, serpent_known = false }).action, "chimera",
+        "serpent: an unknown sting keeps the Chimera prompt")
+    -- The three-state feed (BS-3) has three states, and only one of them withholds:
+    -- an EXPLICIT unknown (nil, the "the scan could not be trusted" state) must
+    -- never silence the prompt either.
+    eq(evaluate({ chimera_known = true, serpent_known = true,
+        serpent_active = nil }).action, "chimera",
+        "serpent: an explicit unknown debuff never withholds the Chimera prompt")
+    pure.family = saved
+
+    -- SoD-LnL plus the Serpent guard on 5b (ERA family).
+    saved = pure.family
+    pure.family = "ERA"
+    eq(evaluate({ lnl_ready = true, aimed_known = true, aimed_remaining_cd = 6,
+        synced_duration = 4.0 }).action, "aimed",
+        "SoD-LnL: the free window fires Aimed past its cooldown")
+    eq(evaluate({ lnl_ready = true, aimed_known = true, aimed_remaining_cd = 6,
+        steady_known = false, aimed_cast_seconds = 3.0, latency = 0.03,
+        synced_duration = 3.55 }).action, nil,
+        "SoD-LnL: the free Aimed still needs its clip window")
+    eq(evaluate({ lnl_ready = true, multi_known = true, multi_remaining_cd = 10,
+        latency = 0.03, synced_duration = 1.56 }).action, "multi",
+        "SoD-LnL: the free window fires Multi past its cooldown")
+    eq(evaluate({ lnl_ready = true, chimera_known = true,
+        synced_duration = 4.0 }).action, "chimera",
+        "SoD-LnL: Chimera still outranks the free window")
+    eq(evaluate({ chimera_known = true, serpent_known = true,
+        serpent_active = false, aimed_known = true,
+        synced_duration = 4.0 }).action, "aimed",
+        "serpent: a known-down sting drops SoD Chimera to the Era weave")
+    eq(evaluate({ chimera_known = true, aimed_known = true,
+        synced_duration = 4.0 }).action, "chimera",
+        "serpent: unknown sting state keeps the SoD Chimera prompt")
+    eq(evaluate({ chimera_known = true, serpent_known = true, aimed_known = true,
+        synced_duration = 4.0 }).action, "chimera",
+        "serpent: a known sting with an unknown debuff keeps the SoD Chimera prompt")
+    -- The family gates: forged LnL never prompts off its family.
+    pure.family = nil
+    eq(evaluate({ lnl_ready = true, explosive_known = true,
+        explosive_remaining_cd = 6 }).action, "steady",
+        "gates: a forged Wrath LnL never prompts off-Wrath")
+    eq(evaluate({ lnl_ready = true, aimed_known = true, aimed_remaining_cd = 6,
+        synced_duration = 4.0 }).action, "steady",
+        "gates: a forged SoD LnL never prompts off-Era")
+    pure.family = saved
+
+    -- 5c TBC Arcane: dormant while the plug is false (ships false).
+    eq(hg.TBC_ARCANE_ENABLED, false,
+        "5c: the TBC Arcane plug ships false (no default-visible change)")
+    saved = pure.family
+    pure.family = "TBC"
+    eq(evaluate({ arcane_known = true }).action, "steady",
+        "5c: a due TBC Arcane stays silent while the plug is false")
+    hg.TBC_ARCANE_ENABLED = true
+    eq(evaluate({ arcane_known = true }).action, "arcane",
+        "5c: with the plug on, a ready TBC Arcane prompts above the weave")
+    eq(evaluate({ arcane_known = true, arcane_remaining_cd = 6 }).action, "steady",
+        "5c: Arcane on cooldown falls through to the filler")
+    eq(evaluate({ arcane_known = true, multi_known = true,
+        latency = 0.03, synced_duration = 2.06 }).action, "arcane",
+        "5c: the instant Arcane outranks a due Multi-Shot weave")
+    eq(evaluate({ arcane_known = true, steady_remaining = 0.3 }).hold_text, "RIDE",
+        "rule 1 outranks 5c: a live cast rides first")
+    eq(evaluate({ arcane_known = true, hidden_window_start = 99.9,
+        hidden_window_duration = 0.5 }).hold_text, "HOLD",
+        "rule 2 outranks 5c: the window holds first")
+    hg.TBC_ARCANE_ENABLED = false
+    eq(evaluate({ arcane_known = true }).action, "steady",
+        "5c: restoring false restores the silence")
+    pure.family = nil
+    hg.TBC_ARCANE_ENABLED = true
+    eq(evaluate({ arcane_known = true }).action, "steady",
+        "gates: a forged TBC Arcane never prompts off-TBC")
+    hg.TBC_ARCANE_ENABLED = false
+    pure.family = saved
+
+    -- The Sniper-range bypass on rule 2b (sim TestSniperShotExtendsAutoShotRange).
+    eq(evaluate({ target_in_range = 0 }).hold_text, "HOLD",
+        "2b: out of range still holds with no buff (unknown-hides)")
+    eq(evaluate({ target_in_range = 0,
+        sniper_range_buff_active = false }).hold_text, "HOLD",
+        "2b: an inactive buff still holds")
+    eq(evaluate({ target_in_range = 0, sniper_range_buff_active = true }).action,
+        "steady", "2b: a live Sniper buff bypasses the range hold")
+    eq(evaluate({ target_in_range = 0, sniper_range_buff_active = true,
+        steady_remaining = 0.3 }).hold_text, "RIDE",
+        "rule 1 still outranks the bypass: a live cast rides")
 end
 
 -- Rule 6c: the Steady cooldown gate and the clip-safe boundary.
@@ -1046,7 +1402,7 @@ local SPELL_INFOS = {
     [2643] = { name = "Multi-Shot", icon = "icon_multi_r1", cast_ms = 500 },
 }
 
-local MODULES = { "compat.lua", "utils.lua", "nextaction_ui.lua", "hunter_window.lua",
+local MODULES = { "compat.lua", "utils.lua", "guard.lua", "nextaction_ui.lua", "hunter_window.lua",
     "hunter_guide.lua", "classes/hunter.lua" }
 
 local function make_fontstring()
@@ -1136,6 +1492,8 @@ local function build(opts)
         health_max = nil,
         aura_queries = 0,
         player_auras = nil,
+        target_auras = nil, -- [{ name, spell_id, count, duration, expiration }] for "target"
+        target_aura_queries = 0,
     }
 
     local env = {}
@@ -1172,6 +1530,20 @@ local function build(opts)
     env.GetSpellCooldown = function(spell)
         sb.cooldown_queries = sb.cooldown_queries + 1
         local cd = sb.cooldowns[spell]
+        if not cd and type(spell) == "string" then
+            -- TBC queries by localized name (never a bare id): match the id
+            -- whose spell data carries that name, mirroring the client's own
+            -- mapping. Id-keyed fixtures keep working unchanged.
+            for id, entry in pairs(sb.cooldowns) do
+                if type(id) == "number" then
+                    local info = (opts.spell_infos or SPELL_INFOS)[id]
+                    if info and info.name == spell then
+                        cd = entry
+                        break
+                    end
+                end
+            end
+        end
         if cd then
             return cd[1], cd[2], 1, 1
         end
@@ -1189,12 +1561,24 @@ local function build(opts)
             false, 1, false, cast.spell_id
     end
     env.UnitChannelInfo = function() return nil end
-    -- Player auras for the H2 Bloodlust/Heroism scan (compat's scan_player_aura reads
-    -- through this wrapper). nil means "no auras": every existing fixture stays on the
-    -- no-window path. Non-player units answer nil (the hunter badges' pet scan lives in
-    -- hunter_ui, not in this sandbox).
+    -- Player auras for the H2 CUT pins (compat's scan_player_aura reads through
+    -- this wrapper). The gather spends no scan on TBC or Era: the Lock and Load
+    -- probe runs only on the families that have the talent (Wrath, and the SoD
+    -- rune on the Era family), and the Bloodlust scan stays cut. Non-player
+    -- units answer nil (the hunter badges' pet scan lives in hunter_ui, not in
+    -- this sandbox) - except the target's HARMFUL debuffs, which the Serpent
+    -- Sting target scan reads (BS-3).
     env.UnitAura = function(unit, index, filter)
         sb.aura_queries = sb.aura_queries + 1
+        if unit == "target" and filter == "HARMFUL" then
+            sb.target_aura_queries = sb.target_aura_queries + 1
+            local debuff = sb.target_auras and sb.target_auras[index]
+            if not debuff then
+                return nil
+            end
+            return debuff.name, "", debuff.count or 0, "", debuff.duration, debuff.expiration,
+                nil, nil, nil, debuff.spell_id
+        end
         if unit ~= "player" then
             return nil
         end
@@ -1218,6 +1602,11 @@ local function build(opts)
     -- Target health for the Wrath Kill Shot execute read (nil = unknown).
     env.UnitHealth = function() return sb.health end
     env.UnitHealthMax = function() return sb.health_max end
+    -- The target unit's existence (the Serpent Sting scan's "the scan ran" proof:
+    -- no target means there is nothing to scan, so the debuff stays unknown).
+    if opts.unit_exists ~= nil then
+        env.UnitExists = opts.unit_exists
+    end
     env.IsSpellInRange = function()
         sb.range_queries = sb.range_queries + 1
         return sb.is_spell_in_range
@@ -1292,6 +1681,14 @@ local function build(opts)
         local chunk = assert(loadfile(ROOT .. modules[i]))
         setfenv(chunk, env)
         chunk("SwedgeTimer", st)
+        -- Class files register their body as a loader (operator order 2026-10-21:
+        -- only the selected class executes). This sandbox activates the class it
+        -- loads, exactly as main.lua does at init.
+        local class = modules[i]:match("classes/(%a+)%.lua")
+        if class and type(st.class_loaders) == "table"
+            and type(st.class_loaders[class:upper()]) == "function" then
+            st.class_loaders[class:upper()]()
+        end
     end
 
     sb.env, sb.st, sb.ST, sb.class_db = env, st, ST, class_db
@@ -1325,8 +1722,7 @@ check(ui.inert ~= true, "the hunter provider is live")
 eq(ui.get_provider(ST), ST.HUNTER.guide, "the hunter guide resolves as the frame's provider")
 
 local slots = ST.HUNTER.guide.slots
-eq(#slots, 6, "six slots are declared (the contract's maximum)")
-check(#slots <= 6, "the slot set stays at the contract's six or fewer")
+eq(#slots, 13, "the Wrath slot set covers the APL's whole spine (six arms + seven utility rows)")
 eq(slots[1].key, "kill_shot", "Wrath slot 1 is kill_shot (the execute)")
 eq(slots[2].key, "chimera", "Wrath slot 2 is chimera (the MM signature)")
 eq(slots[3].key, "explosive", "Wrath slot 3 is explosive (the SV signature)")
@@ -1354,8 +1750,8 @@ eq(ST.HUNTER.guide.rotation_key, nil, "no rotation text source is declared")
 eq(ST.HUNTER.guide.rotation_names, nil, "no rotation name map is declared")
 
 -- The frame: one icon per slot, in order, showing the resolved rank textures.
-eq(#ui.icons, 6, "the frame holds one icon per slot")
-eq(sandbox.frames, 15, "frame count: group + hold + 6 icons/borders + 1 cooldown")
+eq(#ui.icons, 13, "the frame holds one icon per slot")
+eq(sandbox.frames, 29, "frame count: group + hold + 13 icons/borders + 1 cooldown")
 for i = 1, #slots do
     eq(ui.icons[i].slot, slots[i], "icon " .. i .. " follows the slot declaration order")
 end
@@ -1448,11 +1844,12 @@ eq(gathered.swing_speed, 3.0, "gather: swing_speed")
 eq(gathered.swing_ends_at, 102.0, "gather: swing_ends_at")
 eq(gathered.synced_duration, nil, "gather: an absent synced duration stays nil")
 eq(gathered.auto_repeat_active, true, "gather: auto_repeat_active")
-near(gathered.latency, 0.05, 1e-9, "gather: world latency only (no twist calibration)")
-near(gathered.hidden_window_start, 101.45, 1e-9,
+near(gathered.latency, 0.999, 1e-9,
+    "gather: the calibrated latency wins when usable (never the twist calibration)")
+near(gathered.hidden_window_start, 100.501, 1e-9,
     "gather: the hidden window is recomputed from the live cycle")
-near(gathered.hidden_window_duration, 0.55, 1e-9,
-    "gather: the window width is the base cast window plus latency")
+near(gathered.hidden_window_duration, 1.499, 1e-9,
+    "gather: the window width is the base cast window plus the compensated latency")
 eq(gathered.raptor_strike_queued, true, "gather: raptor_strike_queued")
 eq(gathered.steady_shot_queued, false, "gather: steady_shot_queued")
 eq(gathered.casting, true, "gather: the live cast state")
@@ -1495,6 +1892,81 @@ eq(gathered.wrath_aimed_known, false, "gather: an unlearned Wrath Aimed never pr
 eq(gathered.wrath_aimed_remaining_cd, 0, "gather: no Wrath Aimed rank reads idle (no query spent)")
 eq(gathered.arcane_known, false, "gather: an unlearned Arcane never prompts")
 eq(gathered.arcane_remaining_cd, 0, "gather: no Arcane rank reads idle (no query spent)")
+eq(gathered.lnl_ready, nil, "gather: LnL writes nil when the player carries no proc aura")
+eq(gathered.serpent_known, nil, "gather: Serpent known writes nil (no known rank)")
+eq(gathered.serpent_active, nil, "gather: Serpent active writes nil (no known rank, no scan)")
+eq(gathered.sniper_range_buff_active, nil, "gather: the Sniper buff writes nil (no source)")
+-- The Lock and Load probe is scoped to the families that have the talent: a
+-- TBC or Era client spends no aura scan on it (the audit's H-05 closure).
+do
+    local tbc_lnl = build({ project = 5 })
+    tbc_lnl.ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0 }
+    tbc_lnl.clock = 100
+    tbc_lnl.player_auras = { { name = "Lock and Load", spell_id = 56344,
+        duration = 22, expiration = 120 } }
+    tbc_lnl.aura_queries = 0
+    local tbc_gathered = tbc_lnl.ST.HUNTER.gather_guide_inputs(tbc_lnl.ST, {})
+    eq(tbc_gathered.lnl_ready, nil, "gather: a TBC client reads no Lock and Load window")
+    eq(tbc_lnl.aura_queries, 0, "gather: a TBC client spends no Lock and Load scan")
+    local era_lnl = build({ project = 2 })
+    era_lnl.ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0 }
+    era_lnl.clock = 100
+    era_lnl.player_auras = { { name = "Lock and Load", spell_id = 415413,
+        duration = 20, expiration = 120 } }
+    era_lnl.aura_queries = 0
+    local era_gathered = era_lnl.ST.HUNTER.gather_guide_inputs(era_lnl.ST, {})
+    eq(era_gathered.lnl_ready, nil, "gather: an Era client reads no Lock and Load window")
+    eq(era_lnl.aura_queries, 0, "gather: an Era client spends no Lock and Load scan")
+end
+
+-- The Serpent Sting target-debuff feed, end to end (BS-3): the gather's three-state
+-- scan reaches the naked-Chimera guard, and the guard's semantics are unchanged -
+-- only a KNOWN-down sting withholds the prompt, an unknown never does.
+do
+    -- A Wrath MM client that knows both the Chimera Shot and a Serpent Sting rank.
+    local serpent_infos = {}
+    for id, info in pairs(SPELL_INFOS) do serpent_infos[id] = info end
+    serpent_infos[53209] = { name = "Chimera Shot", icon = "icon_chimera", cast_ms = 0 }
+    serpent_infos[13554] = { name = "Serpent Sting", icon = "icon_serpent", cast_ms = 0 }
+    local function mm_client(target_auras)
+        local sb = build({
+            spell_infos = serpent_infos,
+            known_spells = { [53209] = true, [13554] = true },
+            unit_exists = function() return true end,
+        })
+        sb.clock = 100
+        sb.ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0 }
+        sb.target_auras = target_auras
+        sb.ST.HUNTER.post_init(sb.ST)
+        return sb
+    end
+
+    -- The sting is up on the target: the Chimera prompt fires.
+    local up = mm_client({ { name = "Serpent Sting", spell_id = 13554, count = 1,
+        duration = 16, expiration = 116 } })
+    local up_inputs = up.ST.HUNTER.gather_guide_inputs(up.ST, {})
+    eq(up_inputs.serpent_known, true, "serpent: the client knows a Serpent rank")
+    eq(up_inputs.chimera_known, true, "serpent: the client knows the Chimera Shot")
+    eq(up_inputs.serpent_active, true, "serpent: the sting on the target reads as up")
+    eq(up.st.hunter_guide.evaluate(up_inputs, {}).action, "chimera",
+        "serpent: a live sting keeps the Chimera prompt")
+
+    -- The sting is not on the target: the prompt is withheld (a known-down sting).
+    local down = mm_client({ { name = "Corruption", spell_id = 11563, count = 1,
+        duration = 6, expiration = 106 } })
+    local down_inputs = down.ST.HUNTER.gather_guide_inputs(down.ST, {})
+    eq(down_inputs.serpent_active, false, "serpent: a target without the sting reads as down")
+    eq(down.st.hunter_guide.evaluate(down_inputs, {}).action, "serpent",
+        "serpent: a known-down sting withholds the naked Chimera prompt (the upkeep asks instead)")
+
+    -- No target: the debuff is unknown, so the prompt fires (never guess).
+    local no_target = mm_client(nil)
+    no_target.env.UnitExists = function() return false end
+    local unknown_inputs = no_target.ST.HUNTER.gather_guide_inputs(no_target.ST, {})
+    eq(unknown_inputs.serpent_active, nil, "serpent: no target leaves the debuff unknown")
+    eq(no_target.st.hunter_guide.evaluate(unknown_inputs, {}).action, "chimera",
+        "serpent: an unknown debuff never withholds the Chimera prompt")
+end
 eq(sandbox.cast_reads, 1, "gather: the live cast is read once per call")
 eq(sandbox.range_queries, 1, "gather: the range probe is one client call per call")
 eq(sandbox.cooldown_queries, 5, "gather: one cooldown read per prompt (steady/kc/bw/rf/multi)")
@@ -1511,6 +1983,19 @@ do
     end
     check(cooldowns_resolve, "every slot cooldown_key resolves into the gathered inputs")
 end
+
+-- The compensation fallback ladder: an unusable calibrated reading falls back to
+-- raw, and an answerless client reads zero (never a guess, never the twist keys).
+ST.latency = { world_ms = 50, calibrated_world_ms = nil }
+near(ST.HUNTER.guide.gather(ST, gathered_target).latency, 0.05, 1e-9,
+    "gather: a missing calibrated reading falls back to raw world latency")
+ST.latency = { world_ms = 50, calibrated_world_ms = 0/0 }
+near(ST.HUNTER.guide.gather(ST, gathered_target).latency, 0.05, 1e-9,
+    "gather: a NaN calibrated reading falls back to raw world latency")
+ST.latency = {}
+eq(ST.HUNTER.guide.gather(ST, gathered_target).latency, 0,
+    "gather: an answerless latency client reads zero")
+ST.latency = { world_ms = 50 }
 
 -- The cached window bounds win over a recompute (the visual half's cache is reused).
 ST.ranged.hidden_window_start = 100.4
@@ -1557,6 +2042,10 @@ eq(gathered2.chimera_known, false, "the Chimera gate stays down unlearned")
 eq(gathered2.explosive_known, false, "the Explosive gate stays down unlearned")
 eq(gathered2.wrath_aimed_known, false, "the Wrath Aimed gate stays down unlearned")
 eq(gathered2.arcane_known, false, "the Arcane gate stays down unlearned")
+eq(gathered2.lnl_ready, nil, "the LnL window stays nil on the reused table")
+eq(gathered2.serpent_known, nil, "the Serpent known stays nil on the reused table")
+eq(gathered2.serpent_active, nil, "the Serpent active stays nil on the reused table")
+eq(gathered2.sniper_range_buff_active, nil, "the Sniper buff stays nil on the reused table")
 near(gathered2.hidden_window_start, 51.45, 1e-9,
     "the recomputed window follows the new cycle")
 
@@ -1582,13 +2071,13 @@ do
     fallback.hide_spells = true
     fallback.ST.HUNTER.post_init(fallback.ST)
     local fslots = fallback.ST.HUNTER.guide.slots
-    eq(#fslots, 6, "the fallback client declares the Wrath six (project 11)")
+    eq(#fslots, 13, "the fallback client declares the Wrath spine (project 11)")
     eq(fslots[1].spell_id, 53351, "an unlearned Kill Shot keeps the rank-1 fallback")
     eq(fslots[2].spell_id, 53209, "an unlearned Chimera keeps the rank-1 fallback")
     eq(fslots[3].spell_id, 53301, "an unlearned Explosive keeps the rank-1 fallback")
     eq(fslots[4].spell_id, 49050, "an unlearned Wrath Aimed keeps the rank-1 fallback")
     eq(fslots[5].spell_id, 49045, "an unlearned Arcane keeps the rank-1 fallback")
-    eq(fslots[6].spell_id, 56641, "an unresolved Steady rank keeps the rank-1 fallback")
+    eq(fslots[6].spell_id, 49052, "an unresolved Steady rank keeps the family's fallback id")
     local fui = fallback.st.nextaction_ui
     eq(fui.icons[1].icon.texture.texture, nil,
         "an unresolvable icon simply stays texture-less (no error)")
@@ -1596,8 +2085,12 @@ do
     fallback.ST.latency = { world_ms = 50 }
     local fgathered = fallback.ST.HUNTER.guide.gather(fallback.ST, {})
     eq(fgathered.steady_cast_seconds, 1.5, "an unreadable cast time falls back to 1.5 s")
+    eq(fgathered.steady_cast_seconds, fallback.ST.HUNTER.CAST_TIME_FALLBACK.steady.WRATH,
+        "the Steady fallback rides the per-client table on Wrath")
     eq(fgathered.steady_remaining_cd, 0, "an unresolved rank reads no cooldown")
     eq(fgathered.multi_cast_seconds, 0.5, "an unreadable Multi cast time falls back to 0.5 s")
+    eq(fgathered.multi_cast_seconds, fallback.ST.HUNTER.CAST_TIME_FALLBACK.multi.WRATH,
+        "the Multi fallback rides the per-client table on Wrath")
     eq(fgathered.multi_known, false, "an unresolved Multi rank never weaves")
     eq(fgathered.kc_known, false, "an unresolved Kill Command never prompts")
     eq(fgathered.bw_known, false, "an unresolved Bestial Wrath never prompts")
@@ -1610,12 +2103,41 @@ do
     eq(fgathered.target_hp_frac, nil, "no Kill Shot rank means no health probe")
 end
 
--- H2 gather wiring: the Bloodlust/Heroism read through compat's frozen scan contract,
--- throttled; Era never arms and spends no scan.
+-- Cold-cache per-client wiring on TBC and Era: with the spell data hidden, the
+-- live probe answers nothing and the per-client table decides (the TBC-name /
+-- Era-id queries behind the probe are pinned in §10b of hunter_state.lua).
 do
-    local h2 = build({ project = 5 })  -- TBC arms the scan
-    eq(h2.st.lust_supported, true, "H2: the TBC family arms the lust scan")
-    local h2ST, h2st = h2.ST, h2.st
+    local cold_tbc = build({ project = 5 })
+    cold_tbc.hide_spells = true
+    local cST = cold_tbc.ST
+    cST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, auto_repeat_active = true }
+    cST.latency = { world_ms = 50 }
+    local cg = cST.HUNTER.guide.gather(cST, {})
+    eq(cg.steady_cast_seconds, 1.5, "TBC cold cache: the Steady fallback reads 1.5 s")
+    eq(cg.steady_cast_seconds, cST.HUNTER.CAST_TIME_FALLBACK.steady.TBC,
+        "TBC cold cache: the Steady read rides the per-client table")
+    eq(cg.multi_cast_seconds, 0.5, "TBC cold cache: the Multi fallback reads 0.5 s")
+    eq(cg.multi_cast_seconds, cST.HUNTER.CAST_TIME_FALLBACK.multi.TBC,
+        "TBC cold cache: the Multi read rides the per-client table")
+    local cold_era = build({ project = 2 })
+    cold_era.hide_spells = true
+    local eST = cold_era.ST
+    eST.ranged = { start = 99.0, speed = 4.0, ends_at = 103.0, auto_repeat_active = true }
+    eST.latency = { world_ms = 50 }
+    local eg = eST.HUNTER.guide.gather(eST, {})
+    eq(eg.multi_cast_seconds, 0.5, "Era cold cache: the Multi fallback reads 0.5 s")
+    eq(eg.aimed_cast_seconds, 3.0, "Era cold cache: the Aimed fallback reads 3.0 s")
+    eq(eg.steady_cast_seconds, nil,
+        "Era cold cache: no Steady fallback (the spell does not exist)")
+end
+
+-- H2 CUT gather: no Bloodlust/Heroism-family scan exists. An aura on the player
+-- changes nothing: no window is ever written and no scan is spent. A reintroduced
+-- producer fails the nil pins; a reintroduced scan fails the query-count pins.
+-- Source pins at the end prove the machinery is gone from classes/hunter.lua.
+do
+    local h2 = build({ project = 5 }) -- TBC armed the old scan; now it must not
+    local h2ST = h2.ST
     h2ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, auto_repeat_active = true }
     h2ST.latency = { world_ms = 50 }
     h2ST.raptor_strike_queued = false
@@ -1624,52 +2146,55 @@ do
     h2.player_auras = {
         { name = "Bloodlust", spell_id = 2825, duration = 40, expiration = 130 },
     }
+    h2.aura_queries = 0
     local g = h2ST.HUNTER.guide.gather(h2ST, {})
-    near(g.lust_remaining, 30, 1e-9, "H2 gather: a live Bloodlust reads its remaining seconds")
-    check(h2.aura_queries > 0, "H2 gather: the aura scan ran on TBC")
-    check(h2st.lust_spell_ids ~= nil, "H2 gather: the id list comes from compat")
-    -- Throttle: the aura drops, but a gather inside the window reuses the reading.
+    eq(g.lust_remaining, nil, "H2 CUT gather: a live Bloodlust writes no window")
+    eq(h2.aura_queries, 0, "H2 CUT gather: a live Bloodlust spends no aura scan")
+    -- A dropped aura changes nothing either (no throttle state survives).
     h2.player_auras = nil
-    h2.clock = 100.2
-    near(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, 30, 1e-9,
-        "H2 gather: the scan is throttled (cached reading serves the tick)")
-    -- Past the throttle the scan re-polls and the dropped aura clears the field.
     h2.clock = 100.6
     eq(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, nil,
-        "H2 gather: a dropped aura clears the window after the throttle")
-    -- Heroism matches the same contract (the id list, not the name).
+        "H2 CUT gather: a dropped aura still writes no window")
+    eq(h2.aura_queries, 0, "H2 CUT gather: the re-poll spends no aura scan either")
+    -- Heroism and unrelated auras are equally silent.
     h2.player_auras = {
         { name = "Heroism", spell_id = 32182, duration = 40, expiration = 140.6 },
     }
     h2.clock = 101.2
-    near(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, 39.4, 1e-9,
-        "H2 gather: Heroism matches the id list too")
-    -- An unrelated aura is never the window.
+    eq(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, nil,
+        "H2 CUT gather: Heroism writes no window either")
     h2.player_auras = {
         { name = "Rapid Fire", spell_id = 3045, duration = 15, expiration = 120 },
     }
     h2.clock = 101.8
     eq(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, nil,
-        "H2 gather: an unrelated aura is never the window")
-    -- An expired window clamps to 0 and reads as no window (never suppressed on 0).
-    h2.player_auras = {
-        { name = "Bloodlust", spell_id = 2825, duration = 40, expiration = 101.9 },
-    }
-    h2.clock = 102.4
-    eq(h2ST.HUNTER.guide.gather(h2ST, {}).lust_remaining, nil,
-        "H2 gather: an expired window reads as no window")
-    -- Era never arms: no scan is spent and the field stays nil.
+        "H2 CUT gather: an unrelated aura writes no window")
+    -- Era never armed the old scan and still spends nothing.
     local era = build({ project = 2 })
-    eq(era.st.lust_supported, false, "H2 gather: the Era family keeps the scan closed")
     era.ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, auto_repeat_active = true }
     era.ST.latency = { world_ms = 50 }
     era.clock = 50
     era.player_auras = {
         { name = "Bloodlust", spell_id = 2825, duration = 40, expiration = 90 },
     }
+    era.aura_queries = 0
     eq(era.ST.HUNTER.guide.gather(era.ST, {}).lust_remaining, nil,
-        "H2 gather: Era never reads a lust window")
-    eq(era.aura_queries, 0, "H2 gather: Era spends no aura scan")
+        "H2 CUT gather: Era writes no window")
+    eq(era.aura_queries, 0, "H2 CUT gather: Era spends no aura scan")
+    -- Source pins: the producer machinery is gone from the class module.
+    do
+        local f = assert(io.open(ROOT .. "classes/hunter.lua", "r"))
+        local src = f:read("*a")
+        f:close()
+        check(src:find("lust_remaining", 1, true) == nil,
+            "H2 CUT: no lust field write remains in classes/hunter.lua")
+        check(src:find("hunter_lust", 1, true) == nil,
+            "H2 CUT: no lust throttle state remains in classes/hunter.lua")
+        check(src:find("LUST_RESCAN_INTERVAL", 1, true) == nil,
+            "H2 CUT: no lust rescan interval remains in classes/hunter.lua")
+        check(src:find("lust_ids", 1, true) == nil,
+            "H2 CUT: no lust id set remains in classes/hunter.lua")
+    end
 end
 
 --=========================================================================================
@@ -1692,7 +2217,7 @@ do
     tST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, auto_repeat_active = true }
     tST.HUNTER.post_init(tST)
     local tslots = tST.HUNTER.guide.slots
-    eq(#tslots, 6, "the TBC client declares all six slots")
+    eq(#tslots, 8, "the TBC client declares the base set plus its mana-swap slots")
     eq(tslots[1].spell_id, 34120, "TBC steady resolves to the TBC rank")
     eq(tslots[2].spell_id, 27014, "TBC raptor resolves to the TBC rank")
     eq(tslots[3].spell_id, 34026, "TBC Kill Command resolves")
@@ -1842,7 +2367,7 @@ do
     eST.ranged = { start = 99.0, speed = 4.0, ends_at = 103.0, auto_repeat_active = true }
     eST.HUNTER.post_init(eST)
     local eslots = eST.HUNTER.guide.slots
-    eq(#eslots, 3, "the Era client declares three slots (the contract allows six)")
+    eq(#eslots, 5, "the Era client declares the Era set with the Rapid Fire and Serpent rows")
     check(#eslots <= 6, "the Era slot set stays at the contract's six or fewer")
     eq(eslots[1].key, "aimed", "Era slot 1 is aimed (the primary filler)")
     eq(eslots[2].key, "raptor", "Era slot 2 is raptor (the melee surface)")
@@ -1856,8 +2381,8 @@ do
     eq(eslots[2].spell_id, 14265, "Era raptor resolves to the module top vanilla rank")
     eq(eslots[3].spell_id, 14290, "Era multi resolves to the top rank")
     local eui = est.nextaction_ui
-    eq(#eui.icons, 3, "the Era frame holds one icon per slot")
-    eq(era.frames, 9, "Era frame count: group + hold + 3 icons/borders + 1 cooldown")
+    eq(#eui.icons, 5, "the Era frame holds one icon per slot")
+    eq(era.frames, 13, "Era frame count: group + hold + 5 icons/borders + 1 cooldown")
     eq(eui.icons[1].icon.texture.texture, "icon_aimed",
         "the aimed icon shows the current rank's texture")
     eq(eui.icons[1].remaining_key, "aimed_remaining", "the swipe field names derive from the key")
@@ -1888,7 +2413,11 @@ do
     eq(egathered.kc_known, false, "Era gather: Kill Command never prompts")
     eq(egathered.bw_known, false, "Era gather: Bestial Wrath never prompts")
     eq(egathered.rf_known, false, "Era gather: Rapid Fire never prompts")
-    eq(era.cooldown_queries, 6, "Era gather: one cooldown read per prompt (steady/kc/bw/rf/multi/aimed)")
+    -- The family-correct ids changed what the gather SPENDS: a slot for a spell
+    -- the running client cannot have carries no id at all (the Era family cell is
+    -- empty - the Era client has neither Kill Command nor Bestial Wrath), so the
+    -- gather reads no cooldown for it (bench/hunter_hud_family_2026-10-20.md §2).
+    eq(era.cooldown_queries, 4, "Era gather: one cooldown read per prompt (steady/rf/multi/aimed)")
     eq(eST.HUNTER.guide.evaluate(egathered, {}).action, "aimed",
         "Era: Aimed Shot is the prompt on a fresh slow-weapon tick")
 
@@ -1988,7 +2517,7 @@ do
     eq(tgathered.aimed_remaining_cd, nil,
         "TBC gather: no Aimed cooldown is read (query count unchanged)")
     eq(tgathered.steady_known, true, "TBC gather: Steady stays known")
-    eq(#tST.HUNTER.guide.slots, 6, "TBC with Aimed data still declares six slots")
+    eq(#tST.HUNTER.guide.slots, 8, "TBC with Aimed data still declares the TBC slot set")
     eq(tST.HUNTER.guide.evaluate(tgathered, {}).action, "kill_command",
         "TBC with Aimed data: Kill Command still wins the fresh tick")
 end
@@ -2025,7 +2554,7 @@ do
         [49045] = true, [53351] = true })
     do
         local mslots = mST.HUNTER.guide.slots
-        eq(#mslots, 6, "Wrath MM declares six slots")
+        eq(#mslots, 13, "Wrath MM declares the thirteen-slot spine")
         eq(mslots[1].spell_id, 53351, "Wrath MM resolves the Kill Shot icon")
         eq(mslots[2].spell_id, 53209, "Wrath MM resolves the Chimera icon")
         eq(mslots[3].spell_id, 53301, "an unlearned Explosive keeps the rank-1 fallback")
@@ -2183,24 +2712,35 @@ do
     sST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, auto_repeat_active = true }
     sST.HUNTER.post_init(sST)
     local sslots = sST.HUNTER.guide.slots
-    eq(#sslots, 4, "SoD declares four slots (the contract allows six)")
-    check(#sslots <= 6, "the SoD slot set stays at the contract's six or fewer")
+    eq(#sslots, 13, "SoD declares the thirteen-slot spine")
+    check(#sslots >= 4, "the SoD slot set carries the whole spine")
     do
         local keys = {}
         for i = 1, #sslots do keys[#keys + 1] = sslots[i].key end
-        eq(table.concat(keys, ","), "chimera,aimed,raptor,multi",
-            "SoD slots are the Era set with Chimera first")
+        eq(table.concat(keys, ","),
+            "chimera,aimed,raptor,multi,rapid_fire,bestial_wrath,kill_shot,raptor_strike,"
+                .. "wyvern_strike,aspect_viper,arcane,aspect_falcon,wing_clip",
+            "SoD slots are the Era set with Chimera first, then the APL's utility spine")
     end
     eq(sslots[1].spell_id, 409433, "SoD resolves the Chimera rune icon")
     eq(sslots[1].cooldown_key, nil, "the SoD Chimera slot is a swipe-less prompt")
     eq(sslots[2].spell_id, 20904, "SoD keeps the Era Aimed rank")
+    -- The Bestial Wrath: the SoD client HAS the spell (its own spell data maps
+    -- 19574 to the Beast Mastery skill line), so the SoD set declares the slot
+    -- the Era-base set drops - with the client's own id.
+    eq(sslots[6].key, "bestial_wrath", "SoD declares the Bestial Wrath slot")
+    eq(sslots[6].spell_id, 19574, "the SoD Bestial Wrath slot carries the client's own rank")
     local sui = sst.nextaction_ui
-    eq(#sui.icons, 4, "the SoD frame holds one icon per slot")
-    eq(sod.frames, 11, "SoD frame count: group + hold + 4 icons/borders + 1 cooldown")
+    eq(#sui.icons, 13, "the SoD frame holds one icon per slot")
+    eq(sod.frames, 29, "SoD frame count: group + hold + 13 icons/borders + 1 cooldown")
     eq(sui.icons[1].icon.texture.texture, "icon_chimera_sod",
         "the Chimera icon shows the rune texture")
 
-    -- The gather on a SoD tick: the rune weaves above the Era pair.
+    -- The gather on a SoD tick: the rune weaves above the Era pair. The read
+    -- count is the Era four plus the rune plus the Bestial Wrath - the SoD
+    -- client HAS that spell (its own spell data), so the guide's SoD slot set
+    -- declares it and the gather reads its cooldown, exactly like the other
+    -- families that carry the Bestial Wrath slot.
     sod.clock = 100
     sST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, synced_duration = nil,
         hidden_window_start = nil, hidden_window_duration = nil, auto_repeat_active = true }
@@ -2215,7 +2755,7 @@ do
     eq(sgathered.chimera_known, true, "SoD gather: the learned rune weaves")
     eq(sgathered.chimera_remaining_cd, 0, "SoD gather: the rune is ready")
     eq(sgathered.steady_known, false, "SoD gather: Steady stays unknown on Era")
-    eq(sod.cooldown_queries, 7, "SoD gather: the Era six plus the rune read")
+    eq(sod.cooldown_queries, 6, "SoD gather: the Era four plus the rune read plus the Bestial Wrath")
     eq(sST.HUNTER.guide.evaluate(sgathered, {}).action, "chimera",
         "SoD: Chimera is the prompt on a fresh tick")
 
@@ -2264,7 +2804,7 @@ do
     local pST = plain.ST
     pST.HUNTER.post_init(pST)
     local pslots = pST.HUNTER.guide.slots
-    eq(#pslots, 3, "a pet-rune build keeps the three-slot Era set")
+    eq(#pslots, 5, "a pet-rune build keeps the plain Era set")
     eq(pslots[1].key, "aimed", "a pet-rune build opens with the Era Aimed slot")
     plain.clock = 100
     pST.ranged = { start = 99.0, speed = 4.0, ends_at = 103.0, auto_repeat_active = true }
@@ -2282,11 +2822,15 @@ end
 --=========================================================================================
 -- The beta guides name Summon Hawk and Sniper Shot but publish no spell ids, so
 -- the module's tables are empty: nothing resolves, both prompts stay silent by
--- construction, and the filler (Steady, if known) plus the melee surface carry
--- the tick. Multi-Shot data answers but never prompts (the conservative gate).
+-- construction, and the melee surface carries the tick. Multi-Shot data answers
+-- but never prompts (the conservative gate).
+-- The fixture carries NO Steady Shot: the Forever client has none at all (the
+-- corpus correction of 2026-10-20, bench/rotation_gap_vs_apl_2026-10-20.md §0.0
+-- H4 - the spell arrived in 2.3 and the Forever spell data carries no
+-- SteadyShot table), so the guide declares no Steady slot there and the engine's
+-- steady arm can never fire (steady_known is false by construction).
 do
     local FOREVER_SPELLS = {
-        [34120] = { name = "Steady Shot", icon = "icon_steady_forever", cast_ms = 1500 },
         [27014] = { name = "Raptor Strike", icon = "icon_raptor_forever", cast_ms = 0 },
         [27021] = { name = "Multi-Shot", icon = "icon_multi_forever", cast_ms = 500 },
     }
@@ -2298,13 +2842,15 @@ do
     fST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, auto_repeat_active = true }
     fST.HUNTER.post_init(fST)
     local fslots = fST.HUNTER.guide.slots
-    eq(#fslots, 4, "the Forever client declares four slots (the contract allows six)")
-    check(#fslots <= 6, "the Forever slot set stays at the contract's six or fewer")
+    eq(#fslots, 11, "the Forever client declares the eleven-slot spine (no Steady Shot)")
+    check(#fslots >= 4, "the Forever slot set carries the whole spine")
     do
         local keys = {}
         for i = 1, #fslots do keys[#keys + 1] = fslots[i].key end
-        eq(table.concat(keys, ","), "hawk,sniper,steady,raptor",
-            "Forever slots are the upkeep, the cast, the filler and the melee surface")
+        eq(table.concat(keys, ","),
+            "hawk,sniper,raptor,raptor_strike,hunters_mark,mongoose_bite,"
+                .. "immolation_trap,wing_clip,serpent,arcane,multi",
+            "Forever slots are the upkeep, the cast, the melee surface and the APL's spine")
     end
     eq(fslots[1].spell_id, nil, "the hawk slot ships spell-less (UNCONFIRMED id)")
     eq(fslots[1].cooldown_key, nil, "the hawk slot is a swipe-less upkeep prompt")
@@ -2312,22 +2858,27 @@ do
     eq(fslots[2].cooldown_key, "sniper", "the sniper slot carries its live-cast swipe key")
     eq(fslots[2].swipe_duration, 4.0, "the sniper slot carries the cast-length swipe fallback")
     eq(fslots[2].swipe_always, true, "the sniper swipe stays armed while the RIDE hold fades the icon")
-    eq(fslots[3].spell_id, 34120, "Forever steady resolves to the known rank")
-    eq(fslots[4].spell_id, 27014, "Forever raptor resolves to the known rank")
+    eq(fslots[3].spell_id, 27014, "Forever raptor resolves to the known rank")
+    local steady_slot = nil
+    for i = 1, #fslots do
+        if fslots[i].key == "steady" then steady_slot = fslots[i] end
+    end
+    eq(steady_slot, nil,
+        "the Forever guide declares NO Steady slot (the client has no Steady Shot)")
     local fui = fst.nextaction_ui
-    eq(#fui.icons, 4, "the Forever frame holds one icon per slot")
-    eq(fw.frames, 12, "Forever frame count: group + hold + 4 icons/borders + 2 cooldowns")
+    eq(#fui.icons, 11, "the Forever frame holds one icon per slot")
+    eq(fw.frames, 25, "Forever frame count: group + hold + 11 icons/borders + 1 cooldown")
     eq(fui.icons[1].icon.texture.texture, nil,
         "a spell-less hawk icon simply stays texture-less (no error)")
     eq(fui.icons[2].icon.texture.texture, nil,
         "a spell-less sniper icon simply stays texture-less (no error)")
-    eq(fui.icons[3].icon.texture.texture, "icon_steady_forever",
-        "the steady icon shows the current rank's texture")
+    eq(fui.icons[3].icon.texture.texture, "icon_raptor_forever",
+        "the raptor icon shows the current rank's texture")
     eq(fui.icons[2].remaining_key, "sniper_remaining", "the swipe field names derive from the key")
     eq(fui.icons[2].duration_key, "sniper_duration", "the swipe length field derives from the key")
     eq(fui.icons[1].remaining_key, nil, "the hawk slot carries no swipe fields")
 
-    -- The gather on a Forever tick: both UNCONFIRMED gates down, Steady due.
+    -- The gather on a Forever tick: both UNCONFIRMED gates down and no Steady Shot.
     fw.clock = 100
     fST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, synced_duration = nil,
         hidden_window_start = nil, hidden_window_duration = nil, auto_repeat_active = true }
@@ -2348,10 +2899,17 @@ do
     eq(fgathered.sniper_remaining, nil, "Forever gather: no live Sniper cast is tracked")
     eq(fgathered.sniper_duration, nil, "Forever gather: no Sniper swipe length is tracked")
     eq(fgathered.multi_known, false, "Forever gather: Multi-Shot data answers but never prompts")
-    eq(fgathered.steady_known, true, "Forever gather: Steady Shot is known")
-    eq(fw.cooldown_queries, 5, "Forever gather: one cooldown read per old prompt (steady/kc/bw/rf/multi)")
-    eq(fST.HUNTER.guide.evaluate(fgathered, {}).action, "steady",
-        "Forever: Steady Shot is the prompt on a fresh tick (filler intact)")
+    eq(fgathered.steady_known, false,
+        "Forever gather: the client knows no Steady Shot (the corpus correction, §0.0 H4)")
+    eq(fgathered.steady_cast_seconds, nil,
+        "Forever gather: no Steady Shot means no Steady cast-time fallback either")
+    -- The Forever client has no Kill Command (its own hunter spell table carries
+    -- no Kill Command entry - wowsims/forever sim/hunter/spell_data_auto_gen.go),
+    -- so the family-correct slot carries no id and the gather spends no read for
+    -- it (bench/hunter_hud_family_2026-10-20.md §2).
+    eq(fw.cooldown_queries, 3, "Forever gather: one cooldown read per old prompt (bw/rf/multi)")
+    eq(fST.HUNTER.guide.evaluate(fgathered, {}).action, nil,
+        "Forever: no action on a fresh tick (the client has no Steady Shot to fill with)")
 
     -- Stale fields are overwritten on the reused table.
     fgathered.hawk_known = true
@@ -2363,9 +2921,10 @@ do
     eq(fgathered.sniper_remaining, nil, "the cleared cast removes the stale sniper remaining")
     eq(fgathered.sniper_duration, nil, "the cleared cast removes the stale sniper duration")
 
-    -- Every action the Forever engine can return names a Forever slot.
+    -- Every action the Forever engine can return names a Forever slot, and the
+    -- Steady Shot is NOT one of them (the client has no Steady Shot at all).
     do
-        local actions = { "hawk", "sniper", "steady" }
+        local actions = { "hawk", "sniper" }
         local all_resolve = true
         for i = 1, #actions do
             if fui.slot_index[actions[i]] == nil then
@@ -2373,11 +2932,20 @@ do
             end
         end
         check(all_resolve, "every Forever action names a declared Forever slot")
+        eq(fui.slot_index["steady"], nil,
+            "the Forever frame declares no Steady slot (the client has no Steady Shot)")
     end
 
-    -- The Forever tick through the real hook lights the steady slot; the
-    -- window still holds there (conservative, pinned at the pure level too).
+    -- The Forever tick through the real hook lights nothing (no Steady Shot to
+    -- fill with); the window still holds there (conservative, pinned at the pure
+    -- level too).
     local function ftarget(key) return fui.icons[fui.slot_index[key]].fade.target end
+    local function any_target_lit()
+        for i = 1, #fui.icons do
+            if fui.icons[i].fade.target > 0 then return true end
+        end
+        return false
+    end
     local function ftick()
         fST.mainhand = { speed = 3.0, ends_at = fw.clock + 3.0, start = fw.clock,
             is_full = false }
@@ -2385,17 +2953,17 @@ do
         fST.HUNTER.on_bar_update(fST, "mainhand")
     end
     ftick()
-    eq(ftarget("steady"), 1, "Forever tick: the filler prompt lights the steady slot")
+    eq(any_target_lit(), false, "Forever tick: no slot lights (the client has no Steady Shot)")
     eq(ftarget("hawk"), 0, "Forever tick: the unconfirmed hawk slot stays dark")
     eq(ftarget("sniper"), 0, "Forever tick: the unconfirmed sniper slot stays dark")
-    eq(fui.frame.hold.fade.target, 0, "Forever tick: the filler prompt shows no hold")
+    eq(fui.frame.hold.fade.target, 0, "Forever tick: no prompt shows no hold")
     eq(fui.frame.shown, true, "Forever tick: the frame shows in combat")
     fST.ranged.hidden_window_start = fw.clock - 0.2
     fST.ranged.hidden_window_duration = 0.5
     ftick()
     eq(fui.frame.hold.fade.target, 1, "Forever tick: the window shows the hold overlay")
     eq(fui.frame.hold.text.text, "HOLD", "Forever tick: the window reads HOLD")
-    eq(ftarget("steady"), 0, "Forever tick: the window suppresses the filler prompt")
+    eq(any_target_lit(), false, "Forever tick: the window suppresses every prompt")
     fST.ranged.hidden_window_start = nil
     fST.ranged.hidden_window_duration = nil
 end
@@ -2587,7 +3155,7 @@ do
         or ""
 
     local expected_defaults = {
-        nextaction_enabled = "false",
+        nextaction_enabled = "true",
         nextaction_locked = "true",
         nextaction_visibility_key = "\"in_combat\"",
         nextaction_icon_size = "45",
@@ -2755,6 +3323,714 @@ do
     eq(evaluate({}).action, "steady",
         "non-retail family: a clip-safe Steady still prompts")
     pure.family = saved_family
+end
+
+-- Weave band mapping (hunter_wa_map Secs 1-3, wago J3U7jOhMI Mode 3): the Dynamic
+-- switch mapped onto our model. The band is carried but no rule reads it
+-- (filed arm): forged values change nothing, and the 2b HOLD fires on the
+-- range probe alone in every band (the unshootable leg of the switch).
+do
+    eq(evaluate({ weave_band = "melee" }).action, "steady",
+        "band: a forged melee band prompts nothing by itself")
+    eq(evaluate({ weave_band = "ranged" }).action, "steady",
+        "band: a forged ranged band prompts nothing by itself")
+    eq(evaluate({ weave_band = "out_of_range" }).action, "steady",
+        "band: a forged far band prompts nothing by itself")
+    eq(evaluate({ weave_band = "bogus" }).action, "steady",
+        "band: a garbage band prompts nothing by itself")
+    eq(evaluate({ weave_band = "melee" }).hold, false,
+        "band: a forged melee band raises no overlay either")
+    eq(evaluate({ weave_band = "melee" }).hold_text, nil,
+        "band: a forged melee band writes no hold text either")
+    eq(evaluate({ steady_known = false }).action, nil,
+        "band: unknown band with nothing due stays silent")
+    eq(evaluate({ steady_known = false, weave_band = "melee" }).action, nil,
+        "band: forged melee with nothing due stays silent")
+    eq(evaluate({ steady_known = false, weave_band = "melee" }).hold, false,
+        "band: forged melee with nothing due raises no overlay either")
+    eq(evaluate({ target_in_range = 0, weave_band = "melee" }).hold_text, "HOLD",
+        "band: 2b holds in the melee band on a 0 probe")
+    eq(evaluate({ target_in_range = 0, weave_band = "ranged" }).hold_text, "HOLD",
+        "band: 2b holds in the ranged band on a 0 probe")
+    eq(evaluate({ target_in_range = 0 }).hold_text, "HOLD",
+        "band: 2b holds with unknown band on a 0 probe")
+end
+
+-- Rotation-text tiers (hunter_wa_map §1, wago eEJOoHci- TBC pack): the WA
+-- speed→label readout as pure data + lookup. CLIENT-OBSERVED, SIM-UNCONFIRMED,
+-- display-only (evaluate never reads them). Custom texts/colors stay filed
+-- with the WA option keys (options scope); the tables carry the WA defaultText
+-- labels only.
+do
+    local std = hg.ROTATION_TIERS_STANDARD
+    local weave = hg.ROTATION_TIERS_WEAVE
+    check(type(std) == "table" and type(weave) == "table",
+        "tiers: both WA tables are declared")
+    eq(#std, 9, "tiers: Standard carries the WA 9 tiers")
+    eq(#weave, 5, "tiers: Melee Weave carries the WA 5 tiers")
+    local want_std = {
+        { 2.33, "5:4:1:1" }, { 1.95, "5:5:1:1" }, { 1.74, "5:6:1:1" },
+        { 1.27, "1:1" }, { 1.09, "5:9:1:1" }, { 0.90, "2:3" },
+        { 0.70, "1:2" }, { 0.57, "2:5" }, { 0, "1:3" },
+    }
+    for i = 1, #want_std do
+        eq(std[i].speed_gt, want_std[i][1],
+            "tiers: Standard tier " .. i .. " thresholds the WA " .. want_std[i][1])
+        eq(std[i].label, want_std[i][2],
+            "tiers: Standard tier " .. i .. " labels the WA " .. want_std[i][2])
+    end
+    local want_weave = {
+        { 1.83, "5:5:1:1 3w" }, { 1.62, "2:2 1w" }, { 1.22, "6:9:1:1 3w" },
+        { 0.94, "6:11:1:1 3w" }, { 0, "3:7 2w" },
+    }
+    for i = 1, #want_weave do
+        eq(weave[i].speed_gt, want_weave[i][1],
+            "tiers: Weave tier " .. i .. " thresholds the WA " .. want_weave[i][1])
+        eq(weave[i].label, want_weave[i][2],
+            "tiers: Weave tier " .. i .. " labels the WA " .. want_weave[i][2])
+    end
+
+    -- Lookup: first threshold the speed strictly exceeds wins (WA verbatim).
+    eq(hg.rotation_tier(3.0), "5:4:1:1", "tier: a fast cycle reads the top tier")
+    eq(hg.rotation_tier(2.33, 1), "5:5:1:1",
+        "tier boundary: equality falls through (strict >)")
+    eq(hg.rotation_tier(1.96, 1), "5:5:1:1", "tier: just above 1.95 reads 5:5:1:1")
+    eq(hg.rotation_tier(1.95, 1), "5:6:1:1", "tier boundary: 1.95 falls through")
+    eq(hg.rotation_tier(0.5, 1), "1:3", "tier: a slow cycle reads the bottom tier")
+    eq(hg.rotation_tier(0, 1), "1:3", "tier: zero reads the bottom tier")
+    eq(hg.rotation_tier(2.0, 2), "5:5:1:1 3w", "tier: mode 2 reads the weave table")
+    eq(hg.rotation_tier(1.83, 2), "2:2 1w", "tier boundary: weave equality falls through")
+    eq(hg.rotation_tier(0.5, 2), "3:7 2w", "tier: weave bottom tier")
+    -- Mode default + the filed dynamic 3 read Standard (the WA's no-target default).
+    eq(hg.rotation_tier(3.0, nil), "5:4:1:1", "tier: a nil mode reads Standard")
+    eq(hg.rotation_tier(3.0, 3), "5:4:1:1", "tier: the filed mode 3 reads Standard")
+    eq(hg.rotation_tier(3.0, 99), "5:4:1:1", "tier: a bogus mode reads Standard")
+    -- Unknown speed never guesses.
+    eq(hg.rotation_tier(nil), nil, "tier: nil speed reads nil")
+    eq(hg.rotation_tier(0 / 0), nil, "tier: NaN speed reads nil")
+    eq(hg.rotation_tier("2.5"), nil, "tier: a non-number reads nil")
+
+    -- Display-only: no tier input exists and evaluate never calls the lookup.
+    local f = assert(io.open(ROOT .. "hunter_guide.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    local _, defs = src:gsub("rotation_tier%s*%(", "")
+    eq(defs, 1, "tier: the lookup is defined once and never called in-engine")
+    check(src:find("inputs%.rotation", 1, true) == nil,
+        "tier: the frozen input set carries no tier field")
+    eq(evaluate({}).action, "steady",
+        "tier: the engine baseline is unchanged by the readout")
+end
+
+--=========================================================================================
+-- 6) The practice contract: the rotation table, the scenario step and the class drills
+--=========================================================================================
+-- The shared engine looks the hunter up by player_class and reads three things
+-- (the orchestrator's contract, 2026-10-19):
+--   ST.HUNTER.practice_rotation       the family's shot priority in the sim's order
+--   ST.HUNTER.practice_scenario_step  the expected action at one decision
+--   ST.HUNTER.practice_drills         the class drills (key + label + grade)
+-- The pins below prove the shape, the per-family order, the sim citations and the
+-- fact that the scenario reuses the SAME engine the live guide uses.
+local GUIDE_ACTIONS = {
+    kill_shot = true, chimera = true, explosive = true, arcane = true, aimed = true,
+    multi = true, steady = true, kill_command = true, bestial_wrath = true,
+    rapid_fire = true, hawk = true, sniper = true,
+    -- The APL UTILITY layer (the utility lane, 2026-10-20): the engine has an
+    -- arm for each of these now, so they are engine-facing rows too.
+    serpent = true, raptor_strike = true, wyvern_strike = true,
+    aspect_viper = true, aspect_hawk = true, aspect_falcon = true,
+    aspect_dragonhawk = true, wing_clip = true, mongoose_bite = true,
+    immolation_trap = true, hunters_mark = true, silencing_shot = true,
+    explosive_trap = true, black_arrow = true,
+}
+
+do
+    local H = ST.HUNTER
+    check(type(H.practice_rotation) == "table", "the hunter exposes practice_rotation")
+    check(type(H.practice_scenario_step) == "function", "the hunter exposes practice_scenario_step")
+    check(type(H.practice_drills) == "table", "the hunter exposes practice_drills")
+
+    -- The per-family tables: the ENGINE-facing rows (the actions the frozen engine
+    -- can emit) plus the APL's SPINE rows (the utility/upkeep layer the engine has
+    -- no arm for - the APL gap analysis, bench/rotation_gap_vs_apl_2026-10-20.md §2).
+    -- Every row carries the same shape: an action, a label, the spell id + name, the
+    -- family gate, the live flag and the source.
+    local rotations = H.PRACTICE_ROTATIONS
+    check(type(rotations) == "table", "the per-family rotation tables exist")
+    local families = { "ERA", "SOD", "TBC", "WRATH", "FOREVER" }
+    for i = 1, #families do
+        local family = families[i]
+        local table_for = rotations[family]
+        check(type(table_for) == "table" and #table_for > 0,
+            "the " .. family .. " rotation table exists and is not empty")
+        local engine_rows = 0
+        for j = 1, #table_for do
+            local entry = table_for[j]
+            check(type(entry.action) == "string" and entry.action ~= "",
+                "the " .. family .. " rotation entry names an action (" .. tostring(entry.action) .. ")")
+            check(type(entry.label) == "string" and entry.label ~= "",
+                "the " .. family .. " rotation entry carries a label")
+            check(type(entry.source) == "string"
+                and (entry.source:find("wowsims") ~= nil or entry.source:find("docs/research") ~= nil),
+                "the " .. family .. " rotation entry cites a sim or research source")
+            -- The family gate rides on the line: the table is read per family, so
+            -- every row names the family whose SIM plays it.
+            check(type(entry.families) == "table" and #entry.families == 1
+                and entry.families[1] == family,
+                "the " .. family .. " rotation entry is gated on its own family ("
+                    .. tostring(entry.action) .. ")")
+            -- The live flag: the read exists (true) or the row names the read it is
+            -- waiting for (false).
+            check(type(entry.live) == "boolean",
+                "the " .. family .. " rotation entry carries the live flag ("
+                    .. tostring(entry.action) .. ")")
+            -- HU-13's engine flag is a STRICT BOOLEAN too: a truthiness test
+            -- (entry.engine ~= false) would pass for nil, 0 and any truthy
+            -- string, and a row with no arm must never look engine-facing.
+            check(type(entry.engine) == "boolean",
+                "the " .. family .. " rotation entry carries the engine flag ("
+                    .. tostring(entry.action) .. ")")
+            -- The cross-row rule (the other five classes enforce it): a row that
+            -- waits for a read names that read - never an empty `needs`.
+            if entry.live == false then
+                check(type(entry.needs) == "string" and entry.needs ~= "",
+                    "the " .. family .. " rotation row files the read it needs ("
+                        .. tostring(entry.action) .. ")")
+            end
+            -- The id + name pair: the TBC client resolves by NAME and the Era client
+            -- by ID, so a row that names a spell carries both.
+            if entry.spell_id ~= nil then
+                check(type(entry.spell_name) == "string" and entry.spell_name ~= "",
+                    "the " .. family .. " rotation row carries the spell name ("
+                        .. tostring(entry.action) .. ")")
+            end
+            if entry.engine == true then
+                engine_rows = engine_rows + 1
+                check(GUIDE_ACTIONS[entry.action] == true,
+                    "the " .. family .. " engine-facing rotation names a guide action ("
+                        .. tostring(entry.action) .. ")")
+            end
+        end
+        check(engine_rows > 0, "the " .. family .. " rotation keeps its engine-facing rows")
+    end
+
+    -- The compiled order: the engine-facing rows first (the order the guide plays
+    -- them), then the APL's spine rows in the APL's own priority order.
+    local function order_of(family)
+        local names = {}
+        for i = 1, #rotations[family] do names[i] = rotations[family][i].action end
+        return table.concat(names, ",")
+    end
+    eq(order_of("ERA"), "aimed,multi,rapid_fire,serpent",
+        "the Era rotation is Aimed, Multi, then the Rapid Fire and Serpent rows")
+    eq(order_of("SOD"),
+        "chimera,aimed,multi,rapid_fire,kill_shot,raptor_strike,wyvern_strike,aspect_viper,arcane,aspect_falcon,wing_clip",
+        "the SoD rotation is Chimera, Aimed, Multi, then the APL's spine rows")
+    eq(order_of("TBC"),
+        "kill_command,bestial_wrath,rapid_fire,arcane,multi,steady,aspect_viper,aspect_hawk",
+        "the TBC rotation is KC, BW, RF, Arcane, Multi, Steady, then the mana-swap rows")
+    eq(order_of("WRATH"),
+        "kill_shot,chimera,explosive,aimed,arcane,steady,aspect_viper,aspect_dragonhawk,silencing_shot,serpent,explosive_trap,multi,black_arrow",
+        "the Wrath rotation is the six-arm priority, then the APL's spine rows")
+    eq(order_of("FOREVER"),
+        "hawk,sniper,raptor_strike,hunters_mark,mongoose_bite,immolation_trap,wing_clip,serpent,arcane,multi,aimed",
+        "the Forever rotation is the hawk upkeep, the Sniper cast and the APL's spine rows (the Steady Shot row is gone: the Forever client has no Steady Shot)")
+
+    -- The APL's UTILITY LAYER (the operator's "a rotation that only carries the
+    -- damage abilities is not the class's rotation"): the Serpent Sting upkeep, the
+    -- aspect swaps and the Kill Shot execute, each with the id its family's APL
+    -- casts. The Serpent Sting ranks are 13554 / 25295 / 49001 (SIM-CONFIRMED) and
+    -- the read is name-first (the TBC client resolves by name).
+    local function row_for(family, action)
+        for i = 1, #rotations[family] do
+            if rotations[family][i].action == action then
+                return rotations[family][i]
+            end
+        end
+        return nil
+    end
+    eq(row_for("ERA", "serpent").spell_id, 25295, "the Era Serpent row carries the APL's 25295")
+    eq(row_for("FOREVER", "serpent").spell_id, 25295, "the Forever Serpent row carries the APL's 25295")
+    eq(row_for("WRATH", "serpent").spell_id, 49001, "the Wrath Serpent row carries the APL's 49001")
+    eq(row_for("TBC", "aspect_viper").spell_id, 34074, "the TBC Viper row carries the APL's 34074")
+    eq(row_for("SOD", "aspect_viper").spell_id, 415423, "the SoD Viper row carries the APL's 415423")
+    eq(row_for("WRATH", "aspect_viper").spell_id, 34074, "the Wrath Viper row carries the APL's 34074")
+    eq(row_for("TBC", "aspect_hawk").spell_id, 27044, "the TBC Hawk row carries the APL's 27044")
+    eq(row_for("SOD", "aspect_falcon").spell_id, 469145, "the SoD Falcon row carries the APL's 469145")
+    eq(row_for("WRATH", "aspect_dragonhawk").spell_id, 61847,
+        "the Wrath Dragonhawk row carries the APL's 61847")
+    eq(row_for("SOD", "kill_shot").spell_id, 409593, "the SoD Kill Shot row carries the APL's 409593")
+    -- The id FIXES: the WotLK APLs cast 61006 and 60053/60052, not the client's
+    -- rank-1 ids the rows used to cite.
+    eq(row_for("WRATH", "kill_shot").spell_id, 61006,
+        "the Wrath Kill Shot row cites the APL's 61006, not the rank-1 53351")
+    eq(row_for("WRATH", "explosive").spell_id, 60053,
+        "the Wrath Explosive row cites the APL's 60053, not the rank-1 53301")
+    eq(row_for("TBC", "steady").spell_id, 34120,
+        "the TBC Steady row cites the TBC rank 34120, not the WotLK rank-1 56641")
+    -- The HU-12 ruling: the rotation carries the APL's SPELL rows; the APL's
+    -- PRE-PULL rows stay in the prepull table (the SoD's Serpent Sting is one).
+    eq(row_for("SOD", "serpent"), nil, "the SoD serpent stays a pre-pull row (HU-12)")
+    eq(ST.HUNTER.PRACTICE_PREPULLS.SOD[5].action, "serpent",
+        "the SoD serpent pre-pull row is still in the prepull table")
+
+    -- The ENGINE-FACING slice: the panel's action vocabulary and the engine's
+    -- inputs. Since the APL UTILITY lane (2026-10-20) every row whose read and
+    -- whose engine arm landed is engine-facing, so the slice is the family's
+    -- WHOLE spine - the panel can ask for every line the engine can emit.
+    local function engine_order_of(family)
+        local names = {}
+        local slice = H.practice_rotation_for(family)
+        for i = 1, #slice do names[i] = slice[i].action end
+        return table.concat(names, ",")
+    end
+    eq(engine_order_of("ERA"), "aimed,multi,rapid_fire,serpent",
+        "the Era engine slice is the whole Era spine")
+    eq(engine_order_of("SOD"),
+        "chimera,aimed,multi,rapid_fire,kill_shot,raptor_strike,wyvern_strike,aspect_viper,arcane,aspect_falcon,wing_clip",
+        "the SoD engine slice is the whole SoD spine")
+    eq(engine_order_of("TBC"),
+        "kill_command,bestial_wrath,rapid_fire,arcane,multi,steady,aspect_viper,aspect_hawk",
+        "the TBC engine slice is the whole TBC spine")
+    eq(engine_order_of("WRATH"),
+        "kill_shot,chimera,explosive,aimed,arcane,steady,aspect_viper,aspect_dragonhawk,silencing_shot,serpent,explosive_trap,multi,black_arrow",
+        "the Wrath engine slice is the whole thirteen-row spine")
+    eq(engine_order_of("FOREVER"),
+        "hawk,sniper,raptor_strike,hunters_mark,mongoose_bite,immolation_trap,wing_clip,serpent,arcane,multi",
+        "the Forever engine slice is the whole Forever spine")
+    for i = 1, #families do
+        local family = families[i]
+        local slice = H.practice_rotation_for(family)
+        local slice_actions = {}
+        for j = 1, #slice do slice_actions[slice[j].action] = true end
+        for j = 1, #rotations[family] do
+            local entry = rotations[family][j]
+            if entry.engine == false then
+                eq(slice_actions[entry.action], nil,
+                    "the " .. family .. " spine row " .. tostring(entry.action)
+                        .. " stays out of the engine slice")
+            else
+                eq(slice_actions[entry.action], true,
+                    "the " .. family .. " row " .. tostring(entry.action)
+                        .. " is in the engine slice")
+            end
+        end
+    end
+
+    -- The running client's table: the family's own list, and an empty table on a
+    -- client with no sourced rotation (never a guess).
+    local function rotation_for(project)
+        local sb = build({ project = project })
+        return sb.ST.HUNTER.practice_rotation, sb
+    end
+    local wrath_rotation, wrath_sb = rotation_for(11)
+    eq(#wrath_rotation, 13, "the Wrath client reads the six-arm priority plus the APL's spine")
+    local running_names = {}
+    for i = 1, #wrath_rotation do running_names[i] = wrath_rotation[i].action end
+    eq(table.concat(running_names, ","),
+        "kill_shot,chimera,explosive,aimed,arcane,steady,aspect_viper,aspect_dragonhawk,silencing_shot,serpent,explosive_trap,multi,black_arrow",
+        "the running client reads its own family's table")
+    local retail_rotation = rotation_for(1)
+    eq(#retail_rotation, 0, "a client with no sourced rotation reads an empty table")
+    local cata_rotation = rotation_for(14)
+    eq(#cata_rotation, 0, "Cata reads an empty rotation too (no sim in scope)")
+
+    -- The scenario step: the shape, and the engine's own verdict.
+    local step = wrath_sb.ST.HUNTER.practice_scenario_step
+    local result = step(wrath_sb.ST, { now = 100 })
+    check(type(result) == "table", "the scenario step returns a table")
+    -- The scenario's default state has EVERY engine-facing row known and off
+    -- cooldown (the shipped fixture semantics: a fresh scenario has every
+    -- cooldown ready), so the family's TOP APL row leads: the Silencing Shot on
+    -- the WotLK MM spine (i=3). A row the ctx puts on cooldown hands the step to
+    -- the next one down the spine.
+    eq(result.action, "silencing_shot",
+        "the Wrath scenario wants the MM spine's top row (the Silencing Shot)")
+    check(type(result.reason) == "string" and result.reason ~= "",
+        "the scenario step explains itself")
+    -- The execute: Kill Shot wins at or under 20% health.
+    eq(step(wrath_sb.ST, { now = 100, target_hp_frac = 0.2 }).action, "kill_shot",
+        "the Wrath scenario takes the execute")
+    eq(step(wrath_sb.ST, { now = 100, target_hp_frac = 0.21 }).action, "silencing_shot",
+        "above the execute threshold the Silencing Shot leads")
+    -- The cooldown order: a Chimera on cooldown hands the shot to Explosive.
+    eq(step(wrath_sb.ST, { now = 100, cooldowns = { silencing_shot = 5 } }).action, "explosive_trap",
+        "the Wrath scenario follows the cooldown order (the MM APL's i=6 trap row)")
+    eq(step(wrath_sb.ST, { now = 100, cooldowns = { silencing_shot = 5,
+        explosive_trap = 5 } }).action, "chimera",
+        "the trap on cooldown hands the step to the Chimera")
+    -- The buff lines: the scenario carries the aura state from the ctx into the
+    -- engine, so a line whose buff is KNOWN DOWN is asked for and one whose
+    -- buff is up never is.
+    eq(step(wrath_sb.ST, { now = 100, serpent_active = false,
+        cooldowns = { silencing_shot = 5, explosive_trap = 5 } }).action, "serpent",
+        "the Wrath scenario asks for the Serpent upkeep when the sting is known down")
+    eq(step(wrath_sb.ST, { now = 100, serpent_active = true,
+        cooldowns = { silencing_shot = 5, explosive_trap = 5 } }).action, "chimera",
+        "the Wrath scenario NEVER asks for the Serpent while the sting is up")
+    -- An unreadable clock decides nothing.
+    eq(step(wrath_sb.ST, { now = "x" }), nil, "an unreadable clock decides nothing")
+    eq(step(wrath_sb.ST, nil), nil, "a missing ctx decides nothing")
+    eq(step(wrath_sb.ST, { now = 0 / 0 }), nil, "a NaN clock decides nothing")
+    -- A client with no sourced rotation decides nothing.
+    local retail_sb = build({ project = 1 })
+    eq(retail_sb.ST.HUNTER.practice_scenario_step(retail_sb.ST, { now = 100 }), nil,
+        "a client with no sourced rotation decides nothing")
+
+    -- The TBC scenario: Kill Command is the first priority, the pops follow it.
+    local tbc_sb = build({ project = 5 })
+    local tbc_step = tbc_sb.ST.HUNTER.practice_scenario_step
+    eq(tbc_step(tbc_sb.ST, { now = 100 }).action, "kill_command",
+        "the TBC scenario pops Kill Command first")
+    eq(tbc_step(tbc_sb.ST, { now = 100, cooldowns = { kill_command = 5 } }).action,
+        "bestial_wrath", "the TBC scenario pops Bestial Wrath behind it")
+    eq(tbc_step(tbc_sb.ST, { now = 100,
+        cooldowns = { kill_command = 5, bestial_wrath = 5 } }).action, "rapid_fire",
+        "the TBC scenario pops Rapid Fire last")
+
+    -- The Era scenario: the weave, and the clip check decides which shot fits.
+    local era_sb = build({ project = 2 })
+    local era_step = era_sb.ST.HUNTER.practice_scenario_step
+    eq(era_step(era_sb.ST, { now = 100 }).action, "rapid_fire",
+        "the Era scenario asks for the Era spine's top row (the Rapid Fire, i=1)")
+    eq(era_step(era_sb.ST, { now = 100, cooldowns = { rapid_fire = 5 } }).action, "multi",
+        "the Rapid Fire on cooldown hands the Era step to the Multi weave")
+    -- The cast ride: a cast shot occupies the player, so the next decision rides it.
+    -- A ride is a HOLD, and a hold is a DECISION (the operator ruling HU-8): the
+    -- step states it, so the engine can punish a cast during the ride.
+    local ride_sb = build({ project = 11 })
+    local ride_step = ride_sb.ST.HUNTER.practice_scenario_step
+    eq(ride_step(ride_sb.ST, { now = 100 }).action, "silencing_shot",
+        "the ride scenario starts clean")
+    local riding = ride_step(ride_sb.ST, { now = 100, last_action = "steady" })
+    check(type(riding) == "table" and riding.hold == true,
+        "a cast in progress states an explicit hold")
+    eq(riding.action, nil, "the ride hold names no action")
+    check(type(riding.reason) == "string" and riding.reason ~= "",
+        "the ride hold carries the guide's own caption")
+    local riding_now = ride_step(ride_sb.ST, { now = 100.5, last_action = "steady" })
+    check(type(riding_now) == "table" and riding_now.hold == true,
+        "the ride holds while the cast runs")
+    eq(ride_step(ride_sb.ST, { now = 102.0, last_action = "steady" }).action, "silencing_shot",
+        "the decision returns when the cast is over")
+
+    -- The drills: the audit's target set (bench/class_features_drills_2026-10-19.md
+    -- §2.3 (C)), each with its registry key, a label and a grade function.
+    local drills = wrath_sb.ST.HUNTER.practice_drills
+    eq(#drills, 4, "the hunter ships the four audited drills")
+    local expected_keys = { "hunter_shot_order", "hunter_weave_clip",
+        "hunter_kill_command", "hunter_prepull" }
+    for i = 1, #expected_keys do
+        eq(drills[i].key, expected_keys[i], "drill " .. i .. " carries the audited registry key")
+        check(type(drills[i].label) == "string" and drills[i].label ~= "",
+            "drill " .. drills[i].key .. " carries a label")
+        check(type(drills[i].grade) == "function", "drill " .. drills[i].key .. " grades")
+    end
+
+    -- D-H1: the shot priority. The right pick is an S, a wrong pick an F (a
+    -- mis-order, not a late pick), and no press grades nothing.
+    local order = drills[1].grade
+    eq(order(wrath_sb.ST, { now = 100, pressed = "silencing_shot" }), "S",
+        "shot order: the shot the rotation wants is an S")
+    eq(order(wrath_sb.ST, { now = 100, pressed = "steady" }), "F",
+        "shot order: a different shot is a mis-order (F)")
+    eq(order(wrath_sb.ST, { now = 100 }), nil, "shot order: no press grades nothing")
+    -- The run bands: the mis-pick tally grades the session instead.
+    eq(order(wrath_sb.ST, { now = 100, pressed = "chimera", mispicks = 0 }), "S",
+        "shot order: a clean run is an S")
+    eq(order(wrath_sb.ST, { now = 100, pressed = "chimera", mispicks = 1 }), "A",
+        "shot order: one mis-pick is an A")
+    eq(order(wrath_sb.ST, { now = 100, pressed = "chimera", mispicks = 3 }), "C",
+        "shot order: three mis-picks are a C")
+    eq(order(wrath_sb.ST, { now = 100, pressed = "chimera", mispicks = 9 }), "F",
+        "shot order: nine mis-picks are an F")
+
+    -- The pick channel (the F1 fix in practice_ui.lua's drill_list_grade): the
+    -- drill-list PRESS is the pick, and it is written into every alias the graders
+    -- read - ctx.pick among them, which this class's reader reads FIRST. So a
+    -- press grades the press, even while a shot is in flight. The class's own pick
+    -- (the live cast) survives only a press-LESS press.
+    eq(order(wrath_sb.ST, { now = 100, pick = "silencing_shot" }), "S",
+        "shot order: a press in ctx.pick grades the press")
+    eq(order(wrath_sb.ST, { now = 100, pick = "steady" }), "F",
+        "shot order: a different pick in ctx.pick is a mis-order")
+    eq(order(wrath_sb.ST, { now = 100, pick = "steady", pressed = "silencing_shot" }), "F",
+        "shot order: ctx.pick wins over the other aliases (the drill-list press's alias)")
+    eq(order(wrath_sb.ST, { now = 100, pick = "silencing_shot", action = "steady" }), "S",
+        "shot order: ctx.pick wins over ctx.action too")
+    -- The press-LESS drill press: this class's ctx publishes the live cast as
+    -- ctx.pick, and that is the pick the drill judges.
+    wrath_sb.cast = { name = "Steady Shot", start = 99, ["end"] = 101, spell_id = 49052 }
+    local live_ctx = wrath_sb.ST.HUNTER.practice_context(wrath_sb.ST, 100, nil)
+    eq(live_ctx.pick, "steady",
+        "the class's own ctx publishes the live cast as the pick")
+    eq(order(wrath_sb.ST, live_ctx), "F",
+        "a press-less drill press judges the live cast")
+    wrath_sb.cast = nil
+    local idle_ctx = wrath_sb.ST.HUNTER.practice_context(wrath_sb.ST, 100, nil)
+    eq(idle_ctx.pick, nil, "no live cast means the class publishes no pick")
+    eq(order(wrath_sb.ST, idle_ctx), nil,
+        "a press-less drill press with no live cast grades nothing")
+
+    -- D-H2: the clip. The margin bands are the shipped weave bands; a clip is an F.
+    -- The drill judges the MOMENT (it reads no press at all): the shot the rotation
+    -- wants is the highest-priority cast shot of the rotation, and the margin is the
+    -- time left before the cast would clip the Auto Shot.
+    local clip = drills[2].grade
+    eq(clip(wrath_sb.ST, { now = 100 }), "D",
+        "clip: a wide margin is a D")
+    eq(clip(wrath_sb.ST, { now = 100.4 }), "B",
+        "clip: a 0.07 s margin is a B")
+    eq(clip(wrath_sb.ST, { now = 100.47 }), "S",
+        "clip: a tight start is an S")
+    eq(clip(wrath_sb.ST, { now = 100.5 }), "F",
+        "clip: a cast past the deadline clips (F)")
+    eq(clip(wrath_sb.ST, { now = 100, pressed = "chimera" }), "D",
+        "clip: the drill judges the moment, not the press")
+    -- A client whose rotation has no cast shot (the Wrath Aimed is instant) still
+    -- has the Steady filler: the drill judges that one.
+    eq(clip(wrath_sb.ST, { now = 100, pressed = "steady" }), "D",
+        "clip: the press does not change the moment's grade")
+
+    -- D-H3: the cooldown pops (the TBC order: Kill Command, Bestial Wrath, Rapid
+    -- Fire). The drill is a TBC rotation, so it grades nothing elsewhere.
+    local tbc_drills = tbc_sb.ST.HUNTER.practice_drills
+    local pop = tbc_drills[3].grade
+    eq(pop(tbc_sb.ST, { now = 100, pressed = "kill_command" }), "S",
+        "pop: the first pop off cooldown is an S")
+    eq(pop(tbc_sb.ST, { now = 100, pressed = "kill_command",
+        cooldowns = { kc = 5 } }), "F",
+        "pop: the wrong pop (the order slipped) is an F")
+    eq(pop(tbc_sb.ST, { now = 100, pressed = "rapid_fire" }), "F",
+        "pop: the wrong pop order is an F")
+    eq(pop(tbc_sb.ST, { now = 100, pressed = "kill_command", ready_at = 99 }), "A",
+        "pop: a pop one GCD late is an A")
+    eq(pop(tbc_sb.ST, { now = 100, pressed = "steady" }), nil,
+        "pop: a shot is not this drill's business")
+    -- Without a pick the moment itself is the judgement: how far down the sim's
+    -- order the moment sits.
+    eq(pop(tbc_sb.ST, { now = 100 }), "S",
+        "pop: Kill Command up is the clean moment")
+    eq(pop(tbc_sb.ST, { now = 100, cooldowns = { kc = 5 } }), "A",
+        "pop: the order slipped to Bestial Wrath (A)")
+    eq(pop(tbc_sb.ST, { now = 100, cooldowns = { kc = 5, bw = 5 } }), "B",
+        "pop: the order slipped to Rapid Fire (B)")
+    eq(pop(tbc_sb.ST, { now = 100, cooldowns = { kc = 5, bw = 5, rf = 5 } }), nil,
+        "pop: nothing is up, so there is no pop to make")
+    local wrath_pop = wrath_sb.ST.HUNTER.practice_drills[3].grade
+    eq(wrath_pop(wrath_sb.ST, { now = 100, pressed = "kill_command" }), nil,
+        "pop: the pops are a TBC rotation")
+
+    -- D-H4: the opener. The pre-pull sequence is the sim APL's own offsets.
+    local prepulls = tbc_sb.ST.HUNTER.PRACTICE_PREPULLS
+    check(type(prepulls.TBC) == "table" and #prepulls.TBC == 2,
+        "the TBC pre-pull sequence has the Hawk and the Steady opener")
+    eq(prepulls.TBC[1].action, "aspect_hawk", "the TBC pre-pull opens with the Aspect of the Hawk")
+    eq(prepulls.TBC[1].at, -20, "the Aspect of the Hawk is pre-pulled 20 s before the pull")
+    eq(prepulls.TBC[2].action, "steady", "the TBC pull opener is the Steady Shot")
+    eq(prepulls.TBC[2].at, 0.5, "the Steady opener lands inside the first half second")
+    check(type(prepulls.SOD) == "table" and #prepulls.SOD == 5,
+        "the SoD pre-pull sequence carries the five APL entries")
+    eq(prepulls.SOD[1].at, -5, "the SoD pre-pull opens with the Aspect of the Falcon at -5 s")
+    eq(prepulls.SOD[5].action, "serpent", "the SoD pre-pull ends with the Serpent Sting")
+    check(type(prepulls.FOREVER) == "table" and #prepulls.FOREVER == 2,
+        "the Forever pre-pull sequence carries the Mark and the Hawk")
+    eq(prepulls.FOREVER[1].at, -22, "the Forever pre-pull opens with the Hunter's Mark at -22 s")
+    local pre = tbc_drills[4].grade
+    eq(pre(tbc_sb.ST, { now = 0, time_to_pull = 20, pressed = "aspect_hawk" }), "S",
+        "opener: the due pre-pull on time is an S")
+    eq(pre(tbc_sb.ST, { now = 0, time_to_pull = 10, pressed = "aspect_hawk" }), "D",
+        "opener: a late pre-pull is a D")
+    eq(pre(tbc_sb.ST, { now = 0, time_to_pull = 20, pressed = "steady" }), "D",
+        "opener: the wrong opener misses the due one (D)")
+    eq(pre(tbc_sb.ST, { now = 0, time_to_pull = 40, pressed = "steady" }), nil,
+        "opener: nothing is due yet, so nothing grades")
+    -- Without a pull clock the drill opens its OWN synthetic countdown (the audit's
+    -- D-H4: "a new synthetic pull clock belongs to the drill, not to the guide").
+    eq(pre(tbc_sb.ST, { now = 0, pressed = "aspect_hawk" }), "S",
+        "opener: the drill's own clock opens on the first opener")
+
+    -- The family's key: SoD shares the ERA token and the Chimera rune decides.
+    eq(wrath_sb.ST.HUNTER.practice_rotation_family(), "WRATH",
+        "the Wrath client reads the WRATH rotation family")
+    eq(tbc_sb.ST.HUNTER.practice_rotation_family(), "TBC",
+        "the TBC client reads the TBC rotation family")
+    eq(era_sb.ST.HUNTER.practice_rotation_family(), "ERA",
+        "the Era client reads the ERA rotation family")
+    -- A ctx that names another family grades that family's rotation (the offline
+    -- "simulate another client" case): the engine's family gates and the per-client
+    -- cast-time fallbacks follow the named family for the call, and the running
+    -- client's own family is restored afterwards.
+    do
+        local cross = wrath_sb.ST.HUNTER.practice_scenario_step
+        eq(cross(wrath_sb.ST, { now = 100, family = "TBC" }).action, "kill_command",
+            "a ctx that names TBC grades the TBC rotation")
+        eq(wrath_sb.st.family, "WRATH", "the running client's family is restored after the call")
+        eq(cross(wrath_sb.ST, { now = 100 }).action, "silencing_shot",
+            "the running client still grades its own rotation")
+    end
+
+    -- The engine's optional accessors: the rotation slice and the family key.
+    eq(#wrath_sb.ST.HUNTER.practice_rotation_for(), 13,
+        "the running client's rotation slice is the whole Wrath spine")
+    eq(#tbc_sb.ST.HUNTER.practice_rotation_for("TBC"), 8,
+        "a named family's slice is that family's rotation")
+    eq(#tbc_sb.ST.HUNTER.practice_rotation_for("ERA"), 4,
+        "another family's slice is that family's rotation")
+    eq(#wrath_sb.ST.HUNTER.practice_rotation_for("NOPE"), 0,
+        "an unknown family answers an empty slice")
+    -- The class's own ctx builder (the engine's extension point): the live state in
+    -- the engine's vocabulary.
+    do
+        local ctx_sb = build()
+        ctx_sb.ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0 }
+        ctx_sb.clock = 100
+        local ctx = ctx_sb.ST.HUNTER.practice_context(ctx_sb.ST, 100, nil)
+        check(type(ctx) == "table", "the class publishes its own scenario ctx")
+        eq(ctx.now, 100, "the ctx carries the clock")
+        eq(ctx.last_action, nil, "the ctx carries the last action")
+        eq(ctx.cycle_duration, 3.0, "the ctx carries the live ranged cycle")
+        check(type(ctx.cooldowns) == "table", "the ctx carries the cooldown map")
+        check(type(ctx.resources) == "table", "the ctx carries the resources")
+        eq(ctx.resources.family, "WRATH", "the ctx carries the engine's family token")
+        -- The live pull moment (BS-8 item 2 / P-17): the prepull step judges the
+        -- pull window from the SAME moment the live guide reads, so the class's
+        -- own ctx builder carries it.
+        eq(ctx.pull_at, nil, "pull: an unarmed clock publishes no pull moment")
+        eq(ctx.pull_in_seconds, nil, "pull: an unarmed clock publishes no countdown")
+        local pull_sb = build()
+        pull_sb.ST.pull_at = 1234
+        pull_sb.ST.pull_in_seconds = function(self, now) return self.pull_at - now end
+        local pull_ctx = pull_sb.ST.HUNTER.practice_context(pull_sb.ST, 1000, nil)
+        eq(pull_ctx.pull_at, 1234, "pull: the ctx carries the absolute pull moment")
+        eq(pull_ctx.pull_in_seconds, 234, "pull: the ctx carries the countdown to the pull")
+        -- A non-numeric clock is never a guess.
+        local broken = build()
+        broken.ST.pull_at = "soon"
+        broken.ST.pull_in_seconds = function() return "soon" end
+        local broken_ctx = broken.ST.HUNTER.practice_context(broken.ST, 1000, nil)
+        eq(broken_ctx.pull_at, nil, "pull: a non-numeric moment is never published")
+        eq(broken_ctx.pull_in_seconds, nil, "pull: a non-numeric countdown is never published")
+    end
+end
+
+--=========================================================================================
+-- 6b) HU-8: the class states its hold, and the three states are the engine's own
+--=========================================================================================
+-- The operator ruling (hands-up HU-8, resolved 2026-10-19): a HOLD is a DECISION and
+-- an unknown is not. The hunter's guide answers a HOLD (the RIDE window, the hidden
+-- Auto-Shot window, out of range) and the step must SAY so: casting during the hold
+-- is an illegal cast, doing nothing is correct, and a state the guide cannot read
+-- stays unknown (no attempt at all).
+do
+    local hold_sb = build({ project = 11 })
+    local pmod = assert(loadfile(ROOT .. "practice.lua"))
+    setfenv(pmod, hold_sb.env)
+    local okp, errp = pcall(function() pmod("SwedgeTimer", hold_sb.st) end)
+    check(okp, "hold: practice.lua loads in the hunter sandbox (" .. tostring(errp) .. ")")
+    local H = hold_sb.st.practice and hold_sb.st.practice.harness
+    check(type(H) == "table", "hold: the shared harness is loaded")
+
+    -- The hold statement: the accessor keeps it (the engine's contract).
+    local hold_answer = H.practice_scenario_step("HUNTER", hold_sb.ST,
+        { now = 100, last_action = "steady" })
+    check(type(hold_answer) == "table" and hold_answer.hold == true,
+        "hold: the ride state states an explicit hold")
+    eq(hold_answer.action, nil, "hold: the hold statement names no action")
+    check(type(hold_answer.reason) == "string" and hold_answer.reason ~= "",
+        "hold: the hold statement carries the guide's reason")
+
+    -- The three states, through the engine's own decision:
+    --   hold + a cast  -> the illegal cast (an attempt, an F)
+    --   hold + nothing -> a correct hold (no attempt, no points)
+    --   unknown        -> unknown (no attempt)
+    local run = H.new_rotation_run()
+    local cast = H.rotation_run_decide(run, hold_answer.action, "chimera", hold_answer.hold)
+    eq(cast.outcome, "illegal_cast", "hold: a cast during the ride is an illegal cast")
+    eq(H.ROTATION_OUTCOME_GRADES[cast.outcome], "F", "hold: the illegal cast grades F")
+    eq(run.mispicks, 1, "hold: the illegal cast counts against the run's band")
+    local idle_run = H.new_rotation_run()
+    local idle = H.rotation_run_decide(idle_run, hold_answer.action, nil, hold_answer.hold)
+    eq(idle.outcome, "hold_ok", "hold: doing nothing during the ride is correct")
+    eq(H.ROTATION_OUTCOME_GRADES[idle.outcome], nil,
+        "hold: a correct hold records no attempt (no points)")
+    eq(idle_run.mispicks, 0, "hold: a correct hold is never a mis-pick")
+    -- The unknown: a state the guide cannot read stays unknown.
+    local unknown_answer = H.practice_scenario_step("HUNTER", hold_sb.ST, { now = "x" })
+    eq(unknown_answer, nil, "hold: an unreadable state stays unknown (no hold statement)")
+    local unknown_run = H.new_rotation_run()
+    local unknown = H.rotation_run_decide(unknown_run, nil, "chimera")
+    eq(unknown.outcome, "unknown", "hold: an unknown step stays unknown")
+    eq(H.ROTATION_OUTCOME_GRADES[unknown.outcome], nil,
+        "hold: an unknown decision records no attempt")
+    eq(unknown_run.mispicks, 0, "hold: an unknown decision is never a mis-pick")
+end
+
+--=========================================================================================
+-- The guide's shared spell slots are FAMILY-CORRECT: every slot carries the
+-- client's own rank for that family (the same owner the HUD reads, so the two
+-- surfaces can never disagree about which spell the running client has -
+-- bench/hunter_hud_family_2026-10-20.md §2), and the guide never declares a slot
+-- for a spell the client cannot have.
+--=========================================================================================
+do
+    local function guide_by_key(sandbox_st)
+        local by_key = {}
+        for i = 1, #sandbox_st.HUNTER.guide.slots do
+            by_key[sandbox_st.HUNTER.guide.slots[i].key] = sandbox_st.HUNTER.guide.slots[i]
+        end
+        return by_key
+    end
+    local EXPECT = {
+        { project = 2, family = "ERA",
+          ids = { raptor = 14266, multi = 25294, rapid_fire = 3045, aimed = 20904 } },
+        { project = 5, family = "TBC",
+          ids = { steady = 34120, raptor = 27014, kill_command = 34026, multi = 27021,
+            bestial_wrath = 19574, rapid_fire = 3045 } },
+        { project = 11, family = "WRATH",
+          ids = { steady = 49052, multi = 49048, aimed = 49050 } },
+        { project = 18, family = "FOREVER",
+          ids = { raptor = 14266, multi = 2643 } },
+    }
+    for _, case in ipairs(EXPECT) do
+        local sb = build({ project = case.project })
+        local by_key = guide_by_key(sb.ST)
+        for key, id in pairs(case.ids) do
+            check(by_key[key] ~= nil,
+                case.family .. " guide: the " .. key .. " slot is declared")
+            if by_key[key] then
+                eq(by_key[key].spell_id, id,
+                    case.family .. " guide: the " .. key .. " slot carries the client's own rank")
+            end
+        end
+    end
+    -- The dead-slot rule on the guide side: a client that cannot have a spell has
+    -- no slot for it (the same rule the HUD's filter follows).
+    local era = guide_by_key(build({ project = 2 }).ST)
+    eq(era.steady, nil, "Era guide: no Steady slot is declared")
+    eq(era.kill_command, nil, "Era guide: no Kill Command slot is declared")
+    eq(era.bestial_wrath, nil, "Era guide: no Bestial Wrath slot is declared")
+    local forever = guide_by_key(build({ project = 18 }).ST)
+    eq(forever.steady, nil, "Forever guide: no Steady slot is declared")
+    eq(forever.kill_command, nil, "Forever guide: no Kill Command slot is declared")
+    -- The guide and the HUD carry the SAME id for every slot they share.
+    for _, case in ipairs(EXPECT) do
+        local sb = build({ project = case.project })
+        local g_by_key, h_by_key = guide_by_key(sb.ST), {}
+        for i = 1, #sb.ST.HUNTER.HUD_SLOTS do
+            h_by_key[sb.ST.HUNTER.HUD_SLOTS[i].key] = sb.ST.HUNTER.HUD_SLOTS[i]
+        end
+        local shared, agree = 0, true
+        for key, slot in pairs(h_by_key) do
+            if slot.spell and g_by_key[key] then
+                shared = shared + 1
+                if g_by_key[key].spell_id ~= slot.spell then agree = false end
+            end
+        end
+        check(shared > 0, case.family .. ": the guide and the HUD share at least one slot")
+        check(agree, case.family .. ": the guide and the HUD carry the same id for every shared slot")
+    end
 end
 
 if failures == 0 then

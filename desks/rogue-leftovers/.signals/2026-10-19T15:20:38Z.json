@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T15:20:38Z",
+  "run_id": "rogue-slots-2026-10-19",
+  "agent_name": "rogue-leftovers",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Appended slots preserve existing indices (guide 7+4, HUD 10+1 before trinkets); nil-safe provider gate gives no default-visible change without options widgets; monotonic parity clocks avoid lust-throttle time travel.",
+    "what_was_hard": "Stale aura expiry across clock jumps (fixed by re-stamping before the frame tick); hud_state count pins are reconcile-owned so the full harness stays red by design.",
+    "skill_gap": "None for this lane; options-widget + reconcile lanes own the filed follow-ups."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Reconcile to update hud_state.lua section 19 (12 to 13, coldblood at 11); options lane to add hud_show_coldblood widget plus default."
+  }
+}

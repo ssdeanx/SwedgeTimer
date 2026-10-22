@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T00:40:00Z",
+  "run_id": "class-hold-statements-2026-10-20",
+  "agent_name": "class-hold-statements",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading each class's OWN guide engine for its real hold verdict (out.hold / out.hold_text) instead of guessing a hold: the paladin, rogue, shaman and hunter each state a hold with the engine's own text, and the DRUID turned out to have no hold concept at all (its guide hold names a spell to press) - nothing was invented for it.",
+    "what_was_hard": "The shaman and the druid publish no ctx builder, so the class-side pull read had nowhere to land. Adding one would have duplicated the engine's fallback ctx shape (a second source of truth that can drift), so the moment reaches them through the engine's own fallback builder and the fact is pinned instead (a builder without the pull read fails the pin).",
+    "skill_gap": "The line references in the bench artifact needed a verification pass after the edits shifted the files - several first-draft citations were off by one to three lines and had to be re-checked against the tree."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

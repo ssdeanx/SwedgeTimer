@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T16:00:00Z",
+  "agent_name": "shaman-rotation-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "input-driven dormant gates: nil threshold keeps old behavior so no live-visible change without the gather lane",
+    "what_was_hard": "sandbox battery on TBC family needed the mana feed the live gather provides",
+    "skill_gap": null
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "dispatch twist gather feed + hold/SR options specs; FE display stays filed"
+  }
+}

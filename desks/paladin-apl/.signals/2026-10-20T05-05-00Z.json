@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T05:05:00Z",
+  "run_id": "paladin-apl-2026-10-20",
+  "agent_name": "paladin-apl",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The lane's own rows are settled against external facts (the fetched APLs, the sims' own spell tables, the 1.15 client's own skill-line tables), so this hands-up is about a decision only the operator can make, not a disagreement between desks.",
+    "what_was_hard": "Deciding how far to go with the WotLK APL: the brief asks for engine arms, but the WotLK APL's full priority list contradicts the shipped Wrath order in two places (it has no Judgement-of-Light row and no Holy Wrath row, and its judgement row is a different spell).",
+    "skill_gap": "A lane that reads only the corpus would have shipped the corpus's spell names; four of them were wrong, and two of the corpus's proposed reads would not have compiled against the client's own spell data."
+  },
+  "escalation": {
+    "reason": "TWO operator-visible items the paladin APL utility lane filed. (1) THE WOTLK ORDER RE-CUT: the lane armed the WotLK APL's utility band - Hand of Reckoning 67485 (the APL's i=1) and Hammer of Wrath 48806 (i=2) - above the shipped damage rows, so on the WotLK client the guide now prompts those two instead of Crusader Strike while they are up (the APL's own order). The shipped damage rows keep their relative order (cs, judge, ds, cons, exo, hw) and the shipped Judgement and Holy Wrath rows stay where they were - but the WotLK APL has NO row for either (its judgement row is Judgement of Wisdom 53408, a different spell; its damage rows are Exorcism 48801 and Consecration 48819). Re-cutting the Wrath order onto the APL's full list (hor, how_wrath, jow, cs, ds, exo, cons - which would also DROP the shipped judge and hw rows) is the operator-visible change bench/rotation_gap_vs_apl_2026-10-20.md §6.5 filed, and it needs the operator's call: it changes what the WotLK guide shows and what the practice scenario grades. The lane did NOT do it - the shipped order stays intact below the utility band. (2) THE WOTLK JUDGEMENT-OF-WISDOM ARM: 53408 (Judgement of Wisdom) and 20271 (Judgement of Light) share the WotLK 10 s judgement cooldown (sim wowsims/wotlk sim/paladin/judgement.go:38 - one cdTimer for both judgements), so an arm for the APL's judgement row would REPLACE the shipped judgement cue on the WotLK client. The row ships in the rotation table with live = true and engine = false and the exact reason in `needs`; it needs an arm only if the operator rules on (1). (3) MINOR: the two new guide slots have no HUD mirror yet - tests/hud_state.lua owns the HUD slot-count pin and is out of this lane's scope, so the HUD mirror is filed for the HUD lane.",
+    "blocked_on": "The operator's ruling on the WotLK order re-cut (item 1). The lane itself is landed and validated; nothing in it waits for the ruling.",
+    "recommendation": "Rule (1) first: keep the shipped damage rows and the utility band as shipped (the current state - APL-faithful for the two cooldowns, no change to the damage order), or re-cut the Wrath order onto the WotLK APL's full priority list (which then also needs the Judgement of Wisdom slot, the Judgement-of-Light and Holy Wrath rows' fate, and a re-cut of the practice scenario's expected answers on WotLK). Item (2) follows (1); item (3) is a HUD-lane follow-up. Until (1) is ruled, the shipped rows are unchanged and the two armed cooldowns are gated on the client's own spell book, so a WotLK build without the talent sees no change at all."
+  }
+}

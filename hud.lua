@@ -138,7 +138,10 @@ local unit_guid = rawget(_G, "UnitGUID")
 -- has one). Ported from the archive's st_data.lua trinket tables (128-199, the WA's
 -- own data). NEEDS IN-CLIENT CONFIRMATION: the item ids, buff ids and ICD lengths
 -- were assembled for the TBC/Forever clients and have not been verified against a
--- live combat log on every supported family here.
+-- live combat log on every supported family here. Every `icd` value below is
+-- UNCONFIRMED (competitor S1: the Anniversary trackers prove the demand, and the
+-- Quagmire caveat shows Anniversary drift) - never invent a length; an item with
+-- no confirmed length ships with no `icd` and loses only the reversed swipe.
 local TRINKET_DATA = {
     [28830] = { buff = 34775, icd = 20 },   -- Dragonspine Trophy
     [29383] = { buff = 35166 },             -- Bloodlust Brooch
@@ -196,6 +199,28 @@ HUD.frame = HUD.frame or nil
 HUD.icons = HUD.icons or {}
 HUD.trinkets = HUD.trinkets or { [13] = {}, [14] = {} }
 HUD.update_counter = 0
+-- M1: CLEU registration failures are counted for /st diag plus a one-time chat.
+-- The wiring that prints them (main.lua print_runtime_diag, diag.lua) is filed -
+-- main.lua + diag.lua are out of scope for this lane - so the counter lives here.
+HUD.cleu_register_errors = HUD.cleu_register_errors or 0
+HUD.cleu_register_notified = HUD.cleu_register_notified or false
+
+-- N2: per-icon isolation. The driver polls one provider per wanted icon; a throwing
+-- slot must cost only its own icon, never the rest of the row. The contract lives in
+-- guard.lua (one implementation for the whole addon): first throw prints once, every
+-- throw counts in self.bar_hook_errors (read by /st diag), the site quarantines after
+-- st.guard.QUARANTINE_THROWS. Degrade is hide, never stale.
+--
+-- What stays here is this module's own wording ("HUD ...") and its own site keys.
+st.guard.label("hud", "HUD")
+local HUD_HIDDEN_STATE = { hidden = true }
+
+-- Provider call shape kept explicit for the wiring_check dispatcher
+-- (`mod.get_hud_state(` is the dynamic call site); the shared guard (st.guard.run)
+-- wraps this helper.
+local function call_hud_provider(mod, self, slot, now)
+    return mod.get_hud_state(self, slot, now)
+end
 
 local TRINKET_STATE = {}   -- one reused state table for the trinket machine
 local PREVIEW_STATE = {}   -- one reused state table for the design-mode sample
@@ -272,6 +297,9 @@ function HUD.read_trinkets()
 end
 
 -- The proc buff's remaining time, from the player's auras (by spell id).
+-- No early break (compat R2): nil is simply no match at this index, so a
+-- restricted row above the buff never hides the proc; the 40-row cap bounds
+-- the walk. J1 (hunter-proctor-fixes): nil-guard + cap is the contract.
 local function scan_trinket_proc(t)
     t.proc_expires, t.proc_duration = nil, nil
     if not t.buff then
@@ -279,14 +307,46 @@ local function scan_trinket_proc(t)
     end
     for i = 1, AURA_SCAN_LIMIT do
         local name, _, _, _, duration, expires, _, _, _, spell_id = api.UnitAura("player", i, "HELPFUL")
-        if name == nil then
-            break
-        end
-        if spell_id == t.buff then
-            t.proc_expires, t.proc_duration = expires, duration
-            return
+        if name ~= nil then
+            if spell_id == t.buff then
+                t.proc_expires, t.proc_duration = expires, duration
+                return
+            end
         end
     end
+end
+
+-- Usable-only gate (operator order): a trinket shows only when it has a usable
+-- effect. A known proc (TRINKET_DATA buff) or a live proc/ICD stamp is usable;
+-- otherwise the slot probes the live item cooldown: an on-use trinket reports
+-- enabled even while ready, a passive stat stick reports disabled. Unknown =
+-- hide (never guess). Nil-safe: a missing cooldown reader reports disabled.
+local function trinket_has_on_use(inv_slot)
+    if type(api.GetInventoryItemCooldown) ~= "function" then
+        return false
+    end
+    local _, _, use_enable = api.GetInventoryItemCooldown(inv_slot)
+    return use_enable == 1 or use_enable == true
+end
+
+-- True when the tracked trinket is usable: a known proc buff, a live proc/ICD
+-- stamp, or a live on-use flag. Empty slots (no item) are never usable. The
+-- optional use_enable reuses the tick's cooldown read so trinket_state makes
+-- one live call per tick; icon_should_show probes on its own (layout only).
+function HUD.trinket_usable(t, inv_slot, use_enable)
+    if type(t) ~= "table" or t.item == nil then
+        return false
+    end
+    if t.buff ~= nil then
+        return true
+    end
+    if t.proc_expires ~= nil or t.icd_expires ~= nil then
+        return true
+    end
+    if use_enable == nil then
+        return trinket_has_on_use(inv_slot)
+    end
+    return use_enable == 1 or use_enable == true
 end
 
 -- CLEU: the proc landing starts the trinket's internal cooldown (archive 174-184).
@@ -330,6 +390,10 @@ function HUD.trinket_state(self, slot, now)
     s.texture = t.texture
     scan_trinket_proc(t)
     local use_start, use_duration, use_enable = api.GetInventoryItemCooldown(slot.inv_slot)
+    if not HUD.trinket_usable(t, slot.inv_slot, use_enable) then
+        s.hidden = true
+        return s
+    end
     local on_use_cd = (use_enable == 1 or use_enable == true)
         and (use_duration or 0) > 1.5
         and ((use_start or 0) + (use_duration or 0)) > now
@@ -360,17 +424,47 @@ end
 --=========================================================================================
 -- Frame construction (archive 189-260; called once, out of combat)
 --=========================================================================================
+-- SoD-safe fallback chain (never throws): LSM font -> STANDARD_TEXT_FONT ->
+-- the classic client font. Every SetFont runs pcall-guarded: a missing font
+-- degrades to the next fallback, never out of the HUD build.
+local FONT_FALLBACK_PATH = "Fonts\\FRIZQT__.TTF"
 local function apply_font(text, db)
-    local path = LSM:Fetch("font", db.hud_font)
+    if type(text) ~= "table" or type(text.SetFont) ~= "function" then
+        return
+    end
+    if type(db) ~= "table" then
+        db = {}
+    end
     local outline = OUTLINE_MAP[db.hud_text_outline] or "OUTLINE"
     local size = db.hud_text_size or 16
-    local ok = path and text:SetFont(path, size, outline)
-    if ok == false or not text:GetFont() then
-        text:SetFont(STANDARD_TEXT_FONT, size, outline)
+    local std = rawget(_G, "STANDARD_TEXT_FONT") or FONT_FALLBACK_PATH
+    local path
+    if type(LSM) == "table" and type(LSM.Fetch) == "function" and type(db.hud_font) == "string" then
+        local ok_fetch, fetched = pcall(LSM.Fetch, LSM, "font", db.hud_font)
+        if ok_fetch then
+            path = fetched
+        end
+    end
+    local ok
+    if path then
+        local ok_set, res = pcall(text.SetFont, text, path, size, outline)
+        if ok_set then
+            ok = res
+        end
+    end
+    local has_font = false
+    if type(text.GetFont) == "function" then
+        local ok_get, got = pcall(text.GetFont, text)
+        if ok_get then
+            has_font = got ~= nil
+        end
+    end
+    if ok == false or not has_font then
+        pcall(text.SetFont, text, std, size, outline)
     end
 end
 
-local function create_icon(parent, slot, index)
+local function create_icon(parent, slot, index, db)
     local f = CreateFrame("Frame", addon_name .. "HudIcon" .. index, parent)
     f.slot = slot
     f.texture = f:CreateTexture(nil, "ARTWORK")
@@ -397,6 +491,10 @@ local function create_icon(parent, slot, index)
     f.text_frame:SetAllPoints()
     f.text_frame:SetFrameLevel(f.cooldown:GetFrameLevel() + 1)
     f.text = f.text_frame:CreateFontString(nil, "OVERLAY")
+    -- SoD crash fix: a FontString with no font throws on SetText ("Font not
+    -- set"). Set the real font BEFORE the first SetText; apply_settings
+    -- re-applies the LSM/db font after the row builds (the single restyle path).
+    apply_font(f.text, db)
     f.text:SetPoint("CENTER", 0, 0)
     f.text:SetJustifyH("CENTER")
     f.text:SetShadowColor(0, 0, 0, 1)
@@ -461,8 +559,15 @@ function HUD.create(self)
     end)
 
     HUD.icons = {}
+    local db_for_font
+    if type(self) == "table" and type(self.get_class_table) == "function" then
+        local ok_db, got_db = pcall(self.get_class_table, self)
+        if ok_db and type(got_db) == "table" then
+            db_for_font = got_db
+        end
+    end
     for i = 1, #usable do
-        local icon = create_icon(frame, usable[i], i)
+        local icon = create_icon(frame, usable[i], i, db_for_font)
         icon.show_key = "hud_show_" .. usable[i].key
         HUD.icons[#HUD.icons + 1] = icon
     end
@@ -510,8 +615,26 @@ function HUD.build_event_frame()
     if type(utils) == "table" and type(utils.IsEventValid) == "function" then
         valid = utils.IsEventValid("COMBAT_LOG_EVENT_UNFILTERED") and true or false
     end
+    -- Fallback (hunter-audit item 5): the CLEU registration is probed +
+    -- pcall-guarded because the classic combat log does not exist on every
+    -- client. When it fails only the proc-ICD reversed swipe is lost: on-use
+    -- cooldowns poll GetInventoryItemCooldown and proc buffs poll the aura list
+    -- on every trinket_state tick, so both stay live without CLEU.
     if valid then
-        pcall(frame.RegisterEvent, frame, "COMBAT_LOG_EVENT_UNFILTERED")
+        local ok, err = pcall(frame.RegisterEvent, frame, "COMBAT_LOG_EVENT_UNFILTERED")
+        if not ok then
+            -- M1: a discarded pcall used to hide a dead ICD feed. Count every
+            -- failure (HUD.cleu_register_errors, read by the /st diag wiring
+            -- filed alongside) and say so once in chat; the fallback above
+            -- keeps on-use + proc reads live either way.
+            HUD.cleu_register_errors = (HUD.cleu_register_errors or 0) + 1
+            if HUD.cleu_register_notified ~= true then
+                HUD.cleu_register_notified = true
+                if st.utils and type(st.utils.print_msg) == "function" then
+                    pcall(st.utils.print_msg, "SwedgeTimer: combat-log tracking for trinket internal cooldowns is unavailable; on-use cooldowns and proc buffs still work. (" .. tostring(err) .. ")")
+                end
+            end
+        end
     end
 end
 
@@ -617,7 +740,7 @@ function HUD.icon_should_show(self, icon, designing)
     local slot = icon.slot
     if slot.inv_slot and not designing then
         local t = HUD.trinkets[slot.inv_slot]
-        return t ~= nil and t.item ~= nil
+        return HUD.trinket_usable(t, slot.inv_slot)
     end
     return true
 end
@@ -1061,7 +1184,17 @@ function HUD.update_display(self)
                 if icon.slot.inv_slot then
                     s = HUD.trinket_state(self, icon.slot, now)
                 elseif HUD.class_module then
-                    s = HUD.class_module.get_hud_state(self, icon.slot, now)
+                    local site = "hud:" .. tostring(icon.slot.key or "?")
+                    -- Isolated through the shared contract (guard.lua): a quarantined
+                    -- site is not called at all, a throwing provider costs only its
+                    -- own icon - the row still paints.
+                    local ok, state = st.guard.run(self, site, call_hud_provider,
+                        HUD.class_module, self, icon.slot, now)
+                    if ok then
+                        s = state
+                    else
+                        s = HUD_HIDDEN_STATE
+                    end
                 end
             end
             if s and not s.hidden then

@@ -27,3 +27,8 @@
 - **Next step:** reconcile pass updates `hud_state`/`bars_state` rows + options pass adds
   the §5 toggle keys (recommended defaults documented); in-client check owns every
   visual (pips, countdown text, badge, omen halo, marker).
+
+## 2026-10-19 — [signal:done] Druid feral HUD styles sweep (read-only research lane)
+- **Worked on:** wago.io feral sweep (TBC + Era/SoD only): 9 waited scrapes + websearch discovery + 3 screenshots VIEWED. Wrote NEW bench/druid_styles_2026-10-19.md (only new file; glob-verified absent first).
+- **Current state:** 7 ranked cards (Sabimaru SoD 38★/358 installs, Ryecoke TBC 9★/159, Meatslab SoD 11★/142, Luxthos Era, Cat-Rotation TBC triggers, Igosha TBC-Anniversary restoration, Grillitassu title-only) + shortlist + per-attempt evidence log. Firecrawl bodies kept minimal per discipline; agent/search rejections recorded with SearXNG fallback noted.
+- **Next step:** orchestrator validation; in-client side-by-side owns all pixel geometry (UNCONFIRMED throughout).

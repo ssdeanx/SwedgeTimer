@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T21:48:29Z",
+  "agent_name": "reconcile-pd",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "ST-qualified callers for wiring; session-gated druid routing without new player_class==DRUID literal; presence flips for landed shaman practice",
+    "what_was_hard": "druid wiring without breaking druid_state 2-branch pin; pause/shift without a druid shift_pause wrapper",
+    "skill_gap": "none"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

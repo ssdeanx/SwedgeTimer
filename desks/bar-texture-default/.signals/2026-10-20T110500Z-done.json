@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T11:05:00Z",
+  "run_id": "bar-texture-default-2026-10-20",
+  "agent_name": "bar-texture-default",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The operator's precedent (Minimalist.tga and Expressway.ttf are in NO toc and the addon works) turned the packaging question into a two-minute check instead of a seven-toc edit, and LSM:HashTable returning the LIVE registry proved the dropdown needed no new widget - both answers came from reading the vendored lib and the reference client source rather than guessing. The nil-fetch degradation was made real by extending the bars_state LSM mock with two nil modes, which gave two independent pins (fallback key, client white pixel) instead of one.",
+    "what_was_hard": "/tmp was 100% full (16G tmpfs, 15G of stale mutation copies from earlier lanes) and the first full-tree copy failed with 'No space left on device'. Reclaimed 5G by deleting only the stale scratch copies of lanes the journal marks done, then made the proof copy lean (no .git/Media/docs/desks) - but tests/hunter_state.lua reads a bench file, so bench/ had to stay in the copy or the baseline is not green.",
+    "skill_gap": "I did not check disk headroom before the first mutation copy. A free-space check before copying is the difference between a proof and a failed proof."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Operator rulings still open: (1) the deadzone marker and the bar backdrop deliberately keep 'Solid' - the order said 'default status bar texture for the progress bars' and those are markers/backdrop, one line each if the operator wants them changed; (2) existing profiles keep their SAVED texture, so the new default reaches fresh profiles only; (3) Media/StatusBar/atlas.tga (2.3 MB) and its sibling folders are referenced nowhere - reported, not deleted."
+  }
+}

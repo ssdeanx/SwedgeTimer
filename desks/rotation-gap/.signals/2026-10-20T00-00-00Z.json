@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T00:00:00Z",
+  "run_id": "rotation-gap-2026-10-20",
+  "agent_name": "rotation-gap",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Fetching the APLs directly from the five wowsims repos and expanding every 'groups' block inline gave the true priority order, and resolving spell names from the sims' own spell data (spell_data_auto_gen.go + per-ability .go files) avoided the wowhead version trap where one id means different spells in different clients.",
+    "what_was_hard": "The GitHub REST API rate limit (60/hr unauthenticated) ran out mid-session; the GitHub HTML tree pages were the working substitute. Wowhead then rate-limited to 403, so names had to come from the sims. The soD repo has no feral-druid phase_6 APL (it ends at phase_5), and the forever repo uses a different generated-spell-data format (spelldata.Ladder).",
+    "skill_gap": "Resolving a spell id to a name needs the CLIENT's own data, not a web spell database - a per-family id map should be built once and kept, rather than re-derived each pass."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

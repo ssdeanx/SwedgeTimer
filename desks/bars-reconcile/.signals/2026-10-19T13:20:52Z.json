@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T13:20:52Z",
+  "agent_name": "bars-reconcile",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "widget-creation-site reads pinned exact counts first try; baseline run confirmed got-values matched predicted +1 deltas",
+    "what_was_hard": "interpreting config_presets default as document-nil-off vs explicit entry; chose absence-plus-comment per accepted round-2 precedent",
+    "skill_gap": null
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T16:05:00Z",
+  "run_id": "progression-fix-2026-10-20",
+  "agent_name": "progression-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The H-1 fix needed TWO independent defences to be provable: the hits-only median AND a best-hit floor, so a single-line mutant that restores either one is still caught by a pin. Reading the sibling lanes' in-flight edits (practice_ui.lua 11:48, practice_progress_ui.lua 11:50) before filing the call-site diffs kept the filed line numbers exact.",
+    "what_was_hard": "The 'cap can be zero' mutant I wrote first was an EQUIVALENT mutant (the points > 0 filter already dropped the misses) and SURVIVED - the two defences had to be understood before the proof meant anything. Separately, the harness carried 1-3 failures from a parallel hunter lane editing classes/hunter.lua mid-run; proving those suites never load the two pure modules was what made the crossfire verdict checkable rather than assumed.",
+    "skill_gap": "Judge a mutation's SEMANTIC effect before trusting it as a proof; a surviving mutant may be an equivalent mutant rather than a hole in the pins, and the difference needs the implementation in front of you, not the test names."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T00:00:00Z",
+  "run_id": "shared-engine-bs8-2026-10-20",
+  "agent_name": "shared-engine-bs8",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The engine half of the hold verdict went in cleanly: the grade map's ABSENCE of a hold_ok entry is the single gate for 'an attempt happened', so the no-points rule needed no second source of truth. Reading the client sources before designing the pull clock (no pull-timer API on any of the five branches) turned a guess into a documented constraint, and the projection could then be built on client-sourced cast times only.",
+    "what_was_hard": "The spec's pin for the pull clock sits in tests/practice_ui_state.lua while the deliverable is main.lua's publication - the two readings (a live clock carried into the practice context vs a purely synthetic practice clock) were reconciled by publishing the live moment into the ctx AND letting a caller's own clock win, which satisfies both but needs the residual (the drill's grading basis can follow a real pull) written down. A concurrent warrior lane also landed mid-run and turned the harness red in files this lane never touched; the reds were left alone and recorded, not 'fixed' here.",
+    "skill_gap": "The scope list named ten files but only six needed changes; diag.lua / practice_stats.lua / practice_progress.lua / tests/diag_state.lua were deliberately untouched, and saying so explicitly (with the reason) in the bench artifact is what keeps 'in scope' from turning into 'must touch'."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T20:58:10Z",
+  "agent_name": "options-sod-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "probe script evaluating widget funcs under nil/hollow/live module states found the one real throw; mutation proofs on /tmp/opencode copies killed exactly on the new pins",
+    "what_was_hard": "empty-page symptom had no in-scope cause — required exhaustive elimination (TOC order, group registration, dynamic name, SoD-nil guards) before filing honestly",
+    "skill_gap": "in-client AceConfigDialog-on-SoD rendering still unverifiable offline"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator to run in-client SoD shaman check per bench/options_sod_fix_2026-10-19.md FILE-S2"
+  }
+}

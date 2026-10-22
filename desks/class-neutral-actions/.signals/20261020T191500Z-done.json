@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T19:15:00Z",
+  "run_id": "class-neutral-actions-2026-10-20",
+  "agent_name": "class-neutral-actions",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The engine lane's contract (practice.lua's accessor, the neutral outcome, the family-scoped publish shape) landed mid-session and was read before the class tables were written, so the class side codes against the REAL reader instead of a guess. The closed-list pin (every panel key classified: rotation / neutral / intentional mis-pick) is what makes the set a contract rather than a wish list: 8/8 mutation proofs die, including the grading-integrity mutant (a rotation action published as neutral) and the unclassified-new-key mutant.",
+    "what_was_hard": "Defining the class's own 'practice-panel ability key' vocabulary: the panel's action row (rotation slice + guide slots), the shared sim's grid (the paladin only) and the classes' drill cast keys are three different key spaces, and only the first two belong to the rotation vocabulary. The orchestrator's per-class name lists are much wider than the shipped panels - most of those abilities (the paladin's heals, the warrior's potions, the shaman's heals, the hunter's Concussive Shot) have NO key in the class file at all, so publishing them would have meant inventing keys.",
+    "skill_gap": "Reading the sibling lane's landed code BEFORE writing the class side was luck, not a step - the engine's file was mid-edit when the lane started. A cross-lane contract should be pinned by a brief, not discovered by reading a file that may still be moving."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

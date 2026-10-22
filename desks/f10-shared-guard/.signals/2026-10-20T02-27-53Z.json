@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T02:27:53Z",
+  "run_id": "f10-shared-guard-2026-10-19",
+  "agent_name": "f10-shared-guard",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "One shared guard with the wording as a per-call-site parameter kept every existing isolation pin unchanged and green (the counters, the site keys, the messages and the degrades are byte-identical). The 9/9 mutation proofs on /tmp/opencode copies killed the counting, the once-only print, the quarantine, the pcall, the refusal print, the resource-list definition, the ctx lift, a consumer growing its own threshold back and a missing TOC line. Reading every class's gather_guide_inputs before writing the resource list turned a guess into a verified union (and proved 'focus' does not exist).",
+    "what_was_hard": "The tree is shared and moving: classes/shaman.lua was mid-edit twice during the lane (once breaking the Lua 5.1 200-local limit, which blocked three suites), so the mutation baseline had to be re-taken and the two remaining reds had to be traced to the sibling lane instead of assumed. The sandbox module lists in seven out-of-scope suites had to gain guard.lua, or the consumers load with no st.guard at all (a load-time error, deliberately loud).",
+    "skill_gap": "Choosing between a per-call parameter and a namespace registry for the per-site wording took several passes; the registry (first segment of the site key) is the cheaper answer but it is one step removed from 'the message text is a parameter'. A future lane should read the call-site wording requirement as 'the shared module never hard-codes a module's wording' and pick the simplest mechanism that satisfies it."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

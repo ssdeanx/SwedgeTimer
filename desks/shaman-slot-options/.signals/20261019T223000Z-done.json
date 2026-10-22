@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:32:00Z",
+  "run_id": "shaman-slot-options-2026-10-19",
+  "agent_name": "shaman-slot-options",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The filed row named the keys, the consumer and the design (nil = off, false default); following it literally - two widgets, two false defaults, 32 pins, 13 mutations - kept the lane inside its scope and inside the house shapes.",
+    "what_was_hard": "Judging the glow-description copy against a 'two widgets only' brief (see the checkpoint signal).",
+    "skill_gap": "None material - the filed row was complete enough to execute without asking the operator anything."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

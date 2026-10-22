@@ -43,7 +43,16 @@
 --                             tick (rotation_key() below is the live text source)
 --       out.waiting_judgement bool - judgement-cue carry (paladin; others may ignore)
 --     out.riding (the engine's optional field) selects the ride label when
---     out.hold_text is nil.
+--     out.hold_text is nil. out.hard_wait (optional bool, strictSequence wait)
+--     paints WAIT instead of HOLD/RIDE while true (nil/false = archived text).
+--     out.stopattack (optional bool, twist-now or judge inside the window)
+--     paints STOP instead and shows the overlay even without out.hold.
+--     out.prepull_ready (optional bool, pull inside the lead with no seal)
+--     paints PULL the same way. out.mana_low (optional bool, mana-governor
+--     ride) paints OOM while true. Priority: STOP, then PULL, then OOM,
+--     then WAIT. The out-of-combat prepull cue reads inputs, not out (the
+--     engine only ticks in combat): inputs.time_to_pull_seconds against the
+--     engine's PREPULL_SEAL_LEAD_SECONDS with inputs.seal == "none".
 --
 --   rotation_key = function(inputs) return key or nil end   -- optional
 --     Live rotation-pattern key for the text below the icons. Absent -> the in-guide
@@ -52,7 +61,11 @@
 --     Resolves a rotation key to its display text (default: the key itself).
 --   labels = { next_action = "Next action:", hold = "HOLD", ride = "RIDE" } -- optional
 --     Static captions: next_action is the text above the icons; hold/ride supply the
---     overlay text when out.hold_text is nil.
+--     overlay text when out.hold_text is nil; wait (optional, default "WAIT")
+--     supplies it while out.hard_wait is true; stop (optional, default "STOP")
+--     while out.stopattack is true; prepull (optional, default "PULL") while
+--     out.prepull_ready is true (either path); mana (optional, default "OOM")
+--     while out.mana_low is true.
 --
 -- OPTIONAL SLOT DISPLAY FIELDS - every default reproduces the archive's plain 45x45
 -- centre icon; the paladin provider exercises each one:
@@ -234,7 +247,10 @@ local function build_slot_icon(frame, slot)
 
     if slot.label then
         local caption = icon:CreateFontString(nil, "OVERLAY")
-        caption:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
+        -- The shared chain keeps the file that renders first and always leaves a
+        -- font that exists (a FontString with no font throws "Font not set" on
+        -- its first SetText).
+        st.utils.apply_font(caption, "Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
         caption:SetPoint("CENTER", icon, "CENTER", 0, 0)
         caption:SetTextColor(1, 1, 1, 1)
         caption:SetText(slot.label)
@@ -366,6 +382,9 @@ function ui.init(self)
 
     -- HOLD / RIDE: dark translucent circle over the action icon with white text
     -- (the WA drew a near-black circle with Friz Quadrata 12 OUTLINE text).
+    -- The font goes through the shared chain: the file that renders stays first,
+    -- and a client that does not ship it still gets a font that exists (a
+    -- FontString with no font throws "Font not set" on its first SetText).
     frame.hold = CreateFrame("Frame", addon_name .. "NextActionHold", frame)
     frame.hold:SetSize(HOLD_CIRCLE_SIZE, HOLD_CIRCLE_SIZE)
     frame.hold:SetPoint("CENTER", frame, "CENTER", 0, 0)
@@ -380,7 +399,7 @@ function ui.init(self)
     end
     frame.hold.circle:SetVertexColor(unpack(HOLD_CIRCLE_COLOR))
     frame.hold.text = frame.hold:CreateFontString(nil, "OVERLAY")
-    frame.hold.text:SetFont("Fonts\\FRIZQT__.TTF", 12, "OUTLINE")
+    st.utils.apply_font(frame.hold.text, "Fonts\\FRIZQT__.TTF", 12, "OUTLINE")
     frame.hold.text:SetPoint("CENTER", frame.hold, "CENTER", 0, 0)
     frame.hold.text:SetTextColor(1, 1, 1, 1)
     frame.hold.text:SetText((provider.labels and provider.labels.hold) or "HOLD")
@@ -389,7 +408,7 @@ function ui.init(self)
 
     -- "Next action:" label above the icons (WA: Friz Quadrata 8 OUTLINE at (2,25)).
     frame.label = frame:CreateFontString(nil, "OVERLAY")
-    frame.label:SetFont("Fonts\\FRIZQT__.TTF", 8, "OUTLINE")
+    st.utils.apply_font(frame.label, "Fonts\\FRIZQT__.TTF", 8, "OUTLINE")
     frame.label:SetPoint("CENTER", frame, "CENTER", 2, 25)
     frame.label:SetTextColor(1, 1, 1, 1)
     frame.label:SetShadowColor(0, 0, 0, 1)
@@ -397,9 +416,11 @@ function ui.init(self)
     frame.label:SetText((provider.labels and provider.labels.next_action) or "Next action:")
 
     -- Rotation pattern text below the icons (WA: font "2002" size 12 OUTLINE,
-    -- bottom-anchored 40px below center).
+    -- bottom-anchored 40px below center). The shared chain keeps the font that
+    -- renders: "Fonts\2002.TTF" first, then STANDARD_TEXT_FONT, then the classic
+    -- client font - a client that does not ship the "2002" file still gets one.
     frame.rotation_text = frame:CreateFontString(nil, "OVERLAY")
-    frame.rotation_text:SetFont("Fonts\\2002.TTF", 12, "OUTLINE")
+    st.utils.apply_font(frame.rotation_text, "Fonts\\2002.TTF", 12, "OUTLINE")
     frame.rotation_text:SetPoint("BOTTOM", frame, "CENTER", 0, -40)
     frame.rotation_text:SetTextColor(1, 1, 1, 1)
     frame.rotation_text:SetShadowColor(0, 0, 0, 1)
@@ -551,10 +572,44 @@ local function display_active(self, provider, inputs, out)
     end
 
     local hold_target = 0
-    if not unknown and out.hold and db.nextaction_hold_enabled ~= false then
+    if not unknown and (out.hold or out.stopattack == true or out.prepull_ready == true)
+        and db.nextaction_hold_enabled ~= false then
         hold_target = 1
         local text = out.hold_text
-        if text == nil then
+        if out.stopattack == true then
+            -- StopAttack discipline (classic IsUsingJudgementStopAttack and
+            -- SoD StopAttack/StartAttack twists/judges): the sim stops the
+            -- attack before a twist-now or a judge inside the window, so the
+            -- frame surfaces the advisory as STOP. Distinct text so the stop
+            -- reads apart from HOLD/RIDE; nil-safe (== true),
+            -- unknown-suppressed (the outer gate) and hold-gated like the
+            -- overlay itself. No db key. The macro that acts on it stays
+            -- filed (addons cannot cast); this only paints the output.
+            local labels = provider.labels
+            text = (labels and labels.stop) or "STOP"
+        elseif out.prepull_ready == true then
+            -- Prepull seal cue (classic APL -1.5 s): seal down, pull inside
+            -- the lead. The combat path paints it here; the pull-timer
+            -- source itself is filed (main lane), so this stays
+            -- display-inert until it feeds inputs.time_to_pull_seconds.
+            local labels = provider.labels
+            text = (labels and labels.prepull) or "PULL"
+        elseif out.mana_low == true then
+            -- Mana-governor ride: mana sits below the threshold, so the
+            -- guide withholds the reseal and rides instead. Distinct text
+            -- carries the reason; the Blood icon underneath still shows the
+            -- ride. Nil-safe, unknown-suppressed, hold-gated. No db key.
+            local labels = provider.labels
+            text = (labels and labels.mana) or "OOM"
+        elseif out.hard_wait == true then
+            -- strictSequence hard-wait (SoD twist APLs): a held twist on a
+            -- strict build waits the swing out instead of filling. Distinct
+            -- text so the wait reads apart from HOLD/RIDE; nil-safe (nil =
+            -- the archived text below), unknown-suppressed (the outer gate)
+            -- and hold-gated like the overlay itself. No db key.
+            local labels = provider.labels
+            text = (labels and labels.wait) or "WAIT"
+        elseif text == nil then
             local labels = provider.labels
             if out.riding then
                 text = (labels and labels.ride) or "RIDE"
@@ -637,7 +692,29 @@ local function display_idle(self, provider, inputs)
         targets[i] = sf.slot.idle_alpha or 0
         set_fade_target(sf.fade, targets[i])
     end
-    set_fade_target(frame.hold.fade, 0)
+    -- Prepull seal cue (the live pre-combat render: the engine only ticks in
+    -- combat, so the idle frame reads the pull-timer inputs directly against
+    -- the engine's own lead constant, no duplicated seconds). Nil-safe (no
+    -- timer = the archived idle below); no unknown gate (a prepull precedes
+    -- the swing by nature); no db key. The pull-timer source itself is filed
+    -- (main lane), as is the family-specific seal choice, so this stays
+    -- display-inert until inputs.time_to_pull_seconds is fed.
+    local ttp = inputs.time_to_pull_seconds
+    local lead = (st.nextaction and st.nextaction.PREPULL_SEAL_LEAD_SECONDS) or 1.5
+    local prepull = type(ttp) == "number" and ttp == ttp and ttp >= 0 and ttp <= lead
+        and inputs.seal == "none"
+    if prepull then
+        local soc_index = ui.slot_index["soc"]
+        if soc_index then
+            targets[soc_index] = 1
+            set_fade_target(icons[soc_index].fade, 1)
+        end
+        local labels = provider.labels
+        frame.hold.text:SetText((labels and labels.prepull) or "PULL")
+        set_fade_target(frame.hold.fade, 1)
+    else
+        set_fade_target(frame.hold.fade, 0)
+    end
     -- Archive parity: the idle opener carries no swipes, so every slot swipe is
     -- cleared here too (out of combat the engine is not consulted at all).
     for i = 1, #icons do
@@ -652,6 +729,19 @@ local function display_idle(self, provider, inputs)
     end
     update_texts(self, provider, inputs)
 end
+
+--=========================================================================================
+-- Compute isolation (N1): the self-driver (frame OnUpdate + class hook) must never freeze
+-- on a throwing provider. The contract lives in guard.lua (one implementation for the
+-- whole addon): first throw prints once, every throw counts in self.bar_hook_errors
+-- (read by /st diag), the site quarantines after st.guard.QUARANTINE_THROWS.
+-- Degrade is unknown, never stale-confident: gather failure flags inputs_unknown (the
+-- engine threads it into out), evaluate failure flags out directly.
+--
+-- What stays here is this module's own wording ("Next action ...") and its own site
+-- keys.
+--=========================================================================================
+st.guard.label("nextaction", "Next action")
 
 --=========================================================================================
 -- Per-frame update (driven by the class hook and by the frame's own OnUpdate)
@@ -697,10 +787,14 @@ function ui.update(self)
     -- The provider owns the reused inputs table; the UI owns the reused output table.
     -- A provider that returns a non-table (exception-path degrade) leaves last tick's
     -- table in place: that is stale state, so it is flagged unknown (M6) and the
-    -- guide shows "…" instead of advice built on stale reads.
-    local gathered = provider.gather(self, ui.inputs)
+    -- guide shows "…" instead of advice built on stale reads. A throwing provider is
+    -- isolated the same way (N1): counted + one-time notice + quarantine, never stale.
     local inputs
-    if type(gathered) == "table" then
+    -- Isolated through the shared contract (guard.lua): a quarantined site is not
+    -- called at all, a throwing provider costs only this tick's guidance.
+    local gathered_ok, gathered = st.guard.run(self, "nextaction:gather",
+        provider.gather, self, ui.inputs)
+    if gathered_ok and type(gathered) == "table" then
         inputs = gathered
     else
         inputs = ui.inputs
@@ -713,7 +807,11 @@ function ui.update(self)
             out = {}
             ui.out = out
         end
-        provider.evaluate(inputs, out)
+        local evaluate_ok = st.guard.run(self, "nextaction:evaluate",
+            provider.evaluate, inputs, out)
+        if not evaluate_ok then
+            out.inputs_unknown = true
+        end
         -- The waiting-judgement state is a carry: this tick's output seeds the
         -- next tick's input.
         self.guide_waiting_judgement = out.waiting_judgement and true or false

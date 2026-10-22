@@ -100,8 +100,30 @@ local function make_fontstring()
     function f:SetPoint() end
     function f:ClearAllPoints() f.point_cleared = true end
     function f:SetFontObject(obj) f.font_object = obj end
-    function f:SetFont(path, size, flags) f.font = { path, size, flags }; return true end
-    function f:SetText(text) f.text = text end
+    -- SoD-faithful: SetFont with a nil path latches nothing (false, like the
+    -- client); SetText with no font (neither SetFont nor SetFontObject latched)
+    -- throws ("Font not set"). The result frame must carry a font before its
+    -- first SetText.
+    function f:SetFont(path, size, flags)
+        if path == nil then
+            return false
+        end
+        f.font = { path, size, flags }
+        return true
+    end
+    function f:GetFont()
+        -- A font object carries a font of its own (the client reports its path),
+        -- so a FontString set with SetFontObject is not fontless.
+        if f.font then return f.font[1] end
+        if f.font_object then return f.font_object end
+        return nil
+    end
+    function f:SetText(text)
+        if f.font == nil and f.font_object == nil then
+            error("Font not set", 2)
+        end
+        f.text = text
+    end
     function f:SetTextColor(r, g, b, a) f.color = { r, g, b, a } end
     function f:SetShadowColor(r, g, b, a) f.shadow_color = { r, g, b, a } end
     function f:SetShadowOffset(x, y) f.shadow_offset = { x, y } end
@@ -212,8 +234,51 @@ local SPELL_ICONS = {
 --=========================================================================================
 -- Sandbox builder
 --=========================================================================================
+-- A fresh practice blob: the shape the AceDB default (ST.PRACTICE_DEFAULTS) carries.
+local function fresh_practice_blob()
+    return {
+        schema_version = 1,
+        progress = {
+            version = 1,
+            classes = {},
+            global = { daily_streak = 0, unlocks = {} },
+        },
+        stats = {
+            version = 1,
+            classes = {},
+            global = {
+                runs = 0, attempts = 0, hits = 0, misses = 0, points = 0,
+                best_session_score = 0, best_s_streak = 0, s_run = 0,
+                time_active_seconds = 0, drills = {}, recent = {}, history = {},
+            },
+        },
+    }
+end
+
+-- The drive helper for the progression section: the paladin twist that lands an A.
+-- (Soc at 1.9 swaps blood->command and fades blood till 2.3; the 2.0 swing lands at
+-- the 2.01 drive with a 110ms lead -> grade A.)
+local function twist_attempt(b, clock)
+    local F = b.sb
+    F.clock = 1.9
+    b.st.practice_ui.cast_key(b.ST, "soc")
+    F.clock = clock or 2.01
+    drive(b, 0.01)
+end
+
 -- opts.no_practice: a flavor without the pure engine (practice.lua not loaded).
 -- opts.no_bar:      st.practice_ui's anchor fallback (no mainhand bar frame).
+-- opts.with_db:     the addon's saved profile (the progression hook's surface).
+-- opts.practice_blob: a pre-seeded db.profile.practice blob (the migration path).
+-- opts.day:         the scripted calendar day the hook injects (mutable at runtime
+--                    through sb.day).
+-- opts.no_date:     the client exposes NO `date` global (the M4 path).
+-- opts.clock_epoch: the client's clock in epoch seconds (nil = no clock at all).
+-- opts.with_progress_ui: load practice_progress_ui.lua too (the shipped reset).
+-- opts.project_id:  the client family the sandbox pretends to be (the compat
+--                    layer's own WOW_PROJECT_ID probe; nil = WotLK Classic).
+-- opts.client_spells: the spell ids the sandbox's client knows (on top of the
+--                    fixed base set) - the client's own spell data.
 local function build(opts)
     opts = opts or {}
 
@@ -243,6 +308,8 @@ local function build(opts)
         last_visibility_hand = nil,
         lsm_font = "Fonts\\LSM.ttf",
         font_requests = {},
+        day = opts.day or "2026-10-19",
+        practice_writes = 0,
     }
 
     -- The real PALADIN practice defaults (config_presets.lua): a wrong fixture value
@@ -262,9 +329,18 @@ local function build(opts)
     bar_frame.right, bar_frame.top = 60, 60
 
     -- The addon object: only the surface practice_ui touches.
+    -- The six class tables live here (main.lua creates them; every class module
+    -- reaches them through LibStub), so a test that drives a REAL class grader
+    -- finds the class's own module.
     local ST = {
         PALADIN = {},
+        ROGUE = {},
+        WARRIOR = {},
+        DRUID = {},
+        SHAMAN = {},
+        HUNTER = {},
         player_class = "PALADIN",
+        active_class = "PALADIN",
         interfaces_are_initialised = true,
         in_combat = false,
         gcd = { duration = 1.5, spell_length = 1.5 },
@@ -272,6 +348,19 @@ local function build(opts)
     }
     function ST.PALADIN.practice_sync() sb.practice_sync = sb.practice_sync + 1 end
     function ST.PALADIN.on_aura_change() sb.aura_change = sb.aura_change + 1 end
+    -- The paladin's sim-path provider seams (class-isolation 2026-10-21): the
+    -- shared bridge asks the ACTIVE class's provider for them.
+    ST.PALADIN.practice_panel = {
+        progress = {
+            mode = "paladin_twist",
+            scenario = "paladin_rotation",
+            drills = { "paladin_twist", "paladin_aw_combo" },
+        },
+        session = {
+            sync_sim = function(self) ST.PALADIN.practice_sync(self) end,
+            clear_sim = function(self) ST.PALADIN.on_aura_change(self) end,
+        },
+    }
     function ST:Print(msg) sb.prints[#sb.prints + 1] = tostring(msg) end
     function ST:get_class_table() return class_db end
     function ST:get_hand_table() return hand_db end
@@ -300,25 +389,93 @@ local function build(opts)
     function ST:set_gcd_times_before_swing_seconds() sb.gcd_times = sb.gcd_times + 1 end
     function ST:on_gcd_length_change() sb.gcd_changes = sb.gcd_changes + 1 end
 
+    -- The saved profile (the progression hook's surface). The real AceDB profile is
+    -- a plain table; this thin proxy counts how often the practice key is REPLACED
+    -- (a write), so the throttle can be pinned.
+    local profile_store = {}
+    local profile = setmetatable({}, {
+        __index = function(_, key) return profile_store[key] end,
+        __newindex = function(_, key, value)
+            profile_store[key] = value
+            if key == "practice" then
+                sb.practice_writes = sb.practice_writes + 1
+            end
+        end,
+    })
+    sb.profile = profile
+    sb.profile_store = profile_store
+    if opts.with_db then
+        ST.db = { profile = profile }
+        function ST:get_profile_table() return self.db and self.db.profile or nil end
+        -- AceDB copies the defaults into the profile, so the practice key starts as
+        -- its own copy of the default blob (the default table itself stays untouched).
+        profile_store.practice = opts.practice_blob or fresh_practice_blob()
+    end
+
     local LSM = {
         -- Records the media key the module asks for, so the hand-font option path is
         -- pinned, and returns the scripted font (nil exercises the fallback).
         Fetch = function(_, mediatype, key)
             sb.font_requests[#sb.font_requests + 1] = { mediatype = mediatype, key = key }
+            if opts.lsm_throw then
+                error("LSM probe throw")
+            end
             return sb.lsm_font
         end,
     }
 
     local env = setmetatable({}, { __index = _G })
-    env.WOW_PROJECT_ID = 11
+    -- opts.project_id: the client family this sandbox pretends to be (the compat
+    -- layer's own WOW_PROJECT_ID probe). nil = the default (WotLK Classic). The guide
+    -- vocabulary is family-scoped, so a pin that reads one family's own slot set
+    -- asks for that family here (2 = Classic Era, 5 = TBC, 11 = WotLK,
+    -- 18 = WoW Forever).
+    env.WOW_PROJECT_ID = opts.project_id or 11
     env.WOW_PROJECT_CLASSIC = 2
     env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5
     env.WOW_PROJECT_WRATH_CLASSIC = 11
     env.WOW_PROJECT_MAINLINE = 1
     env.GetTimePreciseSec = function() return sb.clock end
     env.GetTime = function() return sb.clock end
+    -- The calendar day the progression hook injects into the pure layer. Scripted
+    -- so the daily streak and the daily XP cap are deterministic.
+    --
+    -- opts.no_date: the client exposes NO `date` global at all (the M4 path).
+    -- opts.clock_epoch: the client's clock (the `time` global) in epoch seconds;
+    --   nil = the client has no clock either.
+    env.date = function(fmt)
+        if fmt == "%Y-%m-%d" then
+            return sb.day
+        end
+        return ""
+    end
+    -- The mirror below cannot restore an ABSENT global (a nil previous value drops
+    -- the key from the restore table), so a global a previous build leaked into _G
+    -- stays there for the rest of the run. The M4 builds need the calendar and the
+    -- clock to be TRULY absent - a client that has neither - so they clear the
+    -- leak themselves.
+    if opts.no_date then
+        env.date = nil
+        _G.date = nil
+    end
+    if opts.clock_epoch ~= nil then
+        env.time = function() return sb.epoch or opts.clock_epoch end
+    else
+        _G.time = nil
+    end
     env.GetBuildInfo = function() return "3.3.5", "12340", "today", 38002 end
-    env.STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
+    -- The client's own standard font (the shared chain's middle step). A distinctive
+    -- value proves which step carried a label; opts.std_font = false (or the older
+    -- opts.no_std_font) removes it so the chain's classic-client fallback has to
+    -- carry the label.
+    local std_font = opts.std_font
+    if std_font == nil and not opts.no_std_font then
+        std_font = "Fonts\\FRIZQT__.TTF"
+    end
+    if std_font == false then
+        std_font = nil
+    end
+    env.STANDARD_TEXT_FONT = std_font
     env.GameFontNormal = "GameFontNormal"
     env.GameFontHighlightSmall = "GameFontHighlightSmall"
     env.UIParent = make_frame()
@@ -335,15 +492,26 @@ local function build(opts)
             sb.timers[#sb.timers + 1] = { delay = delay, cb = callback }
         end,
     }
+    -- The client's own spell data (opts.client_spells): the spell ids this sandbox's
+    -- client knows, on top of the fixed base set. The common abilities resolve
+    -- against the client (the class's own resolver asks the client first, the cited
+    -- id ladder second), so a pin can seed the client with the rank it owns and
+    -- read the resolved id back - and a client that knows NONE of the common
+    -- spells resolves none of them (unknown-hides).
+    local client_spells = {}
+    for id, icon in pairs(SPELL_ICONS) do client_spells[id] = icon end
+    for _, id in ipairs(opts.client_spells or {}) do
+        client_spells[id] = "icon_spell_" .. tostring(id)
+    end
     env.GetSpellInfo = function(spell_id)
-        local icon = SPELL_ICONS[spell_id]
+        local icon = client_spells[spell_id]
         if not icon then
             return nil
         end
         return "Spell " .. spell_id, nil, icon, 0, 0, 0, spell_id
     end
     env.GetSpellTexture = function(spell_id)
-        return SPELL_ICONS[spell_id]
+        return client_spells[spell_id]
     end
     env.GetItemIcon = function(item_id)
         return "icon_item_" .. tostring(item_id)
@@ -377,16 +545,24 @@ local function build(opts)
         if major == "AceAddon-3.0" then
             return { GetAddon = function() return ST end }
         elseif major == "LibSharedMedia-3.0" then
+            if opts.no_lsm then
+                return nil
+            end
             return LSM
         end
         return {}
     end
 
     -- compat.lua reads several legacy globals through rawget(_G, ...); mirror every
-    -- stub into _G for the duration of its load, then restore _G exactly.
-    local mirrored = {}
+    -- stub into _G for the duration of its load, then restore _G exactly. The
+    -- names are kept in a list as well: a name whose previous value was nil must
+    -- still be restored (assigning nil removes the key), or the mirror leaks the
+    -- sandbox value into every later build (the next build would then see a
+    -- STANDARD_TEXT_FONT the sandbox never set).
+    local mirrored, mirrored_names = {}, {}
     for name, value in pairs(env) do
         mirrored[name] = rawget(_G, name)
+        mirrored_names[#mirrored_names + 1] = name
         _G[name] = value
     end
 
@@ -395,13 +571,19 @@ local function build(opts)
     setfenv(compat, env)
     compat("SwedgeTimer", st)
 
-    for name, previous in pairs(mirrored) do
-        _G[name] = previous
+    for _, name in ipairs(mirrored_names) do
+        _G[name] = mirrored[name]
     end
 
     local utils = assert(loadfile(ROOT .. "utils.lua"))
     setfenv(utils, env)
     utils("SwedgeTimer", st)
+
+    -- guard.lua owns the shared error-isolation contract (the TOCs load it right
+    -- after utils.lua and before every consumer).
+    local guard = assert(loadfile(ROOT .. "guard.lua"))
+    setfenv(guard, env)
+    guard("SwedgeTimer", st)
 
     -- design.lua (pure) backs the descriptor normaliser the C6 handoff must satisfy.
     local design = assert(loadfile(ROOT .. "design.lua"))
@@ -414,11 +596,51 @@ local function build(opts)
     setfenv(nextaction, env)
     nextaction("SwedgeTimer", st)
 
+    -- weave.lua is the pure marker/clip math the shaman drill grades through
+    -- (all TOCs load it before practice.lua; the starter refuses a session the
+    -- marker cannot resolve).
+    local weave = assert(loadfile(ROOT .. "weave.lua"))
+    setfenv(weave, env)
+    weave("SwedgeTimer", st)
+
     if not opts.no_practice then
         local practice = assert(loadfile(ROOT .. "practice.lua"))
         setfenv(practice, env)
         practice("SwedgeTimer", st)
     end
+
+    -- opts.class_modules: the REAL class modules a test drives (the drill-list pick
+    -- contract, section 27). The list is opt-in and ordered: the class's own pure
+    -- guide first, then the class module itself. A module that fails to load fails
+    -- the suite (a half-loaded class would grade nothing, and the pin would pass
+    -- for the wrong reason).
+    for i = 1, #(opts.class_modules or {}) do
+        local path = opts.class_modules[i]
+        local chunk = assert(loadfile(ROOT .. path))
+        setfenv(chunk, env)
+        local ok_m, err_m = pcall(chunk, "SwedgeTimer", st)
+        if not ok_m then
+            print("FAIL  " .. path .. " does not load under the sandbox: " .. tostring(err_m))
+            os.exit(1)
+        end
+        -- Operator order 2026-10-21: a wrapped class file registers its body as a
+        -- loader; the sandbox activates it exactly as main.lua does at init.
+        local class = path:match("classes/(%a+)%.lua")
+        if class and type(st.class_loaders) == "table"
+            and type(st.class_loaders[class:upper()]) == "function" then
+            st.class_loaders[class:upper()]()
+        end
+    end
+
+    -- The pure progression + stats modules (the TOCs load them between practice.lua
+    -- and practice_ui.lua; they are WoW-free, so they load in any sandbox).
+    local pstats = assert(loadfile(ROOT .. "practice_stats.lua"))
+    setfenv(pstats, env)
+    pstats("SwedgeTimer", st)
+
+    local pprogress = assert(loadfile(ROOT .. "practice_progress.lua"))
+    setfenv(pprogress, env)
+    pprogress("SwedgeTimer", st)
 
     local pui = assert(loadfile(ROOT .. "practice_ui.lua"))
     setfenv(pui, env)
@@ -428,8 +650,575 @@ local function build(opts)
         os.exit(1)
     end
 
+    -- The Progress page's read model + reset (the real module): the M1 pin drives
+    -- the SHIPPED reset path instead of a copy of it. The module creates no frame
+    -- at load, so the frame census is untouched.
+    if opts.with_progress_ui then
+        local ppui = assert(loadfile(ROOT .. "practice_progress_ui.lua"))
+        setfenv(ppui, env)
+        local ok_p, err_p = pcall(ppui, "SwedgeTimer", st)
+        if not ok_p then
+            print("FAIL  practice_progress_ui.lua does not load under the sandbox: " .. tostring(err_p))
+            os.exit(1)
+        end
+    end
+
     sb.env, sb.st, sb.ST, sb.class_db, sb.hand_db, sb.bar_frame = env, st, ST, class_db, hand_db, bar_frame
     return { env = env, st = st, ST = ST, sb = sb }
+end
+
+--=========================================================================================
+-- Fixture: the class modules' practice-panel provider
+--
+-- The real class modules publish `practice_panel` (class-isolation 2026-10-21): the
+-- shared practice UI reads that ONE contract and never names a class. This suite's
+-- hand-built class tables are the sandbox's class modules, so they publish the same
+-- contract here. The closures read T.<CLASS>.<fn> dynamically, so a test that stubs
+-- a class function keeps driving the shared layer exactly as before the contract.
+--=========================================================================================
+local function fixture_panel(b, T, cls)
+    local M = T[cls]
+    local practice = b.st.practice
+    local panel = { session = {} }
+    local session = panel.session
+    local function now_() return b.st.api.get_time() end
+
+    if cls == "HUNTER" then
+        panel.drill_key = "hunter_forced_move"
+        panel.def_type = "shot"
+        panel.title = "|cFFFF8800Forced-Move Practice|r"
+        panel.idle_status = "Drill idle"
+        panel.hint_active = "Click a shot to cast. /st practice or the X button stops."
+        panel.hint_stopped = "Press Start Fight, or cast shots with the icon grid."
+        panel.drift_message = "Practice mode is not available (hunter drill key drifted)."
+        panel.progress = {
+            mode = "hunter_forced_move",
+            scenario = "hunter_rotation",
+            drills = { "hunter_forced_move" },
+        }
+        panel.scenario_key = function()
+            if type(M.get_practice_scenario_key) ~= "function" then return nil end
+            return M.get_practice_scenario_key()
+        end
+        panel.order = function() return M.PRACTICE_SHOT_ORDER end
+        panel.label = function(key) return M.practice_shot_label(key) end
+        panel.spell_id = function(key) return M.practice_shot_spell_id(key) end
+        panel.status = function(ui, now)
+            if type(M.practice_status) ~= "function" then return nil end
+            return M.practice_status(ui.hunter_session, now)
+        end
+        panel.fight_elapsed = function(ui, now)
+            if type(M.practice_fight_elapsed) ~= "function" then return nil end
+            return M.practice_fight_elapsed(ui.hunter_session, now)
+        end
+        session.running = function(ui) return ui.hunter_session ~= nil end
+        session.active = function(ui)
+            return ui.hunter_session and ui.hunter_session.active
+        end
+        session.start = function(self, now, ui)
+            if type(M.practice_new_session) ~= "function"
+                or type(M.practice_begin_session) ~= "function"
+                or type(M.practice_tick) ~= "function"
+                or type(M.practice_cast) ~= "function" then
+                return false
+            end
+            local ok, s = pcall(M.practice_new_session, now)
+            if not ok or s == nil then return false end
+            local ok_begin, begun = pcall(M.practice_begin_session, s, now)
+            if not ok_begin or begun == false then return false end
+            ui.hunter_session = s
+            ui.hunter_out = {}
+            return true
+        end
+        session.tick = function(self, now, elapsed, ui)
+            local s = ui.hunter_session
+            if s == nil then return end
+            ui.hunter_out = M.practice_tick(s, now, elapsed, ui.hunter_out)
+            if ui.hunter_out and ui.hunter_out.move_started then
+                ui.show_result(self, "MOVE!")
+            end
+            ui.update_fight_timer(self, now)
+        end
+        session.cast = function(self, key, ui)
+            if ui.hunter_session == nil then return nil end
+            return M.practice_cast(ui.hunter_session, now_(), key)
+        end
+        session.stop = function(self, ui)
+            local s = ui.hunter_session
+            if s == nil then return end
+            if type(M.practice_end_session) == "function" then
+                M.practice_end_session(s, now_())
+            end
+            ui.hunter_session = nil
+        end
+        session.begin = function(self, now, ui)
+            if ui.hunter_session and type(M.practice_begin_session) == "function" then
+                M.practice_begin_session(ui.hunter_session, now)
+            end
+        end
+        session.end_session = function(self, ui)
+            if ui.hunter_session and type(M.practice_end_session) == "function" then
+                M.practice_end_session(ui.hunter_session, now_())
+            end
+        end
+        session.pause = function(self, ui, shift)
+            if ui.hunter_session and type(M.practice_shift_pause) == "function" then
+                M.practice_shift_pause(ui.hunter_session, shift)
+            end
+        end
+        session.sync = function() end
+        session.clear = function(self) self:handle_bar_visibility("mainhand") end
+        return panel
+    end
+
+    if cls == "SHAMAN" then
+        panel.drill_key = "shaman_weave"
+        panel.def_type = "ability"
+        panel.icon = "name"
+        panel.title = "|cFFFF8800Weave Practice|r"
+        panel.idle_status = "Drill idle - press Start Fight"
+        panel.hint_active = "Click a cast to weave. /st practice or the X button stops."
+        panel.hint_stopped = "Press Start Fight, or cast weaves with the icon grid."
+        panel.drift_message = "Practice mode is not available (shaman drill key drifted)."
+        panel.progress = {
+            mode = "shaman_mw_weave",
+            scenario = "shaman_rotation",
+            drills = { "shaman_enh_priority" },
+        }
+        panel.scenario_key = function()
+            if type(M.practice_scenario_key) ~= "function" then return nil end
+            return M.practice_scenario_key()
+        end
+        panel.order = function() return M.PRACTICE_CAST_ORDER end
+        panel.label = function(key) return M.practice_cast_label(key) end
+        panel.spell_id = function(key) return M.practice_cast_spell_id(key) end
+        panel.status = function(ui, now)
+            if type(M.practice_status) ~= "function" then return nil end
+            return M.practice_status(ui.shaman_swing, now)
+        end
+        panel.fight_elapsed = function(ui, now)
+            if type(M.practice_fight_elapsed) ~= "function" then return nil end
+            return M.practice_fight_elapsed(ui.shaman_session, now)
+        end
+        session.running = function(ui) return ui.shaman_session ~= nil end
+        session.active = function(ui)
+            return ui.shaman_session and ui.shaman_session.active
+        end
+        session.start = function(self, now, ui, ctx)
+            if type(M.practice_latency_seconds) ~= "function"
+                or type(M.practice_cast_seconds) ~= "function"
+                or type(M.new_practice_session) ~= "function"
+                or type(M.tick_practice_session) ~= "function"
+                or type(M.practice_cast) ~= "function" then
+                return false
+            end
+            local duration = ctx and ctx.base_speed
+            if type(duration) ~= "number" or duration <= 0 then duration = 3.5 end
+            if type(self.mainhand) == "table" then
+                ui.saved_hand_speed = self.mainhand.speed
+            else
+                ui.saved_hand_speed = nil
+            end
+            local ok_lat, latency = pcall(M.practice_latency_seconds)
+            if not ok_lat or type(latency) ~= "number" then latency = 0 end
+            local ok_cast, cast = pcall(M.practice_cast_seconds, "weave_lb")
+            if not ok_cast or type(cast) ~= "number" then
+                local defaults = practice and practice.harness
+                    and practice.harness.WEAVE_DEFAULTS
+                cast = (defaults and defaults.effective_cast) or 1.5
+            end
+            local harness = practice and practice.harness
+            local ok_marker, marker = false, nil
+            if type(harness) == "table"
+                and type(harness.weave_marker_fraction) == "function" then
+                ok_marker, marker = pcall(harness.weave_marker_fraction,
+                    duration, cast, latency)
+            end
+            if not ok_marker or type(marker) ~= "number" then return false end
+            local ok, s = pcall(M.new_practice_session, now, {
+                swing_duration = duration,
+                effective_cast = cast,
+                latency = latency,
+            })
+            if not ok or s == nil then return false end
+            ui.shaman_session = s
+            ui.shaman_swing = {
+                swing_duration = duration,
+                swing_start = now,
+                swing_ends_at = now + duration,
+            }
+            ui.shaman_out = {}
+            ui.base_speed = duration
+            return true
+        end
+        session.tick = function(self, now, elapsed, ui)
+            local s = ui.shaman_session
+            local swing = ui.shaman_swing
+            if s == nil or swing == nil then return end
+            local duration = swing.swing_duration
+            if type(duration) ~= "number" or duration <= 0 then return end
+            if s.active then
+                local guard = 0
+                while now >= swing.swing_ends_at and guard < 8 do
+                    swing.swing_start = swing.swing_ends_at
+                    swing.swing_ends_at = swing.swing_ends_at + duration
+                    guard = guard + 1
+                end
+            end
+            ui.shaman_out = M.tick_practice_session(s, now, elapsed, ui.shaman_out)
+            ui.update_fight_timer(self, now)
+            ui.sync_to_addon(self)
+        end
+        session.cast = function(self, key, ui)
+            local s = ui.shaman_session
+            local swing = ui.shaman_swing
+            if s == nil or swing == nil then return nil end
+            return M.practice_cast(s, swing, now_(), key)
+        end
+        session.stop = function(self, ui)
+            local s = ui.shaman_session
+            if s == nil then return end
+            if type(M.end_practice_session) == "function" then
+                M.end_practice_session(s, now_())
+            end
+            ui.shaman_session = nil
+            ui.shaman_swing = nil
+        end
+        session.begin = function(self, now, ui)
+            if ui.shaman_session and type(M.practice_begin_session) == "function" then
+                M.practice_begin_session(ui.shaman_session, now)
+            end
+        end
+        session.end_session = function(self, ui)
+            if ui.shaman_session and type(M.end_practice_session) == "function" then
+                M.end_practice_session(ui.shaman_session, now_())
+            end
+        end
+        session.pause = function(self, ui, shift)
+            local swing = ui.shaman_swing
+            if swing then
+                swing.swing_start = swing.swing_start + shift
+                swing.swing_ends_at = swing.swing_ends_at + shift
+            end
+        end
+        session.sync = function(self, ui)
+            local swing = ui.shaman_swing
+            local s = ui.shaman_session
+            local now = now_()
+            local d = self.mainhand
+            if swing and type(swing.swing_duration) == "number" and swing.swing_duration > 0
+                and type(swing.swing_start) == "number"
+                and type(swing.swing_ends_at) == "number" then
+                d.speed = swing.swing_duration
+                d.start = swing.swing_start
+                d.ends_at = swing.swing_ends_at
+                d.is_paused = not (s and s.active)
+            else
+                d.speed = ui.base_speed or d.speed or 3.5
+                d.start = now
+                d.ends_at = now + (d.speed or 3.5)
+                d.is_paused = true
+            end
+            d.is_full = false
+            if ui.combat_paused then d.is_paused = true end
+            if type(M.practice_sync) == "function" then M.practice_sync(self) end
+            self:show_bar("mainhand")
+        end
+        session.clear = function(self, ui)
+            local now = now_()
+            local d = self.mainhand
+            d.speed = ui.saved_hand_speed or d.speed
+            local speed = d.speed or 3.5
+            d.start = now - speed
+            d.ends_at = now
+            d.current_progress = 1
+            d.is_full = true
+            d.is_paused = false
+            self:on_bar_inactive("mainhand")
+            self:handle_bar_visibility("mainhand")
+        end
+        return panel
+    end
+
+    if cls == "ROGUE" then
+        panel.drill_key = "rogue_energy_pool"
+        panel.def_type = "drill"
+        panel.title = "|cFFFF8800Pool Practice|r"
+        panel.idle_status = "Drill idle - press Start Fight"
+        panel.hint_active = "Click a cast to drill. /st practice or the X button stops."
+        panel.hint_stopped = "Press Start Fight, or cast drills with the icon grid."
+        panel.drift_message = "Practice mode is not available (rogue drill key drifted)."
+        panel.progress = {
+            mode = "rogue_energy_pool",
+            scenario = "rogue_rotation",
+            drills = { "rogue_energy_pool", "rogue_ss_window" },
+        }
+        panel.scenario_key = function()
+            if type(M.practice_scenario_key) ~= "function" then return nil end
+            return M.practice_scenario_key()
+        end
+        panel.order = function()
+            if type(M.practice_cast_order) == "function" then
+                return M.practice_cast_order()
+            end
+            return M.PRACTICE_CAST_ORDER
+        end
+        panel.label = function(key) return M.practice_cast_label(key) end
+        panel.spell_id = function(key) return M.practice_cast_spell_id(key) end
+        panel.status = function(ui, now)
+            if type(M.practice_status) ~= "function" then return nil end
+            return M.practice_status({ tick = ui.rogue_tick, swing = ui.rogue_swing }, now)
+        end
+        panel.fight_elapsed = function(ui, now)
+            if type(M.practice_fight_elapsed) ~= "function" then return nil end
+            return M.practice_fight_elapsed(ui.rogue_session, now)
+        end
+        session.running = function(ui) return ui.rogue_session ~= nil end
+        session.active = function(ui)
+            return ui.rogue_session and ui.rogue_session.active
+        end
+        session.start = function(self, now, ui, ctx)
+            if type(M.new_practice_session) ~= "function"
+                or type(M.new_ss_session) ~= "function"
+                or type(M.practice_begin_session) ~= "function"
+                or type(M.tick_practice_session) ~= "function"
+                or type(M.practice_cast) ~= "function" then
+                return false
+            end
+            local duration = ctx and ctx.base_speed
+            if type(duration) ~= "number" or duration <= 0 then duration = 3.5 end
+            if type(self.mainhand) == "table" then
+                ui.saved_hand_speed = self.mainhand.speed
+            else
+                ui.saved_hand_speed = nil
+            end
+            local ok, s = pcall(M.new_practice_session, now, {})
+            if not ok or s == nil then return false end
+            local ok_ss, ss = pcall(M.new_ss_session, now, {})
+            if not ok_ss then ss = nil end
+            local ok_begin, begun = pcall(M.practice_begin_session, s, now)
+            if not ok_begin or begun == false then return false end
+            if ss then pcall(M.practice_begin_session, ss, now) end
+            ui.rogue_session = s
+            ui.rogue_ss_session = ss
+            ui.rogue_tick = { start = now, interval = 2 }
+            ui.rogue_swing = {
+                swing_duration = duration,
+                swing_start = now,
+                swing_ends_at = now + duration,
+            }
+            ui.rogue_out = {}
+            ui.base_speed = duration
+            return true
+        end
+        session.tick = function(self, now, elapsed, ui)
+            local s = ui.rogue_session
+            if s == nil then return end
+            local swing = ui.rogue_swing
+            if swing and s.active then
+                local duration = swing.swing_duration
+                if type(duration) == "number" and duration > 0 then
+                    local guard = 0
+                    while now >= swing.swing_ends_at and guard < 8 do
+                        swing.swing_start = swing.swing_ends_at
+                        swing.swing_ends_at = swing.swing_ends_at + duration
+                        guard = guard + 1
+                    end
+                end
+            end
+            ui.rogue_out = M.tick_practice_session(s, now, elapsed, ui.rogue_out)
+            if ui.rogue_ss_session then
+                M.tick_practice_session(ui.rogue_ss_session, now, elapsed, ui.rogue_out)
+            end
+            ui.update_fight_timer(self, now)
+            ui.sync_to_addon(self)
+        end
+        session.cast = function(self, key, ui)
+            if ui.rogue_session == nil then return nil end
+            local drill = {
+                energy = ui.rogue_session,
+                ss = ui.rogue_ss_session,
+                tick = ui.rogue_tick,
+                swing = ui.rogue_swing,
+            }
+            return M.practice_cast(drill, now_(), key)
+        end
+        session.stop = function(self, ui)
+            local now = now_()
+            if ui.rogue_session and type(M.end_practice_session) == "function" then
+                M.end_practice_session(ui.rogue_session, now)
+            end
+            ui.rogue_session = nil
+            if ui.rogue_ss_session and type(M.end_practice_session) == "function" then
+                M.end_practice_session(ui.rogue_ss_session, now)
+            end
+            ui.rogue_ss_session = nil
+            ui.rogue_tick = nil
+            ui.rogue_swing = nil
+        end
+        session.begin = function(self, now, ui)
+            if ui.rogue_session and type(M.practice_begin_session) == "function" then
+                M.practice_begin_session(ui.rogue_session, now)
+            end
+        end
+        session.end_session = function(self, ui)
+            local now = now_()
+            if ui.rogue_session and type(M.end_practice_session) == "function" then
+                M.end_practice_session(ui.rogue_session, now)
+            end
+        end
+        session.pause = function(self, ui, shift)
+            if type(M.practice_shift_pause) == "function" then
+                M.practice_shift_pause({
+                    tick = ui.rogue_tick,
+                    swing = ui.rogue_swing,
+                }, shift)
+            end
+        end
+        session.sync = function(self, ui)
+            local swing = ui.rogue_swing
+            local s = ui.rogue_session
+            local now = now_()
+            local d = self.mainhand
+            if swing and type(swing.swing_duration) == "number" and swing.swing_duration > 0
+                and type(swing.swing_start) == "number"
+                and type(swing.swing_ends_at) == "number" then
+                d.speed = swing.swing_duration
+                d.start = swing.swing_start
+                d.ends_at = swing.swing_ends_at
+                d.is_paused = not (s and s.active)
+            else
+                d.speed = ui.base_speed or d.speed or 3.5
+                d.start = now
+                d.ends_at = now + (d.speed or 3.5)
+                d.is_paused = true
+            end
+            d.is_full = false
+            if ui.combat_paused then d.is_paused = true end
+            if type(M.practice_sync) == "function" then M.practice_sync(self) end
+            self:show_bar("mainhand")
+        end
+        session.clear = function(self, ui)
+            local now = now_()
+            local d = self.mainhand
+            d.speed = ui.saved_hand_speed or d.speed
+            local speed = d.speed or 3.5
+            d.start = now - speed
+            d.ends_at = now
+            d.current_progress = 1
+            d.is_full = true
+            d.is_paused = false
+            self:on_bar_inactive("mainhand")
+            self:handle_bar_visibility("mainhand")
+        end
+        return panel
+    end
+
+    if cls == "DRUID" then
+        panel.drill_key = "druid_powershift"
+        panel.def_type = "shift"
+        panel.title = "|cFFFF8800Powershift Practice|r"
+        panel.idle_status = "Drill idle - press Start Fight"
+        panel.hint_active = "Click to powershift. /st practice or the X button stops."
+        panel.hint_stopped = "Press Start Fight, or cast to powershift."
+        panel.drift_message = "Practice mode is not available (druid drill key drifted)."
+        panel.progress = {
+            mode = "druid_powershift_rework",
+            scenario = "druid_rotation",
+            drills = { "druid_finisher_order" },
+        }
+        panel.scenario_key = function()
+            if type(M.practice_scenario_key) ~= "function" then return nil end
+            return M.practice_scenario_key()
+        end
+        panel.order = function() return { "shift" } end
+        panel.label = function(key)
+            if key ~= "shift" then return nil end
+            return "Powershift"
+        end
+        panel.spell_id = function() return nil end
+        panel.status = function(ui, now)
+            local summary
+            if type(M.practice_summary) == "function" then
+                local ok, sum = pcall(M.practice_summary, ui.druid_session)
+                if ok then summary = sum end
+            end
+            if summary and type(summary.attempts) == "number" and summary.attempts > 0 then
+                return string.format("Shifts: %d  Score: %d", summary.attempts,
+                    summary.score or 0)
+            end
+            return nil
+        end
+        panel.fight_elapsed = function(ui, now)
+            local s = ui.druid_session
+            if s and s.active and type(s.started_at) == "number" and type(now) == "number" then
+                local elapsed = now - s.started_at
+                if elapsed == elapsed and elapsed >= 0 then return elapsed end
+            end
+            return nil
+        end
+        session.running = function(ui) return ui.druid_session ~= nil end
+        session.active = function(ui)
+            return ui.druid_session and ui.druid_session.active
+        end
+        session.start = function(self, now, ui)
+            if type(M.new_practice_session) ~= "function"
+                or type(M.tick_practice_session) ~= "function"
+                or type(M.practice_shift) ~= "function" then
+                return false
+            end
+            local ok, s = pcall(M.new_practice_session, now, {})
+            if not ok or s == nil then return false end
+            ui.druid_session = s
+            ui.druid_out = {}
+            return true
+        end
+        session.tick = function(self, now, elapsed, ui)
+            local s = ui.druid_session
+            if s == nil then return end
+            ui.druid_out = M.tick_practice_session(s, now, elapsed, ui.druid_out)
+            ui.update_fight_timer(self, now)
+        end
+        session.cast = function(self, key, ui)
+            local s = ui.druid_session
+            if s == nil then return nil end
+            return M.practice_shift(s, now_())
+        end
+        session.stop = function(self, ui)
+            local s = ui.druid_session
+            if s == nil then return end
+            if type(M.end_practice_session) == "function" then
+                M.end_practice_session(s, now_())
+            end
+            ui.druid_session = nil
+            ui.druid_out = nil
+        end
+        session.begin = function(self, now, ui)
+            if type(M.new_practice_session) == "function" then
+                local ok, s = pcall(M.new_practice_session, now, {})
+                if ok and s then
+                    ui.druid_session = s
+                    ui.druid_out = {}
+                end
+            end
+        end
+        session.end_session = function(self, ui)
+            if ui.druid_session and type(M.end_practice_session) == "function" then
+                M.end_practice_session(ui.druid_session, now_())
+            end
+        end
+        session.pause = function(self, ui, shift)
+            local s = ui.druid_session
+            if s and type(s.started_at) == "number" then
+                s.started_at = s.started_at + shift
+            end
+        end
+        session.sync = function() end
+        session.clear = function(self) self:handle_bar_visibility("mainhand") end
+        return panel
+    end
+
+    return nil
 end
 
 --=========================================================================================
@@ -458,7 +1247,12 @@ local ENTRY_POINTS = {
     "update_proc_icons", "attach_overlay", "detach_overlay", "detach_all_overlays",
     "flash_overlay", "update_overlays", "update_fight_timer",
     "load_bests", "maybe_save_bests", "best_score_text", "update_score",
-    "save_timeline_position",
+    "save_timeline_position", "build_hunter_report", "render_hunter_report",
+    "toggle_hunter_report",
+    -- The progression hook (the gamification step 2).
+    "ensure_progress_profile", "persist_progress", "maybe_persist_progress",
+    "begin_progress_session", "record_progress_attempt", "record_graded_attempt",
+    "end_progress_session", "update_badge", "badge_is_enabled", "set_badge_enabled",
 }
 for i = 1, #ENTRY_POINTS do
     check(type(bui[ENTRY_POINTS[i]]) == "function", "practice_ui.lua exposes " .. ENTRY_POINTS[i])
@@ -489,9 +1283,9 @@ do
     F.timers[1].cb()
     eq(u.init_retry_armed, false, "firing the retry clears the flag")
     eq(u.panel ~= nil, true, "the retry creates the panel")
-    eq(F.created_frames, 69, "init creates exactly the documented 69 frames " ..
+    eq(F.created_frames, 70, "init creates exactly the documented 70 frames " ..
         "(35 panel/result/driver + 10 key buttons + 6 rotation display + " ..
-        "6 timeline shell + 4 proc icons + 8 panel buttons)")
+        "6 timeline shell + 4 proc icons + 8 panel buttons + 1 level badge)")
     eq(u.sim ~= nil, true, "the retry creates the simulation")
     local frames_after = F.created_frames
     u.init(T)
@@ -1175,6 +1969,8 @@ end
 
 --=========================================================================================
 -- 10) Pre-init safety: every hook is inert before the frames exist
+-- (start/toggle are excluded by design: start lazily builds the panel when it
+-- is missing out of combat - see section 10b - and toggle delegates to start)
 --=========================================================================================
 do
     local b = build()
@@ -1182,9 +1978,7 @@ do
     T.interfaces_are_initialised = false
     local HOOKS = {
         { "tick", { 0.1 } },
-        { "start", {} },
         { "stop", {} },
-        { "toggle", {} },
         { "toggle_fight", {} },
         { "start_fight", {} },
         { "stop_fight", {} },
@@ -1252,6 +2046,356 @@ do
     eq(u.result_frame, nil, "no pre-init hook created the result frame")
     eq(F.created_frames, 0, "no pre-init hook created any frame")
     eq(T.mainhand.speed, 2.6, "no pre-init hook touched the addon state")
+end
+
+--=========================================================================================
+-- 10b) Start blocks: every no-start path speaks once + counts in the diag
+-- (practice:start), never dies silent. Lazy init heals the combat-defer race.
+--=========================================================================================
+do
+    -- A toggle before init builds the panel out of combat and starts (the
+    -- reload-mid-fight retry window no longer fails closed on a transient).
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local ok, err = pcall(u.start, T)
+    check(ok, "pre-init start does not error (" .. tostring(err) .. ")")
+    eq(u.panel ~= nil, true, "lazy init builds the panel on a panel-less start")
+    eq(u.active, true, "lazy init starts the session")
+    eq(F.prints[#F.prints], "Practice mode started. Type /st practice to stop.",
+        "lazy init prints the session notice")
+    u.stop(T)
+
+    -- A toggle before init while in combat refuses with the combat reason and
+    -- builds nothing (the deferred retry still owns the build).
+    local c = build()
+    local cu, cT, cF = c.st.practice_ui, c.ST, c.sb
+    cT.in_combat = true
+    local okc, errc = pcall(cu.start, cT)
+    check(okc, "pre-init start in combat does not error (" .. tostring(errc) .. ")")
+    eq(cu.active, nil, "combat still refuses the session")
+    eq(cu.panel, nil, "combat creates no panel")
+    eq(cF.created_frames, 0, "combat creates no frame")
+    eq(cF.prints[#cF.prints], "Practice mode cannot be started in combat.",
+        "combat prints the combat reason")
+    eq(cT.bar_hook_errors.by_site["practice:start"], 1, "the combat refusal counts in the diag")
+
+    -- A missing engine keeps the legacy message (genuinely unavailable).
+    local n = build({ no_practice = true })
+    local nu, nT, nF = n.st.practice_ui, n.ST, n.sb
+    nu.start(nT)
+    eq(nF.prints[#nF.prints], "Practice mode is not available.",
+        "without the engine start keeps the legacy message")
+    eq(nT.bar_hook_errors.by_site["practice:start"], 1, "the no-engine refusal counts in the diag")
+
+    -- A drill whose shell rejects the session speaks per-drill (shaman shown;
+    -- hunter/rogue/druid ride the identical branch shape).
+    local s = build()
+    local su, sT, sF = s.st.practice_ui, s.ST, s.sb
+    sT.player_class = "SHAMAN"
+sT.active_class = "SHAMAN"
+    sT.SHAMAN = {
+        practice_scenario_key = function() return "shaman_weave" end,
+        PRACTICE_CAST_ORDER = { "weave_lb" },
+        practice_cast_label = function() return "Lightning Bolt" end,
+        practice_cast_spell_id = function() return 1001 end,
+        practice_cast_seconds = function() return 1.5 end,
+        practice_latency_seconds = function() return 0 end,
+        new_practice_session = function(now, opts) return nil end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_cast = function(session, swing, now, key) return nil end,
+        practice_status = function() return "Marker: --" end,
+        practice_fight_elapsed = function() return 0 end,
+        end_practice_session = function() return false end,
+        practice_sync = function() return 0 end,
+    }
+    sT.SHAMAN.practice_panel = fixture_panel(s, sT, "SHAMAN")
+    su.init(sT)
+    local oks, errs = pcall(su.start, sT)
+    check(oks, "rejected shaman drill does not error (" .. tostring(errs) .. ")")
+    check(su.active ~= true, "rejected shaman drill starts no session")
+    eq(sF.prints[#sF.prints], "Practice drill is not available (session rejected).",
+        "rejected shaman drill prints its own reason")
+    eq(sT.bar_hook_errors.by_site["practice:start"], 1, "the rejection counts in the diag")
+
+    -- A half-loaded shell (tick entry missing) fails the start closed instead
+    -- of running a session whose ticks never advance.
+    sT.SHAMAN.tick_practice_session = nil
+    su.start(sT)
+    check(su.active ~= true, "half-loaded shaman shell starts no session")
+    eq(sF.prints[#sF.prints], "Practice drill is not available (session rejected).",
+        "half-loaded shaman shell prints the rejection")
+    sT.SHAMAN.tick_practice_session = function(session, now, elapsed, out) return out or {} end
+
+    -- A throwing shell accessor fails the route closed (drift message, no throw).
+    sT.SHAMAN.practice_scenario_key = function() error("shell probe") end
+    local okt, errt = pcall(su.start, sT)
+    check(okt, "throwing shaman accessor does not error out of start (" .. tostring(errt) .. ")")
+    check(su.active ~= true, "throwing accessor starts no session")
+    eq(sF.prints[#sF.prints], "Practice mode is not available (shaman drill key drifted).",
+        "throwing accessor prints the drift reason")
+    sT.SHAMAN.practice_scenario_key = function() return "shaman_weave" end
+
+    -- A throwing begin fails the run closed with the session cleaned up.
+    sT.SHAMAN.new_practice_session = function(now, opts) error("begin probe") end
+    local okb, errb = pcall(su.start, sT)
+    check(okb, "throwing shaman begin does not error out of start (" .. tostring(errb) .. ")")
+    check(su.active ~= true, "throwing begin leaves no active session")
+    eq(su.shaman_session, nil, "throwing begin leaves no drill session")
+    eq(sF.prints[#sF.prints], "Practice drill is not available (session rejected).",
+        "throwing begin prints the rejection")
+end
+
+--=========================================================================================
+-- 10c) Cross-class sweep: a shaman session never calls through another class's
+-- module, and nil profile/bar reads degrade instead of throwing.
+--=========================================================================================
+do
+    -- Nil class profile: the paladin path still starts on shipped defaults.
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    u.init(T)
+    T.get_class_table = function() return nil end
+    local ok, err = pcall(u.start, T)
+    check(ok, "start with a nil class profile does not error (" .. tostring(err) .. ")")
+    eq(u.active, true, "nil profile still starts the session")
+    eq(u.base_speed, 2.6, "nil profile falls back to the equipped speed")
+    u.stop(T)
+    eq(u.active, false, "the session stops with a nil profile")
+
+    -- Missing readout entries read idle instead of throwing the tick.
+    local s = build()
+    local su, sT, sF = s.st.practice_ui, s.ST, s.sb
+    sT.player_class = "SHAMAN"
+sT.active_class = "SHAMAN"
+    sT.SHAMAN = {
+        practice_scenario_key = function() return "shaman_weave" end,
+        PRACTICE_CAST_ORDER = { "weave_lb" },
+        practice_cast_label = function() return "Lightning Bolt" end,
+        practice_cast_spell_id = function() return 1001 end,
+        practice_cast_seconds = function() return 1.5 end,
+        practice_latency_seconds = function() return 0 end,
+        new_practice_session = function(now, opts) return { active = true } end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_cast = function(session, swing, now, key) return nil end,
+        practice_fight_elapsed = function() return 0 end,
+        end_practice_session = function(session, now) session.active = false end,
+        practice_sync = function() return 0 end,
+    }
+    sT.SHAMAN.practice_panel = fixture_panel(s, sT, "SHAMAN")
+    su.init(sT)
+    su.start(sT)
+    eq(su.active, true, "shaman drill starts without the readout entries")
+    sT.SHAMAN.practice_status = nil
+    sT.SHAMAN.practice_fight_elapsed = nil
+    sF.clock = 1.0
+    local okt, errt = pcall(drive, s, 0.1)
+    check(okt, "missing readout entries do not error the tick (" .. tostring(errt) .. ")")
+    eq(su.panel.info_text.text, "Drill idle - press Start Fight", "missing status reads idle")
+    su.stop(sT)
+
+    -- Missing teardown entry still stops (fail-loud + cleaned up).
+    su.start(sT)
+    sT.SHAMAN.end_practice_session = nil
+    local prints_before = #sF.prints
+    local oko, erro = pcall(su.stop, sT)
+    check(oko, "missing teardown entry does not error stop (" .. tostring(erro) .. ")")
+    eq(su.active, false, "stop ends the session without the shell")
+    eq(su.shaman_session, nil, "stop clears the drill session without the shell")
+    -- The class's provider owns the teardown now (class-isolation 2026-10-21):
+    -- a missing class entry is the provider's business, never a shared notice.
+    local shared_notice = false
+    for i = prints_before + 1, #sF.prints do
+        if sF.prints[i] == "Practice drill session end skipped (shell missing)." then
+            shared_notice = true
+        end
+    end
+    eq(shared_notice, false, "the provider owns teardown (no shared-layer shell notice)")
+    eq(sF.prints[#sF.prints], "Practice mode stopped.", "stop still prints the session notice")
+
+    -- A missing class re-begin entry is the provider's business: the shared
+    -- begin seam exists, so the shared layer neither throws nor invents a notice.
+    sT.SHAMAN.end_practice_session = function(session, now) session.active = false end
+    su.start(sT)
+    sT.SHAMAN.practice_begin_session = nil
+    su.stop_fight(sT)
+    local okf, errf = pcall(su.start_fight, sT)
+    check(okf, "missing re-begin entry does not error start_fight (" .. tostring(errf) .. ")")
+    eq(sF.prints[#sF.prints], "Practice mode started. Type /st practice to stop.",
+        "missing re-begin entry is a silent no-op (the provider owns the seam)")
+    su.stop(sT)
+end
+
+--=========================================================================================
+-- 10d) Per-class fidelity: each drill mirrors the shell it grades (order and
+-- real timings proven at the panel), and the warrior routing stays the
+-- documented shared session.
+--=========================================================================================
+do
+    -- Paladin: the panel binds the engine order key-for-key, in sequence.
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    local pr = b.st.practice
+    u.init(T)
+    local seen = {}
+    for i = 1, #pr.ABILITY_ORDER do
+        local key = pr.ABILITY_ORDER[i]
+        check(u.panel.ability_icons[key] ~= nil, "paladin: the panel binds " .. key)
+        seen[#seen + 1] = key
+    end
+    eq(#seen, count_keys(u.panel.ability_icons), "paladin: the panel binds exactly the engine order")
+    u.start(T)
+    eq(u.base_speed, 2.6, "paladin: the session runs the equipped speed")
+    u.stop(T)
+
+    -- Hunter: the panel binds the shell shot order in sequence.
+    local h = build()
+    local hu, hT = h.st.practice_ui, h.ST
+    hT.player_class = "HUNTER"
+hT.active_class = "HUNTER"
+    local horder = { "steady", "multi", "aimed" }
+    hT.HUNTER = {
+        get_practice_scenario_key = function() return "hunter_forced_move" end,
+        PRACTICE_SHOT_ORDER = horder,
+        practice_shot_label = function(key) return key end,
+        practice_shot_spell_id = function(key) return 1001 end,
+        practice_new_session = function(now, opts) return { active = false } end,
+        practice_begin_session = function(session, now) session.active = true return true end,
+        practice_tick = function(session, now, elapsed, out) return out or {} end,
+        practice_cast = function(session, now, key) return "A" end,
+        practice_status = function() return "Windows clear - cast freely" end,
+        practice_fight_elapsed = function() return 0 end,
+        practice_end_session = function(session, now) session.active = false end,
+    }
+    hT.HUNTER.practice_panel = fixture_panel(h, hT, "HUNTER")
+    hu.init(hT)
+    for i = 1, #horder do
+        check(hu.panel.ability_icons[horder[i]] ~= nil,
+            "hunter: the panel binds " .. horder[i] .. " in shell order")
+    end
+    eq(count_keys(hu.panel.ability_icons), #horder, "hunter: the panel binds exactly the shell order")
+    hu.start(hT)
+    eq(hu.active, true, "hunter: the drill session starts")
+    hu.stop(hT)
+
+    -- Shaman: the panel binds the shell cast order and the drill swing mirrors
+    -- the equipped weapon speed (the real beat the drill grades).
+    local s = build()
+    local su, sT, sF = s.st.practice_ui, s.ST, s.sb
+    sT.player_class = "SHAMAN"
+sT.active_class = "SHAMAN"
+    sT.SHAMAN = {
+        practice_scenario_key = function() return "shaman_weave" end,
+        PRACTICE_CAST_ORDER = { "weave_lb", "weave_cl" },
+        practice_cast_label = function(key) return key end,
+        practice_cast_spell_id = function(key) return 1001 end,
+        practice_cast_seconds = function(key) return 1.5 end,
+        practice_latency_seconds = function() return 0 end,
+        new_practice_session = function(now, opts) return { active = true } end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_cast = function(session, swing, now, key) return nil end,
+        practice_begin_session = function(session, now, opts) session.active = true return true end,
+        practice_status = function() return "Marker: --" end,
+        practice_fight_elapsed = function() return 0 end,
+        end_practice_session = function(session, now) session.active = false end,
+        practice_sync = function() return 0 end,
+    }
+    sT.SHAMAN.practice_panel = fixture_panel(s, sT, "SHAMAN")
+    su.init(sT)
+    check(su.panel.ability_icons.weave_lb ~= nil, "shaman: the panel binds weave_lb")
+    check(su.panel.ability_icons.weave_cl ~= nil, "shaman: the panel binds weave_cl")
+    su.start(sT)
+    eq(su.shaman_swing.swing_duration, 2.6, "shaman: the drill swing is the equipped speed")
+    eq(su.base_speed, 2.6, "shaman: the session base speed is the equipped speed")
+    su.stop(sT)
+
+    -- An order key the class cannot define refuses the start instead of running
+    -- a session whose icon has no cast behind it.
+    sT.SHAMAN.PRACTICE_CAST_ORDER = { "weave_lb", "bogus_key" }
+    sT.SHAMAN.practice_cast_label = function(key)
+        if key == "weave_lb" or key == "weave_cl" then return key end
+        return nil
+    end
+    su.start(sT)
+    check(su.active ~= true, "unresolvable drill order starts no session")
+    eq(sF.prints[#sF.prints], "Practice drill is not available (session rejected).",
+        "unresolvable drill order prints the rejection")
+
+    -- A weave model that cannot resolve the marker refuses the start: in-fight
+    -- casts would never score, so no session runs.
+    sT.SHAMAN.PRACTICE_CAST_ORDER = { "weave_lb", "weave_cl" }
+    sT.SHAMAN.practice_cast_label = function(key) return key end
+    local saved_weave = s.st.weave
+    s.st.weave = nil
+    su.start(sT)
+    check(su.active ~= true, "unresolvable weave marker starts no session")
+    eq(sF.prints[#sF.prints], "Practice drill is not available (session rejected).",
+        "unresolvable weave marker prints the rejection")
+    s.st.weave = saved_weave
+
+    -- Rogue: the drill swing mirrors the equipped speed and the energy clock
+    -- runs the real 2 s cadence.
+    local r = build()
+    local ru, rT = r.st.practice_ui, r.ST
+    rT.player_class = "ROGUE"
+rT.active_class = "ROGUE"
+    rT.ROGUE = {
+        practice_scenario_key = function() return "rogue_energy_pool" end,
+        PRACTICE_CAST_ORDER = { "evisc" },
+        practice_cast_label = function(key) return "Pool Spend" end,
+        practice_cast_spell_id = function(key) return "Eviscerate" end,
+        practice_cast_order = function() return { "evisc" } end,
+        new_practice_session = function(now, opts) return { active = false } end,
+        new_ss_session = function(now, opts) return nil end,
+        practice_begin_session = function(session, now) session.active = true return true end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_cast = function(drill, now, key) return "S" end,
+        practice_status = function() return "Pool: --" end,
+        practice_fight_elapsed = function() return 0 end,
+        end_practice_session = function(session, now) session.active = false end,
+        practice_sync = function() return 0 end,
+    }
+    rT.ROGUE.practice_panel = fixture_panel(r, rT, "ROGUE")
+    ru.init(rT)
+    ru.start(rT)
+    eq(ru.rogue_swing.swing_duration, 2.6, "rogue: the drill swing is the equipped speed")
+    eq(ru.rogue_tick.interval, 2, "rogue: the energy clock runs the 2 s cadence")
+    ru.stop(rT)
+
+    -- Druid: the single-shift panel binds the drill def.
+    local d = build()
+    local du, dT = d.st.practice_ui, d.ST
+    dT.player_class = "DRUID"
+dT.active_class = "DRUID"
+    dT.DRUID = {
+        practice_scenario_key = function() return "druid_powershift" end,
+        new_practice_session = function(now, opts) return { active = true, started_at = now } end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_shift = function(session, now) return "S" end,
+        practice_summary = function(session) return { attempts = 0, score = 0 } end,
+        end_practice_session = function(session, now) session.active = false return true end,
+    }
+    dT.DRUID.practice_panel = fixture_panel(d, dT, "DRUID")
+    du.init(dT)
+    check(du.panel.ability_icons.shift ~= nil, "druid: the panel binds the single shift cast")
+    du.start(dT)
+    eq(du.active, true, "druid: the powershift session starts")
+    du.stop(dT)
+
+    -- Warrior (no drills of its own in this sandbox): the twist minigame is the
+    -- PALADIN's drill, never an inherited session, so a class with no practice
+    -- of its own is refused LOUDLY - never a silent paladin sim.
+    local w = build()
+    local wu, wT, wF = w.st.practice_ui, w.ST, w.sb
+    wT.player_class = "WARRIOR"
+wT.active_class = "WARRIOR"
+    wu.init(wT)
+    wu.start(wT)
+    eq(wu.active, nil, "warrior: a class with no practice of its own starts no session")
+    eq(wF.prints[#wF.prints], "No practice for this class.",
+        "warrior: the refusal is loud and names the reason")
+    eq(count_keys(wu.panel.ability_icons or {}), 0,
+        "warrior: the panel carries no twist sim icon grid")
+    wu.stop(wT)
 end
 
 --=========================================================================================
@@ -1804,7 +2948,7 @@ do
     u.init(T)
     eq(u.panel.score_text ~= nil, true, "the panel owns a score line")
     eq(u.panel.score_text.text, "", "the score line starts empty")
-    eq(F.created_frames, 69, "the score line adds no frames (a FontString, not a frame)")
+    eq(F.created_frames, 70, "the score line adds no frames (a FontString, not a frame)")
     u.start(T)                  -- t = 0, fight running, Seal of Blood up
 
     -- No attempts yet, no stored bests: the placeholder line.
@@ -1898,7 +3042,7 @@ do
 
     -- Before init: the descriptors exist, frames read nil, nothing is available.
     eq(type(u.design_targets), "table", "the design targets table exists at load")
-    eq(#u.design_targets, 3, "three practice elements are exposed")
+    eq(#u.design_targets, 5, "five practice elements are exposed")
     local by_key = {}
     for i = 1, #u.design_targets do
         by_key[u.design_targets[i].key] = u.design_targets[i]
@@ -1906,7 +3050,10 @@ do
     check(by_key.practice_panel ~= nil, "the panel target is registered")
     check(by_key.practice_rotation ~= nil, "the rotation display target is registered")
     check(by_key.practice_timeline ~= nil, "the timeline target is registered")
-    for _, key in ipairs({ "practice_panel", "practice_rotation", "practice_timeline" }) do
+    check(by_key.practice_hunter_report ~= nil, "the hunter report target is registered")
+    check(by_key.practice_warrior_report ~= nil, "the warrior report target is registered")
+    for _, key in ipairs({ "practice_panel", "practice_rotation", "practice_timeline",
+        "practice_hunter_report", "practice_warrior_report" }) do
         local d = by_key[key]
         eq(type(d.title), "string", key .. " has a title")
         eq(type(d.get_frame), "function", key .. " has get_frame")
@@ -1921,10 +3068,58 @@ do
     for _, key in ipairs({ "practice_panel", "practice_rotation", "practice_timeline" }) do
         check(by_key[key].get_frame() ~= nil, key .. ": the frame exists after init")
     end
+    -- Reports build on toggle, not on init (session-independent screens).
+    eq(by_key.practice_hunter_report.get_frame(), nil, "the shot report builds on toggle")
+    eq(by_key.practice_warrior_report.get_frame(), nil, "the Execute report builds on toggle")
     u.start(T)
     for _, key in ipairs({ "practice_panel", "practice_rotation", "practice_timeline" }) do
         eq(by_key[key].available(), true, key .. ": available during a session")
     end
+    eq(by_key.practice_hunter_report.available(), false, "the shot report hides until shown")
+    eq(by_key.practice_warrior_report.available(), false, "the Execute report hides until shown")
+
+    -- Shot report: toggle shows it, save/reset move it, toggle hides it again.
+    u.toggle_hunter_report(T)
+    eq(by_key.practice_hunter_report.available(), true, "the shot report is available while shown")
+    local hr = by_key.practice_hunter_report
+    hr.save(120, 60)
+    eq(u.hunter_report_frame.point[1], "CENTER", "the shot report save re-anchors")
+    eq(u.hunter_report_frame.point[4], 120, "the shot report save stores x")
+    eq(u.hunter_report_frame.point[5], 60, "the shot report save stores y")
+    hr.reset()
+    eq(u.hunter_report_frame.point[4], 0, "the shot report reset restores x")
+    eq(u.hunter_report_frame.point[5], 60, "the shot report reset restores y")
+
+    -- Execute report: same shape, same defaults.
+    u.toggle_warrior_execute_report(T)
+    eq(by_key.practice_warrior_report.available(), true, "the Execute report is available while shown")
+    local er = by_key.practice_warrior_report
+    er.save(-40, 90)
+    eq(u.warrior_execute_report_frame.point[1], "CENTER", "the Execute report save re-anchors")
+    eq(u.warrior_execute_report_frame.point[4], -40, "the Execute report save stores x")
+    eq(u.warrior_execute_report_frame.point[5], 90, "the Execute report save stores y")
+    er.reset()
+    eq(u.warrior_execute_report_frame.point[4], 0, "the Execute report reset restores x")
+    eq(u.warrior_execute_report_frame.point[5], 60, "the Execute report reset restores y")
+    u.toggle_hunter_report(T)
+    eq(by_key.practice_hunter_report.available(), false, "the shot report hides on toggle-off")
+    u.toggle_warrior_execute_report(T)
+    eq(by_key.practice_warrior_report.available(), false, "the Execute report hides on toggle-off")
+
+    -- Lockdown: a fresh toggle refuses with a message instead of creating frames.
+    local lb = build()
+    local lu, lT, lF = lb.st.practice_ui, lb.ST, lb.sb
+    lu.init(lT)
+    lF.lockdown = true
+    local frames_before = lF.created_frames
+    lu.toggle_hunter_report(lT)
+    eq(lF.created_frames, frames_before, "lockdown: no shot report frame is created")
+    check((lF.prints[#lF.prints] or ""):find("cannot be opened in combat", 1, true) ~= nil,
+        "lockdown: the shot report refusal names the combat gate")
+    lu.toggle_warrior_execute_report(lT)
+    eq(lF.created_frames, frames_before, "lockdown: no Execute frame is created either")
+    check((lF.prints[#lF.prints] or ""):find("cannot be opened in combat", 1, true) ~= nil,
+        "lockdown: the Execute refusal names the combat gate")
 
     -- Panel: save re-anchors through the panel's own path and persists its offsets.
     local panel = by_key.practice_panel
@@ -2147,6 +3342,4002 @@ do
     eq(u.bests.score, 100, "a reload re-reads the stored score")
     eq(u.bests.grade, "S", "a reload re-reads the stored grade")
     u.stop(T)
+end
+
+--=========================================================================================
+-- Hunter post-fight shot report (H2): standalone screen over the live hunter log
+--=========================================================================================
+do
+    -- Toggle before init builds the hidden frame, shows it, and renders the empty
+    -- hint: no session and no hunter log needed.
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    eq(u.hunter_report_frame, nil, "H2: no report frame at load")
+    local ok, err = pcall(u.toggle_hunter_report, T)
+    check(ok, "H2: toggle before init does not error (" .. tostring(err) .. ")")
+    check(u.hunter_report_frame ~= nil, "H2: toggle builds the report frame")
+    eq(u.hunter_report_visible, true, "H2: toggle shows the report")
+    eq(u.hunter_report_frame.shown, true, "H2: the frame is shown")
+    eq(u.hunter_report_frame.summary_text.text, "Shots: 0 (0 clipped, 0%)",
+        "H2: the empty log summarizes zero")
+    eq(u.hunter_report_frame.hint_text.text, "No shots logged yet.",
+        "H2: the empty log hints the empty line")
+    u.toggle_hunter_report(T)
+    eq(u.hunter_report_visible, false, "H2: toggle hides the report")
+    eq(u.hunter_report_frame.shown, false, "H2: the frame is hidden")
+    -- Re-toggle reuses the frame (no duplicate build).
+    local frames_before = b.sb.created_frames
+    u.toggle_hunter_report(T)
+    eq(b.sb.created_frames, frames_before, "H2: re-toggle builds no new frame")
+    eq(u.hunter_report_visible, true, "H2: re-toggle shows again")
+    u.toggle_hunter_report(T)
+end
+
+-- Render over a hunter log: counts, rate and the advisory hint. A second render with
+-- the hunter_window kernel injected carries the buffer clause.
+do
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    T.HUNTER = { hunter_shot_log = {
+        { clipped = false, latency = 0.1, at = 1 },
+        { clipped = true, latency = 0.2, at = 2 },
+        { clipped = false, latency = 0.3, at = 3 },
+    } }
+    u.toggle_hunter_report(T)
+    eq(u.hunter_report_frame.summary_text.text, "Shots: 3 (1 clipped, 33%)",
+        "H2: the report summarizes the log")
+    check(u.hunter_report_frame.hint_text.text:find("1 of 3 shots clipped %(33%%%)") ~= nil,
+        "H2: the hint reports the clip count")
+    check(u.hunter_report_frame.hint_text.text:find("buffer used") == nil,
+        "H2: no hunter_window means no buffer clause")
+    b.st.hunter_window = { cast_window = function(lat) return 0.5 + (lat or 0) end }
+    u.render_hunter_report(T)
+    check(u.hunter_report_frame.hint_text.text:find("buffer used") ~= nil,
+        "H2: the kernel injects the buffer clause")
+    u.toggle_hunter_report(T)
+end
+
+-- stop_fight re-renders a visible report so the post-fight numbers are final; a
+-- hidden report stays untouched. No practice engine: render is a safe no-op.
+do
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    u.init(T)
+    u.start(T)
+    u.toggle_hunter_report(T)
+    T.HUNTER = { hunter_shot_log = { { clipped = true, latency = 0.1, at = 1 } } }
+    u.stop_fight(T)
+    eq(u.hunter_report_frame.summary_text.text, "Shots: 1 (1 clipped, 100%)",
+        "H2: stop_fight refreshes the visible report")
+    u.toggle_hunter_report(T)
+    T.HUNTER.hunter_shot_log = {}
+    u.stop_fight(T)
+    eq(u.hunter_report_frame.summary_text.text, "Shots: 1 (1 clipped, 100%)",
+        "H2: stop_fight never touches a hidden report")
+    u.stop(T)
+
+    local nb = build({ no_practice = true })
+    local nu = nb.st.practice_ui
+    local ok, err = pcall(nu.render_hunter_report, nb.ST)
+    check(ok, "H2: render without the engine does not error (" .. tostring(err) .. ")")
+end
+
+--=========================================================================================
+-- N4: compute isolation - a throwing sim tick freezes scoring, never the session.
+-- First throw prints once, every throw counts in ST.bar_hook_errors (the /st diag
+-- counter), the site quarantines after 25. No attempt is recorded on a failed tick.
+--=========================================================================================
+do
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 100.0
+    u.start(T)
+    local pr = b.st.practice
+    local real_tick = pr.tick
+    pr.tick = function() error("N4 probe throw") end
+    local prints_before = #F.prints
+    F.clock = 100.1
+    local ok, err = pcall(drive, b, 0.1)
+    check(ok, "N4: a throwing sim tick does not break the driver (" .. tostring(err) .. ")")
+    eq(u.score.attempts, 0, "N4: a failed compute records no attempt (scoring frozen)")
+    eq(u.result_remaining, 0, "N4: a failed compute shows no result popup")
+    eq(T.bar_hook_errors.count, 1, "N4: the throw is counted")
+    eq(T.bar_hook_errors.by_site["practice:tick"], 1, "N4: the counter names the session tick")
+    eq(#F.prints, prints_before + 1, "N4: the first throw prints exactly one chat line")
+    check((F.prints[#F.prints] or ""):find("practice:tick", 1, true) ~= nil,
+        "N4: the notice names the failed tick")
+    for _ = 1, 3 do
+        F.clock = F.clock + 0.1
+        drive(b, 0.1)
+    end
+    eq(T.bar_hook_errors.by_site["practice:tick"], 4, "N4: every throw keeps counting")
+    eq(#F.prints, prints_before + 1, "N4: repeated throws do not spam chat")
+    for _ = 5, 25 do
+        F.clock = F.clock + 0.1
+        drive(b, 0.1)
+    end
+    eq(T.bar_hook_errors.by_site["practice:tick"], 25, "N4: the site reaches the quarantine threshold")
+    eq(T.bar_hook_errors.quarantined["practice:tick"], true, "N4: the site is quarantined for the session")
+    local counted = T.bar_hook_errors.count
+    local calls = 0
+    pr.tick = function() calls = calls + 1 end
+    F.clock = F.clock + 0.1
+    drive(b, 0.1)
+    eq(calls, 0, "N4: a quarantined tick is not computed again")
+    eq(T.bar_hook_errors.count, counted, "N4: a quarantined tick does not keep counting")
+    eq(u.score.attempts, 0, "N4: the quarantined tick still records nothing")
+    pr.tick = real_tick
+    u.stop(T)
+end
+
+--=========================================================================================
+-- 23) Drill UI sessions: rogue template first, then hunter / shaman / druid
+--=========================================================================================
+-- Each drill runs the identical shell lifecycle (start -> tick -> cast -> stop)
+-- through practice_ui: H1 pcall+quarantine on every drill tick/cast, H2 live
+-- GCD/aura restoration on stop, H4 key-drift refusal instead of a paladin sim.
+do
+    -- Rogue drill UI session (the template the other three drills mirror).
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "ROGUE"
+T.active_class = "ROGUE"
+    local tick_calls, cast_calls, sync_calls, end_calls = 0, 0, 0, 0
+    T.ROGUE = {
+        practice_scenario_key = function() return "rogue_energy_pool" end,
+        PRACTICE_CAST_ORDER = { "evisc" },
+        practice_cast_label = function(key)
+            if key == "evisc" then return "Pool Spend" end
+            return nil
+        end,
+        practice_cast_spell_id = function(key)
+            if key == "evisc" then return "Eviscerate" end
+            return nil
+        end,
+        new_practice_session = function(now, opts) return { active = false } end,
+        new_ss_session = function(now, opts) return nil end,
+        practice_begin_session = function(session, now) session.active = true return true end,
+        practice_cast_order = function() return { "evisc" } end,
+        tick_practice_session = function(session, now, elapsed, out)
+            tick_calls = tick_calls + 1
+            return out or {}
+        end,
+        practice_cast = function(drill, now, key)
+            cast_calls = cast_calls + 1
+            return "S"
+        end,
+        practice_status = function(state, now) return "Pool: --" end,
+        practice_fight_elapsed = function(session, now) return 0 end,
+        end_practice_session = function(session, now)
+            end_calls = end_calls + 1
+            session.active = false
+            return true
+        end,
+        practice_sync = function() sync_calls = sync_calls + 1; return 0 end,
+    }
+    T.ROGUE.practice_panel = fixture_panel(b, T, "ROGUE")
+    u.init(T)
+    eq(count_keys(u.panel.ability_icons), 1, "rogue: the panel shows the drill order")
+    check(u.panel.ability_icons.evisc ~= nil, "rogue: the pool spend icon exists")
+    eq(u.panel.title.text, "|cFFFF8800Pool Practice|r", "rogue: the drill title ships")
+    u.start(T)
+    eq(u.active, true, "rogue: start activates the session")
+    eq(u.rogue_session ~= nil, true, "rogue: the drill session exists")
+    eq(u.rogue_session.active, true, "rogue: the run begins immediately")
+    eq(F.prints[#F.prints], "Practice mode started. Type /st practice to stop.",
+        "rogue: start prints the session notice")
+    F.clock = 1.0
+    local ok, err = pcall(drive, b, 0.1)
+    check(ok, "rogue: the drill tick drives without error (" .. tostring(err) .. ")")
+    eq(tick_calls, 1, "rogue: the tick reaches the class shell")
+    check(sync_calls >= 1, "rogue: the swing mirror runs on the tick")
+    eq(u.score.attempts, 0, "rogue: the tick alone records no attempt")
+    u.cast_key(T, "evisc")
+    eq(cast_calls, 1, "rogue: the cast reaches the class shell")
+    eq(u.score.attempts, 1, "rogue: the graded cast scores")
+    u.stop(T)
+    eq(u.active, false, "rogue: stop ends the session")
+    eq(end_calls, 1, "rogue: the class run ends")
+    eq(T.gcd.duration, 1.5, "rogue H2: the live GCD is untouched by the drill")
+    eq(T.gcd.spell_length, 1.5, "rogue H2: the spell length is untouched too")
+    eq(F.gcd_changes, 0, "rogue H2: no GCD length change fires")
+    eq(F.aura_change, 0, "rogue H2: no aura restore runs for the drill")
+    eq(T.mainhand.is_full, true, "rogue H2: the bar goes to its idle full look")
+    eq(F.last_visibility_hand, "mainhand", "rogue H2: the bar-visibility rule runs")
+
+    -- H1: a throwing rogue tick is isolated (counted once per throw, session
+    -- alive, scoring frozen) and quarantines after 25. The tick side is pinned
+    -- first so its first-throw notice is exact; the cast side follows on the
+    -- same site (no second chat line).
+    u.start(T)
+    local real_tick = T.ROGUE.tick_practice_session
+    T.ROGUE.tick_practice_session = function() error("rogue tick probe") end
+    local prints_before = #F.prints
+    F.clock = 2.0
+    local ok2, err2 = pcall(drive, b, 0.1)
+    check(ok2, "rogue H1: a throwing tick does not break the driver (" .. tostring(err2) .. ")")
+    eq(T.bar_hook_errors.by_site["practice:tick"], 1, "rogue H1: the throw is counted")
+    eq(#F.prints, prints_before + 1, "rogue H1: the first throw prints once")
+    eq(u.active, true, "rogue H1: the session survives the throw")
+    eq(u.score.attempts, 0, "rogue H1: the failed tick records nothing")
+    local real_cast = T.ROGUE.practice_cast
+    T.ROGUE.practice_cast = function() error("rogue cast probe") end
+    local casts_before = cast_calls
+    u.cast_key(T, "evisc")
+    eq(T.bar_hook_errors.by_site["practice:tick"], 2, "rogue H1: the throwing cast is counted")
+    eq(cast_calls, casts_before, "rogue H1: the failed cast records nothing more")
+    eq(#F.prints, prints_before + 1, "rogue H1: repeated throws do not spam chat")
+    T.ROGUE.practice_cast = real_cast
+    for _ = 3, 25 do
+        F.clock = F.clock + 0.1
+        drive(b, 0.1)
+    end
+    eq(T.bar_hook_errors.by_site["practice:tick"], 25, "rogue H1: the site reaches the quarantine threshold")
+    eq(T.bar_hook_errors.quarantined["practice:tick"], true, "rogue H1: the site quarantines")
+    local frozen = tick_calls
+    F.clock = F.clock + 0.1
+    drive(b, 0.1)
+    eq(tick_calls, frozen, "rogue H1: a quarantined tick is not computed again")
+    T.ROGUE.tick_practice_session = real_tick
+    u.stop(T)
+
+    -- H4: a drifted rogue key fails closed (no paladin sim on the wrong class).
+    T.ROGUE.practice_scenario_key = function() return "renamed_key" end
+    local prints_drift = #F.prints
+    u.start(T)
+    check(u.active ~= true, "rogue H4: a drifted key starts no session")
+    eq(F.prints[#F.prints], "Practice mode is not available (rogue drill key drifted).", "rogue H4: the drift prints unavailability")
+    eq(#F.prints, prints_drift + 1, "rogue H4: the drift prints exactly once")
+    T.ROGUE.practice_scenario_key = function() return "rogue_energy_pool" end
+end
+
+do
+    -- Hunter drill UI session (mirrors the rogue template above).
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "HUNTER"
+T.active_class = "HUNTER"
+    local tick_calls, cast_calls, end_calls = 0, 0, 0
+    T.HUNTER = {
+        get_practice_scenario_key = function() return "hunter_forced_move" end,
+        PRACTICE_SHOT_ORDER = { "steady" },
+        practice_shot_label = function(key)
+            if key == "steady" then return "Steady Shot" end
+            return nil
+        end,
+        practice_shot_spell_id = function(key)
+            if key == "steady" then return 49001 end
+            return nil
+        end,
+        practice_new_session = function(now, opts) return { active = false } end,
+        practice_begin_session = function(session, now) session.active = true return true end,
+        practice_tick = function(session, now, elapsed, out)
+            tick_calls = tick_calls + 1
+            return out or {}
+        end,
+        practice_cast = function(session, now, key)
+            cast_calls = cast_calls + 1
+            return "A"
+        end,
+        practice_status = function(session, now) return "Windows clear - cast freely" end,
+        practice_fight_elapsed = function(session, now) return 0 end,
+        practice_shift_pause = function(session, shift) end,
+        practice_end_session = function(session, now)
+            end_calls = end_calls + 1
+            session.active = false
+        end,
+    }
+    T.HUNTER.practice_panel = fixture_panel(b, T, "HUNTER")
+    u.init(T)
+    eq(count_keys(u.panel.ability_icons), 1, "hunter: the panel shows the shot order")
+    eq(u.panel.title.text, "|cFFFF8800Forced-Move Practice|r", "hunter: the drill title ships")
+    u.start(T)
+    eq(u.active, true, "hunter: start activates the session")
+    F.clock = 1.0
+    local ok, err = pcall(drive, b, 0.1)
+    check(ok, "hunter: the drill tick drives without error (" .. tostring(err) .. ")")
+    eq(tick_calls, 1, "hunter: the tick reaches the class shell")
+    u.cast_key(T, "steady")
+    eq(cast_calls, 1, "hunter: the cast reaches the class shell")
+    eq(u.score.attempts, 1, "hunter: the graded shot scores")
+    -- H1: a throwing hunter cast is isolated (counted, session alive).
+    local real_cast = T.HUNTER.practice_cast
+    T.HUNTER.practice_cast = function() error("hunter cast probe") end
+    local counted = T.bar_hook_errors and T.bar_hook_errors.count or 0
+    u.cast_key(T, "steady")
+    eq(T.bar_hook_errors.count, counted + 1, "hunter H1: the throwing cast is counted")
+    eq(u.score.attempts, 1, "hunter H1: the failed cast records nothing more")
+    T.HUNTER.practice_cast = real_cast
+    u.stop(T)
+    eq(end_calls, 1, "hunter: the class run ends")
+    eq(T.gcd.duration, 1.5, "hunter H2: the live GCD is untouched by the drill")
+
+    -- H4: drift fails closed.
+    T.HUNTER.get_practice_scenario_key = function() return "renamed_key" end
+    u.start(T)
+    check(u.active ~= true, "hunter H4: a drifted key starts no session")
+    T.HUNTER.get_practice_scenario_key = function() return "hunter_forced_move" end
+end
+
+do
+    -- Shaman drill UI session (mirrors the rogue template; covers M2/G6).
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "SHAMAN"
+T.active_class = "SHAMAN"
+    local tick_calls, cast_calls, sync_calls = 0, 0, 0
+    T.SHAMAN = {
+        practice_scenario_key = function() return "shaman_weave" end,
+        PRACTICE_CAST_ORDER = { "weave_lb", "weave_cl" },
+        practice_cast_label = function(key)
+            if key == "weave_lb" then return "Lightning Bolt" end
+            if key == "weave_cl" then return "Chain Lightning" end
+            return nil
+        end,
+        practice_cast_spell_id = function(key) return 1001 end,
+        practice_cast_seconds = function(key) return 1.5 end,
+        practice_latency_seconds = function() return 0 end,
+        new_practice_session = function(now, opts) return { active = true } end,
+        tick_practice_session = function(session, now, elapsed, out)
+            tick_calls = tick_calls + 1
+            return out or {}
+        end,
+        practice_cast = function(session, swing, now, key)
+            cast_calls = cast_calls + 1
+            return "B"
+        end,
+        practice_begin_session = function(session, now, opts) session.active = true end,
+        practice_status = function(swing, now) return "Marker: --" end,
+        practice_fight_elapsed = function(session, now) return 0 end,
+        end_practice_session = function(session, now) session.active = false end,
+        practice_sync = function() sync_calls = sync_calls + 1; return 0 end,
+    }
+    T.SHAMAN.practice_panel = fixture_panel(b, T, "SHAMAN")
+    u.init(T)
+    eq(count_keys(u.panel.ability_icons), 2, "shaman: the panel shows the weave casts")
+    eq(u.panel.title.text, "|cFFFF8800Weave Practice|r", "shaman: the drill title ships")
+    u.start(T)
+    eq(u.active, true, "shaman: start activates the session")
+    -- M2/G6: the fight button follows the drill run (not the paladin sim).
+    eq(u.panel.fight_btn.label.text, "|cFFFF0000Stop Fight|r", "shaman M2: the live fight labels the button Stop Fight")
+    F.clock = 1.0
+    local ok, err = pcall(drive, b, 0.1)
+    check(ok, "shaman: the drill tick drives without error (" .. tostring(err) .. ")")
+    eq(tick_calls, 1, "shaman: the tick reaches the class shell")
+    check(sync_calls >= 1, "shaman: the swing mirror runs on the tick")
+    u.cast_key(T, "weave_lb")
+    eq(cast_calls, 1, "shaman: the cast reaches the class shell")
+    eq(u.score.attempts, 1, "shaman: the graded weave scores")
+    -- H1: a throwing shaman tick is isolated.
+    local real_tick = T.SHAMAN.tick_practice_session
+    T.SHAMAN.tick_practice_session = function() error("shaman tick probe") end
+    local counted = T.bar_hook_errors and T.bar_hook_errors.count or 0
+    F.clock = 2.0
+    local ok2, err2 = pcall(drive, b, 0.1)
+    check(ok2, "shaman H1: a throwing tick does not break the driver (" .. tostring(err2) .. ")")
+    eq(T.bar_hook_errors.count, counted + 1, "shaman H1: the throw is counted")
+    T.SHAMAN.tick_practice_session = real_tick
+    u.stop(T)
+    eq(T.gcd.duration, 1.5, "shaman H2: the live GCD is untouched by the drill")
+    eq(F.gcd_changes, 0, "shaman H2: no GCD length change fires")
+
+    -- H4: drift fails closed.
+    T.SHAMAN.practice_scenario_key = function() return "renamed_key" end
+    u.start(T)
+    check(u.active ~= true, "shaman H4: a drifted key starts no session")
+    T.SHAMAN.practice_scenario_key = function() return "shaman_weave" end
+end
+
+do
+    -- Druid drill UI session (mirrors the rogue template; covers H5/M3).
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "DRUID"
+T.active_class = "DRUID"
+    local tick_calls, shift_calls, summary_calls, end_calls, sync_calls = 0, 0, 0, 0, 0
+    T.DRUID = {
+        practice_scenario_key = function() return "druid_powershift" end,
+        new_practice_session = function(now, opts) return { active = true, started_at = now } end,
+        tick_practice_session = function(session, now, elapsed, out)
+            tick_calls = tick_calls + 1
+            return out or {}
+        end,
+        practice_shift = function(session, now)
+            shift_calls = shift_calls + 1
+            return "S"
+        end,
+        practice_summary = function(session)
+            summary_calls = summary_calls + 1
+            return { attempts = 0, score = 0 }
+        end,
+        end_practice_session = function(session, now)
+            end_calls = end_calls + 1
+            session.active = false
+            return true
+        end,
+        practice_sync = function() sync_calls = sync_calls + 1; return 0 end,
+    }
+    T.DRUID.practice_panel = fixture_panel(b, T, "DRUID")
+    u.init(T)
+    -- H5: the panel shows the single powershift cast (label from the drill def,
+    -- never the paladin seal engine).
+    eq(count_keys(u.panel.ability_icons), 1, "druid H5: the panel shows one drill cast")
+    check(u.panel.ability_icons.shift ~= nil, "druid H5: the shift cast exists")
+    eq(u.panel.title.text, "|cFFFF8800Powershift Practice|r", "druid: the drill title ships")
+    u.start(T)
+    eq(u.active, true, "druid: start activates the session")
+    eq(u.druid_session ~= nil, true, "druid: the drill session exists")
+    F.clock = 1.0
+    local ok, err = pcall(drive, b, 0.1)
+    check(ok, "druid: the drill tick drives without error (" .. tostring(err) .. ")")
+    eq(tick_calls, 1, "druid: the tick reaches the class shell")
+    check(summary_calls >= 1, "druid: the info line reads the class summary")
+    u.cast_key(T, "shift")
+    eq(shift_calls, 1, "druid: the cast reaches the class shell")
+    eq(u.score.attempts, 1, "druid: the graded shift scores")
+    -- M3: the keybind capture prompt names the drill cast, not the raw key.
+    u.start_key_capture(T, "shift")
+    check((u.key_capture_frame.prompt.text or ""):find("Powershift", 1, true) ~= nil,
+        "druid M3: the capture prompt labels the shift cast")
+    u.cancel_key_capture(T)
+    -- H1: a throwing druid tick is isolated.
+    local real_tick = T.DRUID.tick_practice_session
+    T.DRUID.tick_practice_session = function() error("druid tick probe") end
+    local counted = T.bar_hook_errors and T.bar_hook_errors.count or 0
+    F.clock = 2.0
+    local ok2, err2 = pcall(drive, b, 0.1)
+    check(ok2, "druid H1: a throwing tick does not break the driver (" .. tostring(err2) .. ")")
+    eq(T.bar_hook_errors.count, counted + 1, "druid H1: the throw is counted")
+    T.DRUID.tick_practice_session = real_tick
+    u.stop(T)
+    eq(end_calls, 1, "druid: the class run ends")
+    eq(T.gcd.duration, 1.5, "druid H2: the live GCD is untouched by the drill")
+    eq(F.gcd_changes, 0, "druid H2: no GCD length change fires")
+    eq(F.aura_change, 0, "druid H2: no aura restore runs for the drill")
+
+    -- H4: drift fails closed.
+    T.DRUID.practice_scenario_key = function() return "renamed_key" end
+    u.start(T)
+    check(u.active ~= true, "druid H4: a drifted key starts no session")
+    T.DRUID.practice_scenario_key = function() return "druid_powershift" end
+end
+
+do
+    -- H3: a paladin sim session with a hollow PALADIN module never throws and
+    -- never stamps seal fields (fail-closed bridge).
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.PALADIN = nil
+    u.init(T)
+    u.start(T)
+    eq(u.active, true, "H3: the sim starts without the class module")
+    F.clock = 1.0
+    local ok, err = pcall(drive, b, 0.1)
+    check(ok, "H3: the sim tick mirrors nothing without the module (" .. tostring(err) .. ")")
+    u.stop(T)
+    eq(u.active, false, "H3: the sim stops without the class module")
+end
+
+--=========================================================================================
+-- SoD live crash: FontString:SetText(): Font not set (practice_ui.lua
+-- build_result_frame). The SoD client throws when SetText runs before any SetFont;
+-- the stub above is SoD-faithful (SetText without a font errors, SetFont(nil)
+-- latches nothing). The fix sets a real font BEFORE the first SetText at creation,
+-- then update_result_font re-applies through the same helper (the single restyle
+-- path). The fallback chain is LSM font -> STANDARD_TEXT_FONT -> the classic
+-- client font, pcall-guarded so a missing LSM / throwing Fetch / missing STANDARD
+-- never throws out of the result build.
+--=========================================================================================
+do
+    -- Strict creation: the fixed build carries a font, so the SoD-faithful SetText
+    -- never throws. A font-stripped build_result_frame mutant (no font before
+    -- SetText) dies here on init.
+    local b = build()
+    local ok_init, err_init = pcall(b.st.practice_ui.init, b.ST)
+    check(ok_init, "SoD font: init never throws (" .. tostring(err_init) .. ")")
+    check(b.st.practice_ui.result_frame ~= nil, "SoD font: the result frame still builds")
+    local got = b.st.practice_ui.result_frame and b.st.practice_ui.result_frame.text
+        and b.st.practice_ui.result_frame.text:GetFont() or nil
+    check(got ~= nil, "SoD font: the result text carries a font after creation")
+    local ok_show, err_show = pcall(b.st.practice_ui.show_result, b.ST, "TWIST!")
+    check(ok_show, "SoD font: the first paint never throws (" .. tostring(err_show) .. ")")
+
+    -- LSM Fetch nil: the STANDARD fallback carries the row, never throws.
+    local n = build()
+    n.sb.lsm_font = nil
+    local ok_n, err_n = pcall(n.st.practice_ui.init, n.ST)
+    check(ok_n, "SoD font: a nil LSM font never throws (" .. tostring(err_n) .. ")")
+    local got_n = n.st.practice_ui.result_frame and n.st.practice_ui.result_frame.text
+        and n.st.practice_ui.result_frame.text:GetFont() or nil
+    eq(got_n, "Fonts\\FRIZQT__.TTF",
+        "SoD font: a nil LSM font falls back to STANDARD_TEXT_FONT")
+
+    -- STANDARD missing on the result path: the LSM font still carries the row,
+    -- never throws. (Scoped to update_result_font: a full init with a missing
+    -- STANDARD trips the panel's direct SetFont(STANDARD_TEXT_FONT) sites, which
+    -- are out of scope here -- STANDARD exists on every live client. A client
+    -- without the global: hide the leaked real _G value for the update, then
+    -- restore it, so the missing-STANDARD path of the result helper is genuinely
+    -- exercised.)
+    local m = build()
+    local ok_mi, err_mi = pcall(m.st.practice_ui.init, m.ST)
+    check(ok_mi, "SoD font: init with STANDARD visible never throws (" .. tostring(err_mi) .. ")")
+    local saved_std_m = rawget(_G, "STANDARD_TEXT_FONT")
+    _G["STANDARD_TEXT_FONT"] = nil
+    local ok_m, err_m = pcall(m.st.practice_ui.update_result_font, m.ST)
+    _G["STANDARD_TEXT_FONT"] = saved_std_m
+    check(ok_m, "SoD font: a missing STANDARD_TEXT_FONT never throws on the result path (" .. tostring(err_m) .. ")")
+    local got_m = m.st.practice_ui.result_frame and m.st.practice_ui.result_frame.text
+        and m.st.practice_ui.result_frame.text:GetFont() or nil
+    check(got_m ~= nil,
+        "SoD font: a missing STANDARD still leaves a font latched")
+    eq(got_m, "Fonts\\LSM.ttf",
+        "SoD font: a missing STANDARD keeps the LSM font")
+
+    -- Both missing on the result path: the literal still carries the row, never
+    -- throws.
+    local b2 = build()
+    local ok_b2i, err_b2i = pcall(b2.st.practice_ui.init, b2.ST)
+    check(ok_b2i, "SoD font: init with LSM valid never throws (" .. tostring(err_b2i) .. ")")
+    b2.sb.lsm_font = nil
+    local saved_std_b2 = rawget(_G, "STANDARD_TEXT_FONT")
+    _G["STANDARD_TEXT_FONT"] = nil
+    local ok_b2, err_b2 = pcall(b2.st.practice_ui.update_result_font, b2.ST)
+    _G["STANDARD_TEXT_FONT"] = saved_std_b2
+    check(ok_b2, "SoD font: nil LSM + nil STANDARD never throws on the result path (" .. tostring(err_b2) .. ")")
+    local got_b2 = b2.st.practice_ui.result_frame and b2.st.practice_ui.result_frame.text
+        and b2.st.practice_ui.result_frame.text:GetFont() or nil
+    eq(got_b2, "Fonts\\FRIZQT__.TTF",
+        "SoD font: nil LSM + nil STANDARD still latches the literal")
+
+    -- Throwing Fetch: pcall-guarded, falls back, never throws.
+    local t = build({ lsm_throw = true })
+    local ok_t, err_t = pcall(t.st.practice_ui.init, t.ST)
+    check(ok_t, "SoD font: a throwing LSM Fetch never throws (" .. tostring(err_t) .. ")")
+    local got_t = t.st.practice_ui.result_frame and t.st.practice_ui.result_frame.text
+        and t.st.practice_ui.result_frame.text:GetFont() or nil
+    check(got_t ~= nil,
+        "SoD font: a throwing Fetch still leaves a font latched")
+
+    -- Missing LSM lib: type-guarded, falls back, never throws.
+    local l = build({ no_lsm = true })
+    local ok_l, err_l = pcall(l.st.practice_ui.init, l.ST)
+    check(ok_l, "SoD font: a missing LSM lib never throws (" .. tostring(err_l) .. ")")
+    local got_l = l.st.practice_ui.result_frame and l.st.practice_ui.result_frame.text
+        and l.st.practice_ui.result_frame.text:GetFont() or nil
+    check(got_l ~= nil,
+        "SoD font: a missing LSM lib still leaves a font latched")
+
+    -- Single restyle path: creation fonts through apply_result_font before the first
+    -- SetText, and update_result_font re-applies through the same helper.
+    local src = read("practice_ui.lua")
+    local apos = src:find("apply_result_font(result.text", 1, true)
+    local tpos = src:find('result.text:SetText("")', 1, true)
+    check(apos ~= nil and tpos ~= nil and apos < tpos,
+        "SoD font: creation fonts through apply_result_font before the first SetText")
+    check(src:find("apply_result_font(result.text, self)", 1, true) ~= nil,
+        "SoD font: update_result_font re-applies through the same helper")
+    local setfont_uses = 0
+    local from = 1
+    while true do
+        local at = src:find("pcall(text.SetFont", from, true)
+        if not at then break end
+        setfont_uses = setfont_uses + 1
+        from = at + 1
+    end
+    eq(setfont_uses, 2, "SoD font: exactly two guarded SetFont sites, both inside apply_result_font")
+    check(src:find("result.text:SetFont(", 1, true) == nil,
+        "SoD font: no unguarded result SetFont call survives outside pcall")
+end
+
+--=========================================================================================
+-- SoD font (2): the practice UI's own FontStrings
+--
+-- The sweep left the panel's own captions with a bare SetFont(STANDARD_TEXT_FONT,
+-- ...). Every one of them now goes through the shared chain (utils.lua
+-- apply_font: the caller's path -> STANDARD_TEXT_FONT -> the classic client font,
+-- every step pcall-guarded, never throwing), so a client without the global still
+-- gets a font that exists.
+--
+-- The sandbox FontString above is SoD-faithful (SetText with no font throws
+-- "Font not set"), so a fontless site dies in this suite instead of the client's
+-- chat box. The source scan below checks EVERY site the practice UI creates: the
+-- font must be applied before the first SetText, matched on the variable
+-- expression so a same-named variable in another function cannot satisfy a site.
+--=========================================================================================
+do
+    -- The standard font is the chain's middle step: a distinctive value proves it
+    -- carried the captions (and not the classic-client fallback).
+    local b = build({ std_font = "Fonts\\STANDARD_TEST.TTF" })
+    local u = b.st.practice_ui
+    local ok_init, err_init = pcall(u.init, b.ST)
+    check(ok_init, "SoD font (2): the practice UI init never throws (" .. tostring(err_init) .. ")")
+
+    -- The panel's own lines: the chain-fonted hint and the font-object lines.
+    local hint = u.panel.hint_text
+    check(hint ~= nil, "SoD font (2): the panel owns a hint line")
+    if hint then
+        eq(hint:GetFont(), "Fonts\\STANDARD_TEST.TTF",
+            "SoD font (2): the hint line carries the standard font")
+    end
+    local font_object_lines = {
+        { name = "title", fs = u.panel.title },
+        { name = "info line", fs = u.panel.info_text },
+        { name = "rotation line", fs = u.panel.rotation_text },
+        { name = "fight timer", fs = u.panel.fight_timer_text },
+        { name = "score line", fs = u.panel.score_text },
+        { name = "resource line", fs = u.panel.resource_text },
+    }
+    for _, line in ipairs(font_object_lines) do
+        check(line.fs ~= nil, "SoD font (2): the panel owns a " .. line.name)
+        if line.fs then
+            check(line.fs:GetFont() ~= nil,
+                "SoD font (2): the " .. line.name .. " carries a font")
+        end
+    end
+
+    -- No STANDARD_TEXT_FONT on the client: the chain's classic-client fallback still
+    -- carries the line (the call never throws).
+    local f = build({ std_font = false })
+    local ok_f, err_f = pcall(f.st.practice_ui.init, f.ST)
+    check(ok_f, "SoD font (2): the init without STANDARD_TEXT_FONT never throws (" .. tostring(err_f) .. ")")
+    local fallback = f.st.practice_ui.panel.hint_text
+    eq(fallback and fallback:GetFont(), "Fonts\\FRIZQT__.TTF",
+        "SoD font (2): a missing STANDARD_TEXT_FONT falls back to the classic client font")
+
+    -- The shared chain's own contract (the panel rides on it): the caller's path,
+    -- then STANDARD_TEXT_FONT, then the classic client font. A FontString that
+    -- refuses a font degrades to the next candidate and never throws.
+    local chain = b.st.utils
+    check(type(chain) == "table" and type(chain.apply_font) == "function",
+        "SoD font (2): the shared font chain is loaded")
+    if type(chain) == "table" and type(chain.apply_font) == "function" then
+        local refused = { font = nil, calls = {} }
+        function refused:SetFont(path, size, flags)
+            self.calls[#self.calls + 1] = path
+            if path == "Fonts\\REFUSED.TTF" then
+                return false
+            end
+            self.font = { path, size, flags }
+            return true
+        end
+        function refused:GetFont() return self.font and self.font[1] or nil end
+        local ok_c, err_c = pcall(chain.apply_font, refused, "Fonts\\REFUSED.TTF", 12, "")
+        check(ok_c, "SoD font (2): a refused font never throws out of the chain (" .. tostring(err_c) .. ")")
+        eq(refused:GetFont(), "Fonts\\STANDARD_TEST.TTF",
+            "SoD font (2): a refused font degrades to STANDARD_TEXT_FONT")
+
+        local bare = { font = nil }
+        function bare:SetFont(path, size, flags) self.font = { path, size, flags }; return true end
+        function bare:GetFont() return self.font and self.font[1] or nil end
+        chain.apply_font(bare, nil, 12, "")
+        eq(bare:GetFont(), "Fonts\\STANDARD_TEST.TTF",
+            "SoD font (2): a caller without a path gets STANDARD_TEXT_FONT")
+    end
+
+    -- The chain without STANDARD_TEXT_FONT still lands the classic client font.
+    local g = build({ std_font = false })
+    -- The sandbox must be faithful: a build without a standard font really has
+    -- none, and the stub does not leak into the process global (a leaked value
+    -- would make every "missing STANDARD_TEXT_FONT" check vacuous).
+    eq(rawget(g.env, "STANDARD_TEXT_FONT"), nil,
+        "SoD font (2): a build without a standard font really has none")
+    eq(rawget(_G, "STANDARD_TEXT_FONT"), nil,
+        "SoD font (2): the sandbox leaves no STANDARD_TEXT_FONT behind")
+    local bare2 = { font = nil }
+    function bare2:SetFont(path, size, flags) self.font = { path, size, flags }; return true end
+    function bare2:GetFont() return self.font and self.font[1] or nil end
+    local ok_g, err_g = pcall(g.st.utils.apply_font, bare2, nil, 12, "")
+    check(ok_g, "SoD font (2): the chain without STANDARD_TEXT_FONT never throws (" .. tostring(err_g) .. ")")
+    eq(bare2:GetFont(), "Fonts\\FRIZQT__.TTF",
+        "SoD font (2): the chain without STANDARD_TEXT_FONT lands the classic client font")
+
+    -- Source: every FontString the practice UI creates is fonted before its first
+    -- SetText. The scan is per site and expression-matched.
+    local src = read("practice_ui.lua")
+    local lines = {}
+    for line in (src .. "\n"):gmatch("([^\n]*)\n") do lines[#lines + 1] = line end
+
+    -- find_call: the first line in [from, to] where <expr><suffix> appears as a
+    -- whole token (a longer path may not end with the same name).
+    local function find_call(from, to, expr, suffix)
+        for j = from, to do
+            local s = 1
+            while true do
+                local at = lines[j]:find(expr, s, true)
+                if not at then break end
+                local before = at > 1 and lines[j]:sub(at - 1, at - 1) or " "
+                if not before:match("[%w_.]") then
+                    if lines[j]:sub(at + #expr, at + #expr + #suffix - 1) == suffix then
+                        return j
+                    end
+                end
+                s = at + 1
+            end
+        end
+        return nil
+    end
+
+    -- find_helper: the first line in [from, to] where the shared chain takes the
+    -- expression as its FontString argument.
+    local function find_helper(from, to, expr)
+        local names = { "apply_font(", "apply_result_font(" }
+        for j = from, to do
+            for _, name in ipairs(names) do
+                local s = 1
+                while true do
+                    local at = lines[j]:find(name, s, true)
+                    if not at then break end
+                    local arg = at + #name
+                    if lines[j]:sub(arg, arg + #expr - 1) == expr then
+                        local after = lines[j]:sub(arg + #expr, arg + #expr)
+                        if after:match("[%s,)]") then
+                            return j
+                        end
+                    end
+                    s = at + 1
+                end
+            end
+        end
+        return nil
+    end
+
+    local sites, fontless, late = 0, 0, 0
+    for i = 1, #lines do
+        local expr = lines[i]:match("local%s+([%w_]+)%s*=%s*[%w_%.]+:CreateFontString%(")
+        if not expr then
+            expr = lines[i]:match("([%w_%.]+)%s*=%s*[%w_%.]+:CreateFontString%(")
+        end
+        if expr then
+            sites = sites + 1
+            local last = math.min(i + 80, #lines)
+            local font_at = find_call(i + 1, last, expr, ":SetFont(")
+            local font_obj_at = find_call(i + 1, last, expr, ":SetFontObject(")
+            local helper_at = find_helper(i + 1, last, expr)
+            if font_obj_at and (not font_at or font_obj_at < font_at) then font_at = font_obj_at end
+            if helper_at and (not font_at or helper_at < font_at) then font_at = helper_at end
+            local text_at = find_call(i + 1, last, expr, ":SetText(")
+            if not font_at then
+                fontless = fontless + 1
+                check(false, "SoD font (2): " .. expr .. " (line " .. i .. ") is never fonted")
+            elseif text_at and font_at > text_at then
+                late = late + 1
+                check(false, "SoD font (2): " .. expr .. " (line " .. i .. ") is fonted after its first SetText")
+            end
+        end
+    end
+    check(sites >= 30, "SoD font (2): the scan found the practice UI's FontString sites (" .. sites .. ")")
+    eq(fontless, 0, "SoD font (2): every FontString site carries a font")
+    eq(late, 0, "SoD font (2): every FontString is fonted before its first SetText")
+
+    -- No direct SetFont survives: every font goes through the shared chain (or a
+    -- font object, which carries a font of its own).
+    check(src:find(":SetFont(", 1, true) == nil,
+        "SoD font (2): no direct SetFont call survives in practice_ui.lua")
+end
+
+--=========================================================================================
+-- 12e) Session resource pools: display, rage generation on the drill swing, mana
+-- spend/refuse on drill casts, stop lifecycle (sim-resources lane)
+--=========================================================================================
+do
+    -- A fresh session owns no pools and shows no resource line.
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    local pr = b.st.practice
+    u.init(T)
+    eq(u.rage_pool, nil, "pools: no rage pool after init")
+    eq(u.mana_pool, nil, "pools: no mana pool after init")
+    eq(u.focus_pool, nil, "pools: no focus pool after init")
+    eq(u.panel.resource_text.text, "", "pools: the resource line starts empty")
+    eq(u.panel.resource_text.hidden, true, "pools: the resource line starts hidden")
+    u.start(T)
+    eq(u.panel.resource_text.text, "", "pools: no pool means no resource readout")
+    eq(u.panel.resource_text.hidden, true, "pools: no pool keeps the line hidden")
+    u.stop(T)
+
+    -- Setters arm pools and paint the line; rage wins the display order.
+    local b2 = build()
+    local u2, T2 = b2.st.practice_ui, b2.ST
+    local pr2 = b2.st.practice
+    u2.init(T2)
+    u2.start(T2)
+    local rp = u2.set_session_rage_pool(T2, {})
+    eq(type(rp), "table", "pools: the rage setter returns the pool")
+    eq(rp.rage, 0, "pools: the rage pool starts empty")
+    eq(rp.max, 100, "pools: the rage pool caps at 100")
+    eq(u2.panel.resource_text.text, "Rage: 0/100", "pools: the rage line reads 0/100")
+    eq(u2.panel.resource_text.hidden, false, "pools: the rage line shows")
+    u2.set_session_mana_pool(T2, 5000)
+    eq(u2.panel.resource_text.text, "Rage: 0/100", "pools: rage outranks mana")
+    pr2.mana_gain(u2.mana_pool, 2500)
+    u2.update_resource_display(T2)
+    eq(u2.panel.resource_text.text, "Rage: 0/100", "pools: mana gain does not steal the line")
+    u2.set_session_focus_pool(T2, 100)
+    eq(u2.panel.resource_text.text, "Rage: 0/100", "pools: rage outranks focus too")
+    u2.clear_session_pools(T2)
+    eq(u2.rage_pool, nil, "pools: clear drops the rage pool")
+    eq(u2.mana_pool, nil, "pools: clear drops the mana pool")
+    eq(u2.focus_pool, nil, "pools: clear drops the focus pool")
+    eq(u2.panel.resource_text.text, "", "pools: clear empties the line")
+    eq(u2.panel.resource_text.hidden, true, "pools: clear hides the line")
+    u2.set_session_mana_pool(T2, 5000)
+    pr2.mana_gain(u2.mana_pool, 2500)
+    u2.update_resource_display(T2)
+    eq(u2.panel.resource_text.text, "Mana: 2500/5000", "pools: the mana line shows amount/max")
+    u2.clear_session_pools(T2)
+    u2.set_session_focus_pool(T2, 100)
+    pr2.focus_gain(u2.focus_pool, 60)
+    u2.update_resource_display(T2)
+    eq(u2.panel.resource_text.text, "Focus: 60/100", "pools: the focus line shows amount/max")
+    -- stop() ends the pools with the session.
+    u2.stop(T2)
+    eq(u2.rage_pool, nil, "pools: stop drops the rage pool")
+    eq(u2.mana_pool, nil, "pools: stop drops the mana pool")
+    eq(u2.focus_pool, nil, "pools: stop drops the focus pool")
+    eq(u2.panel.resource_text.text, "", "pools: stop empties the line")
+
+    -- A twist session (the paladin's own drill - the class that owns it): the
+    -- landed drill swing banks rage through the sim formula (white damage +
+    -- level are scripted drill inputs here; the class-shell lane owns the live
+    -- feed). The pool mechanics are session-level, so the session that runs the
+    -- fight is the twist one.
+    local w = build()
+    local wu, wT, wF = w.st.practice_ui, w.ST, w.sb
+    wu.init(wT)
+    wu.start(wT)
+    eq(wu.active, true, "pools: the twist session starts")
+    wu.set_session_rage_pool(wT, { white_damage = 1153, level = 60 })
+    eq(wu.rage_pool.rage, 0, "pools: no swing yet, no rage")
+    wF.clock = 2.0
+    drive(w)
+    local banked = wu.rage_pool.rage
+    check(type(banked) == "number" and banked > 37 and banked < 38,
+        "pools: the landed swing banks ~37.5 rage (1153 * 7.5 / ~230.6)")
+    eq(wu.panel.resource_text.text, "Rage: 37/100", "pools: the banked rage paints floored")
+    wu.stop(wT)
+
+    -- No drill damage means no generation (unknown-hides): the swing lands
+    -- and the pool stays empty.
+    local w2 = build()
+    local wu2, wT2, wF2 = w2.st.practice_ui, w2.ST, w2.sb
+    wu2.init(wT2)
+    wu2.start(wT2)
+    wu2.set_session_rage_pool(wT2, {})
+    wF2.clock = 2.0
+    drive(w2)
+    eq(wu2.rage_pool.rage, 0, "pools: no drill damage banks nothing")
+    eq(wu2.panel.resource_text.text, "Rage: 0/100", "pools: the line still reads the empty pool")
+    wu2.stop(wT2)
+
+    -- A huge drill swing caps at the pool max.
+    local w3 = build()
+    local wu3, wT3, wF3 = w3.st.practice_ui, w3.ST, w3.sb
+    wu3.init(wT3)
+    wu3.start(wT3)
+    wu3.set_session_rage_pool(wT3, { white_damage = 4612, level = 60 })
+    wF3.clock = 2.0
+    drive(w3)
+    eq(wu3.rage_pool.rage, 100, "pools: the banked rage caps at 100")
+    eq(wu3.panel.resource_text.text, "Rage: 100/100", "pools: the capped pool paints full")
+    wu3.stop(wT3)
+
+    -- Mana spend/refuse on drill casts (paladin shared session, scripted costs).
+    local m = build()
+    local mu, mT, mF = m.st.practice_ui, m.ST, m.sb
+    mu.init(mT)
+    mu.start(mT)
+    mu.set_session_mana_pool(mT, 100, { soc = 40, sob = 40 })
+    pr.mana_gain(mu.mana_pool, 90)
+    mu.update_resource_display(mT)
+    eq(mu.panel.resource_text.text, "Mana: 90/100", "pools: the funded mana line reads 90")
+    mF.clock = 0
+    mu.cast_key(mT, "soc")
+    eq(mu.mana_pool.mana, 50, "pools: a fired seal spends its cost")
+    eq(mu.panel.resource_text.text, "Mana: 50/100", "pools: the spent line repaints")
+    mF.clock = 1.2
+    mu.cast_key(mT, "sob")
+    eq(mu.mana_pool.mana, 10, "pools: the second seal spends again")
+    eq(mu.sim.n_active_seals, 1, "pools: recasting the older seal collapses (archive quirk)")
+    -- Ten mana cannot cover a 40 seal: the cast refuses, the sim is untouched.
+    mF.clock = 2.4
+    mu.cast_key(mT, "soc")
+    eq(mu.mana_pool.mana, 10, "pools: a refused cast spends nothing")
+    eq(mu.sim.n_active_seals, 1, "pools: a refused cast leaves the seals alone")
+    eq(mu.result_frame.text.text, "OOM", "pools: a refused cast flashes OOM")
+    -- A key with no scripted cost fires free (unknown costs never spend).
+    mF.clock = 3.6
+    mu.cast_key(mT, "cs")
+    eq(mu.mana_pool.mana, 10, "pools: an uncosted cast spends nothing")
+    near(mu.sim.cs_cooldown_expires, 9.6, "pools: the uncosted cast still fires")
+    mu.stop(mT)
+end
+
+--=========================================================================================
+-- 21) The progression hook (the gamification spec's step 2): the live session feeds
+-- the pure progress/stats modules, the achievements are evaluated, the writes are
+-- throttled and the panel's level badge is opt-in.
+--=========================================================================================
+
+-- Does any of the collected chat lines contain the given text?
+local function printed(sb, text)
+    for i = 1, #sb.prints do
+        if sb.prints[i]:find(text, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+-- 21a) Without a saved profile the hook is inert: the session still runs and
+-- nothing throws.
+do
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    u.init(T)
+    u.start(T)
+    eq(u.progress_profile, nil, "no profile: the hook keeps no state")
+    eq(u.progress_session, nil, "no profile: no pure session is opened")
+    local ok = pcall(function() u.stop(T) end)
+    check(ok, "no profile: the session stops cleanly")
+end
+
+-- 21b) The saved blob: the profile key is REPLACED with the migrated blob, and the
+-- migrated blob carries both halves.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    u.start(T)
+    local blob = F.profile_store.practice
+    check(type(blob) == "table", "the profile carries a practice blob")
+    eq(blob.schema_version, 1, "the migrated blob is at schema version 1")
+    check(type(blob.progress) == "table", "the migrated blob carries the progress half")
+    check(type(blob.stats) == "table", "the migrated blob carries the stats half")
+    check(type(blob.progress.classes) == "table", "the progress half carries the class scopes")
+    check(type(blob.stats.classes) == "table", "the stats half carries the class scopes")
+    u.stop(T)
+end
+
+-- 21c) A corrupt blob is repaired at load, never thrown, and never wipes a
+-- sibling profile key.
+do
+    local corrupt = fresh_practice_blob()
+    corrupt.progress = "junk"
+    corrupt.stats = 42
+    local b = build({ with_db = true, practice_blob = corrupt })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    F.profile_store.other_key = "keep me"
+    u.init(T)
+    u.start(T)
+    local blob = F.profile_store.practice
+    check(type(blob) == "table", "a corrupt blob is repaired into a table")
+    check(type(blob.progress) == "table", "the corrupt progress half is repaired")
+    check(type(blob.stats) == "table", "the corrupt stats half is repaired")
+    eq(F.profile_store.other_key, "keep me", "a sibling profile key is untouched")
+    u.stop(T)
+end
+
+-- 21d) A blob a NEWER build wrote is never overwritten.
+do
+    local future = { schema_version = 99, progress = { classes = {} } }
+    local b = build({ with_db = true, practice_blob = future })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    u.start(T)
+    eq(F.profile_store.practice, future, "a newer blob is left exactly as it was")
+    eq(F.practice_writes, 0, "a newer blob is never written over")
+    u.stop(T)
+    eq(F.practice_writes, 0, "a newer blob is still never written over at session end")
+end
+
+-- 21e) A live session feeds the progression: XP, the streak, the mastery window and
+-- the lifetime counters. The write count never grows per attempt.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    local writes_after_start = F.practice_writes
+    check(writes_after_start >= 1, "the load-time migration replaces the profile key")
+
+    -- One graded twist (an A) through the real engine path.
+    twist_attempt(b)
+    eq(u.score.attempts, 1, "the engine recorded the attempt")
+    local blob = F.profile_store.practice
+    local scope = blob.progress.classes.PALADIN
+    check(type(scope) == "table", "the class scope exists after the first attempt")
+    eq(scope.xp, 80, "an A earns its grade points as XP")
+    eq(scope.best_streak, 1, "the streak counts the hit")
+    eq(blob.stats.classes.PALADIN.attempts, 1, "the stats side counts the attempt")
+    eq(blob.stats.classes.PALADIN.hits, 1, "the stats side counts the hit")
+    eq(blob.stats.classes.PALADIN.drills.paladin_twist.attempts, 1,
+        "the per-drill table counts the attempt")
+    eq(F.practice_writes, writes_after_start, "an attempt that does not level up writes nothing")
+
+    -- A miss breaks the streak and earns nothing.
+    F.clock = 3.1
+    u.cast_key(T, "sob")
+    F.clock = 4.02
+    drive(b, 0.01)
+    eq(u.score.attempts, 2, "the second attempt is recorded")
+    eq(scope.xp, 80, "a miss earns nothing")
+    eq(scope.best_streak, 1, "the lifetime best streak survives the miss")
+    eq(F.practice_writes, writes_after_start, "a miss writes nothing")
+
+    -- The session end: the run, the time active, the history entry and the streak.
+    local blob_before_stop = F.profile_store.practice
+    F.clock = 12.5
+    u.stop(T)
+    blob = F.profile_store.practice
+    check(blob ~= blob_before_stop,
+        "the session end replaces the profile key instead of editing it in place")
+    local stats = blob.stats.classes.PALADIN
+    eq(stats.runs, 1, "the session is one completed run")
+    eq(stats.time_active_seconds, 12, "the time active is the live session window")
+    eq(#stats.history, 1, "the session lands in the bounded history")
+    -- The history entry is read defensively: a session that never wrote one must
+    -- report a failed check, not abort the suite.
+    local entry = stats.history and stats.history[1]
+    eq(type(entry) == "table" and entry.attempts or nil, 2, "the history entry carries the attempt count")
+    eq(type(entry) == "table" and entry.score or nil, 40, "the history entry carries the session score")
+    eq(blob.progress.classes.PALADIN.daily_streak, 1, "the daily streak counts the day")
+    eq(blob.progress.global.daily_streak, 1, "the account daily streak counts the day")
+    check(F.practice_writes > writes_after_start, "the session end writes the state")
+end
+
+-- 21f) The time active counts the live session only: the idle time between two
+-- sessions never lands in the total.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    u.record_graded_attempt(T, "A")
+    F.clock = 5
+    u.stop(T)
+    local blob = F.profile_store.practice
+    eq(blob.stats.classes.PALADIN.time_active_seconds, 5, "the first session counts five seconds")
+    -- The panel idles for an hour; a second session counts only its own window.
+    F.clock = 3600
+    u.start(T)
+    u.record_graded_attempt(T, "A")
+    F.clock = 3610
+    u.stop(T)
+    blob = F.profile_store.practice
+    eq(blob.stats.classes.PALADIN.time_active_seconds, 15,
+        "the idle hour between the sessions is not counted")
+    eq(blob.stats.classes.PALADIN.runs, 2, "both sessions are runs")
+end
+
+-- 21g) The daily streak: a missed day freezes it, it never resets.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    u.record_graded_attempt(T, "S")
+    F.clock = 1
+    u.stop(T)
+    eq(F.profile_store.practice.progress.classes.PALADIN.daily_streak, 1, "day one")
+
+    -- A session two days later: the streak freezes (no reset, no increment).
+    F.day = "2026-10-21"
+    F.clock = 10
+    u.start(T)
+    u.record_graded_attempt(T, "S")
+    F.clock = 11
+    u.stop(T)
+    eq(F.profile_store.practice.progress.classes.PALADIN.daily_streak, 1,
+        "a missed day freezes the streak")
+
+    -- The next consecutive day counts again.
+    F.day = "2026-10-22"
+    F.clock = 20
+    u.start(T)
+    u.record_graded_attempt(T, "S")
+    F.clock = 21
+    u.stop(T)
+    eq(F.profile_store.practice.progress.classes.PALADIN.daily_streak, 2,
+        "the next consecutive day counts again")
+end
+
+-- 21h) The achievements are evaluated at the session end: first_s fires on the first
+-- S, and the unlock flag is persisted.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    u.record_graded_attempt(T, "S")
+    F.clock = 1
+    u.stop(T)
+    local scope = F.profile_store.practice.progress.classes.PALADIN
+    eq(scope.unlocks.first_s, true, "the first S unlocks first_s")
+    eq(scope.unlocks.hundred_attempts, nil, "a single attempt is not a hundred attempts")
+    -- The unlock is persisted in the saved blob, not only in memory.
+    check(scope.unlocks ~= nil, "the unlock flags are part of the saved blob")
+end
+
+-- 21i) The daily per-drill XP cap stops the farming: three A attempts fill the cap
+-- (3x the drill's median attempt XP) and the rest earn nothing.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    for _ = 1, 6 do
+        u.record_graded_attempt(T, "A")
+    end
+    local scope = F.profile_store.practice.progress.classes.PALADIN
+    eq(scope.xp, 240, "the drill's daily XP is capped at 3x its median attempt XP")
+    -- A new calendar day resets the cap.
+    F.day = "2026-10-20"
+    u.record_graded_attempt(T, "A")
+    eq(scope.xp, 320, "a new day resets the daily cap")
+    u.stop(T)
+end
+
+-- 21j) The writes are throttled: the live session saves at most once every five
+-- minutes, and a level-up saves immediately.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    local writes = F.practice_writes
+    -- Below the interval: no write.
+    F.clock = 299
+    u.maybe_persist_progress(T, 299)
+    eq(F.practice_writes, writes, "a save before the interval writes nothing")
+    -- At the interval: one write.
+    F.clock = 300
+    u.maybe_persist_progress(T, 300)
+    eq(F.practice_writes, writes + 1, "the throttled save fires at the interval")
+    -- A level-up saves right away.
+    u.record_graded_attempt(T, "A")
+    u.record_graded_attempt(T, "A")
+    check(F.practice_writes > writes + 1, "a level-up writes immediately")
+    u.stop(T)
+end
+
+-- 21k) The panel's level badge is opt-in: hidden by default, and it never changes
+-- the panel's own layout.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    check(u.badge_frame ~= nil, "the badge frame is built with the panel")
+    eq(u.badge_frame.parent, u.panel, "the badge is a child of the panel")
+    eq(u.badge_frame.shown, false, "the badge is hidden by default")
+    eq(u.panel.height, 370, "the badge adds no height to the panel (it is an overlay)")
+    F.clock = 0
+    u.start(T)
+    eq(u.badge_frame.shown, false, "the badge stays hidden with the toggle off")
+    eq(u.badge_enabled, false, "the toggle reads off with no db key")
+    -- With the toggle off the progression runs SILENTLY: the data is still
+    -- collected and saved, but nothing is printed (no default-visible change).
+    u.record_graded_attempt(T, "A", nil)
+    u.record_graded_attempt(T, "A", nil)
+    check(not printed(F, "Practice level up"),
+        "no chat notice fires while the opt-in is off")
+    u.stop(T)
+end
+
+-- 21l) The badge shows the level, the XP and the session XP once the toggle is on.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_panel_badge = true
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.badge_enabled, true, "the toggle reads on with the db key")
+    eq(u.badge_frame.shown, true, "the badge shows when the toggle is on")
+    eq(u.badge_frame.level.text, "Lv 1", "the badge starts at level 1")
+    eq(u.badge_frame.xp.text, "0/100", "the badge starts with no XP into the level")
+    twist_attempt(b)
+    eq(u.badge_frame.level.text, "Lv 1", "one A does not level up")
+    eq(u.badge_frame.xp.text, "80/100", "the badge shows the XP into the level")
+    eq(u.badge_frame.session.text, "+80 XP", "the badge shows the session XP")
+    eq(u.badge_frame.bar_fill.width, 56, "the XP bar fills with the XP (80 of 100)")
+    -- The second A crosses the level line: the badge follows and the notice fires.
+    u.record_graded_attempt(T, "A", nil)
+    eq(u.badge_frame.level.text, "Lv 2", "the badge follows the level up")
+    check(printed(F, "Practice level up"), "the level-up notice fires")
+    u.stop(T)
+    eq(u.badge_frame.shown, true, "the badge stays built when the session ends")
+end
+
+-- 21m) The toggle is nil-safe: only an explicit true turns the badge on, and the
+-- toggle can be flipped live.
+do
+    local b = build({ with_db = true })
+    local u, T = b.st.practice_ui, b.ST
+    u.init(T)
+    eq(u.badge_is_enabled(T), false, "a missing db key reads off")
+    b.sb.class_db.practice_panel_badge = false
+    eq(u.badge_is_enabled(T), false, "an explicit false reads off")
+    b.sb.class_db.practice_panel_badge = true
+    eq(u.badge_is_enabled(T), true, "an explicit true reads on")
+    -- The live toggle writes the class table and repaints.
+    u.set_badge_enabled(T, false)
+    eq(b.sb.class_db.practice_panel_badge, false, "the toggle writes the class table")
+    eq(u.badge_frame.shown, false, "the badge hides again")
+    u.set_badge_enabled(T, true)
+    eq(u.badge_frame.shown, true, "the badge shows again")
+end
+
+--=========================================================================================
+-- 22) The shared engine: the rotation scenario session and the generic drill list
+--=========================================================================================
+-- The two new practice modes ride the shipped panel, score and progression hook.
+-- The mode comes from the Practice page's select (nil = the shipped class session,
+-- so a fresh profile sees exactly the panel it saw before). The class contract is
+-- fixed: ST.<CLASS>.practice_scenario_step(self, ctx) and
+-- ST.<CLASS>.practice_drills = { { key, label, grade } }.
+
+-- 22a) The default mode is the shipped class session: no scenario, no drill list,
+-- no practice row - the panel is byte-identical to the one that shipped.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, true, "the default mode starts the shipped class session")
+    eq(u.sim.fight_active, true, "the default mode still runs the paladin sim")
+    eq(u.scenario_run, nil, "the default mode starts no scenario")
+    eq(u.drill_list, nil, "the default mode starts no drill list")
+    eq(u.practice_row, nil, "the default mode builds no practice row")
+    eq(u.progress_drill_key, "paladin_twist", "the default scope is the class's own drill")
+    u.stop(T)
+end
+
+-- 22b) The rotation scenario: the class is asked, the cast is compared, the
+-- decision is graded, and the graded decision feeds the shared score.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    local asked = {}
+    T.PALADIN.practice_scenario_step = function(self, ctx)
+        asked[#asked + 1] = ctx
+        return { action = "cs", reason = "the seal is up" }
+    end
+    -- The class owns the name its rotation scenario is graded under (22b2 pins
+    -- the resolution; here it is the shipped name).
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, true, "the scenario session starts")
+    check(u.scenario_run ~= nil, "the scenario run exists")
+    eq(u.scenario_step.expected, "cs", "the class's answer is the open step's expectation")
+    eq(u.scenario_step.reason, "the seal is up", "the class's reason rides along")
+    eq(#asked, 1, "the class was asked once")
+    eq(asked[1].now, 0, "the class receives the injected clock")
+    eq(asked[1].last_action, nil, "the first step has no last action")
+    check(type(asked[1].resources) == "table" or asked[1].resources == nil,
+        "the context carries the resource view (or none)")
+    eq(u.practice_row.shown, true, "the practice row shows")
+    eq(u.progress_drill_key, "paladin_rotation", "the scenario's id is the progression scope")
+    eq(u.practice_row_prompt.text, "next: cs - the seal is up", "the prompt shows the wanted action")
+    -- The matching cast is a correct decision.
+    u.cast_key(T, "cs")
+    eq(u.score.attempts, 1, "the correct decision is one attempt")
+    eq(u.score.hits, 1, "the correct decision is a hit")
+    eq(u.scenario_run.correct, 1, "the run counts the correct decision")
+    eq(u.result_frame.text.text, "CORRECT", "the popup reads CORRECT")
+    -- The next step opens on the tick; a different cast is out of order.
+    F.clock = 1
+    drive(b, 0.05)
+    eq(u.scenario_step.expected, "cs", "the next step is open")
+    u.cast_key(T, "judge")
+    eq(u.score.attempts, 2, "the out-of-order decision is one attempt")
+    eq(u.score.hits, 1, "the out-of-order decision is a miss")
+    eq(u.scenario_run.mispicks, 1, "the run counts the mis-pick")
+    eq(u.result_frame.text.text, "OUT OF ORDER", "the popup reads OUT OF ORDER")
+    -- The deadline closes an unacted step as a miss.
+    F.clock = 2
+    drive(b, 0.05)
+    check(u.scenario_step ~= nil, "the third step is open")
+    F.clock = 20
+    drive(b, 0.05)
+    eq(u.scenario_run.misses, 1, "the expired step is a miss")
+    eq(u.score.attempts, 3, "the miss is one attempt")
+    eq(u.result_frame.text.text, "MISS", "the popup reads MISS")
+    u.stop(T)
+    eq(u.scenario_run, nil, "stop clears the scenario run")
+    eq(u.scenario_step, nil, "stop clears the open step")
+    eq(u.practice_row.shown, false, "stop hides the practice row")
+end
+
+-- 22c) A class that cannot decide answers nil: the step is UNKNOWN, no attempt is
+-- recorded and the action is never called wrong.
+-- 22b2) The class owns its scenario id: its own key wins over the engine's
+-- fallback table, and the fallback stands when the class names none.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function() return { action = "cs" } end
+    T.PALADIN.practice_scenario_key = "custom_rotation_key"
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.progress_drill_key, "custom_rotation_key", "the class's own scenario id is the scope")
+    u.stop(T)
+end
+
+-- 22b3) The class owns its context and its rotation table: the engine asks the
+-- class for both instead of guessing.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    local asked = {}
+    T.PALADIN.practice_scenario_step = function(self, ctx)
+        asked[#asked + 1] = ctx
+        return { action = "cs" }
+    end
+    T.PALADIN.practice_context = function(self, now, last_action)
+        return { now = now, last_action = last_action, resources = { mana = 42 },
+                 cooldowns = { cs = 3 }, class_field = "from the class" }
+    end
+    T.PALADIN.practice_rotation_for = function()
+        return { { action = "cs", label = "Crusader Strike" } }
+    end
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(asked[1].class_field, "from the class", "the class's own context reaches the step")
+    eq(asked[1].resources.mana, 42, "the class's resource view rides along")
+    eq(asked[1].cooldowns.cs, 3, "the class's cooldown view rides along")
+    eq(asked[1].now, 0, "the engine still injects the clock")
+    -- The published rotation names the panel's buttons (with the class's labels).
+    local button = u.practice_row_buttons.buttons["cs"]
+    check(button ~= nil, "the published rotation's action has a button")
+    if button then
+        eq(button.label.text, "Crusader Strike", "the button carries the class's own label")
+    end
+    u.stop(T)
+end
+
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function() return { action = "cs" } end
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.progress_drill_key, "paladin_rotation",
+        "the engine's fallback id stands when the class names none")
+    u.stop(T)
+end
+
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function() return nil end
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.scenario_step.expected, nil, "the unknown step has no expectation")
+    u.cast_key(T, "cs")
+    eq(u.score.attempts, 0, "the unknown decision records no attempt")
+    eq(u.scenario_run.unknown, 1, "the run counts the unknown decision")
+    eq(u.scenario_run.mispicks, 0, "the unknown decision is not a mis-pick")
+    eq(u.practice_row_status.text, "unknown - the rotation could not decide",
+        "the row says the rotation could not decide")
+    u.stop(T)
+end
+
+-- 22d) The run ends after its decisions and the summary lands in the row.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function() return { action = "cs" } end
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    for i = 1, 10 do
+        u.cast_key(T, "cs")
+        F.clock = F.clock + 1
+        drive(b, 0.05)
+        eq(u.scenario_run.steps, i, "the run took its decision " .. i)
+    end
+    eq(u.scenario_run.steps, 10, "the run took its ten decisions")
+    eq(u.scenario_run.finished, true, "the run is finished")
+    eq(u.scenario_run.correct, 10, "every decision was correct")
+    check(u.practice_row_status.text:find("run S", 1, true) ~= nil,
+        "the summary reads the run band")
+    u.stop(T)
+end
+
+-- 22e) A class that ships no scenario refuses the session LOUDLY - never a silent
+-- paladin sim on the wrong class.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, nil, "the session does not start")
+    eq(u.sim.fight_active, false, "the refusal never falls back to the paladin sim")
+    eq(u.scenario_run, nil, "no scenario run exists")
+    eq(F.prints[#F.prints], "Practice scenario is not available for this class.",
+        "the refusal prints the reason")
+    -- The same class with the drill mode selected and no drills: also loud.
+    b.sb.class_db.practice_mode = "drills"
+    u.start(T)
+    eq(u.active, nil, "the drill-list session does not start either")
+    eq(F.prints[#F.prints], "Practice drills are not available for this class.",
+        "the drill refusal prints the reason")
+    -- The shipped class mode still works for the very same class.
+    b.sb.class_db.practice_mode = nil
+    u.start(T)
+    eq(u.active, true, "the shipped class session still starts")
+    u.stop(T)
+end
+
+-- 22f) The generic drill list: one button per drill, the press grades it, and the
+-- progression scope follows the drill.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "drills"
+    local seen = {}
+    T.PALADIN.practice_drills = {
+        { key = "test_timing", label = "Test timing",
+          grade = function(self, ctx) seen[#seen + 1] = ctx; return "A" end },
+        { key = "test_unknown", label = "Test unknown", grade = function() return nil end },
+    }
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, true, "the drill-list session starts")
+    eq(#u.drill_list, 2, "both drills are listed")
+    eq(u.practice_row.shown, true, "the practice row shows")
+    local buttons = u.practice_row_buttons.buttons
+    check(buttons["test_timing"] ~= nil, "the first drill has a button")
+    check(buttons["test_unknown"] ~= nil, "the second drill has a button")
+    eq(buttons["test_timing"].label.text, "Test timing", "the button carries the drill's label")
+    -- Pressing the gradeable drill grades it.
+    buttons["test_timing"]:GetScript("OnClick")()
+    eq(u.score.attempts, 1, "the graded drill is one attempt")
+    eq(u.score.hits, 1, "the graded drill is a hit")
+    eq(u.progress_drill_key, "test_timing", "the progression scope follows the drill")
+    eq(seen[1].now, 0, "the grader receives the injected clock")
+    -- The ungradeable drill records no attempt (a grade is never invented).
+    buttons["test_unknown"]:GetScript("OnClick")()
+    eq(u.score.attempts, 1, "the ungradeable drill records no attempt")
+    eq(u.progress_drill_key, "test_unknown", "the scope follows the pressed drill")
+    u.stop(T)
+    eq(u.drill_list, nil, "stop clears the drill list")
+    eq(u.practice_row.shown, false, "stop hides the practice row")
+end
+
+-- 22g) A class that publishes its own drills never runs the inherited twist
+-- session: the warrior's own drill list is its session, its scope is its own
+-- drill key (never the shared twist one) and its panel carries no twist sim
+-- widgets at all.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "WARRIOR"
+T.active_class = "WARRIOR"
+    T.WARRIOR = {
+        practice_drills = {
+            { key = "warrior_core_order", label = "Core order", grade = function() return "A" end },
+            { key = "warrior_ww_delay", label = "WW delay", grade = function() return "B" end },
+        },
+    }
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, true, "the warrior's own drill session starts")
+    check(u.drill_list ~= nil, "the warrior runs its own drill list")
+    eq(#u.drill_list, 2, "both of the warrior's drills are listed")
+    eq(u.sim.fight_active, false, "the warrior never runs the twist sim")
+    eq(u.progress_drill_key, "warrior_core_order", "the scope is the warrior's own drill")
+    eq(count_keys(u.panel.ability_icons or {}), 0, "the panel has no twist sim icon grid")
+    eq(u.panel.bl_btn, nil, "the panel has no haste buttons")
+    eq(u.panel.dst_btn, nil, "the panel has no DST toggle")
+    -- The drill presses grade and the scope follows the pressed drill.
+    local buttons = u.practice_row_buttons.buttons
+    buttons["warrior_ww_delay"]:GetScript("OnClick")()
+    eq(u.score.attempts, 1, "the pressed drill is graded")
+    eq(u.progress_drill_key, "warrior_ww_delay", "the scope follows the pressed drill")
+    u.stop(T)
+end
+
+-- 22h) A class with a SHIPPED session of its own keeps that session: the class's
+-- own session grades through the class's own drill (one skill, one truth), and
+-- the session itself stays reachable. The drill list is the mode="drills" option
+-- on top of it, and the built-in key still resolves for the class's own
+-- wrappers.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "DRUID"
+T.active_class = "DRUID"
+    T.DRUID = {
+        practice_scenario_key = function() return "druid_powershift" end,
+        practice_drills = {
+            { key = "druid_powershift_rework", label = "The shift rule",
+              grade = function() return "A" end },
+        },
+        new_practice_session = function(now, opts) return { active = true, started_at = now } end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_shift = function(session, now) return "S" end,
+        practice_summary = function(session) return { attempts = 0, score = 0 } end,
+        end_practice_session = function(session, now) session.active = false return true end,
+    }
+    T.DRUID.practice_panel = fixture_panel(b, T, "DRUID")
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, true, "the druid's own drill session starts")
+    check(u.druid_session ~= nil, "the druid keeps its own session (not the drill list)")
+    eq(u.drill_list, nil, "the class session is the drill list's job, not its own")
+    eq(u.sim.fight_active, false, "the druid never runs the twist sim")
+    -- The drill list is still reachable (the mode="drills" option).
+    b.sb.class_db.practice_mode = "drills"
+    u.stop(T)
+    u.start(T)
+    check(u.drill_list ~= nil, "the druid trains its own drill list on demand")
+    eq(u.drill_list[1].key, "druid_powershift_rework", "the class list owns the shift rule")
+    eq(u.progress_drill_key, "druid_powershift_rework",
+        "the scope is the class's own drill, not the built-in one")
+    -- The built-in key still resolves (the class's own wrappers keep working).
+    local H = b.st.practice.harness
+    check(H.get_scenario("druid_powershift") ~= nil, "the built-in key still resolves")
+    eq(H.SUPERSEDED_DRILLS.druid_powershift, "druid_powershift_rework",
+        "the built-in drill names the class drill that owns the skill")
+    u.stop(T)
+end
+
+-- 22i) The panel map itself: the warrior names its OWN drill, never the shared
+-- twist drill (the operator's correction - the map is a file-local table, so the
+-- pin is a source read).
+--
+-- The three classes whose class wrappers were re-pointed (druid / shaman /
+-- warrior) name the drill their session actually runs, so the mastery row, the
+-- session and the panel's offered drill are ONE drill (the filed drill-key
+-- routing fix - bench/superseded_wrappers_2026-10-19.md §6 item 1).
+do
+    local ui_src = read("practice_ui.lua")
+    local warrior_src = read("classes/warrior.lua")
+    local shaman_src = read("classes/shaman.lua")
+    local druid_src = read("classes/druid.lua")
+    local paladin_src = read("classes/paladin.lua")
+    check(warrior_src:find('mode = "warrior_execute_burn"', 1, true) ~= nil,
+        "the warrior's own panel facts name the drill its session runs")
+    check(shaman_src:find('mode = "shaman_mw_weave"', 1, true) ~= nil,
+        "the shaman's own panel facts name the drill its session runs")
+    check(druid_src:find('mode = "druid_powershift_rework"', 1, true) ~= nil,
+        "the druid's own panel facts name the drill its session runs")
+    check(warrior_src:find('mode = "warrior_core_order"', 1, true) == nil,
+        "the warrior's own panel facts never name the list's first drill")
+    check(shaman_src:find('mode = "shaman_enh_priority"', 1, true) == nil,
+        "the shaman's own panel facts never name the list's first drill")
+    check(druid_src:find('mode = "druid_finisher_order"', 1, true) == nil,
+        "the druid's own panel facts never name the list's first drill")
+    check(paladin_src:find('mode = "paladin_twist"', 1, true) ~= nil,
+        "the paladin's own panel facts name the twist drill")
+    check(ui_src:find('mode = "paladin_twist"', 1, true) == nil,
+        "the shared practice module keeps no class-keyed progression map")
+    check(ui_src:find('mode = "warrior_execute_burn"', 1, true) == nil,
+        "the shared practice module keeps no class drill literal")
+end
+
+-- 22i-bis) C7 (class-isolation 2026-10-21): the shared layer keys on the ACTIVE
+-- class, never on the class being PLAYED. An explicit non-playing pick (the
+-- operator's class_activation option) must drive its own panel and session.
+do
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    T.player_class = "WARRIOR"
+    T.active_class = "ROGUE"
+    T.ROGUE = {
+        practice_scenario_key = function() return "rogue_energy_pool" end,
+        PRACTICE_CAST_ORDER = { "evisc" },
+        practice_cast_label = function(key)
+            if key == "evisc" then return "Pool Spend" end
+            return nil
+        end,
+        practice_cast_spell_id = function() return "Eviscerate" end,
+        practice_cast_order = function() return { "evisc" } end,
+        new_practice_session = function() return { active = false } end,
+        new_ss_session = function() return nil end,
+        practice_begin_session = function(session) session.active = true return true end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_cast = function() return "S" end,
+        end_practice_session = function(session) session.active = false return true end,
+        practice_sync = function() return 0 end,
+    }
+    T.ROGUE.practice_panel = fixture_panel(b, T, "ROGUE")
+    u.init(T)
+    eq(u.panel.title.text, "|cFFFF8800Pool Practice|r",
+        "C7: the ACTIVATED class's panel ships, not the playing class's")
+    check(u.panel.ability_icons.evisc ~= nil, "C7: the ACTIVATED class's icons build")
+    u.start(T)
+    eq(u.active, true, "C7: the ACTIVATED class's drill session starts")
+    check(u.rogue_session ~= nil, "C7: the rogue session owns the run")
+    u.stop(T)
+    -- The reverse: the same sandbox with the warrior ACTIVE has no rogue drill.
+    T.active_class = "WARRIOR"
+    u.start(T)
+    check(u.active ~= true, "C7: with WARRIOR active the rogue drill does not run")
+    check(u.rogue_session == nil, "C7: no rogue session leaks across the switch")
+end
+
+-- 22j) The routing fix in behaviour: the class session's progression scope (the
+-- mastery row) is the drill the class's own session grades - not the list's
+-- first entry.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "DRUID"
+T.active_class = "DRUID"
+    T.DRUID = {
+        practice_scenario_key = function() return "druid_powershift" end,
+        practice_drills = {
+            { key = "druid_finisher_order", label = "Finisher order", grade = function() return "A" end },
+            { key = "druid_powershift_rework", label = "The shift rule", grade = function() return "A" end },
+        },
+        new_practice_session = function(now, opts) return { active = true, started_at = now } end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_shift = function(session, now) return "S" end,
+        practice_summary = function(session) return { attempts = 0, score = 0 } end,
+        end_practice_session = function(session, now) session.active = false return true end,
+    }
+    T.DRUID.practice_panel = fixture_panel(b, T, "DRUID")
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, true, "the druid's own drill session starts")
+    eq(u.progress_drill_key, "druid_powershift_rework",
+        "the mastery row is the drill the class's session runs")
+    u.stop(T)
+end
+
+-- 22k) HU-8: a hold is a DECISION. The class states it, the prompt shows it, a
+-- cast during it is the illegal cast (an attempt, an F) and doing nothing during
+-- it is correct - and worth nothing (no attempt, so idling cannot farm points).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function()
+        return { action = nil, hold = true, reason = "pool the resource first" }
+    end
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.scenario_step.hold, true, "the open step is a hold")
+    eq(u.scenario_step.expected, nil, "a hold step expects no action")
+    eq(u.practice_row_prompt.text, "next: HOLD - pool the resource first",
+        "the prompt shows the hold and the class's own reason")
+    -- A cast during the hold is the illegal cast: an attempt, a miss, and a clear
+    -- message that names the class's reason.
+    u.cast_key(T, "cs")
+    eq(u.score.attempts, 1, "the illegal cast is one attempt")
+    eq(u.score.hits, 0, "the illegal cast is a miss")
+    eq(u.scenario_run.illegal_casts, 1, "the run counts the illegal cast")
+    eq(u.scenario_run.mispicks, 1, "the illegal cast counts against the run's band")
+    eq(u.result_frame.text.text, "ILLEGAL CAST", "the popup reads ILLEGAL CAST")
+    check(u.practice_row_status.text:find("pool the resource first", 1, true) ~= nil,
+        "the status line carries the class's hold reason")
+    check(u.practice_row_status.text:find("illegal cast", 1, true) ~= nil,
+        "the status line says the cast was illegal")
+    -- The next step is a hold again; letting the window expire is the CORRECT
+    -- hold - recorded, but never an attempt (so it awards nothing).
+    F.clock = 1
+    drive(b, 0.05)
+    eq(u.scenario_step.hold, true, "the next step is a hold too")
+    F.clock = 20
+    drive(b, 0.05)
+    eq(u.scenario_run.holds, 1, "the run counts the correct hold")
+    eq(u.score.attempts, 1, "the correct hold records no attempt")
+    eq(u.score.hits, 0, "the correct hold awards no hit")
+    eq(u.result_frame.text.text, "HOLD OK", "the popup reads HOLD OK")
+    check(u.practice_row_status.text:find("nothing cast", 1, true) ~= nil,
+        "the status line says nothing was cast")
+    u.stop(T)
+end
+
+-- 22m) The NEUTRAL action: a legitimate action the rotation did not ask for (a
+-- heal, a shield, food) is NOT a mis-pick. The popup says NEUTRAL, the run counts
+-- it, and it records no attempt (no score, no streak, no XP).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function()
+        return { action = "cs", reason = "strike now" }
+    end
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    -- The class publishes its neutral set (the class lane owns the sets).
+    T.PALADIN.practice_neutral_actions = { heal = true }
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.scenario_step.expected, "cs", "the open step wants the rotation action")
+    eq(type(u.scenario_neutral) == "table" and u.scenario_neutral.heal, true,
+        "the session carries the class's neutral set")
+    -- The neutral press: a heal the rotation never asks for.
+    u.cast_key(T, "heal")
+    eq(u.result_frame.text.text, "NEUTRAL", "the popup reads NEUTRAL")
+    check(u.practice_row_status.text:find("NEUTRAL", 1, true) ~= nil,
+        "the status line says NEUTRAL")
+    check(u.practice_row_status.text:find("heal", 1, true) ~= nil,
+        "the status line names the neutral action")
+    eq(u.score.attempts, 0, "the neutral press records no attempt")
+    eq(u.score.hits, 0, "the neutral press awards no hit")
+    eq(u.progress_session.attempts, 0, "the neutral press records no progression attempt")
+    eq(u.progress_session.xp, 0, "the neutral press awards no XP")
+    eq(u.progress_session.streak, 0, "the neutral press does not move the streak")
+    eq(u.scenario_run.neutral, 1, "the run counts the neutral press")
+    eq(u.scenario_run.mispicks, 0, "the neutral press is not a mis-pick")
+    eq(u.scenario_run.correct, 0, "the neutral press is not a correct decision")
+    -- The popup is not the miss colour: a neutral action is no mistake.
+    eq(u.result_frame.text.color[1], b.sb.class_db.practice_result_color_hit[1],
+        "the neutral popup is not the miss colour")
+    u.stop(T)
+end
+
+-- 22n) A class that publishes NO neutral set keeps today's behaviour: the same
+-- press is a mis-pick (an attempt, an F) and the run counts no neutral step.
+--
+-- The NO DEFAULT-VISIBLE CHANGE half: the neutral counter rides along only when it
+-- matters, so a run of a class with no published set reads exactly as before - the
+-- run summary and the panel readout name NO neutral at all (not "0 neutrals"). The
+-- positive half lives in 22o (a class WITH a published set reports its count).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function()
+        return { action = "cs", reason = "strike now" }
+    end
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.scenario_neutral, nil, "a class with no published set has no neutral set")
+    -- One step only: the run ends on the mis-pick, so the summary is written.
+    u.scenario_run.max_steps = 1
+    u.cast_key(T, "heal")
+    eq(u.result_frame.text.text, "OUT OF ORDER",
+        "without a published set the press is a mis-pick")
+    eq(u.score.attempts, 1, "the mis-pick is one attempt")
+    eq(u.score.hits, 0, "the mis-pick is a miss")
+    eq(u.progress_session.attempts, 1, "the mis-pick records a progression attempt")
+    eq(u.scenario_run.mispicks, 1, "the run counts the mis-pick")
+    eq(u.scenario_run.neutral, 0, "the run counts no neutral press")
+    F.clock = 0.5
+    drive(b, 0.05)
+    check(u.scenario_summary ~= nil, "the run summary was written")
+    check(u.practice_row_status.text:find("neutral", 1, true) == nil,
+        "the run summary of a class with no published set names no neutral")
+    check(u.panel.info_text.text:find("neutral", 1, true) == nil,
+        "the panel readout of a class with no published set names no neutral")
+    u.stop(T)
+end
+
+-- 22o) The rotation action is unaffected and the run summary reports the neutral
+-- count (the row's summary line and the panel's readout).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function()
+        return { action = "cs", reason = "strike now" }
+    end
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    T.PALADIN.practice_neutral_actions = { heal = true }
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    -- The rotation action itself still grades normally.
+    u.cast_key(T, "cs")
+    eq(u.result_frame.text.text, "CORRECT", "the rotation action still reads CORRECT")
+    eq(u.score.attempts, 1, "the rotation action is one attempt")
+    eq(u.score.hits, 1, "the rotation action is a hit")
+    eq(u.progress_session.streak, 1, "the rotation action moves the streak")
+    eq(u.scenario_run.correct, 1, "the run counts the correct decision")
+    -- The next step: a neutral press, then the run ends and the summary reports.
+    F.clock = 0.5
+    drive(b, 0.05)
+    eq(u.scenario_step.expected, "cs", "the next step is open")
+    u.scenario_run.max_steps = 2
+    u.cast_key(T, "heal")
+    eq(u.scenario_run.neutral, 1, "the run counts the neutral press")
+    eq(u.score.attempts, 1, "the neutral press adds no attempt")
+    F.clock = 1
+    drive(b, 0.05)
+    check(u.practice_row_status.text:find("neutral", 1, true) ~= nil,
+        "the run summary reports the neutral count")
+    check(u.panel.info_text.text:find("neutral 1", 1, true) ~= nil,
+        "the panel readout reports the neutral count")
+    u.stop(T)
+end
+
+-- 22l) The live pull clock rides the context: the prepull rule and the prepull
+-- drills read the same moment the live guide reads (BS-8 item 2). A context that
+-- already carries its own pull clock keeps it.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    local asked = {}
+    T.PALADIN.practice_scenario_step = function(self, ctx)
+        asked[#asked + 1] = ctx
+        return { action = "cs" }
+    end
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    -- The live clock on the addon object (main.lua's ST.pull_at).
+    T.pull_at = 30
+    function T:pull_in_seconds(now) return self.pull_at - (now or 0) end
+    u.init(T)
+    F.clock = 10
+    u.start(T)
+    eq(asked[1].pull_at, 30, "the context carries the pull timestamp")
+    eq(asked[1].pull_in_seconds, 20, "the context carries the countdown")
+    u.stop(T)
+    -- A context that already knows its pull keeps it (the live clock never
+    -- overwrites a caller that knows better).
+    local b2 = build({ with_db = true })
+    local u2, T2 = b2.st.practice_ui, b2.ST
+    b2.sb.class_db.practice_mode = "scenario"
+    local asked2 = {}
+    T2.PALADIN.practice_scenario_step = function(self, ctx)
+        asked2[#asked2 + 1] = ctx
+        return { action = "cs" }
+    end
+    T2.PALADIN.practice_context = function(self, now, last_action)
+        return { now = now, last_action = last_action, pull_at = 99, pull_in_seconds = 5 }
+    end
+    T2.pull_at = 30
+    function T2:pull_in_seconds(now) return self.pull_at - (now or 0) end
+    u2.init(T2)
+    b2.sb.clock = 0
+    u2.start(T2)
+    eq(asked2[1].pull_at, 99, "the class's own pull clock wins")
+    eq(asked2[1].pull_in_seconds, 5, "the class's own countdown wins")
+    u2.stop(T2)
+    -- A class that owns its context but carries no pull clock still gets the live
+    -- one (the engine's own context path publishes it too).
+    local b3 = build({ with_db = true })
+    local u3, T3 = b3.st.practice_ui, b3.ST
+    b3.sb.class_db.practice_mode = "scenario"
+    local asked3 = {}
+    T3.PALADIN.practice_scenario_step = function(self, ctx)
+        asked3[#asked3 + 1] = ctx
+        return { action = "cs" }
+    end
+    T3.PALADIN.practice_context = function(self, now, last_action)
+        return { now = now, last_action = last_action, resources = {}, cooldowns = {} }
+    end
+    T3.pull_at = 30
+    function T3:pull_in_seconds(now) return self.pull_at - (now or 0) end
+    u3.init(T3)
+    b3.sb.clock = 10
+    u3.start(T3)
+    eq(asked3[1].pull_at, 30, "the class's own context carries the live pull clock")
+    eq(asked3[1].pull_in_seconds, 20, "the class's own context carries the countdown")
+    u3.stop(T3)
+end
+
+--=========================================================================================
+-- 23) The default scenario ctx: a class with NO own practice_context
+--
+-- The engine's fallback ctx builder lifts the class's gathered guide inputs into
+-- ctx.resources / ctx.cooldowns. It used to read SCENARIO_RESOURCE_KEYS - a constant
+-- that was defined NOWHERE in the tree - so the first scenario step of every class
+-- that does not publish its own practice_context (druid, warrior, shaman) raised and
+-- the session never opened. The pool contract is now verified against the six
+-- classes' gather_guide_inputs, and the path cannot raise again.
+--=========================================================================================
+do
+    local b = build({ with_db = true })
+    local u, T = b.st.practice_ui, b.ST
+    b.sb.class_db.practice_mode = "scenario"
+    T.player_class = "WARRIOR"
+T.active_class = "WARRIOR"
+    local asked = {}
+    T.WARRIOR = {
+        -- The warrior's own gather shape (classes/warrior.lua): the pool reading plus
+        -- the state beside it. No practice_context: the engine's fallback owns the
+        -- ctx, exactly like the druid, the warrior and the shaman in production.
+        gather_guide_inputs = function(_self, out)
+            out.speed = 2.6
+            out.rage = 42
+            out.hs_queued = true
+            out.hs_remaining = 3.5
+            out.target_health_pct = 55
+            return out
+        end,
+        practice_scenario_step = function(_self, ctx)
+            asked[#asked + 1] = ctx
+            return { action = "hs", reason = "the pool is banked" }
+        end,
+        practice_scenario_key = "warrior_rotation",
+    }
+    u.init(T)
+    b.sb.clock = 0
+    local ok, err = pcall(u.start, T)
+    check(ok, "the default ctx path does not raise (" .. tostring(err) .. ")")
+    eq(#asked, 1, "the class without its own ctx is asked (the fallback ran)")
+    local ctx = asked[1]
+    check(type(ctx) == "table", "the fallback built a context")
+    eq(ctx.now, 0, "the fallback ctx carries the injected clock")
+    eq(ctx.last_action, nil, "the first step has no last action")
+    check(type(ctx.resources) == "table", "the fallback ctx carries the resource view")
+    eq(ctx.resources.rage, 42, "the class's pool reading reaches the ctx")
+    eq(ctx.resources.hs_queued, true, "the class's state flag reaches the ctx")
+    eq(ctx.resources.target_health_pct, 55, "the class's state reading reaches the ctx")
+    check(type(ctx.cooldowns) == "table", "the fallback ctx carries the cooldown view")
+    eq(ctx.cooldowns.hs, 3.5, "the remaining cooldown lands in the cooldown table")
+    u.stop(T)
+end
+
+-- 23b) The undefined-constant crash cannot come back: the resource-field list is a
+-- LOCAL definition in the module (never a global read), and it is defined before the
+-- code that reads it. A mutant that drops the definition breaks the module load (a
+-- failed check), never a silent global read.
+do
+    local src = read("practice_ui.lua")
+    local def = src:find("local SCENARIO_RESOURCE_KEYS = {", 1, true)
+    local use = src:find("#SCENARIO_RESOURCE_KEYS", 1, true)
+    check(def ~= nil, "the resource-field list is defined in the module")
+    check(use ~= nil, "the resource-field list is read")
+    check(def ~= nil and use ~= nil and def < use,
+        "the resource-field list is defined before the code that reads it")
+end
+
+-- 23c) F10: the practice tick's isolation is the shared guard (one implementation).
+-- The start path's refusal flavour is the same contract (count + print every time);
+-- the tick path's flavour is count + report once + quarantine.
+do
+    local src = read("practice_ui.lua")
+    check(src:find("st.guard.note", 1, true) ~= nil,
+        "the practice tick reports its failure to the shared guard")
+    check(src:find("st.guard.refusal", 1, true) ~= nil,
+        "the practice start refusal reports to the shared guard")
+    check(src:find("st.guard.quarantined", 1, true) ~= nil,
+        "the practice quarantine gate reads the shared guard")
+    check(src:find("QUARANTINE_THROWS = ", 1, true) == nil,
+        "the practice module keeps no second quarantine threshold")
+    check(src:find("errors.by_site", 1, true) == nil,
+        "the practice module keeps no second counter bookkeeping")
+    check(src:find('st.guard.label("practice", "Practice")', 1, true) ~= nil,
+        "the practice wording stays at the call site")
+end
+
+-- 24) F2: the drill-list panel supplies a PICK. A drill press grades through the
+-- class's own grader with the action the player pressed; without a pick the
+-- pick-based graders answer nil (UNKNOWN) and the press records nothing.
+--
+-- The grader below has the REAL class graders' shape (the paladin, the warrior
+-- and the druid all read the pick from ctx.last_action and compare it with the
+-- rotation's answer): no pick -> nil, so a press that drops the pick is visible
+-- here (the suite's old stub graders returned a letter whatever the ctx said,
+-- which is why the defect was invisible).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "drills"
+    local seen = {}
+    T.PALADIN.practice_rotation_for = function()
+        return { { action = "judge", label = "Judgement" } }
+    end
+    T.PALADIN.practice_drills = {
+        { key = "paladin_fcfs_priority", label = "FCFS priority order",
+          grade = function(self, ctx)
+              seen[#seen + 1] = ctx
+              local pick = type(ctx) == "table" and ctx.last_action or nil
+              if type(pick) ~= "string" or pick == "" then
+                  return nil
+              end
+              return pick == "judge" and "S" or "F"
+          end },
+    }
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, true, "the drill-list session starts")
+    local buttons = u.practice_row_buttons.buttons
+    check(buttons["paladin_fcfs_priority"] ~= nil, "the drill has a button")
+    check(buttons["judge"] ~= nil, "the class's action has a button (the pick)")
+    -- The drill press with no pick in hand: the grader cannot judge -> UNKNOWN,
+    -- no attempt (a grade is never invented).
+    buttons["paladin_fcfs_priority"]:GetScript("OnClick")()
+    eq(#seen, 1, "the drill press reached the grader")
+    eq(seen[1].last_action, nil, "no pick yet: the drill press carries none")
+    eq(u.score.attempts, 0, "the unknown drill records no attempt")
+    -- The action press IS the pick: it grades the selected drill with the
+    -- pressed action, and the class's own grader judges it.
+    buttons["judge"]:GetScript("OnClick")()
+    eq(#seen, 2, "the action press reached the grader")
+    eq(seen[2].last_action, "judge", "the grader received the pressed action as the pick")
+    eq(u.score.attempts, 1, "the graded drill is one attempt")
+    eq(u.score.hits, 1, "the graded drill is a hit")
+    eq(u.progress_drill_key, "paladin_fcfs_priority", "the scope follows the drill")
+    -- The pick stays for the next drill press.
+    buttons["paladin_fcfs_priority"]:GetScript("OnClick")()
+    eq(#seen, 3, "the drill press reached the grader again")
+    eq(seen[3].last_action, "judge", "the drill press carries the pick in hand")
+    eq(u.score.attempts, 2, "the drill press with a pick grades the drill")
+    u.stop(T)
+end
+
+-- 24b) F9: the drill counters hang off the drill-list SESSION (the ctx's session
+-- identity and session state), never on the addon object: a band's mis-picks
+-- cannot survive into the next session.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "drills"
+    local seen = {}
+    T.PALADIN.practice_drills = {
+        { key = "paladin_fcfs_priority", label = "FCFS priority order",
+          grade = function(self, ctx) seen[#seen + 1] = ctx return "A" end },
+    }
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    local buttons = u.practice_row_buttons.buttons
+    buttons["paladin_fcfs_priority"]:GetScript("OnClick")()
+    eq(seen[1].session ~= nil, true, "the drill press carries a session identity")
+    eq(seen[1].session, u.drill_list_session, "the identity is the drill-list session's own")
+    eq(type(seen[1].state), "table", "the drill press carries the session state")
+    eq(seen[1].state, u.drill_list_state, "the state is the drill-list session's own")
+    local first_session = seen[1].session
+    local first_state = seen[1].state
+    -- A new session gets a new identity: the mis-pick window starts over.
+    u.stop(T)
+    u.start(T)
+    local buttons2 = u.practice_row_buttons.buttons
+    buttons2["paladin_fcfs_priority"]:GetScript("OnClick")()
+    check(seen[2].session ~= first_session, "a new session gets a new drill-counter identity")
+    check(seen[2].state ~= first_state, "a new session gets a new drill-counter window")
+    u.stop(T)
+end
+
+-- 24c) F5: the practice row leaks no frames. The row is rebuilt on every
+-- scenario step (open and close) and the buttons are REUSED from the row's own
+-- pool, so a long run creates no new frames.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function() return { action = "cs" } end
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    local frames_after_start = F.created_frames
+    -- Twenty steps open and close: the row is rebuilt every time.
+    for _ = 1, 20 do
+        u.cast_key(T, "cs")
+        F.clock = F.clock + 1
+        drive(b, 0.05)
+    end
+    eq(F.created_frames, frames_after_start,
+        "twenty scenario steps create no new frame (the row reuses its buttons)")
+    check(#u.practice_row_buttons.pool > 0, "the row keeps a button pool")
+    u.stop(T)
+end
+
+-- 24d) F4: a class with a SHIPPED session of its own keeps that session - the
+-- shaman's own weave session, not the drill list (the session grades through the
+-- class's own drill, so the skill stays one truth).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "SHAMAN"
+T.active_class = "SHAMAN"
+    T.SHAMAN = {
+        practice_scenario_key = function() return "shaman_weave" end,
+        practice_drills = {
+            { key = "shaman_mw_weave", label = "The stack decision", grade = function() return "A" end },
+        },
+        PRACTICE_CAST_ORDER = { "weave_lb" },
+        practice_cast_label = function() return "Lightning Bolt" end,
+        practice_cast_spell_id = function() return 1001 end,
+        practice_cast_seconds = function() return 1.5 end,
+        practice_latency_seconds = function() return 0 end,
+        new_practice_session = function(now, opts) return { active = true, started_at = now } end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_cast = function(session, swing, now, key) return "S" end,
+        practice_summary = function(session) return { attempts = 0, score = 0 } end,
+        end_practice_session = function(session, now) session.active = false return true end,
+    }
+    T.SHAMAN.practice_panel = fixture_panel(b, T, "SHAMAN")
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, true, "the shaman's own session starts")
+    check(u.shaman_session ~= nil, "the shaman keeps its own session (not the drill list)")
+    eq(u.drill_list, nil, "the class session is the drill list's job, not its own")
+    u.stop(T)
+end
+
+-- 24e) F4 (the second half): a cast with NO session is LOUD - it prints and it
+-- counts. Never a silent no-op (the player clicked a drill icon and nothing
+-- happened).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "SHAMAN"
+T.active_class = "SHAMAN"
+    T.SHAMAN = {
+        practice_scenario_key = function() return "shaman_weave" end,
+        PRACTICE_CAST_ORDER = { "weave_lb" },
+        practice_cast_label = function() return "Lightning Bolt" end,
+        practice_cast_spell_id = function() return 1001 end,
+        practice_cast_seconds = function() return 1.5 end,
+        practice_latency_seconds = function() return 0 end,
+        new_practice_session = function(now, opts) return { active = true, started_at = now } end,
+        tick_practice_session = function(session, now, elapsed, out) return out or {} end,
+        practice_cast = function(session, swing, now, key) return "S" end,
+        practice_summary = function(session) return { attempts = 0, score = 0 } end,
+        end_practice_session = function(session, now) session.active = false return true end,
+    }
+    T.SHAMAN.practice_panel = fixture_panel(b, T, "SHAMAN")
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    -- The session is gone (it ended, or it never existed): the cast must say so.
+    u.shaman_session = nil
+    u.shaman_swing = nil
+    local before = #F.prints
+    u.cast_key(T, "lb")
+    check(#F.prints > before, "the cast with no session prints the refusal")
+    local last = F.prints[#F.prints]
+    check(tostring(last):find("no drill session", 1, true) ~= nil,
+        "the refusal names the reason (got " .. tostring(last) .. ")")
+    check(type(T.bar_hook_errors) == "table" and T.bar_hook_errors.count ~= nil
+        and T.bar_hook_errors.count > 0, "the refusal is counted")
+    u.stop(T)
+end
+
+-- 24f) F7: the rotation scenario is gated on a LIVE swing engine. The client
+-- that keeps the inert stand-in refuses the session loudly (never ten unknown
+-- steps), and the reason names the client.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function() return { action = "cs" } end
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    T.swing_engine = "inert-standin"
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(u.active, nil, "the scenario does not start on a client with no live swing engine")
+    eq(u.scenario_run, nil, "no scenario run exists")
+    local last = F.prints[#F.prints]
+    check(tostring(last):find("not available on this client", 1, true) ~= nil,
+        "the refusal says the client cannot run it (got " .. tostring(last) .. ")")
+    -- A live engine runs the scenario as before.
+    local b2 = build({ with_db = true })
+    local u2, T2, F2 = b2.st.practice_ui, b2.ST, b2.sb
+    b2.sb.class_db.practice_mode = "scenario"
+    T2.PALADIN.practice_scenario_step = function() return { action = "cs" } end
+    T2.PALADIN.practice_scenario_key = "paladin_rotation"
+    T2.swing_engine = "vendored-lib"
+    u2.init(T2)
+    F2.clock = 0
+    u2.start(T2)
+    eq(u2.active, true, "a live swing engine runs the scenario")
+    u2.stop(T2)
+end
+
+-- 24g) F10: the twist drill is the PALADIN's own. The paladin's drill list leads
+-- with it (the flagship practice stays reachable from the paladin's panel) and
+-- no other class is offered it.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "drills"
+    T.PALADIN.practice_drills = {
+        { key = "paladin_fcfs_priority", label = "FCFS priority order", grade = function() return "A" end },
+    }
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    local buttons = u.practice_row_buttons.buttons
+    check(buttons["paladin_twist"] ~= nil, "the paladin's drill list leads with the twist drill")
+    check(buttons["paladin_fcfs_priority"] ~= nil, "the paladin's own drills are listed too")
+    -- The twist press starts the twist session (the flagship practice).
+    buttons["paladin_twist"]:GetScript("OnClick")()
+    eq(u.drill_list, nil, "the twist press leaves the drill-list session")
+    eq(u.active, true, "the twist session started")
+    eq(u.progress_mode_key, "paladin_twist", "the twist session grades the twist drill")
+    u.stop(T)
+    -- Another class is never offered the twist drill.
+    local b2 = build({ with_db = true })
+    local u2, T2 = b2.st.practice_ui, b2.ST
+    b2.sb.class_db.practice_mode = "drills"
+    T2.player_class = "WARRIOR"
+T2.active_class = "WARRIOR"
+    T2.WARRIOR = {
+        practice_drills = {
+            { key = "warrior_core_order", label = "The core rotation", grade = function() return "A" end },
+        },
+    }
+    u2.init(T2)
+    b2.sb.clock = 0
+    u2.start(T2)
+    local buttons2 = u2.practice_row_buttons.buttons
+    check(buttons2["paladin_twist"] == nil, "the warrior is never offered the twist drill")
+    check(buttons2["warrior_core_order"] ~= nil, "the warrior's own drills are listed")
+    u2.stop(T2)
+end
+
+-- 25) The practice strip's GEOMETRY (the hunter's full APL spine, 2026-10-20).
+-- The strip is the panel's companion row: the prompt line, the button lines and
+-- the status line. Four buttons per row, so the hunter's thirteen-row Wrath
+-- spine needs FOUR button lines - and the strip has to GROW to carry them
+-- (the shipped strip is 74 px, two lines). The panel's height follows the
+-- strip's, so a rotation row can never fall out of the panel.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    -- A thirteen-row spine (the hunter's Wrath spine): every row must be
+    -- reachable, so the strip has to carry four button lines.
+    local spine = {}
+    for i = 1, 13 do
+        spine[i] = { action = "a" .. i, label = "Row " .. i }
+    end
+    T.PALADIN.practice_rotation_for = function() return spine end
+    T.PALADIN.practice_scenario_step = function() return { action = "a1" } end
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    local buttons = u.practice_row_buttons.buttons
+    local missing = 0
+    for i = 1, 13 do
+        if buttons["a" .. i] == nil then missing = missing + 1 end
+    end
+    eq(missing, 0, "every rotation row gets a button in the strip")
+    -- The geometry: the strip's height follows the button lines (the prompt
+    -- line, the lines and the status line), so four lines need a taller strip
+    -- than the shipped two-line strip.
+    local height = u.practice_row_height
+    check(type(height) == "number" and height > 74,
+        "the strip grows past the shipped 74 px when the spine needs four lines (got "
+            .. tostring(height) .. ")")
+    check(type(height) == "number" and height >= 30 + 4 * 22,
+        "the strip carries four button lines (got " .. tostring(height) .. ")")
+    -- The panel follows the strip: the row is never cut off by the panel.
+    local panel_height = u.panel.height
+    check(type(panel_height) == "number" and panel_height > u.panel_base_height,
+        "the panel grows with the strip (got " .. tostring(panel_height) .. ")")
+    -- The strip's own geometry constants: four buttons per row.
+    local source = read("practice_ui.lua")
+    check(source:find("PRACTICE_ROW_ACTION_PER_ROW = 4", 1, true) ~= nil,
+        "the strip keeps four action buttons per row")
+    u.stop(T)
+end
+
+--=========================================================================================
+-- 26) The deep audit's practice-persistence findings (H2 / M1 / M4, 2026-10-20)
+--=========================================================================================
+-- H2: a completed session is silently lost on logout / /reload. The progression
+-- session's completion bonus, its daily streak, its run, its time active and its
+-- bounded history row were written by ONE caller - the session's stop.
+-- M1: a Progress-page reset during a live session dropped every later attempt (the
+-- score still moved, but no XP, no mastery, no streak, no stats and no badge).
+-- M4: a client without the `date` global froze the daily XP cap forever - the drill
+-- awarded 0 XP, silently.
+
+-- 26a) H2: the flush writes the session a logout would otherwise lose, and it does
+-- NOT tear the frames down (a logout is not a session end).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    -- Ten attempts: the completion bonus needs ten (SESSION_BONUS_MIN_ATTEMPTS).
+    for _ = 1, 10 do
+        u.record_graded_attempt(T, "A")
+    end
+    local scope = F.profile_store.practice.progress.classes.PALADIN
+    eq(scope.xp, 240, "H2: the attempts earn their capped XP before the flush")
+    F.clock = 12
+    eq(u.flush_progress_session(T), true, "H2: the flush reports that it closed the session")
+    local blob = F.profile_store.practice
+    scope = blob.progress.classes.PALADIN
+    local stats_scope = blob.stats.classes.PALADIN
+    check(type(scope) == "table", "H2: the flushed session keeps its class scope")
+    check(type(stats_scope) == "table", "H2: the flushed session keeps its stats scope")
+    eq(type(scope) == "table" and scope.xp or nil, 265, "H2: the flushed session pays its completion bonus")
+    eq(type(scope) == "table" and scope.daily_streak or nil, 1, "H2: the flushed session counts the day (the class streak)")
+    eq(type(blob.progress.global) == "table" and blob.progress.global.daily_streak or nil, 1,
+        "H2: the flushed session counts the account streak")
+    eq(type(stats_scope) == "table" and stats_scope.runs or nil, 1, "H2: the flushed session is a completed run")
+    eq(type(stats_scope) == "table" and stats_scope.time_active_seconds or nil, 12,
+        "H2: the flushed session counts its time")
+    eq(type(stats_scope) == "table" and #stats_scope.history or nil, 1,
+        "H2: the flushed session lands in the bounded history")
+    -- The frames are NOT torn down: the logout path must not hide anything.
+    eq(u.panel.shown, true, "H2: the flush leaves the practice panel alone")
+    eq(u.driver.shown, true, "H2: the flush leaves the driver frame alone")
+    eq(u.active, true, "H2: the flush does not stop the live session")
+    eq(u.progress_session, nil, "H2: the flush closes the progression session")
+    -- A second flush (the logout can fire twice) closes nothing.
+    eq(u.flush_progress_session(T), false, "H2: a second flush closes nothing")
+end
+
+-- 26b) L1 (re-audit 2026-10-20): the panel's hide does NOT end a LIVE run. The
+-- flush applies only when the run is actually over; a live run keeps its
+-- progression session, so the score and the recording can never diverge.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    u.record_graded_attempt(T, "A")
+    F.clock = 5
+    local on_hide = u.panel:GetScript("OnHide")
+    check(type(on_hide) == "function", "L1: the practice panel carries a hide script")
+    local session_before = u.progress_session
+    -- The frame stub does not fire OnHide by itself, so the script is called the
+    -- way the client calls it.
+    if type(on_hide) == "function" then
+        on_hide(u.panel)
+    end
+    local blob = F.profile_store.practice
+    local stats_scope = blob.stats.classes.PALADIN
+    local scope = blob.progress.classes.PALADIN
+    eq(type(stats_scope) == "table" and stats_scope.runs or nil, 0,
+        "L1: hiding the panel during a live run writes no run")
+    eq(type(scope) == "table" and scope.daily_streak or nil, 0,
+        "L1: hiding the panel during a live run moves no streak")
+    eq(type(stats_scope) == "table" and stats_scope.time_active_seconds or nil, 0,
+        "L1: hiding the panel during a live run records no time")
+    check(type(u.progress_session) == "table",
+        "L1: the live run keeps its progression session")
+    eq(u.progress_session, session_before, "L1: the live session is the same one")
+    -- The recording continues: the next graded attempt is still recorded.
+    u.record_graded_attempt(T, "A")
+    eq(type(u.progress_session) == "table" and u.progress_session.attempts or nil, 2,
+        "L1: the recording continues after the hide")
+    -- The run's OWN end still writes everything: the flush is the one writer.
+    F.clock = 9
+    u.stop(T)
+    local blob2 = F.profile_store.practice
+    local stats_scope2 = blob2.stats.classes.PALADIN
+    local scope2 = blob2.progress.classes.PALADIN
+    eq(type(stats_scope2) == "table" and stats_scope2.runs or nil, 1,
+        "L1: the run's end writes the run")
+    eq(type(scope2) == "table" and scope2.daily_streak or nil, 1,
+        "L1: the run's end writes the streak")
+    eq(type(stats_scope2) == "table" and stats_scope2.time_active_seconds or nil, 9,
+        "L1: the run's end writes the time")
+end
+
+-- 26c) M1: a reset during a live session does not drop the later attempts. The
+-- shipped reset path (practice_progress_ui.lua's perform_reset) drives the hook.
+--
+-- The badge is OFF here: with the badge off, update_badge returns before it
+-- re-creates the profile, so the hook lane's OWN ensure (record_progress_attempt
+-- ensures the profile itself) is what keeps the recording alive. With the badge on,
+-- the badge's repaint would re-create the profile and hide the defect.
+do
+    local b = build({ with_db = true, with_progress_ui = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local pui = b.st.practice_progress_ui
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    u.record_graded_attempt(T, "A")
+    eq(F.profile_store.practice.progress.classes.PALADIN.xp, 80, "M1: the first attempt earns its XP")
+
+    -- The Progress page's reset, mid-session.
+    eq(pui.perform_reset(T), true, "M1: the shipped reset runs against the live profile")
+    -- The live session keeps running, but its progression bookkeeping starts over.
+    eq(u.progress_session.xp, 0, "M1: the reset clears the in-flight session's XP")
+    eq(u.progress_session.attempts, 0, "M1: the reset clears the in-flight session's attempts")
+
+    -- The next attempt records into the FRESH profile: no silent drop.
+    u.record_graded_attempt(T, "A")
+    local blob = F.profile_store.practice
+    local scope = blob.progress.classes.PALADIN
+    local stats_scope = blob.stats.classes.PALADIN
+    check(type(scope) == "table", "M1: the attempt after the reset creates the class scope")
+    check(type(stats_scope) == "table", "M1: the attempt after the reset creates the stats scope")
+    eq(type(scope) == "table" and scope.xp or nil, 80, "M1: the attempt after the reset earns its XP again")
+    eq(type(scope) == "table" and scope.best_streak or nil, 1,
+        "M1: the attempt after the reset counts the streak")
+    eq(type(stats_scope) == "table" and stats_scope.attempts or nil, 1,
+        "M1: the attempt after the reset counts the stats")
+    u.stop(T)
+end
+
+-- 26c-bis) M1: with the badge ON, the badge's "+N XP" must not keep counting the XP
+-- the reset just erased.
+do
+    local b = build({ with_db = true, with_progress_ui = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local pui = b.st.practice_progress_ui
+    -- The badge on, so the "+N XP" line is observable.
+    F.class_db.practice_panel_badge = true
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    u.record_graded_attempt(T, "A")
+    eq(u.badge_frame.session.text, "+80 XP", "M1: the badge shows the session's XP")
+    eq(pui.perform_reset(T), true, "M1: the shipped reset runs against the live profile")
+    eq(u.badge_frame.session.text, "", "M1: the reset takes the erased XP off the badge")
+    u.record_graded_attempt(T, "A")
+    eq(u.badge_frame.session.text, "+80 XP", "M1: the badge shows the post-reset XP only")
+    u.stop(T)
+end
+
+-- 26d) M4/L6 (progression audit 2026-10-20): a client with NO `date` global has NO
+-- day. The numeric clock fallback is gone: it was a UTC day count, a DIFFERENT
+-- numbering from the civil "YYYY-MM-DD" form the pure layer's day ordinal is built
+-- from, so mixing the two rolled the day over at the wrong hour. One numbering, one
+-- source - the calendar, which exists on every shipped client family.
+--
+-- The consequence is stated, not hidden: with no day the daily cap cannot reset, so
+-- the drill earns XP only up to its cap (the notice in 26e names the cause).
+do
+    local b = build({ with_db = true, no_date = true, clock_epoch = 1790000000 })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    for _ = 1, 6 do
+        u.record_graded_attempt(T, "A")
+    end
+    local scope = F.profile_store.practice.progress.classes.PALADIN
+    eq(scope.xp, 240, "M4: a client with no calendar day earns up to its cap")
+    -- The clock moves past the day boundary: the day is STILL not there, so the cap
+    -- does NOT reset. A UTC day count would have rolled it over at the wrong hour.
+    F.epoch = 1790000000 + 86400
+    u.record_graded_attempt(T, "A")
+    eq(scope.xp, 240, "M4: a client with no calendar has no day, so the cap cannot reset")
+    u.stop(T)
+end
+
+-- 26e) M4: a client with NEITHER a calendar nor a clock can still freeze the cap -
+-- but never SILENTLY. The notice names the cause, and it is printed once.
+do
+    local b = build({ with_db = true, no_date = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    local prints_before = #F.prints
+    for _ = 1, 8 do
+        u.record_graded_attempt(T, "A")
+    end
+    local scope = F.profile_store.practice.progress.classes.PALADIN
+    eq(scope.xp, 240, "M4: the cap still bites on a client with no day at all")
+    check(#F.prints > prints_before, "M4: the frozen cap prints a notice")
+    check((F.prints[#F.prints] or ""):find("no calendar date", 1, true) ~= nil,
+        "M4: the notice names the cause")
+    local prints_after = #F.prints
+    u.record_graded_attempt(T, "A")
+    eq(#F.prints, prints_after, "M4: the notice is printed once, not once per attempt")
+    u.stop(T)
+end
+
+-- 26f) M4: the day is still read the client's way when the client HAS a calendar -
+-- the clock fallback never overrides a real date.
+do
+    local b = build({ with_db = true, clock_epoch = 1790000000 })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    for _ = 1, 6 do
+        u.record_graded_attempt(T, "A")
+    end
+    local scope = F.profile_store.practice.progress.classes.PALADIN
+    eq(scope.xp, 240, "M4: the capped drill earns its capped XP")
+    -- The scripted calendar day moves, the clock does not: the CALENDAR wins.
+    F.day = "2026-10-20"
+    u.record_graded_attempt(T, "A")
+    eq(scope.xp, 320, "M4: the client's own calendar day resets the cap")
+    u.stop(T)
+end
+
+-- 26g) L5 (re-audit 2026-10-20): the M4 cap notice can fire AGAIN after a
+-- mid-session reset. The notice is per session, and the reset starts a NEW
+-- session - without the clear it could fire only once per login and the rest of
+-- the session was silent again.
+do
+    local b = build({ with_db = true, no_date = true, with_progress_ui = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local pui = b.st.practice_progress_ui
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    for _ = 1, 8 do
+        u.record_graded_attempt(T, "A")
+    end
+    local prints_after_first = #F.prints
+    check(prints_after_first > 0, "L5: the frozen cap prints the notice")
+    -- The notice is once per session: another attempt prints nothing.
+    u.record_graded_attempt(T, "A")
+    eq(#F.prints, prints_after_first, "L5: the notice is printed once per session")
+    -- The reset starts a NEW session, so the notice can fire again.
+    eq(pui.perform_reset(T), true, "L5: the shipped reset runs against the live profile")
+    for _ = 1, 8 do
+        u.record_graded_attempt(T, "A")
+    end
+    check(#F.prints > prints_after_first, "L5: the notice fires again after the reset")
+    check((F.prints[#F.prints] or ""):find("no calendar date", 1, true) ~= nil,
+        "L5: the second notice names the cause")
+    u.stop(T)
+end
+
+-- 26h) M3 (re-audit 2026-10-20): the completion bonus is a share of what the
+-- session EARNED, not of how many attempts it made. A session of misses (ten F
+-- grades, zero attempt XP) earns no bonus at all - the old flat +25 for ten
+-- attempts was a grind hole, and it sat outside the daily cap.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    for _ = 1, 10 do
+        u.record_graded_attempt(T, "F")
+    end
+    F.clock = 12
+    eq(u.flush_progress_session(T), true, "M3: the flush closes the session")
+    local blob = F.profile_store.practice
+    local scope = blob.progress.classes.PALADIN
+    eq(type(scope) == "table" and scope.xp or nil, 0,
+        "M3: a session of misses earns no bonus (and no attempt XP)")
+    local stats_scope = blob.stats.classes.PALADIN
+    eq(type(stats_scope) == "table" and stats_scope.runs or nil, 1,
+        "M3: the miss session still counts as a completed run")
+end
+
+--=========================================================================================
+-- 26i) H2 (progression audit 2026-10-20): the daily cap's swallow is REPORTED.
+--
+-- The detection was already in record_progress_attempt (a grade that earns points but
+-- moves nothing means the cap swallowed the whole award), but the only consumer was
+-- the M4 notice, gated on "no calendar day". With a VALID day the swallow was
+-- COMPLETELY silent: the badge showed no "+N XP", the XP bar stopped, the level
+-- stopped, the score kept counting and the player was told NOTHING - for every
+-- player, every day, after ~3 attempts on a drill. The notice is now per DRILL per
+-- DAY.
+do
+    local function cap_notices(prints)
+        local n = 0
+        for _, line in ipairs(prints) do
+            if line:find("XP cap", 1, true) ~= nil then n = n + 1 end
+        end
+        return n
+    end
+
+    local b = build({ with_db = true, clock_epoch = 1790000000 })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    eq(cap_notices(F.prints), 0, "H2: nothing is printed before the cap bites")
+    -- Three A grades fill the drill's daily cap (3 x its median attempt XP = 240);
+    -- the fourth award is swallowed whole.
+    for _ = 1, 6 do
+        u.record_graded_attempt(T, "A")
+    end
+    local scope = F.profile_store.practice.progress.classes.PALADIN
+    eq(scope.xp, 240, "H2: the capped drill earns its capped XP")
+    eq(cap_notices(F.prints), 1, "H2: the capped drill prints the notice once")
+    -- Once per drill per day: another attempt on the same day prints nothing.
+    u.record_graded_attempt(T, "A")
+    eq(cap_notices(F.prints), 1, "H2: the notice is printed once per drill per day")
+    -- The next calendar day resets the cap, and the cap bites again (and the player
+    -- is told again).
+    F.day = "2026-10-21"
+    for _ = 1, 4 do
+        u.record_graded_attempt(T, "A")
+    end
+    eq(cap_notices(F.prints), 2, "H2: the notice fires again on the next day")
+    u.stop(T)
+end
+
+--=========================================================================================
+-- 26j) M1 (progression audit 2026-10-20): a saved blob a NEWER build wrote is
+-- protected, but the refusal was SILENT and the logout flush reported success while
+-- nothing was written.
+--
+-- The player keeps practising - the badge climbs, the level moves, the XP accrues -
+-- and at the session end nothing is saved and nothing is said. The guard sees no
+-- error, so /st diag stays clean. The refusal now prints a notice (once per
+-- session) and the flush reports the WRITE, not the close.
+do
+    local newer = { schema_version = 99, progress = { classes = {} }, stats = {} }
+    local b = build({ with_db = true, practice_blob = newer, clock_epoch = 1790000000 })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    check(#F.prints > 0, "M1: the newer blob prints a refusal notice")
+    local refused = false
+    for _, line in ipairs(F.prints) do
+        if line:find("not being saved", 1, true) ~= nil then refused = true end
+    end
+    check(refused, "M1: the refusal notice names the dead end")
+    local prints_after = #F.prints
+    u.record_graded_attempt(T, "A")
+    eq(#F.prints, prints_after, "M1: the refusal notice is printed once per session")
+    eq(F.practice_writes, 0, "M1: the newer blob is never written over")
+    -- The flush reports the WRITE: a session whose blob a newer build owns closed
+    -- cleanly and reported success while NOTHING was written.
+    eq(u.flush_progress_session(T), false, "M1: the flush reports that nothing was written")
+    eq(F.practice_writes, 0, "M1: the flush wrote nothing")
+    u.stop(T)
+end
+
+--=========================================================================================
+-- 26k) L2 (progression audit 2026-10-20): the reserved "_unknown" drill bucket is
+-- recorded on BOTH sides, so the merged row is coherent (the progress side's
+-- attempts next to a real accuracy, not a fabricated 0.0%).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    -- An attempt with no usable drill id lands in the reserved bucket.
+    u.progress_drill_key = nil
+    u.record_graded_attempt(T, "A")
+    local blob = F.profile_store.practice
+    local stats_drills = blob.stats.classes.PALADIN.drills
+    local progress_drills = blob.progress.classes.PALADIN.drills
+    check(type(stats_drills) == "table" and type(stats_drills._unknown) == "table",
+        "L2: the stats side records the reserved bucket")
+    eq(type(stats_drills) == "table" and type(stats_drills._unknown) == "table"
+        and stats_drills._unknown.attempts or nil, 1,
+        "L2: the reserved bucket counts the attempt")
+    check(type(progress_drills) == "table" and type(progress_drills._unknown) == "table",
+        "L2: the progress side records the reserved bucket")
+    u.stop(T)
+end
+
+-- The six classes' drill-list pick contract. Each entry names:
+--   modules  - the sandbox modules the class needs (its pure guide first, then
+--              the class module itself);
+--   setup    - the class's live STATE fixture (the paladin's ctx reads the
+--              session state for its timing and its cooldowns);
+--   gather   - the class's live GATHER fixture (the sandbox has no client);
+--   action   - the action key the drill-list row offers AND the rotation's
+--              own answer at this fixture (the pick the press carries). A
+--              rotation change moves this key - this table is the one place
+--              to update, exactly like the other rotation pins in the tree;
+--   aliases  - the ctx fields the class's own reader reads, in the class's own
+--              order (the "only this alias" case).
+--
+-- Section 27b reads four more fields off the same table (the guide-vocabulary
+-- leg of the action strip):
+--   family_id - the client family the 27b pin runs the class on (the compat
+--               layer's WOW_PROJECT_ID: 2 = Era, 5 = TBC, 11 = WotLK,
+--               18 = Forever). The guide vocabulary is family-scoped, so the
+--               pin asks for the family the class's own slot set needs.
+--   guide_key - a key of the class's OWN guide slot list that the running
+--               family's rotation does NOT rank: the class's own vocabulary,
+--               as opposed to the rotation leg.
+--   common    - the class's common ability the pin follows (the neutral set's
+--               own key: a heal, a potion, food).
+--   client_id - the spell id the sandbox's client knows (the client's own rank
+--               of that ability - NOT the ladder's first id, so the pin reads
+--               the client's answer back).
+local PRACTICE_CLASS_SPECS = {
+    {
+        key = "PALADIN",
+        family_id = 2,
+        guide_key = "sob",
+        common = "food",
+        client_id = 10256,
+        modules = { "classes/paladin.lua" },
+        setup = function(T)
+            T.state = {
+                swing_ends_at = 2.0,
+                gcd_expires = 0.0,
+                effective_speed = 2.6,
+                effective_gcd = 1.5,
+                active_seals = { command = true },
+                cs_cooldown_expires = 0,
+                judge_cooldown_expires = 0,
+                fcfs_mode = T.PALADIN.practice_default_mode(nil, nil),
+            }
+        end,
+        action = "judge",
+        aliases = { "last_action" },
+    },
+    {
+        key = "WARRIOR",
+        family_id = 18,
+        guide_key = "cleave",
+        common = "food",
+        client_id = 10256,
+        modules = { "warrior_guide.lua", "classes/warrior.lua" },
+        gather = function(out)
+            out.speed = 3.0
+            out.swing_remaining = 2.0
+            out.gcd_remaining = 0
+            out.rage = 50
+            out.hs_cost = 15
+            out.cleave_cost = 20
+            out.target_health_pct = 100
+            out.execute_pct = 20
+            out.op_remaining = 0
+            out.execute_remaining = 0
+            out.slam_remaining = 0
+            out.hs_remaining = 0
+            out.cleave_remaining = 0
+            return out
+        end,
+        action = "hs",
+        aliases = { "last_action" },
+    },
+    {
+        key = "DRUID",
+        family_id = 2,
+        guide_key = "maul",
+        common = "healing_touch",
+        client_id = 25297,
+        modules = { "druid_energy.lua", "druid_guide.lua", "classes/druid.lua" },
+        gather = function(out)
+            out.speed = 3.0
+            out.swing_remaining = 2.0
+            out.gcd_remaining = 0
+            out.form_index = 3
+            out.energy = 60
+            out.combo_points = 5
+            out.maul_queued = false
+            out.maul_cost = 15
+            out.insufficient_rage = false
+            out.rip_remaining = 8
+            out.rake_remaining = 7
+            out.mangle_remaining = 6
+            out.rip_refresh = 4
+            out.rake_refresh = 4
+            out.family = "ERA"
+            return out
+        end,
+        action = "shred",
+        aliases = { "last_action" },
+    },
+    {
+        key = "ROGUE",
+        family_id = 2,
+        guide_key = "rupture",
+        common = "food",
+        client_id = 10256,
+        modules = { "rogue_guide.lua", "classes/rogue.lua" },
+        gather = function(out)
+            out.energy_now = 50
+            out.cp = 5
+            out.ttd = 30
+            out.family = "ERA"
+            return out
+        end,
+        action = "eviscerate",
+        aliases = { "action", "pick", "pressed", "last_action" },
+    },
+    {
+        key = "SHAMAN",
+        family_id = 2,
+        guide_key = "twist",
+        common = "healing_potion",
+        client_id = 17534,
+        modules = { "shaman_guide.lua", "classes/shaman.lua" },
+        gather = function(out)
+            return out
+        end,
+        action = "flameshock",
+        aliases = { "action", "pick", "pressed", "last_action" },
+    },
+    {
+        key = "HUNTER",
+        family_id = 2,
+        guide_key = "raptor",
+        common = "food",
+        client_id = 10256,
+        modules = { "hunter_guide.lua", "classes/hunter.lua" },
+        gather = function(out)
+            out.speed = 3.0
+            out.swing_remaining = 2.0
+            out.gcd_remaining = 0
+            out.target_hp_frac = 1.0
+            out.synced_duration = 3.0
+            return out
+        end,
+        action = "silencing_shot",
+        aliases = { "pick", "pressed", "action", "last_action" },
+    },
+}
+
+--=========================================================================================
+-- 27) The drill-list pick channel: the CONTRACT, pinned against the REAL graders
+--
+-- Section 24 pins the plumbing with a HAND-WRITTEN paladin-shaped grader, so the
+-- alias block the F2 fix added (ctx.pick / ctx.pressed / ctx.action / ctx.last_action)
+-- was never exercised against a reader that reads a DIFFERENT alias: the rogue reads
+-- ctx.action FIRST, the shaman accepts action -> pick -> pressed -> choice ->
+-- last_action and the hunter reads pick -> pressed -> action -> last_action. The
+-- moment a class published its own ctx.action the drill-list pick would have been
+-- silently ignored and the press would have graded the wrong thing - with a green
+-- suite.
+--
+-- The pins below drive the CLASS'S OWN grader (the real class module, the real
+-- guide, the real alias reader) through the drill-list path. The sandbox has no
+-- client, so the class's LIVE GATHER (its data source) is stubbed - the grader
+-- under test stays the class's own.
+--
+-- The class-side contract the graders read is
+-- { now, last_action, pick, pressed, action, resources, cooldowns, session,
+--   session_id, state }: the drill-list press must deliver the pick in EVERY
+--   alias, and each class's own reader must resolve the pick from the ctx shape
+--   it actually reads.
+--=========================================================================================
+do
+    -- The pick aliases the ctx can carry: the alias block's four plus the rogue's
+    -- and the shaman's "choice" (a reader alias the drill-list press never sets).
+    local PICK_ALIASES = { "last_action", "pick", "pressed", "action", "choice" }
+    -- A copy of the ctx with every pick alias cleared: the reader under test then
+    -- sees only the one alias the case names (or none at all).
+    local function without_pick(ctx, keep)
+        local out = {}
+        for k, v in pairs(ctx) do
+            out[k] = v
+        end
+        for i = 1, #PICK_ALIASES do
+            out[PICK_ALIASES[i]] = nil
+        end
+        if keep ~= nil then
+            out[keep] = ctx[keep]
+        end
+        return out
+    end
+
+    for _, spec in ipairs(PRACTICE_CLASS_SPECS) do
+        local cls = spec.key
+        local b = build({ with_db = true, class_modules = spec.modules })
+        local u, T, F = b.st.practice_ui, b.ST, b.sb
+        local module = T[cls]
+        local ready = type(module) == "table" and type(module.practice_drills) == "table"
+            and #module.practice_drills > 0
+        check(ready, cls .. ": the real class module loaded (its own drill list is there)")
+        if ready then
+            T.player_class = cls
+T.active_class = cls
+            F.class_db.practice_mode = "drills"
+            if type(spec.setup) == "function" then
+                spec.setup(T)
+            end
+            if type(spec.gather) == "function" then
+                module.gather_guide_inputs = function(_self, out)
+                    return spec.gather(out)
+                end
+            end
+            -- The class's REAL grader, wrapped so the ctx it receives is observable.
+            -- The wrapper only delegates: the letter is the class's own.
+            local real = module.practice_drills[1].grade
+            local seen, graded, calls = nil, nil, 0
+            module.practice_drills[1].grade = function(self, ctx)
+                calls = calls + 1
+                seen = ctx
+                graded = real(self, ctx)
+                return graded
+            end
+            u.init(T)
+            F.clock = 0
+            u.start(T)
+            check(u.drill_list ~= nil, cls .. ": the drill-list session is the live one")
+            local buttons = u.practice_row_buttons and u.practice_row_buttons.buttons or {}
+            check(buttons[spec.action] ~= nil,
+                cls .. ": the drill-list row offers the class's action (" .. spec.action .. ")")
+            -- The press: the action button IS the pick, and the class's own grader
+            -- judges it through the drill-list path.
+            local before = calls
+            local attempts = u.score.attempts
+            buttons[spec.action]:GetScript("OnClick")()
+            local reached = calls > before
+            local ctx = reached and seen or nil
+            local grade = reached and graded or nil
+            check(reached, cls .. ": the drill-list press reached the class's own grader")
+            check(type(grade) == "string" and grade ~= "",
+                cls .. ": the class's own grader answered a letter (not UNKNOWN)")
+            eq(grade, "S", cls .. ": the pressed action is the rotation's own answer")
+            eq(u.score.attempts, attempts + 1,
+                cls .. ": the drill-list press recorded a graded attempt")
+            if ctx then
+                -- The alias-delivery contract: the pick rides in EVERY alias the
+                -- class graders read (this is the alias block's own job).
+                eq(ctx.last_action, spec.action, cls .. ": the pick rides in ctx.last_action")
+                eq(ctx.pick, spec.action, cls .. ": the pick rides in ctx.pick")
+                eq(ctx.pressed, spec.action, cls .. ": the pick rides in ctx.pressed")
+                eq(ctx.action, spec.action, cls .. ": the pick rides in ctx.action")
+                -- Each real alias reader, exercised with the ctx shape it reads: a
+                -- ctx that carries ONLY that alias still resolves the pick.
+                for i = 1, #spec.aliases do
+                    local alias = spec.aliases[i]
+                    local only = without_pick(ctx)
+                    only[alias] = spec.action
+                    local ok_g, g = pcall(real, T, only)
+                    check(ok_g, cls .. ": the real grader survives a ctx carrying only "
+                        .. alias)
+                    check(ok_g and type(g) == "string" and g ~= "",
+                        cls .. ": the real grader resolves the pick from a ctx carrying only "
+                            .. alias .. " (got " .. tostring(g) .. ")")
+                end
+                -- Without a pick the same grader cannot judge: the pick is what it
+                -- graded (UNKNOWN, never a guess).
+                local ok_n, n = pcall(real, T, without_pick(ctx))
+                check(ok_n, cls .. ": the real grader survives a ctx with no pick")
+                eq(ok_n and n or nil, nil,
+                    cls .. ": the real grader answers nil without a pick (UNKNOWN)")
+            end
+            -- The DRILL press: the pick stays in hand and the class's own grader
+            -- judges the drill with it (the panel's own two-step flow).
+            local before_drill = calls
+            local drill_key = u.drill_list_current
+            check(type(drill_key) == "string" and drill_key ~= "",
+                cls .. ": the action press selected a drill")
+            check(buttons[drill_key] ~= nil,
+                cls .. ": the drill-list row offers the class's drill (" .. tostring(drill_key) .. ")")
+            buttons[drill_key]:GetScript("OnClick")()
+            local drill_reached = calls > before_drill
+            local drill_ctx = drill_reached and seen or nil
+            local drill_grade = drill_reached and graded or nil
+            check(drill_reached, cls .. ": the drill press reached the class's own grader")
+            check(type(drill_grade) == "string" and drill_grade ~= "",
+                cls .. ": the drill press answered a letter (not UNKNOWN)")
+            eq(drill_grade, "S", cls .. ": the drill press graded the pick in hand")
+            eq(u.score.attempts, attempts + 2,
+                cls .. ": the drill press recorded a graded attempt")
+            if drill_ctx then
+                eq(drill_ctx.last_action, spec.action,
+                    cls .. ": the drill press carries the pick in ctx.last_action")
+                eq(drill_ctx.pick, spec.action,
+                    cls .. ": the drill press carries the pick in ctx.pick")
+                eq(drill_ctx.pressed, spec.action,
+                    cls .. ": the drill press carries the pick in ctx.pressed")
+                eq(drill_ctx.action, spec.action,
+                    cls .. ": the drill press carries the pick in ctx.action")
+            end
+        end
+        u.stop(T)
+    end
+end
+
+--=========================================================================================
+-- 27b) The scenario strip's GUIDE leg: the class's own guide vocabulary and the
+-- common abilities the client actually has
+--
+-- WHY: the action strip has THREE legs (practice_ui.lua's scenario_action_order):
+-- the class's published rotation, the class's own GUIDE SLOT list, and the keys the
+-- class asked for. The middle leg is where the common abilities live: the class
+-- seam (apply_practice_panel_actions) appends them to guide.slots, and the panel
+-- reads guide.slots LIVE. Drop that one leg and every neutral/common ability
+-- vanishes from the panel - and the suite stays GREEN, because every button key any
+-- suite asserted was also a rotation action.
+--
+-- The pins below drive the REAL class modules (the same sandbox as section 27) and
+-- read the panel's own action group:
+--
+--   (a) the strip carries a guide-slot key the running family's rotation does NOT
+--       rank - the class's OWN vocabulary reaches the panel (the guide leg);
+--   (b) the strip carries the class's common ability, with the CLIENT'S OWN
+--       resolved spell id (the client's own rank, not the ladder's first id);
+--   (c) the NEGATIVE half: the same class on a client that knows NONE of the
+--       common spells offers NO common button (unknown-hides) - so (b) is not
+--       vacuous, and the strip itself is not empty.
+--
+-- The family is per class (the guide vocabulary is family-scoped): the pin needs a
+-- family on which the class's own slot set carries a key its rotation does not rank
+-- - the warrior's own vocabulary IS its rotation vocabulary on Era and TBC, so its
+-- pin runs on the Forever family, where its slot set carries the Cleave.
+--=========================================================================================
+do
+    for _, spec in ipairs(PRACTICE_CLASS_SPECS) do
+        local cls = spec.key
+        -- One sandbox, one session: the class's own guide vocabulary BEFORE the
+        -- seam widens it, the seam's own result, and the panel's action group.
+        local function panel_strip(client_spells)
+            local b = build({
+                with_db = true,
+                class_modules = spec.modules,
+                project_id = spec.family_id,
+                client_spells = client_spells,
+            })
+            local u, T, F = b.st.practice_ui, b.ST, b.sb
+            local module = T[cls]
+            T.player_class = cls
+T.active_class = cls
+            F.class_db.practice_mode = "scenario"
+            if type(spec.setup) == "function" then
+                spec.setup(T)
+            end
+            if type(spec.gather) == "function" then
+                module.gather_guide_inputs = function(_self, out)
+                    return spec.gather(out)
+                end
+            end
+            -- The class's OWN guide vocabulary, captured before the seam widens it.
+            local own = {}
+            local guide = module.guide
+            if type(guide) == "table" and type(guide.slots) == "table" then
+                for i = 1, #guide.slots do
+                    local slot = guide.slots[i]
+                    if type(slot) == "table" and type(slot.key) == "string" then
+                        own[slot.key] = true
+                    end
+                end
+            end
+            -- The class seam: the common abilities are appended to guide.slots.
+            local seam = false
+            if type(module.apply_practice_panel_actions) == "function" then
+                seam = module.apply_practice_panel_actions() == true
+            end
+            -- The id the seam resolved for the common ability (nil when the client
+            -- does not have the spell - unknown-hides).
+            local resolved = nil
+            if type(guide) == "table" and type(guide.slots) == "table" then
+                for i = 1, #guide.slots do
+                    local slot = guide.slots[i]
+                    if type(slot) == "table" and slot.key == spec.common then
+                        resolved = slot.spell_id
+                    end
+                end
+            end
+            u.init(T)
+            F.clock = 0
+            u.start(T)
+            local buttons = u.practice_row_buttons and u.practice_row_buttons.buttons or {}
+            return {
+                b = b, u = u, module = module, own = own, seam = seam,
+                resolved = resolved, buttons = buttons,
+            }
+        end
+
+        -- The client knows the common ability's own rank.
+        local pos = panel_strip({ spec.client_id })
+        -- The client knows NONE of the common spells (the negative half).
+        local neg = panel_strip({})
+
+        -- (a) the guide leg: the class's own vocabulary reaches the panel.
+        check(pos.own[spec.guide_key] == true,
+            cls .. ": the class's own guide vocabulary carries " .. spec.guide_key)
+        local rotation = {}
+        if type(pos.module.practice_rotation_action_set) == "function" then
+            local ok_r, set = pcall(pos.module.practice_rotation_action_set)
+            if ok_r and type(set) == "table" then
+                rotation = set
+            end
+        end
+        check(rotation[spec.guide_key] ~= true,
+            cls .. ": " .. spec.guide_key .. " is not a rotation action (the pin's own premise)")
+        check(pos.buttons[spec.guide_key] ~= nil,
+            cls .. ": the action strip offers the class's own guide key (" .. spec.guide_key .. ")")
+        check(neg.buttons[spec.guide_key] ~= nil,
+            cls .. ": the class's own guide key reaches the strip without the client's common spells")
+
+        -- (b) the common ability, with the CLIENT's own resolved id.
+        check(pos.seam == true,
+            cls .. ": the class seam widened the guide slot list with the common abilities")
+        check(pos.buttons[spec.common] ~= nil,
+            cls .. ": the action strip offers the common ability (" .. spec.common .. ")")
+        eq(pos.resolved, spec.client_id,
+            cls .. ": the common ability resolved to the CLIENT's own spell id")
+        local button = pos.buttons[spec.common]
+        local icon = pos.b.env.GetSpellTexture(spec.client_id)
+        check(button ~= nil and button.row_icon ~= nil and button.row_icon.texture == icon,
+            cls .. ": the common button carries the client's own icon")
+
+        -- (c) the negative half: a client that knows none of the common spells
+        -- offers none of them (unknown-hides).
+        check(neg.buttons[spec.common] == nil,
+            cls .. ": a client that knows none of the common spells offers no common button")
+        local common_keys, leaked = {}, {}
+        for i = 1, #(neg.module.practice_common_actions or {}) do
+            local action = neg.module.practice_common_actions[i]
+            if type(action) == "table" and type(action.key) == "string" then
+                common_keys[action.key] = true
+            end
+        end
+        for key in pairs(neg.buttons) do
+            if common_keys[key] and not neg.own[key] then
+                leaked[#leaked + 1] = key
+            end
+        end
+        table.sort(leaked)
+        check(#leaked == 0,
+            cls .. ": no common ability reaches the strip on a client that knows none of them" ..
+            (#leaked > 0 and (" (leaked: " .. table.concat(leaked, ", ") .. ")") or ""))
+
+        pos.u.stop(pos.b.ST)
+        neg.u.stop(neg.b.ST)
+    end
+end
+
+--=========================================================================================
+-- 28) The progression lane's FILED call sites (progression audit 2026-10-20).
+--
+-- The pure lane fixed the pure modules; the call sites in practice_ui.lua and
+-- practice_progress_ui.lua were FILED with the exact diff (bench/progression_fixes_
+-- 2026-10-20.md §7.1-§7.5). These are the pins for the five of them:
+--   7.1  the ACCOUNT scope is evaluated at the session end (its unlock flags live
+--        in progress.global.unlocks, so the class scope alone left every
+--        account-scoped achievement locked for good);
+--   7.2  the history day is read SIGNED (the NO_DAY sentinel must reach the
+--        renderer - see tests/practice_progress_ui_state.lua for the UI half);
+--   7.3  ONE day numbering (the civil calendar; the UTC clock fallback is gone);
+--   7.4  the grade is validated against the scoring model's set BEFORE the live
+--        score counts it (so the score and the progression can never diverge);
+--   7.5  the two cap notices describe the SHIPPED cap.
+--=========================================================================================
+
+-- 28a) M2: the ACCOUNT scope's achievements evaluate at the session end.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    u.record_graded_attempt(T, "S")
+    F.clock = 1
+    u.stop(T)
+    local blob = F.profile_store.practice
+    local class_scope = blob.progress.classes.PALADIN
+    local account = blob.progress.global
+    eq(type(class_scope) == "table" and class_scope.unlocks
+        and class_scope.unlocks.first_s or nil, true,
+        "M2: the class scope holds its own flag")
+    eq(type(account) == "table" and account.unlocks
+        and account.unlocks.first_s or nil, true,
+        "M2: the account scope holds its own flag too")
+    check(account ~= class_scope, "M2: the account scope is a scope of its own")
+    -- The class-scoped flag does not leak into the account scope's map and the
+    -- account's does not leak into the class's: the two scopes are separate.
+    eq(type(account) == "table" and account.unlocks
+        and account.unlocks.hundred_attempts or nil, nil,
+        "M2: one attempt is not a hundred attempts (in either scope)")
+end
+
+-- 28b) L4: an unknown grade cannot move the live score. The live scoring model
+-- counts ANY grade it is handed (points 0, but an attempt and a hit), while the
+-- pure modules drop a grade outside the scoring model's set - so the score and
+-- the progression used to diverge.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    local attempts = u.score.attempts
+    local hits = u.score.hits
+    local last_grade = u.score.last_grade
+    u.record_graded_attempt(T, "Z")
+    eq(u.score.attempts, attempts, "L4: an unknown grade is not an attempt on the live score")
+    eq(u.score.hits, hits, "L4: an unknown grade is not a hit on the live score")
+    eq(u.score.last_grade, last_grade, "L4: an unknown grade never becomes the last grade")
+    -- The two sides count the same attempts.
+    u.record_graded_attempt(T, "A")
+    local stats = F.profile_store.practice.stats.classes.PALADIN
+    eq(u.score.attempts, type(stats) == "table" and stats.attempts or nil,
+        "L4: the live score and the progression count the same attempts")
+    u.stop(T)
+end
+
+-- 28c) L6: ONE day numbering. The day the UI feeds the pure layer is the CIVIL
+-- ordinal - the same numbering the pure module builds from the "YYYY-MM-DD" form.
+-- The numeric clock fallback (a UTC day count) is a DIFFERENT numbering and is
+-- gone: a client with no calendar has NO day.
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local P = b.st.practice_progress
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    u.record_graded_attempt(T, "A")
+    local blob = F.profile_store.practice
+    local drill = blob.progress.classes.PALADIN.drills[u.progress_drill_key]
+    eq(type(drill) == "table" and drill.daily_day or nil, P.day_ordinal("2026-10-19"),
+        "L6: the stored day is the civil ordinal of the calendar day")
+    -- A client with no calendar has NO day: the clock is not a second numbering.
+    local b2 = build({ with_db = true, no_date = true, clock_epoch = 1790000000 })
+    local u2, T2, F2 = b2.st.practice_ui, b2.ST, b2.sb
+    u2.init(T2)
+    F2.clock = 0
+    u2.start(T2)
+    u2.record_graded_attempt(T2, "A")
+    local drill2 = F2.profile_store.practice.progress.classes.PALADIN.drills[u2.progress_drill_key]
+    eq(type(drill2) == "table" and drill2.daily_day or nil, nil,
+        "L6: a client with no calendar stores no day at all")
+    u2.stop(T2)
+end
+
+-- 28d) The two cap notices describe the SHIPPED cap: 3x the drill's median HIT XP
+-- (floored by the best hit), not 3x its median attempt XP - and a client with no
+-- calendar earns UP TO its cap, not nothing.
+do
+    local b = build({ with_db = true, clock_epoch = 1790000000 })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    for _ = 1, 6 do
+        u.record_graded_attempt(T, "A")
+    end
+    local cap_line = nil
+    for _, line in ipairs(F.prints) do
+        if line:find("XP cap", 1, true) ~= nil then cap_line = line end
+    end
+    check(cap_line ~= nil, "the cap notice: the capped drill prints the notice")
+    check(cap_line and cap_line:find("median hit XP", 1, true) ~= nil,
+        "the cap notice: it names the cap's own rule (the median HIT XP)")
+    check(cap_line and cap_line:find("median attempt XP", 1, true) == nil,
+        "the cap notice: it no longer describes the old cap")
+    u.stop(T)
+end
+
+do
+    local b = build({ with_db = true, no_date = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    for _ = 1, 8 do
+        u.record_graded_attempt(T, "A")
+    end
+    local line = F.prints[#F.prints] or ""
+    check(line:find("no calendar date", 1, true) ~= nil,
+        "the no-calendar notice: it names the cause")
+    check(line:find("earns XP only up to its cap", 1, true) ~= nil,
+        "the no-calendar notice: it says the drill earns up to its cap")
+    check(line:find("earns no XP", 1, true) == nil,
+        "the no-calendar notice: it no longer claims the drill earns nothing")
+    u.stop(T)
+end
+
+--=========================================================================================
+-- 29) F1 (drill-pick contract 2026-10-20): the drill-list PRESS is the pick.
+--
+-- The alias block only filled an EMPTY alias, so a class that published its own
+-- pick alias kept it - and the class's own reader, which reads that alias FIRST,
+-- graded the class's value instead of the player's press.
+--
+-- Case A - the HUNTER, reachable today: the class's own ctx publishes ctx.pick =
+-- the live cast (the shot that is casting right now) and the hunter's reader reads
+-- ctx.pick FIRST. A drill-list press made while a Steady Shot was casting was
+-- graded against the live cast, not the player's press (measured: F for a press
+-- of the rotation's own answer).
+--
+-- Case B - the ROGUE/SHAMAN shape (latent today): a class ctx that publishes
+-- ctx.action, which the rogue and the shaman read FIRST. The sandbox wraps the
+-- class's own ctx builder to publish it; the class file is untouched.
+--
+-- What must NOT change: the SCENARIO path (the hunter's live cast stays the pick
+-- there - a different call site) and the hunter's own drill behaviour (a drill
+-- press with NO pick still judges the shot that is in flight).
+--=========================================================================================
+do
+    -- The hunter's fixture: the rotation's own answer at this state is
+    -- "silencing_shot" (the fixture section 27 uses) and a Steady Shot is in
+    -- flight, so the class's own ctx publishes ctx.pick = "steady".
+    local function hunter_fixture(b)
+        local u, T, F = b.st.practice_ui, b.ST, b.sb
+        local module = T.HUNTER
+        T.player_class = "HUNTER"
+T.active_class = "HUNTER"
+        F.class_db.practice_mode = "drills"
+        module.gather_guide_inputs = function(_self, out)
+            out.speed = 3.0
+            out.swing_remaining = 2.0
+            out.gcd_remaining = 0
+            out.target_hp_frac = 1.0
+            out.synced_duration = 3.0
+            out.steady_remaining = 1.0
+            return out
+        end
+        local seen, graded, calls = nil, nil, 0
+        local real = module.practice_drills[1].grade
+        module.practice_drills[1].grade = function(self, ctx)
+            calls = calls + 1
+            seen = ctx
+            graded = real(self, ctx)
+            return graded
+        end
+        u.init(T)
+        F.clock = 0
+        u.start(T)
+        return {
+            ui = u,
+            ST = T,
+            module = module,
+            watch = function()
+                return seen, graded, calls
+            end,
+        }
+    end
+
+    -- Case A: the class publishes ctx.pick (the live cast).
+    local b = build({ with_db = true, class_modules = { "hunter_guide.lua", "classes/hunter.lua" } })
+    local a = hunter_fixture(b)
+    local u, T = a.ui, a.ST
+    local buttons = u.practice_row_buttons and u.practice_row_buttons.buttons or {}
+    check(buttons["silencing_shot"] ~= nil,
+        "F1: the drill-list row offers the hunter's action")
+    buttons["silencing_shot"]:GetScript("OnClick")()
+    local seen, graded, calls = a.watch()
+    check(calls > 0, "F1: the drill-list press reached the hunter's own grader")
+    eq(type(seen) == "table" and seen.pick or nil, "silencing_shot",
+        "F1: the press wins over the class's published pick (ctx.pick)")
+    eq(type(seen) == "table" and seen.pressed or nil, "silencing_shot",
+        "F1: the press rides in ctx.pressed")
+    eq(type(seen) == "table" and seen.action or nil, "silencing_shot",
+        "F1: the press rides in ctx.action")
+    eq(graded, "S", "F1: the PRESS is graded, not the live cast")
+    u.stop(T)
+
+    -- Case B: the class publishes ctx.action (the rogue's and the shaman's
+    -- first-read alias) and no ctx.pick.
+    local b2 = build({ with_db = true, class_modules = { "hunter_guide.lua", "classes/hunter.lua" } })
+    local bb = hunter_fixture(b2)
+    local u2, T2, module2 = bb.ui, bb.ST, bb.module
+    local own_context = module2.practice_context
+    module2.practice_context = function(self, now, last_action)
+        local ctx = own_context(self, now, last_action)
+        if type(ctx) == "table" then
+            ctx.pick = nil
+            ctx.action = "steady"
+        end
+        return ctx
+    end
+    local buttons2 = u2.practice_row_buttons and u2.practice_row_buttons.buttons or {}
+    buttons2["silencing_shot"]:GetScript("OnClick")()
+    local seen2, _, calls2 = bb.watch()
+    check(calls2 > 0, "F1: the drill-list press reached the class's own grader")
+    eq(type(seen2) == "table" and seen2.action or nil, "silencing_shot",
+        "F1: the press wins over the class's published ctx.action")
+    eq(type(seen2) == "table" and seen2.pick or nil, "silencing_shot",
+        "F1: the press rides in ctx.pick as well")
+    u2.stop(T2)
+
+    -- Case C: the hunter's own drill behaviour is UNCHANGED - a drill press with NO
+    -- pick still judges the shot that is actually in flight.
+    local b3 = build({ with_db = true, class_modules = { "hunter_guide.lua", "classes/hunter.lua" } })
+    local c = hunter_fixture(b3)
+    local u3, T3, module3 = c.ui, c.ST, c.module
+    local buttons3 = u3.practice_row_buttons and u3.practice_row_buttons.buttons or {}
+    local drill_key = module3.practice_drills[1].key
+    check(buttons3[drill_key] ~= nil,
+        "F1: the drill-list row offers the hunter's drill (" .. tostring(drill_key) .. ")")
+    buttons3[drill_key]:GetScript("OnClick")()
+    local seen3, graded3, calls3 = c.watch()
+    check(calls3 > 0, "F1: the drill press reached the hunter's own grader")
+    eq(type(seen3) == "table" and seen3.pick or nil, "steady",
+        "F1: with no press the class's own pick (the live cast) still reaches the grader")
+    check(type(graded3) == "string" and graded3 ~= "",
+        "F1: a drill press with no pick still judges the live cast (not UNKNOWN)")
+    u3.stop(T3)
+end
+
+--=========================================================================================
+-- 29) The scenario strip's GRADER SEAM: ONE spelling per spell, and a press graded by
+-- the spell it represents
+--
+-- WHY (the deep audit's Issue 1, HIGH): the paladin has TWO key spaces. The rotation
+-- and the guide engine say "cons" / "exo" / "hs" / "am" (classes/paladin.lua's
+-- PRACTICE_ORDER_TWIST and the FCFS orders); the guide SLOTS say "consecration" /
+-- "exorcism" / "holy_shock" / "aura_mastery" (the same file's guide.slots). The
+-- action row pushed BOTH vocabularies, so the player got TWO buttons for
+-- Consecration - a bare text "cons" and an icon "consecration" - and the grader
+-- compared the RAW press with the RAW expectation: pressing the icon button graded
+-- OUT OF ORDER (an F, a broken streak and no XP) for the spell the prompt named, on
+-- TBC, on Forever, on Wrath and on the four SoD orders.
+--
+-- The pins below drive the REAL class modules (the same sandbox as section 27) and
+-- the panel's own buttons:
+--
+--   (a) the panel offers ONE button per spell - no two spellings of one spell;
+--   (b) the button that carries a spell's icon is the CANONICAL one;
+--   (c) the press of the panel's own button for the action the prompt names grades
+--       CORRECT (never out_of_order) - for every class and every slice the table
+--       names;
+--   (d) a press in ANY spelling the class knows grades CORRECT too: the grader
+--       compares canonical keys, so the sim's own "consec" and the guide slot's
+--       "consecration" are the spell the rotation calls "cons";
+--   (e) the drill-list path normalises the pick the same way.
+--
+-- The class's own ANSWER is driven by the pin (the `want` variable): what is under
+-- test is the panel <-> grader seam, not the class's decision (the rotation pins
+-- hold that).
+--=========================================================================================
+do
+    local by_key = {}
+    for _, spec in ipairs(PRACTICE_CLASS_SPECS) do
+        by_key[spec.key] = spec
+    end
+
+    -- The GRADER-SEAM walk: the class and the client family its panel is walked on.
+    -- The paladin carries TWO key spaces, so it is walked on the classic line (TBC:
+    -- the twist order names cons/exo) and on the Forever client (the twist order
+    -- there names cons/exo/how) - the families the deep audit named. The other five
+    -- classes carry ONE key space, so their own slice family is enough.
+    --
+    -- filler_actions: the class's own filler rows - the spells the guide slots name
+    -- under the guide's spelling and the rotation asks for under its own (the
+    -- paladin's cons / exo / hs / am: the case the audit found).
+    local GRADER_SPECS = {
+        { key = "PALADIN", family_id = 5,
+            filler_actions = { "cons", "exo", "hs", "am" } },
+        { key = "PALADIN", family_id = 18,
+            filler_actions = { "cons", "exo", "hs", "am" } },
+        { key = "WARRIOR", family_id = 18 },
+        { key = "DRUID", family_id = 2 },
+        { key = "ROGUE", family_id = 2 },
+        { key = "SHAMAN", family_id = 2 },
+        { key = "HUNTER", family_id = 2 },
+    }
+
+    for _, gs in ipairs(GRADER_SPECS) do
+        local spec = by_key[gs.key]
+        local cls = gs.key
+        local tag = cls .. "@" .. tostring(gs.family_id)
+        local b = build({
+            with_db = true,
+            class_modules = spec.modules,
+            project_id = gs.family_id,
+            -- The client knows the filler spells, so their buttons carry an icon.
+            client_spells = { 879, 20930, 407624 },
+        })
+        local u, T, F = b.st.practice_ui, b.ST, b.sb
+        local module = T[cls]
+        T.player_class = cls
+T.active_class = cls
+        F.class_db.practice_mode = "scenario"
+        if type(spec.setup) == "function" then
+            spec.setup(T)
+        end
+        if type(spec.gather) == "function" then
+            module.gather_guide_inputs = function(_self, out)
+                return spec.gather(out)
+            end
+        end
+        -- The class's own answer is driven by the pin: the seam is under test, not
+        -- the class's decision.
+        local want = nil
+        module.practice_scenario_step = function()
+            return { action = want }
+        end
+        u.init(T)
+        F.clock = 0
+        u.start(T)
+        local buttons = u.practice_row_buttons and u.practice_row_buttons.buttons or {}
+
+        -- (a) ONE button per spell: the panel never offers two spellings of one
+        -- spell (the paladin's "cons" and "consecration" are one Consecration).
+        local per_spell, dupes = {}, {}
+        for key in pairs(buttons) do
+            local canonical = module.practice_canonical_key(key)
+            per_spell[canonical] = (per_spell[canonical] or 0) + 1
+        end
+        for canonical, count in pairs(per_spell) do
+            if count > 1 then
+                dupes[#dupes + 1] = canonical
+            end
+        end
+        table.sort(dupes)
+        check(#dupes == 0, tag .. ": the panel offers ONE button per spell"
+            .. (#dupes > 0 and (" (twice: " .. table.concat(dupes, ", ") .. ")") or ""))
+
+        -- (b) the button that carries a spell's icon is the CANONICAL one: the
+        -- spell id is looked up through the class's alias table, so the one
+        -- Consecration button carries the Consecration icon.
+        local slots = (type(module.guide) == "table" and type(module.guide.slots) == "table")
+            and module.guide.slots or {}
+        for i = 1, #slots do
+            local slot = slots[i]
+            if type(slot) == "table" and type(slot.key) == "string"
+                and type(slot.spell_id) == "number" then
+                local canonical = module.practice_canonical_key(slot.key)
+                local btn = buttons[canonical]
+                local icon = b.env.GetSpellTexture(slot.spell_id)
+                if btn and icon then
+                    check(btn.row_icon ~= nil and btn.row_icon.texture == icon,
+                        tag .. ": the " .. canonical .. " button carries the " .. slot.key
+                            .. " icon")
+                end
+            end
+        end
+
+        -- The actions the panel is walked with: the class's own published rotation
+        -- for the running family, plus the class's filler rows.
+        local actions, seen_action = {}, {}
+        local function add(action)
+            if type(action) == "string" and action ~= "" and not seen_action[action] then
+                seen_action[action] = true
+                actions[#actions + 1] = action
+            end
+        end
+        local slice = nil
+        if type(module.practice_rotation_for) == "function" then
+            local ok, entries = pcall(function() return module.practice_rotation_for() end)
+            if ok and type(entries) == "table" then
+                slice = entries
+            end
+        end
+        for i = 1, #(slice or {}) do
+            local entry = slice[i]
+            if type(entry) == "table" then
+                add(entry.action)
+            end
+        end
+        for _, action in ipairs(gs.filler_actions or {}) do
+            add(action)
+        end
+
+        -- One press, one session: the run's own budget is ten decisions and the
+        -- walk asks for more than ten (the slice, the filler rows and every
+        -- spelling the class knows).
+        local function press(expected, press_key, label, via_button)
+            u.stop(T)
+            want = expected
+            F.clock = F.clock + 1
+            u.start(T)
+            local step = u.scenario_step
+            check(step ~= nil and step.expected == expected,
+                label .. ": the prompt names " .. tostring(expected))
+            check(u.scenario_run ~= nil, label .. ": the scenario run is alive")
+            if via_button then
+                local btn = buttons[press_key]
+                check(btn ~= nil, label .. ": the panel offers the button ("
+                    .. tostring(press_key) .. ")")
+                if btn then
+                    btn:GetScript("OnClick")()
+                end
+            else
+                u.cast_key(T, press_key)
+            end
+            local run = u.scenario_run
+            eq(run and run.correct or nil, 1, label .. ": the press grades CORRECT")
+            eq(run and run.mispicks or nil, 0, label .. ": the press is not a mis-pick")
+            eq(u.result_frame.text.text, "CORRECT", label .. ": the popup reads CORRECT")
+            eq(u.score.attempts, 1, label .. ": the press is one graded attempt")
+        end
+
+        -- (c) the press of the panel's OWN button for the action the prompt names.
+        for i = 1, #actions do
+            local action = actions[i]
+            press(action, action, tag .. ": the panel's button for " .. action, true)
+        end
+
+        -- (d) a press in ANY spelling the class knows grades CORRECT too.
+        local aliases = module.practice_action_aliases
+        if type(aliases) == "table" then
+            local spellings = {}
+            for alias, canonical in pairs(aliases) do
+                if type(alias) == "string" and type(canonical) == "string"
+                    and buttons[canonical] ~= nil and canonical ~= alias then
+                    spellings[#spellings + 1] = { alias = alias, canonical = canonical }
+                end
+            end
+            table.sort(spellings, function(a, c) return a.alias < c.alias end)
+            for i = 1, #spellings do
+                local spelling = spellings[i]
+                press(spelling.canonical, spelling.alias,
+                    tag .. ": the spelling " .. spelling.alias, false)
+            end
+        end
+
+        u.stop(T)
+    end
+end
+
+--=========================================================================================
+-- 29e) The drill-list path normalises the pick the same way: the pick rides into the
+-- class's own grader in the CANONICAL key space, whatever spelling the press
+-- carried.
+--
+-- The drill-list press is the player's PICK (the action under test) and it is the
+-- same alias space as the scenario's grader, so it is normalised at the same seam
+-- (practice_ui.lua's drill_list_grade). Without it the pick would reach the class's
+-- grader in the press's own spelling - and the class's grader would have to know
+-- every spelling of every action to make sense of it.
+--=========================================================================================
+do
+    local spec = nil
+    for _, entry in ipairs(PRACTICE_CLASS_SPECS) do
+        if entry.key == "PALADIN" then
+            spec = entry
+        end
+    end
+    local b = build({
+        with_db = true,
+        class_modules = spec.modules,
+        project_id = 5,
+        client_spells = { 879, 20930, 407624 },
+    })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local module = T.PALADIN
+    T.player_class = "PALADIN"
+T.active_class = "PALADIN"
+    F.class_db.practice_mode = "drills"
+    if type(spec.setup) == "function" then
+        spec.setup(T)
+    end
+    if type(spec.gather) == "function" then
+        module.gather_guide_inputs = function(_self, out)
+            return spec.gather(out)
+        end
+    end
+    -- The class's own grader, wrapped so the ctx it receives is observable. The
+    -- wrapper only delegates: the letter is the class's own.
+    local seen, graded, calls = nil, nil, 0
+    local real = module.practice_drills[1].grade
+    module.practice_drills[1].grade = function(self, ctx)
+        calls = calls + 1
+        seen = ctx
+        graded = real(self, ctx)
+        return graded
+    end
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    check(u.drill_list ~= nil, "29e: the drill-list session is the live one")
+    -- The press carries its own spelling (the guide slot's "consecration"), and
+    -- the pick must reach the class's grader in the canonical key space.
+    u.cast_key(T, "consecration")
+    check(calls > 0, "29e: the drill-list press reached the class's own grader")
+    eq(type(seen) == "table" and seen.pick or nil, "cons",
+        "29e: the pick rides in ctx.pick as the canonical key")
+    eq(type(seen) == "table" and seen.last_action or nil, "cons",
+        "29e: the pick rides in ctx.last_action as the canonical key")
+    eq(type(seen) == "table" and seen.action or nil, "cons",
+        "29e: the pick rides in ctx.action as the canonical key")
+    eq(type(seen) == "table" and seen.pressed or nil, "cons",
+        "29e: the pick rides in ctx.pressed as the canonical key")
+    eq(u.drill_list_pick, "cons", "29e: the session's pick is the canonical key")
+    check(type(graded) == "string" and graded ~= "",
+        "29e: the class's own grader answered a letter (not UNKNOWN)")
+    u.stop(T)
+end
+
+--=========================================================================================
+-- 29f) THE CANONICALISATION SEAM: two DIFFERENT spells must never collapse onto one
+-- canonical key
+--
+-- THE HAZARD (the final publish-gate re-audit's F-1): the panel DEDUPES on the
+-- canonical key (practice_ui.lua's scenario_action_order pushes the canonical key
+-- and skips a key it has already pushed) and the ICON lookup takes the FIRST
+-- matching slot (scenario_action_spell_id walks the guide slots and returns the
+-- first slot whose key canonicalises to the wanted key). So two keys of DIFFERENT
+-- spells that canonicalise onto one key cost the player three things at once: one
+-- button silently vanishes, the survivor carries the OTHER spell's icon, and a
+-- press of the dropped ability grades as the other spell.
+--
+-- No such case exists in the shipped tree - the paladin's "sob" is ONE key whose
+-- label names both the Blood and the Martyrdom seal, and it never surfaces as two
+-- buttons - but nothing would have caught a future one. THIS is that guard.
+--
+-- WHAT IS WALKED, per class, on the class's OWN published panel vocabulary:
+--
+--   (1) the class's own GUIDE SLOTS - the key and the slot's spell id (the icon
+--       id, which the class keeps rank-invariant, so two slots of one spell
+--       carry one id);
+--   (2) the class's ROTATION rows for the running family - the key and the row's
+--       LABEL (the spell's name, and the label the panel's button carries);
+--   (3) the COMMON ABILITIES the class publishes for this family (the key, the
+--       label and the published id ladder's first id). The per-ability family
+--       gate decides, and the offer gate's other two clauses are deliberately not
+--       applied: a merge is exactly what would make the offer gate hide a common
+--       ability, and the pin has to see the collision the merge would cause.
+--
+-- THE RULE: two DIFFERENT keys that canonicalise onto the same key must denote the
+-- SAME spell. The evidence is checked per id space (the guide slots' icon ids
+-- among themselves, the common abilities' ladder heads among themselves) and across
+-- the name publishers (the rotation rows' labels and the common abilities' labels
+-- must agree - a rotation row's label IS the spell's name). A rotation row's id is
+-- NOT compared with a guide slot's id: the two live in different id spaces (the
+-- APL's cited rank against the class's rank-invariant icon id), so a same-spell
+-- pair would read as two ids. A guide slot and a common ability are never compared
+-- across their id spaces either - the class's own offer gate keeps a rotation
+-- ability out of the common list, so the two never meet in one panel.
+--
+-- THE NORMALISER'S SHAPE is pinned too, so the pin is not vacuous on either side:
+-- the five classes whose key space is one publish an IDENTITY normaliser (every
+-- vocabulary key canonicalises to itself) and the paladin - the only class with an
+-- alias table - publishes a normaliser that really merges (at least one vocabulary
+-- key canonicalises onto a different key).
+--=========================================================================================
+do
+    local by_key = {}
+    for _, spec in ipairs(PRACTICE_CLASS_SPECS) do
+        by_key[spec.key] = spec
+    end
+
+    -- The same walks the grader-seam block above uses: the paladin carries TWO key
+    -- spaces (the rotation's and the guide slots'), so it is walked on two
+    -- families; the other five carry one key space each.
+    local COLLISION_SPECS = {
+        { key = "PALADIN", family_id = 5 },
+        { key = "PALADIN", family_id = 11 },
+        { key = "PALADIN", family_id = 18 },
+        { key = "WARRIOR", family_id = 18 },
+        { key = "DRUID", family_id = 2 },
+        { key = "ROGUE", family_id = 2 },
+        { key = "SHAMAN", family_id = 2 },
+        { key = "HUNTER", family_id = 2 },
+    }
+
+    for _, cs in ipairs(COLLISION_SPECS) do
+        local spec = by_key[cs.key]
+        local cls = cs.key
+        local tag = cls .. "@" .. tostring(cs.family_id)
+        local b = build({
+            with_db = true,
+            class_modules = spec.modules,
+            project_id = cs.family_id,
+            client_spells = { 879, 20930, 407624 },
+        })
+        local T, F = b.ST, b.sb
+        local module = T[cls]
+        T.player_class = cls
+T.active_class = cls
+        F.class_db.practice_mode = "scenario"
+        if type(spec.setup) == "function" then
+            spec.setup(T)
+        end
+        if type(spec.gather) == "function" then
+            module.gather_guide_inputs = function(_self, out)
+                return spec.gather(out)
+            end
+        end
+
+        -- The vocabulary, one entry per published source.
+        local guide, rotation = {}, {}
+
+        -- (1) the class's OWN guide slots (the class seam widens the slot list
+        -- with the common abilities on start; the class's own slots are the
+        -- other half of the vocabulary).
+        if type(module.guide) == "table" and type(module.guide.slots) == "table" then
+            for i = 1, #module.guide.slots do
+                local slot = module.guide.slots[i]
+                if type(slot) == "table" and type(slot.key) == "string" and slot.key ~= "" then
+                    guide[#guide + 1] = { key = slot.key, spell_id = slot.spell_id }
+                end
+            end
+        end
+
+        -- (2) the class's ROTATION rows for the running family.
+        local ok, entries = pcall(function() return module.practice_rotation_for() end)
+        if ok and type(entries) == "table" then
+            for i = 1, #entries do
+                local entry = entries[i]
+                if type(entry) == "table" and type(entry.action) == "string"
+                    and entry.action ~= "" then
+                    rotation[#rotation + 1] = { key = entry.action, label = entry.label }
+                end
+            end
+        end
+
+        -- (3) the COMMON ABILITIES the class publishes for this family (the
+        -- per-ability family gate decides). The offer gate's OTHER two clauses
+        -- (the neutral publish and the rotation rank) are deliberately NOT
+        -- applied here: a canonicalisation merge is exactly what would make the
+        -- offer gate hide a common ability, and the pin has to see the collision
+        -- the merge would cause.
+        local common = {}
+        if type(module.practice_common_actions) == "table" then
+            for i = 1, #module.practice_common_actions do
+                local action = module.practice_common_actions[i]
+                local families = type(action) == "table" and action.families or nil
+                local published = true
+                if type(families) == "table" then
+                    published = false
+                    for j = 1, #families do
+                        if families[j] == b.st.family then
+                            published = true
+                            break
+                        end
+                    end
+                end
+                if published and type(action.key) == "string" and action.key ~= "" then
+                    local ids = type(action.ids) == "table" and action.ids or nil
+                    common[#common + 1] = {
+                        key = action.key,
+                        label = action.label,
+                        spell_id = ids and ids[1] or nil,
+                    }
+                end
+            end
+        end
+
+        -- The canonical groups: every vocabulary key, canonicalised through the
+        -- class's OWN normaliser (the same seam the panel reads).
+        local groups, order = {}, {}
+        local merged = 0
+        local function add(entry, kind)
+            local canonical = module.practice_canonical_key(entry.key)
+            if type(canonical) ~= "string" or canonical == "" then
+                canonical = entry.key
+            end
+            if canonical ~= entry.key then
+                merged = merged + 1
+            end
+            local group = groups[canonical]
+            if not group then
+                group = { members = {} }
+                groups[canonical] = group
+                order[#order + 1] = canonical
+            end
+            local member = group.members[entry.key]
+            if not member then
+                member = { key = entry.key, guide_ids = {}, common_ids = {}, labels = {} }
+                group.members[entry.key] = member
+            end
+            if kind == "guide" then
+                -- the guide slot's own id: the icon id, which the class keeps
+                -- rank-invariant, so two slots of one spell carry one id.
+                if type(entry.spell_id) == "number" then
+                    member.guide_ids[entry.spell_id] = true
+                end
+            else
+                -- the name publishers: a rotation row's label and a common
+                -- ability's label are both the spell's name.
+                if type(entry.label) == "string" and entry.label ~= "" then
+                    member.labels[entry.label] = true
+                end
+                if kind == "common" and type(entry.spell_id) == "number" then
+                    -- the common ability's own ladder head (the rank-1 id).
+                    member.common_ids[entry.spell_id] = true
+                end
+            end
+        end
+        for _, entry in ipairs(guide) do
+            add(entry, "guide")
+        end
+        for _, entry in ipairs(rotation) do
+            add(entry, "rotation")
+        end
+        for _, entry in ipairs(common) do
+            add(entry, "common")
+        end
+
+        check(#order > 0, tag .. ": the class publishes a panel vocabulary")
+        for _, canonical in ipairs(order) do
+            local group = groups[canonical]
+            local distinct = 0
+            for _ in pairs(group.members) do
+                distinct = distinct + 1
+            end
+            if distinct > 1 then
+                -- The keys that collapse onto this one.
+                local keys = {}
+                for key in pairs(group.members) do
+                    keys[#keys + 1] = key
+                end
+                table.sort(keys)
+                -- (a) the id spaces: every guide slot of the group must carry the
+                -- SAME spell id (the icon lookup takes the first one, so a
+                -- different id is a different spell), and so must every common
+                -- ability (the ladder head).
+                local ids = {}
+                for _, member in pairs(group.members) do
+                    for id in pairs(member.guide_ids) do
+                        ids[#ids + 1] = tostring(id)
+                    end
+                end
+                table.sort(ids)
+                check(#ids <= 1,
+                    tag .. ": the canonical key '" .. canonical .. "' is one spell ("
+                        .. table.concat(keys, ", ") .. ") - the guide slots' spell ids agree"
+                        .. (#ids > 1 and (" (they differ: " .. table.concat(ids, ", ") .. ")")
+                            or ""))
+                local common_ids = {}
+                for _, member in pairs(group.members) do
+                    for id in pairs(member.common_ids) do
+                        common_ids[#common_ids + 1] = tostring(id)
+                    end
+                end
+                table.sort(common_ids)
+                check(#common_ids <= 1,
+                    tag .. ": the canonical key '" .. canonical .. "' is one spell ("
+                        .. table.concat(keys, ", ") .. ") - the common abilities' spell ids agree"
+                        .. (#common_ids > 1 and (" (they differ: "
+                            .. table.concat(common_ids, ", ") .. ")") or ""))
+                -- (b) the name publishers: the spell's name must agree.
+                local names = {}
+                for _, member in pairs(group.members) do
+                    for name in pairs(member.labels) do
+                        names[#names + 1] = name
+                    end
+                end
+                table.sort(names)
+                check(#names <= 1,
+                    tag .. ": the canonical key '" .. canonical .. "' is one spell ("
+                        .. table.concat(keys, ", ") .. ") - the names agree"
+                        .. (#names > 1 and (" (they differ: " .. table.concat(names, ", ") .. ")")
+                            or ""))
+            end
+        end
+
+        -- The normaliser's shape: the pin is not vacuous on either side.
+        if cls == "PALADIN" then
+            check(merged > 0,
+                tag .. ": the paladin's normaliser really merges a vocabulary key")
+        else
+            check(merged == 0,
+                tag .. ": the " .. cls .. " normaliser is the identity (its key space is one)")
+        end
+    end
+end
+
+-- ---- the shipped comments match the code (the final-gate claim) --------------
+-- The two drill-icon notes claimed "Era, TBC and Forever each answer their own
+-- rank art" (the shaman site) and leaned on "the shaman drill's name-art rule"
+-- (the rogue site): the classic-line name leg is UNCONFIRMED in-client (the
+-- audit's §6 C1), so a client that answers the name shows its own rank art, and
+-- an unanswered name leaves the icon blank. The pins keep the stale claim OUT
+-- and the corrected statement IN (source-shape pins, so a correct rewording
+-- still passes).
+--
+-- THE MATCH IS ON PROSE, NOT ON SOURCE LINES: the claim is wrapped across
+-- source lines, so the file is flattened (the line-leading comment marker
+-- dropped, the lines joined with one space) and the sentence is matched whole.
+-- BOTH drill sites must carry the corrected statement (the count is the check):
+-- a note that drops back to the old wording loses its own copy of it.
+do
+    local function prose(path)
+        local fh = io.open(path, "r")
+        local src = fh and fh:read("*a") or ""
+        if fh then fh:close() end
+        local parts = {}
+        for line in (src:gsub("\r\n", "\n")):gmatch("[^\n]*") do
+            parts[#parts + 1] = (line:gsub("^%s*%-%-%s*", ""))
+        end
+        return (table.concat(parts, " "):gsub("%s+", " "))
+    end
+    local p = prose(ROOT .. "practice_ui.lua")
+        .. " " .. prose(ROOT .. "classes/shaman.lua")
+        .. " " .. prose(ROOT .. "classes/rogue.lua")
+    check(p:find("every client family answers its own rank art", 1, true) == nil,
+        "comment: the stale 'every client family answers its own rank art' claim is gone")
+    check(p:find("each answer their own rank art", 1, true) == nil,
+        "comment: the stale 'each answer their own rank art' claim is gone")
+    local _, marked = p:gsub("a client that answers the name shows its own rank art", "")
+    check(marked >= 2,
+        "comment: both drill-icon notes carry the corrected name-art statement (found "
+            .. tostring(marked) .. ")")
+    local _, unconfirmed = p:gsub("UNCONFIRMED in%-client", "")
+    check(unconfirmed >= 2,
+        "comment: both drill-icon notes mark the name leg UNCONFIRMED in-client (found "
+            .. tostring(unconfirmed) .. ")")
 end
 
 if failures == 0 then

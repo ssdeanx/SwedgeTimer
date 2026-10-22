@@ -13,9 +13,16 @@
 --   unreachable (BUG 1) or reachable too early (BUG 2). Only a check that reads the
 --   dispatch graph can see them.
 --
--- WHAT IT DOES: reads the addon sources as TEXT (io.open + read, never load/executes them)
--- and asserts five invariants. Every check prints one PASS/FAIL line naming file:line
--- evidence, and the script exits non-zero if any check fails.
+-- WHAT IT DOES: reads the addon sources as TEXT (io.open + read) and asserts seven
+-- invariants. Every check prints one PASS/FAIL line naming file:line evidence, and the
+-- script exits non-zero if any check fails.
+--
+-- ONE EXCEPTION: check 8 LOADS the six class modules in a hermetic sandbox (no WoW
+-- client, no addon state) - a file-scope failure is invisible to a text scan and to
+-- every behaviour test, because the offline class suites load the modules into a
+-- sandbox whose namespace table is a PLAIN table, which hides a namespace write. The
+-- sandbox in check 8 records every namespace write instead, so a class module whose
+-- file scope touches the namespace fails the build.
 --
 -- NON-VACUITY: a static scan fails silently when its pattern stops matching - this file
 -- once shipped an api-contract counter that matched ZERO references for weeks and printed a
@@ -56,6 +63,20 @@
 --      ALLOWLIST_OPTIONAL with a one-line reason, so a rename of an unguarded call site
 --      (or of a guarded one whose entry was not updated) fails while a documented
 --      optional hook passes. Allowlist rot is reported exactly like ACCEPTED.
+--   7. NAMESPACE WRITE GUARD - the class tables live on the ADDON OBJECT (the AceAddon
+--      table) and the shared engine resolves them from there FIRST, so a class table on
+--      the namespace is dead weight, and a file-scope namespace write in a CLASS module
+--      is a load-time landmine (every class file is in every toc, so its file scope
+--      runs on EVERY client). Two invariants: 7a no class module writes to the
+--      namespace at file scope, 7b no addon file puts a class table on the namespace at
+--      any scope. The root modules' own bootstrap writes (`st.<module> = st.<module> or
+--      {}` - the client's addon table starts empty) are counted and reported, not
+--      failed; the count is a non-vacuity floor.
+--   8. CLASS-MODULE LOAD GUARD + ENGINE RESOLUTION - each class module is LOADED in a
+--      hermetic sandbox whose namespace table records every write, so a file-scope
+--      namespace write fails the build (the client's exact failure mode), and the
+--      shared engine's own accessor (practice.lua's H.practice_class_module) must find
+--      all six class modules with NO namespace mirror anywhere in the tree.
 --
 -- SEVERITY MODEL - three outcomes, deliberately distinct:
 --   ok       invariant holds.
@@ -90,8 +111,8 @@ local ACCEPTED = {
 	-- --- deliberate, no defect
 	["3|main.lua|swing_timer_start-no-guard"] =
 		"Swing-engine callbacks are registered by register_timer_callbacks(), which "
-		.. "init_timers() calls at main.lua:521 - one line AFTER interfaces_are_initialised "
-		.. "is set at main.lua:520. The engine therefore cannot deliver a callback before "
+		.. "init_timers() calls at main.lua:702 - one line AFTER interfaces_are_initialised "
+		.. "is set at main.lua:692. The engine therefore cannot deliver a callback before "
 		.. "the frames exist.",
 	["3|main.lua|swing_timer_stop-no-guard"] =
 		"Registered by register_timer_callbacks() after the flag is set (see "
@@ -381,6 +402,107 @@ local function load_src(path)
 end
 
 local function code_of(path) return SRC[path].code end
+
+-- Blank the CONTENT of a quoted string (the quotes and the line length survive), so a
+-- keyword scan cannot be fooled by the word "end" or "function" inside a literal.
+local function strip_string_contents(line)
+	local out = {}
+	local i, n = 1, #line
+	local quote = nil
+	while i <= n do
+		local c = line:sub(i, i)
+		if quote then
+			if c == "\\" then
+				out[#out + 1] = c
+				if i + 1 <= n then
+					out[#out + 1] = line:sub(i + 1, i + 1)
+					i = i + 2
+				else
+					i = i + 1
+				end
+			elseif c == quote then
+				out[#out + 1] = c
+				quote = nil
+				i = i + 1
+			else
+				out[#out + 1] = " "
+				i = i + 1
+			end
+		elseif c == '"' or c == "'" then
+			quote = c
+			out[#out + 1] = c
+			i = i + 1
+		else
+			out[#out + 1] = c
+			i = i + 1
+		end
+	end
+	return table.concat(out)
+end
+
+-- The LOAD-TIME (file-scope) lines of a module: the lines that run when the client
+-- loads the file, i.e. the lines that are NOT inside a function body. A statement
+-- inside a top-level `if` still runs at load time, so FUNCTION depth is tracked
+-- separately from block depth: function/if/for/while/repeat open a block, end/until
+-- close one, and the `do` of a for/while header belongs to its header (a bare `do`
+-- block opens one). The scan was cross-checked against the compiler's own answer
+-- (luac5.1 -l -l, the main chunk's line set = the file-scope statements): across the
+-- whole tree it neither misses nor invents a file-scope namespace assignment.
+local function load_time_lines(path)
+	local code = code_of(path)
+	local stack = {}
+	local out = {}
+	local pending_do = false
+	for ln = 1, #code do
+		local stripped = strip_string_contents(code[ln])
+		local in_function = false
+		for _, marker in ipairs(stack) do
+			if marker == "function" then
+				in_function = true
+				break
+			end
+		end
+		if not in_function then out[ln] = true end
+		for word in stripped:gmatch("[%a_][%w_]*") do
+			if word == "for" or word == "while" then
+				stack[#stack + 1] = "block"
+				pending_do = true
+			elseif word == "do" then
+				if pending_do then
+					pending_do = false
+				else
+					stack[#stack + 1] = "block"
+				end
+			elseif word == "function" then
+				stack[#stack + 1] = "function"
+			elseif word == "if" or word == "repeat" then
+				stack[#stack + 1] = "block"
+			elseif word == "end" or word == "until" then
+				table.remove(stack)
+			end
+		end
+	end
+	return out
+end
+
+-- The namespace key an assignment publishes DIRECTLY onto the namespace table, or nil
+-- when the line does not: `st.<key> = ...` or `st["<key>"] = ...` (a comparison `==`
+-- is not an assignment).
+local function namespace_key(line)
+	local key = line:match("^%s*st%.([%w_]+)%s*=[^=]")
+	if key then return key end
+	key = line:match('^%s*st%["([%w_]+)"%]%s*=[^=]')
+	if key then return key end
+	return nil
+end
+
+-- Any write INTO the namespace table: the table itself (`st.x = ...`) or a table
+-- inside it (`st.module.field = ...`). The assignment operator is found by its
+-- neighbours, so a comparison (`==`) never counts.
+local function namespace_write(line)
+	if not line:match("^%s*st[%[%.]") then return false end
+	return line:find("[^=]=[^=]") ~= nil
+end
 
 -- Extract a function body span by keyword depth. Counts `function`, `if`, `for`, `while`
 -- and `repeat` as openers and `end`/`until` as closers; the `do` of a `for`/`while` header is
@@ -1360,6 +1482,484 @@ end
 
 ok(string.format("%d literal + %d dynamic call site(s) checked, %d allowlisted optional",
 	literal_sites, dynamic_sites, optional_hits))
+
+--=========================================================================================
+-- 7. NAMESPACE WRITE GUARD (the class mirror - a load-time landmine)
+--=========================================================================================
+
+section("7. namespace write guard (class modules and the class mirror)")
+
+-- WHY THIS EXISTS:
+--   The class tables live on the ADDON OBJECT (the AceAddon table: main.lua creates
+--   ST.ROGUE and every class module reaches it through LibStub), and the shared engine
+--   resolves them from there FIRST - practice.lua's H.practice_class_module reads the
+--   addon object first and the namespace only as a fallback (hands-up.md HU-7). An
+--   earlier tree carried a "namespace mirror" in two class files (st.ROGUE = ST.ROGUE,
+--   st.HUNTER = ST.HUNTER) as the stopgap for the pre-HU-7 engine.
+--
+--   The mirrors are dead weight, and a file-scope namespace write in a CLASS module is a
+--   load-time landmine: every class file is in EVERY toc, so its file scope runs on
+--   EVERY client (the operator hit "Error loading .../classes/rogue.lua" on the TBC
+--   client). Two structural invariants - neither is visible to a behaviour test:
+--     7a  a CLASS module must not assign to the namespace table at file scope.
+--     7b  no addon file may put a CLASS table on the namespace, at any scope - the
+--         mirror shape, wherever it comes back (a class file, or a "central" one in
+--         main.lua).
+--
+--   The addon's own ROOT modules DO publish their tables into the namespace at file
+--   scope - the house idiom `st.<module> = st.<module> or {}` (the client's addon table
+--   starts EMPTY, so the addon has to fill it). Those are counted and reported, NOT
+--   failed: they load on every client, and banning them would ban the addon's own
+--   bootstrap. The count is the non-vacuity floor that proves the scan still sees
+--   file-scope namespace writes at all.
+
+-- The class keys this tree ships: one per class module (classes/<class>.lua).
+local CLASS_KEYS = {}
+for _, path in ipairs(CLASS_LUA) do
+	local class = path:match("classes/(%a+)%.lua")
+	if class then CLASS_KEYS[class:upper()] = path end
+end
+
+-- 7b: the mirror shape, at any scope, in any addon file.
+local mirror_hits = 0
+for _, path in ipairs(ROOT_LUA) do
+	for ln, line in ipairs(code_of(path)) do
+		local key = namespace_key(line)
+		if key and CLASS_KEYS[key] then
+			mirror_hits = mirror_hits + 1
+			report("7", path, ln, "class-table-on-namespace",
+				string.format("publishes the class table %s onto the addon namespace (st.%s = ...) "
+					.. "- the engine resolves the class module from the AceAddon table first, so "
+					.. "the mirror is dead weight, and a file-scope namespace write in a class "
+					.. "module is a load-time landmine on EVERY client", key, key),
+				false)
+		end
+	end
+end
+for _, path in ipairs(CLASS_LUA) do
+	for ln, line in ipairs(code_of(path)) do
+		local key = namespace_key(line)
+		if key and CLASS_KEYS[key] then
+			mirror_hits = mirror_hits + 1
+			report("7", path, ln, "class-table-on-namespace",
+				string.format("publishes the class table %s onto the addon namespace (st.%s = ...) "
+					.. "- the engine resolves the class module from the AceAddon table first, so "
+					.. "the mirror is dead weight, and a file-scope namespace write in a class "
+					.. "module is a load-time landmine on EVERY client", key, key),
+				false)
+		end
+	end
+end
+ok(string.format("no class table is published onto the addon namespace (%d mirror site(s))",
+	mirror_hits))
+
+-- 7a: a class module must not write to the namespace at file scope.
+-- EXCEPTION: the loader REGISTRY is the one sanctioned file-scope write (operator
+-- order 2026-10-21). Each class file publishes its body into st.class_loaders at load
+-- so main.lua can activate the selected one; that key is not a class table (7b still
+-- bans those), and the write is the mechanism itself. Section 9 pins that the registry
+-- write is present, so this allowlist cannot silently stop matching.
+local class_ns_writes = 0
+for _, path in ipairs(CLASS_LUA) do
+	local load_time = load_time_lines(path)
+	for ln, line in ipairs(code_of(path)) do
+		if load_time[ln] and namespace_write(line) then
+			local registry_write = namespace_key(line) == "class_loaders"
+				or line:match("^%s*st%.class_loaders%s*[%[%.]") ~= nil
+			if not registry_write then
+				class_ns_writes = class_ns_writes + 1
+				report("7", path, ln, "class-module-namespace-write",
+					string.format("a class module writes to the addon namespace at file scope "
+						.. "(%s) - the class file's file scope runs on EVERY client",
+						line:gsub("^%s*(.-)%s*$", "%1")),
+					false)
+			end
+		end
+	end
+end
+ok(string.format("no class module writes to the addon namespace at file scope (%d site(s))",
+	class_ns_writes))
+
+-- The house idiom in the root modules (the addon's own bootstrap into the client's
+-- empty addon table): counted and reported, never failed. The floor is the
+-- non-vacuity proof that the load-time scan and the assignment pattern still see
+-- file-scope namespace writes - without it, a scan that stopped matching would report
+-- "0 write(s)" and look like a clean tree.
+local bootstrap_writes, bootstrap_files = 0, 0
+for _, path in ipairs(ROOT_LUA) do
+	local load_time = load_time_lines(path)
+	local count = 0
+	for ln, line in ipairs(code_of(path)) do
+		if load_time[ln] and namespace_write(line) then count = count + 1 end
+	end
+	if count > 0 then
+		bootstrap_writes = bootstrap_writes + count
+		bootstrap_files = bootstrap_files + 1
+	end
+end
+require_min(bootstrap_writes, 100,
+	"file-scope namespace write(s) in the root modules (the house bootstrap idiom)")
+ok(string.format("%d file-scope namespace write(s) across %d root module(s) - the addon's own "
+	.. "bootstrap into the client's empty addon table (reported, not failed)",
+	bootstrap_writes, bootstrap_files))
+
+--=========================================================================================
+-- 8. CLASS-MODULE LOAD GUARD + ENGINE RESOLUTION (sandbox)
+--=========================================================================================
+
+section("8. class-module load guard + engine resolution (sandbox)")
+
+-- The client-load guard: every class file's FILE SCOPE must be safe to execute on any
+-- client. The offline class suites already load every class module, but into a
+-- sandbox whose namespace table is a PLAIN table - a namespace write there is
+-- invisible. This sandbox makes the namespace behave like the client's: EVERY write is
+-- recorded, so a class module whose file scope touches the namespace fails the build
+-- (the exact failure the operator hit in-client).
+--
+-- The sandbox is hermetic and minimal: a class module's file scope touches only
+-- LibStub (the AceAddon table), st.api, st.utils.convert_lookup_table and the
+-- namespace itself. Nothing is written outside the sandbox, and no WoW API is needed.
+
+local function class_sandbox()
+	local backing = {}
+	local ST = {}
+	for _, path in ipairs(CLASS_LUA) do
+		local class = path:match("classes/(%a+)%.lua")
+		if class then ST[class:upper()] = {} end
+	end
+	local env = setmetatable({}, { __index = _G })
+	env.LibStub = function(major)
+		if major == "AceAddon-3.0" then
+			return { GetAddon = function() return ST end }
+		end
+		return {}
+	end
+	backing.api = {}
+	backing.utils = {
+		convert_lookup_table = function(list)
+			local t = {}
+			for _, v in ipairs(list) do t[v] = true end
+			return t
+		end,
+	}
+	backing.family = "TBC"
+	-- The namespace proxy: EVERY write is recorded (a plain table would hide a write
+	-- to a key that already exists).
+	local writes = {}
+	local proxy = setmetatable({}, {
+		__index = function(_, key) return backing[key] end,
+		__newindex = function(_, key, value)
+			writes[#writes + 1] = { key = key, value = value }
+			backing[key] = value
+		end,
+	})
+	return proxy, backing, ST, env, writes
+end
+
+local function sandbox_load(path, env, st)
+	local chunk, err = loadfile(ROOT .. "/" .. path)
+	if not chunk then return false, err end
+	setfenv(chunk, env)
+	local loaded, lerr = pcall(chunk, "SwedgeTimer", st)
+	return loaded, lerr
+end
+
+local ns_proxy, ns_backing, ns_addon, ns_env, ns_writes = class_sandbox()
+
+-- The shared engine (practice.lua) first: the class modules are loaded on top of it,
+-- exactly as the toc order does (practice.lua precedes the class group).
+local engine_ok, engine_err = sandbox_load("practice.lua", ns_env, ns_proxy)
+if engine_ok then
+	ok("practice.lua loads in the sandbox (the shared engine the class modules sit on)")
+else
+	failures = failures + 1
+	print("FAIL practice.lua does not load in the sandbox: " .. tostring(engine_err))
+end
+
+-- Every class module: it must LOAD (a file-scope error is a client load failure) and
+-- its file scope must not write to the namespace. A wrapped class file registers its
+-- body as a loader (operator order 2026-10-21: the body executes at ACTIVATION, not at
+-- load), so the loader is run here too - the sandbox still has to prove the whole
+-- module is load-safe, not just the registration line.
+for _, path in ipairs(CLASS_LUA) do
+	local before = #ns_writes
+	local loaded, load_err = sandbox_load(path, ns_env, ns_proxy)
+	if not loaded then
+		failures = failures + 1
+		print(string.format("FAIL %s does not load in the sandbox: %s - a file-scope error is a "
+			.. "client load failure (the operator saw \"Error loading .../classes/rogue.lua\")",
+			path, tostring(load_err)))
+	else
+		local wrote = {}
+		for i = before + 1, #ns_writes do
+			local key = tostring(ns_writes[i].key)
+			-- The loader REGISTRY is the one sanctioned file-scope namespace write
+			-- (operator order 2026-10-21); section 9 pins it. Class tables are still
+			-- banned by 7b and by the engine-resolution check below.
+			if key ~= "class_loaders" then
+				wrote[#wrote + 1] = key
+			end
+		end
+		if #wrote > 0 then
+			failures = failures + 1
+			print(string.format("FAIL %s writes to the addon namespace while it loads (st.%s = ...) "
+				.. "- the class file's file scope runs on EVERY client",
+				path, table.concat(wrote, ", st.")))
+		else
+			ok(path .. ": loads cleanly and writes nothing to the addon namespace")
+			local class = path:match("classes/(%a+)%.lua")
+			local loader = class and ns_backing.class_loaders
+				and ns_backing.class_loaders[class:upper()]
+			if type(loader) == "function" then
+				local activated, act_err = pcall(loader)
+				if activated then
+					ok(path .. ": the registered loader runs cleanly in the sandbox")
+				else
+					failures = failures + 1
+					print("FAIL " .. path .. ": the registered loader throws: " .. tostring(act_err))
+				end
+			end
+		end
+	end
+end
+
+-- The engine's own accessor must find EVERY class module with no namespace mirror:
+-- practice.lua's H.practice_class_module reads the ADDON OBJECT first (the class
+-- tables live there) and the namespace only as a fallback.
+local harness = ns_backing.practice and ns_backing.practice.harness
+if type(harness) ~= "table" or type(harness.practice_class_module) ~= "function" then
+	failures = failures + 1
+	print("FAIL the shared engine does not expose H.practice_class_module in the sandbox")
+else
+	for key in pairs(CLASS_KEYS) do
+		local module = harness.practice_class_module(key)
+		if module == nil then
+			failures = failures + 1
+			print(string.format("FAIL the engine finds no module for class %s - the class module is "
+				.. "unreachable without a namespace mirror", key))
+		elseif module ~= ns_addon[key] then
+			failures = failures + 1
+			print(string.format("FAIL the engine resolves class %s to a table that is not the "
+				.. "addon's own class table - the class module is not reachable", key))
+		else
+			ok(string.format("the engine finds the %s class module from the addon object (no alias)",
+				key))
+		end
+		if ns_backing[key] ~= nil then
+			failures = failures + 1
+			print(string.format("FAIL the addon namespace still carries the %s class table - the "
+				.. "mirror is back", key))
+		end
+	end
+end
+
+--=========================================================================================
+-- 9. CLASS ACTIVATION CONTRACT (operator order 2026-10-21)
+--=========================================================================================
+
+section("9. class activation contract (operator order 2026-10-21)")
+
+local function contract(cond, path, ln, slug, label)
+	if cond then
+		ok(label)
+	else
+		report("9", path, ln or 0, slug, label, false)
+	end
+end
+
+-- Read a brace-delimited table constructor starting at `start_line` (the code lines
+-- have comments blanked; strings survive). Stops on the closing line at depth 0.
+local function table_span(path, start_line)
+	local code = code_of(path)
+	local parts = {}
+	local depth = 0
+	for ln = start_line, #code do
+		local line = code[ln]
+		parts[#parts + 1] = line
+		for _ in line:gmatch("{") do depth = depth + 1 end
+		for _ in line:gmatch("}") do depth = depth - 1 end
+		if depth <= 0 and ln >= start_line then
+			return table.concat(parts, "\n"), ln
+		end
+	end
+	return table.concat(parts, "\n"), #code
+end
+
+-- 9a. classes/rogue.lua registers its body as the ROGUE loader: a file-scope registry
+-- statement, the closure registration, and the file's last statement closing it.
+local register_line, open_line, last_code_line
+for ln, line in ipairs(code_of("classes/rogue.lua")) do
+	if line:match("^%s*st%.class_loaders%s*=%s*st%.class_loaders%s+or%s*{%s*}%s*$") then
+		register_line = ln
+	end
+	if line:match('^%s*st%.class_loaders%["ROGUE"%]%s*=%s*function%s*%(%s*%)%s*$') then
+		open_line = ln
+	end
+	if line:match("%S") then
+		last_code_line = ln
+	end
+end
+contract(register_line ~= nil, "classes/rogue.lua", register_line, "loader-registry",
+	"classes/rogue.lua: the loader registry is created at file scope")
+contract(open_line ~= nil, "classes/rogue.lua", open_line, "loader-registration",
+	"classes/rogue.lua: the ROGUE loader is registered as a function")
+contract(register_line ~= nil and open_line ~= nil and register_line < open_line,
+	"classes/rogue.lua", open_line, "loader-registry-order",
+	"classes/rogue.lua: the registry statement precedes the ROGUE registration")
+contract(last_code_line ~= nil
+	and code_of("classes/rogue.lua")[last_code_line]:match("^%s*end%s*$") ~= nil,
+	"classes/rogue.lua", last_code_line, "loader-closed",
+	"classes/rogue.lua: the loader's closing end is the file's last statement")
+
+-- 9b. main.lua defines the activation, reads the option, and calls it in init_libs
+-- BEFORE post_init (whose class hook is what brings up the practice panel and HUD).
+local activate_def, option_read
+for ln, line in ipairs(code_of("main.lua")) do
+	if line:match("^function ST:activate_class%s*%(%s*%)") then
+		activate_def = ln
+	end
+	if line:match("class_activation") then
+		option_read = option_read or ln
+	end
+end
+contract(activate_def ~= nil, "main.lua", activate_def, "activate-def",
+	"main.lua: ST:activate_class is defined")
+contract(option_read ~= nil, "main.lua", option_read, "option-read",
+	"main.lua: the activation reads the class_activation option")
+
+local init_line
+for ln, line in ipairs(code_of("main.lua")) do
+	if line:match("^function ST:init_libs%s*%(%s*%)") then
+		init_line = ln
+	end
+end
+local activate_call, post_init_call
+if init_line then
+	local _, init_last = function_span("main.lua", init_line)
+	for ln = init_line, init_last do
+		local line = code_of("main.lua")[ln]
+		if line:match("self:activate_class%s*%(%s*%)") then
+			activate_call = ln
+		end
+		if line:match("self:post_init%s*%(%s*%)") then
+			post_init_call = ln
+		end
+	end
+end
+contract(activate_call ~= nil, "main.lua", activate_call, "activate-call",
+	"main.lua: init_libs calls ST:activate_class")
+contract(post_init_call ~= nil, "main.lua", post_init_call, "post-init-call",
+	"main.lua: init_libs calls post_init")
+contract(activate_call ~= nil and post_init_call ~= nil and activate_call < post_init_call,
+	"main.lua", activate_call, "activate-before-post-init",
+	"main.lua: activation runs BEFORE post_init (the class post_init hook and the practice/HUD init)")
+
+-- 9c. option_tables.lua ships the dropdown; config_presets.lua ships the Auto default.
+local option_line
+for ln, line in ipairs(code_of("option_tables.lua")) do
+	if line:match("^%s*self%.opts_table%.args%.class_activation%s*=%s*{%s*$") then
+		option_line = ln
+	end
+end
+local option_text = option_line and table_span("option_tables.lua", option_line) or ""
+contract(option_line ~= nil, "option_tables.lua", option_line, "option-widget",
+	"option_tables.lua: the class_activation option exists")
+contract(option_text:find('type = "select"', 1, true) ~= nil,
+	"option_tables.lua", option_line, "option-select",
+	"option_tables.lua: the class module option is a dropdown")
+for _, key in ipairs({ "Auto", "DRUID", "HUNTER", "PALADIN", "ROGUE", "SHAMAN", "WARRIOR" }) do
+	contract(option_text:find("[%s]" .. key .. "%s*=") ~= nil,
+		"option_tables.lua", option_line, "option-value-" .. key,
+		"option_tables.lua: the dropdown offers " .. key)
+end
+contract(option_text:find("Auto (the default)", 1, true) ~= nil,
+	"option_tables.lua", option_line, "option-help-default",
+	"option_tables.lua: the help text documents the Auto default")
+contract(option_text:find("== false", 1, true) ~= nil,
+	"option_tables.lua", option_line, "option-nil-safe",
+	"option_tables.lua: a stored false hides the widget (nil-safe)")
+
+local shared_line
+for ln, line in ipairs(code_of("config_presets.lua")) do
+	if line:match("^ST%.class_defaults%s*=%s*{%s*$") then
+		shared_line = ln
+	end
+end
+local shared_text = shared_line and table_span("config_presets.lua", shared_line) or ""
+contract(shared_text:find('class_activation = "Auto"', 1, true) ~= nil,
+	"config_presets.lua", shared_line, "option-default",
+	"config_presets.lua: class_activation ships the Auto default in ST.class_defaults")
+
+--=========================================================================================
+section("10. class isolation (operator order 2026-10-21: no class features cross)")
+
+-- The shared layer must never name a specific class's module in executable code: every
+-- class feature is reached through ST.active_class (the class main.lua ACTIVATED) and
+-- that class's own provider/functions. A class name in a COMMENT is documentation, not
+-- coupling (the scan runs on comment-blanked code), and main.lua's six namespace
+-- definitions (ST.<CLASS> = {}) are the activation mechanism's own tables, not a class
+-- feature route. This is the operator's ask MACHINE-ENFORCED: delete the guard and the
+-- coupling it catches comes back.
+local SHARED_FILES = {
+	"practice_ui.lua", "rotationtext.lua", "designmode.lua", "hud.lua", "bars.lua",
+	"nextaction_ui.lua", "practice.lua", "practice_progress_ui.lua", "diag.lua", "main.lua",
+}
+local CLASS_TOKENS = { "HUNTER", "SHAMAN", "ROGUE", "DRUID", "PALADIN", "WARRIOR" }
+local class_ref_hits = 0
+local namespace_defs = 0
+for _, path in ipairs(SHARED_FILES) do
+	local code = code_of(path)
+	local violations = 0
+	for ln, line in ipairs(code) do
+		local ns_def = path == "main.lua"
+			and line:match("^%s*ST%.%u[%w_]*%s*=%s*{%s*}%s*$") ~= nil
+		if ns_def then
+			namespace_defs = namespace_defs + 1
+		end
+		for _, token in ipairs(CLASS_TOKENS) do
+			local pattern = "%f[%w_][Ss][Tt]%.%s*" .. token .. "%f[%W_]"
+			if line:find(pattern) and not ns_def then
+				violations = violations + 1
+				class_ref_hits = class_ref_hits + 1
+				report("10", path, ln, "class-ref-" .. token,
+					string.format("%s names the %s class module in executable code "
+						.. "(the shared layer must ask ST.active_class)", path, token),
+					false)
+			end
+		end
+	end
+	if violations == 0 then
+		ok(path .. ": no specific class module is named in executable code")
+	end
+end
+require_min(namespace_defs, 6,
+	"main.lua ST.<CLASS> = {} namespace definitions (the mechanism's own tables)")
+
+-- The ACTIVE class is the shared layer's one class fact, recorded by the activation
+-- (never guessed from the class being played).
+local active_readers = { "practice_ui.lua", "rotationtext.lua" }
+for _, path in ipairs(active_readers) do
+	local found_active, found_playing = false, false
+	for _, line in ipairs(code_of(path)) do
+		if line:find("active_class", 1, true) then found_active = true end
+		if line:find("ST.player_class", 1, true) then found_playing = true end
+	end
+	contract(found_active and not found_playing, path, 0, "active-class-read",
+		path .. ": keys its class routes on ST.active_class, never ST.player_class")
+end
+local sets_active = false
+for _, line in ipairs(code_of("main.lua")) do
+	if line:match("self%.active_class%s*=%s*class") then sets_active = true end
+end
+contract(sets_active, "main.lua", 0, "active-class-record",
+	"main.lua: activation records the class whose loader ran as ST.active_class")
+local has_register_element = false
+for _, line in ipairs(code_of("designmode.lua")) do
+	if line:match("^function DM%.register_element%s*%(") then has_register_element = true end
+end
+contract(has_register_element, "designmode.lua", 0,
+	"generic-element-seam",
+	"designmode.lua: class-owned design elements register through the generic seam")
 
 --=========================================================================================
 -- Summary

@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T13:51:04Z",
+  "run_id": "compat-m3-contract-2026-10-20",
+  "agent_name": "compat-m3",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The question could be settled against external facts (the call sites in the tree), so it is a question for the operator, not an argument between lanes.",
+    "what_was_hard": "Naming the deviation honestly: the brief's literal rule was 'add the tri-state only where a caller actually needs it', and no caller needs it today. The lane added it anyway, with a stated rationale, and raised the row rather than quietly shipping it.",
+    "skill_gap": "A brief can contain two rules that point in different directions (keep every caller's behaviour identical / make the contract explicit for a future row / add the tri-state only where a caller needs it). Deciding which rule governs, saying so in the report and raising the row, is the part that needs practice."
+  },
+  "escalation": {
+    "reason": "HU-15: keep the additive, inert api.is_spell_known_state accessor (compat.lua:234) or drop it and keep the contract binary-only.",
+    "blocked_on": "the operator's ruling on HU-15 (bench/compat_m3_contract_2026-10-20.md §6)",
+    "recommendation": "Keep it. Dropping it needs a small deletion (compat.lua:229-245 plus the §10b state pins); keeping it costs nothing behaviourally and leaves the next unknown-hides row without a compat change to make."
+  }
+}

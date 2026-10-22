@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T04:20:00Z",
+  "run_id": "corpus-corrections-2026-10-20",
+  "agent_name": "corpus-corrections",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Treating the five utility-lane build artifacts as the evidence of record let every correction carry a citable source (the artifact + the sim file/line it quotes) instead of a remembered id. Marking superseded values IN PLACE with a dated SUPERSEDED marker satisfied the 'do not silently rewrite history' rule while still leaving the tables copy-safe. Sweeping the corpus with a per-id grep after the seed file caught the TBC rogue SS/Hemo swap, which the closure sweep had found on 2026-10-19 and nobody had fixed.",
+    "what_was_hard": "Deciding what NOT to touch. The paladin section of the gap file has no utility lane behind it, so rewriting it would have been invention; the file now says so explicitly. Several corpus mentions (rogue_research's 'Riposte', the live_test_script's WANTED_IDS list, rogue_research's 'Cloak of Shadows 31224') are guide claims or bare id lists, not wrong ids, and only needed a clarifying note rather than a rewrite.",
+    "skill_gap": "The corpus had no single place where a superseded id was marked, so the same wrong value appeared in 6+ files and every correction had to be hand-carried. A shared 'superseded ids' ledger under bench/ would make the next pass a lookup instead of a sweep."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

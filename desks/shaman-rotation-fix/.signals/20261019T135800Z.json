@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T13:58:00Z",
+  "agent_name": "shaman-rotation-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "audit-ranked gaps mapped 1:1 to engine inputs/rules/feeds; pre-existing suite pins caught every behavior change (7 initial fails, all intended)",
+    "what_was_hard": "SoD/Era-base share the ERA token, so SoD name feeds needed the MW-observed latch as defense-in-depth beyond client-data gating",
+    "skill_gap": "none; wiring_check warrior crossfire (parallel lane, untouched file) left for orchestrator reconcile"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "12 follow-ups filed in journal (options/compat/HUD lanes + Wrath sim coverage); harness 36/37 with the 1 fail owned by another lane"
+  }
+}

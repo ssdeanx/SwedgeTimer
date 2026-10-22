@@ -10,7 +10,10 @@
 --   - functions to manipulate the widgets in predefined ways
 ------------------------------------------------------------------------------------
 local addon_name, st = ...
-local print = st.utils.print_msg
+-- Chat output policy: st.utils.print_msg (utils.lua) is the addon's single chat path,
+-- and every message in this file names it explicitly. There is deliberately no local
+-- alias for the client's raw global print here: a bare call to it would bypass the
+-- addon's chat path, so the identifier is kept out of the file on purpose.
 local LSM = LibStub("LibSharedMedia-3.0")
 local LCG = LibStub("LibCustomGlow-1.0")
 local floor = math.floor
@@ -27,6 +30,29 @@ local floor = math.floor
 ---@field is_cat_or_bear boolean
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LWIN = LibStub("LibWindow-1.1")
+
+-- A statusbar texture fetch must never leave a bar textureless. LibSharedMedia's
+-- Fetch legitimately returns nil (the key is not in the registry - a registration
+-- that failed on this client - or the registered path is empty), and a nil texture
+-- is an INVISIBLE bar. The chain degrades instead of giving up: the requested key ->
+-- the shipped fallback key ("Minimalist", registered in main.lua) -> the client's own
+-- white pixel. The fetch is pcall-guarded too, so a throwing media library cannot
+-- abort the configuration pass and leave the bar without a texture.
+local FALLBACK_STATUSBAR_KEY = "Minimalist"
+local CLIENT_WHITE_PIXEL = "Interface\\Buttons\\WHITE8X8"
+
+local function fetch_statusbar_texture(key)
+    local ok, texture = pcall(LSM.Fetch, LSM, 'statusbar', key)
+    if not ok or texture == nil then
+        local ok_fallback, fallback = pcall(LSM.Fetch, LSM, 'statusbar', FALLBACK_STATUSBAR_KEY)
+        if ok_fallback and fallback ~= nil then
+            texture = fallback
+        else
+            texture = CLIENT_WHITE_PIXEL
+        end
+    end
+    return texture
+end
 
 -- Initialize hand tables
 ST.mainhand = {}
@@ -225,8 +251,8 @@ function ST:configure_bar_appearances(hand)
     -- COnfigure textures/colors for bar and GCD underlay
     local frame = self:get_visuals_frame(hand)
     local db = self:get_hand_table(hand)
-    frame.bar:SetTexture(LSM:Fetch('statusbar', db.bar_texture_key))
-    frame.gcd_bar:SetTexture(LSM:Fetch('statusbar', db.gcd_texture_key))
+    frame.bar:SetTexture(fetch_statusbar_texture(db.bar_texture_key))
+    frame.gcd_bar:SetTexture(fetch_statusbar_texture(db.gcd_texture_key))
     self:set_bar_color(hand)
     frame.gcd_bar:SetVertexColor(
         self:convert_color(db.bar_color_gcd)
@@ -255,7 +281,7 @@ function ST:configure_deadzone(hand)
     else
         f:Show()
     end
-    f:SetTexture(LSM:Fetch('statusbar', db.deadzone_texture_key))
+    f:SetTexture(fetch_statusbar_texture(db.deadzone_texture_key))
 	f:SetVertexColor(
         self:convert_color(db.deadzone_bar_color)
     )
@@ -264,7 +290,13 @@ end
 function ST:configure_texts(hand)
     local db = self:get_hand_table(hand)
 	local frame = self:get_visuals_frame(hand)
-	local font_path = LSM:Fetch('font', db.text_font)
+	-- The shared font chain (utils.lua): the bar texts are written per frame, so every
+	-- one of them carries a font from the start - a FontString with no font throws
+	-- "Font not set" on its first SetText. A key that no longer resolves (the font
+	-- lives in another addon's LSM registration) falls back through
+	-- STANDARD_TEXT_FONT to the classic client font instead of handing SetFont a
+	-- nil path, which would throw out of the bar build.
+	local font_path = st.utils.fetch_font_path(db.text_font)
     local outlines = {
         none = "",
         outline = "OUTLINE",
@@ -286,7 +318,7 @@ function ST:configure_texts(hand)
         left_text_x_offset,
         left_text_y_offset
     )
-    frame.left_text:SetFont(font_path, db.text_size, opt_string)
+    st.utils.apply_font(frame.left_text, font_path, db.text_size, opt_string)
     frame.left_text:SetTextColor(
         self:convert_color(db.text_color)
     )
@@ -306,7 +338,7 @@ function ST:configure_texts(hand)
         center_text_x_offset,
         center_text_y_offset
     )
-    frame.center_text:SetFont(font_path, db.text_size, opt_string)
+    st.utils.apply_font(frame.center_text, font_path, db.text_size, opt_string)
     frame.center_text:SetTextColor(
         select(1, self:convert_color(db.text_color))
     )
@@ -326,7 +358,7 @@ function ST:configure_texts(hand)
         right_text_x_offset,
         right_text_y_offset
     )
-    frame.right_text:SetFont(font_path, db.text_size, opt_string)
+    st.utils.apply_font(frame.right_text, font_path, db.text_size, opt_string)
 	frame.right_text:SetTextColor(
         self:convert_color(db.text_color)
     )
@@ -341,7 +373,7 @@ function ST:configure_bar_outline(hand)
 	local frame = self:get_bar_frame(hand)
     local db = self:get_hand_table(hand)
     frame.backdropInfo = {
-        bgFile = LSM:Fetch('statusbar', db.background_texture_key),
+        bgFile = fetch_statusbar_texture(db.background_texture_key),
 		edgeFile = LSM:Fetch('border', db.border_texture_key),
         tile = true, tileSize = 16, edgeSize = db.border_width,
         -- insets = {
@@ -363,7 +395,7 @@ end
 function ST:configure_gcd_underlay(hand)
     local db = self:get_hand_table(hand)
 	local frame = self:get_visuals_frame(hand)
-    frame.gcd_bar:SetTexture(LSM:Fetch('statusbar', db.gcd_texture_key))
+    frame.gcd_bar:SetTexture(fetch_statusbar_texture(db.gcd_texture_key))
     frame.gcd_bar:SetVertexColor(
         self:convert_color(db.bar_color_gcd)
     )
@@ -505,40 +537,20 @@ end
 --=========================================================================================
 -- Per-tick isolation (H2): a class hook or zone must never freeze the bar.
 --
--- The bar fill/text are painted before these calls, so the visual stays correct even
--- when a hook throws. The first throw per site is reported once in chat; every throw
--- is counted (self.bar_hook_errors, printed by /st diag's runtime line). After
--- BARS_HOOK_QUARANTINE_THROWS the site is quarantined for the session, so a permanently
+-- The contract itself lives in guard.lua (one implementation for the whole addon): the
+-- bar fill/text are painted before these calls, so the visual stays correct even when a
+-- hook throws. The first throw per site is reported once in chat; every throw is
+-- counted (self.bar_hook_errors, printed by /st diag's runtime line). After
+-- st.guard.QUARANTINE_THROWS the site is quarantined for the session, so a permanently
 -- broken hook cannot burn a pcall every frame - the quarantine is announced, never a
 -- silent removal.
+--
+-- What stays here is this module's own wording ("Bar update ...") and its own site
+-- keys; the shared module owns the counting, the once-only report and the quarantine.
 --=========================================================================================
-local BARS_HOOK_QUARANTINE_THROWS = 25
-
-local function run_guarded(self, site, fn, ...)
-    local errors = self.bar_hook_errors
-    if errors and errors.quarantined and errors.quarantined[site] then
-        return
-    end
-    local ok, err = pcall(fn, ...)
-    if ok then
-        return
-    end
-    if not errors then
-        errors = { count = 0, by_site = {}, quarantined = {}, first_reported = {} }
-        self.bar_hook_errors = errors
-    end
-    errors.count = errors.count + 1
-    errors.by_site[site] = (errors.by_site[site] or 0) + 1
-    if not errors.first_reported[site] then
-        errors.first_reported[site] = true
-        self:Print("Bar update error in " .. site .. " (isolated): " .. tostring(err))
-    end
-    if errors.by_site[site] >= BARS_HOOK_QUARANTINE_THROWS then
-        errors.quarantined[site] = true
-        self:Print("Bar update " .. site
-            .. " quarantined for this session after repeated errors.")
-    end
-end
+st.guard.label("zone", "Bar update")
+st.guard.label("class", "Bar update")
+st.guard.label("ldb", "Bar update")
 
 function ST:update_zones(hand)
     -- Dispatches the registered zones for one hand, ascending priority. No-op (and no
@@ -563,7 +575,7 @@ function ST:update_zones(hand)
     ctx.progress = state and state.current_progress or nil
     local list = zones.list
     for i = 1, zones.count do
-        run_guarded(self, "zone:" .. tostring(list[i].zone_id), list[i].draw_fn, ctx)
+        st.guard.run(self, "zone:" .. tostring(list[i].zone_id), list[i].draw_fn, ctx)
     end
 end
 
@@ -663,7 +675,7 @@ function ST:onupdate_common(hand, elapsed)
                 frame.gcd1b_marker:Hide()
             end
         end
-        -- print(combined_progress)
+        -- st.utils.print_msg(combined_progress)
         local offset = combined_progress * w
         local v_offset = h * db.gcd1b_marker_fractional_height
         frame.gcd1b_marker:SetStartPoint("BOTTOMLEFT", offset, 0)
@@ -678,7 +690,7 @@ function ST:onupdate_common(hand, elapsed)
     -- costs its own visuals, not the bar.
     local class = self[self.player_class]
     if class and class.on_bar_update then
-        run_guarded(self, "class:" .. tostring(self.player_class) .. ":on_bar_update",
+        st.guard.run(self, "class:" .. tostring(self.player_class) .. ":on_bar_update",
             class.on_bar_update, self, hand)
     end
 
@@ -691,7 +703,10 @@ function ST:onupdate_common(hand, elapsed)
     -- the first tick and throttled internally, so this stays free on the offhand/ranged
     -- bars and when no broker display is installed.
     if st.ldb and hand == "mainhand" then
-        st.ldb.update(self, hand)
+        -- Isolated like the class hook and the zones above: a throwing broker feed
+        -- must not escape the tick. The bar is already painted above, so an isolated
+        -- feed throw costs the feed and nothing else.
+        st.guard.run(self, "ldb:update", st.ldb.update, self, hand)
     end
 end
 
@@ -760,7 +775,7 @@ function ST:on_bar_inactive(hand)
     -- Called when the bar enters the inactive state.
     -- This is when the player stops swinging with a full timer for
     -- some finite and configurable period of time.
-    -- print("TRIGGERING BAR INACTIVE")
+    -- st.utils.print_msg("TRIGGERING BAR INACTIVE")
     local db = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand)
     if db.gcd1a_marker_hide_inactive then
@@ -799,8 +814,8 @@ function ST:set_gcd_width(hand, timer_width, progress)
         else
             frame.gcd_bar:Show()
         end
-        -- print(gcd_width)
-        -- print(string.format("%f %f", progress, gcd_width))
+        -- st.utils.print_msg(gcd_width)
+        -- st.utils.print_msg(string.format("%f %f", progress, gcd_width))
         frame.gcd_bar:SetTexCoord(progress, 1, 0, 1)
     else
         local gcd_width = (w * gcd_progress) - timer_width
@@ -840,7 +855,7 @@ function ST:set_gcd_marker_positions(hand)
     -- This function's task is to first check if any GCD markers should
     -- be shown. It then calculates the necessary offsets from the end of the bar,
     -- and sets them.
-    -- print('Setting marker positions for hand: ' .. tostring(hand))
+    -- st.utils.print_msg('Setting marker positions for hand: ' .. tostring(hand))
     local db_hand = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand)
     local s = self[hand].speed
@@ -989,7 +1004,7 @@ function ST:set_bar_texts(hand)
 end
 
 function ST:set_deadzone_width(hand)
-    -- print('call to set deadzone width for '..hand)
+    -- st.utils.print_msg('call to set deadzone width for '..hand)
     local db = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand).deadzone
     local speed = self[hand].speed
@@ -1182,7 +1197,7 @@ function ST:new_pips(parent, opts)
         }
         local _, err = dm.registry:register(desc)
         if err then
-            print("Design mode: pips element not registered - " .. tostring(err))
+            st.utils.print_msg("Design mode: pips element not registered - " .. tostring(err))
         end
 
         -- Snap-to-row template (C6): the row's own cells join the drag magnets, so a
@@ -1198,6 +1213,10 @@ function ST:new_pips(parent, opts)
             dm.register_template({
                 id = key .. "_cells",
                 get_cells = function()
+                    -- Degenerate geometry (size <= 0) leaves row_boxes without cells:
+                    -- return nil, the template's "not readable" contract, instead of
+                    -- indexing a nil table from inside the design-mode drag handler.
+                    if not base then return nil end
                     local s = (frame:GetEffectiveScale() or 1)
                         / (UIParent:GetEffectiveScale() or 1)
                     local cx, cy = frame:GetCenter()

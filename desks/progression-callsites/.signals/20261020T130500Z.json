@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T13:05:00Z",
+  "run_id": "progression-callsites-2026-10-20",
+  "agent_name": "progression-callsites",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the three bench artifacts BEFORE the code made the five filed diffs mechanical; the pure lane had already written the exact patch, so the risk was in the call sites, not in the design. The F-1 fix is one shape (overwrite the alias instead of filling an empty one) and it fixes the reachable hunter case AND the latent rogue/shaman case at once, because the overwrite is scoped to 'there is a press'. Mutation proofs on fresh /tmp copies caught the one thing review would not: the first W1a mutant was a SYNTAX ERROR (a false kill), so the harness now reports a file-breaking mutant as INVALID rather than as a kill.",
+    "what_was_hard": "The filed §26d pin asserted the OLD rule (a client with no calendar still gets a day from its clock) and had to be rewritten - a filed pin can contradict the fix it is filed with, and the honest move is to rewrite it to the new contract rather than to keep the old assertion green. The narrow F-1 shape from the artifact would have broken the hunter's own drill behaviour (a press-less drill press would read UNKNOWN instead of judging the shot in flight), which the artifact did not spell out; the scenario path and the press-less drill press are two different preservation requirements and they need different shapes.",
+    "skill_gap": "Sizing the F-1 fix from the artifact alone: the artifact offered two shapes and left the operator to rule. It would have helped to have read the class-side readers (the hunter's practice_pressed, the rogue's and the shaman's get_practice_pick) BEFORE choosing a shape - they take the first alias that answers, and that fact decides whether the press can be a no-op when there is no press."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

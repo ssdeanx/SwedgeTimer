@@ -1,0 +1,63 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T11:35:15Z",
+  "agent_name": "rogue-options",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Three-file writer lane delivered ROGUE panel parity: config_presets defaults (SS/swap/poison toggles+colours, rogue_ea_duty, six guide thresholds at the engine constants) + option_tables ROGUE section (de-sliced copy, Guide Thresholds ranges with nil-safe getters, Post-swing & Weapon Cues section, NAG renumbered 4.x with POOL/NOW and the unknown '...' rule, glow copy now describing the shipped SnD/Rupture/EA glow) + tests/options_load_state.lua section 9 (23/23 class db-keys have widget+default+handler wiring; toggle/colour/range/input round-trips; colour disabled-gating; copy scan). Validation: options suite 919/0, harness 37 steps/0 failed, luacheck floor 2/0, mutation proofs 9/9 bitten on /tmp/opencode copy, restored copy green.",
+    "what_was_hard": "The 10 Slice-A cue placeholder keys (show_rogue_snd/rupture/ea/shiv/tea_cue + colours) ship in defaults+panel with no consumer in classes/rogue.lua - kept (brief's control list + tests/rogue_state pins) and reported instead of edited (compat lane owns the class file). One harness read showed 6 luacheck warnings from the parallel compat lane's mid-edit flap; re-run clean at floor.",
+    "skill_gap": "None blocking; the orphan-key decision needs an orchestrator reconcile row (wire in a class lane or strip)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "artifacts": [
+    "bench/buildout_rogue-options_2026-10-19.md",
+    "desks/rogue-options/journal.md"
+  ],
+  "files_changed": [
+    "config_presets.lua (ST.ROGUE.defaults; CRLF kept; 855->883 lines)",
+    "option_tables.lua (ST.class_opts_funcs.ROGUE + hud_rotation_widgets call args; LF kept)",
+    "tests/options_load_state.lua (section 4 Rogue slots + new section 9; LF kept)"
+  ],
+  "key_coverage": {
+    "class_db_keys": 23,
+    "keys_with_widget_and_default": 23,
+    "new_controls": [
+      "show_rogue_ss_window", "rogue_ss_color",
+      "show_rogue_swap_cue", "rogue_swap_color",
+      "show_rogue_poison_cue", "rogue_poison_color",
+      "rogue_ea_duty",
+      "rogue_rupture_refresh", "rogue_rupture_min_ttd (TTD)",
+      "rogue_finisher_min_cp", "rogue_ea_refresh",
+      "rogue_shiv_refresh", "rogue_tea_energy_max"
+    ],
+    "defaults_added": {
+      "show_rogue_ss_window": false,
+      "show_rogue_swap_cue": false,
+      "show_rogue_poison_cue": false,
+      "rogue_ea_duty": false,
+      "rogue_ss_color": [255, 209, 64, 0.85],
+      "rogue_swap_color": [89, 140, 191, 0.85],
+      "rogue_poison_color": [214, 64, 54, 0.95],
+      "rogue_rupture_refresh": 4,
+      "rogue_rupture_min_ttd": 8,
+      "rogue_finisher_min_cp": 5,
+      "rogue_ea_refresh": 3,
+      "rogue_shiv_refresh": 2,
+      "rogue_tea_energy_max": 40
+    }
+  },
+  "key_mismatches": [
+    "10 inert keys in panel+defaults with no consumer in classes/rogue.lua (reported, NOT edited - compat lane owns the file): show_rogue_snd_cue, rogue_snd_color, show_rogue_rupture_cue, rogue_rupture_color, show_rogue_ea_cue, rogue_ea_color, show_rogue_shiv_cue, rogue_shiv_color, show_rogue_tea_cue, rogue_tea_color (cues lane delivered SnD/Rupture/EA/Shiv/Tea upkeep as HUD slots + guide actions instead). No consumed key is missing from the panel.",
+    "The EA cue placeholder label 'Expose Armor duty' was renamed to 'Expose Armor' (its key unchanged) so the new rogue_ea_duty toggle owns the duty label; no key renamed."
+  ]
+}

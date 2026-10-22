@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T20:22:00Z",
+  "run_id": "class-drills-spec-2026-10-19",
+  "agent_name": "class-drills-spec",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the six per-class rotation audits AND the five rotfix desk journals together: the audits describe the gaps, the journals say which ones landed since. That pairing let the bench file distinguish 'still missing' from 'closed but the audit line number drifted'. Every file:line anchor was re-verified against the current tree instead of being copied forward from the audit.",
+    "what_was_hard": "The audit files quote line numbers from the moment they were written, and many of those anchors have since moved (the shaman guide grew from 13 to 15 slots, the Retail short-circuit moved, the rogue tick constants moved, the druid clip helper moved). Copying the audit anchors would have shipped wrong citations. Separately, bench/warrior_rotation_audit_2026-10-19.md is truncated mid-G1 on disk, so the warrior rows lean on desks/warrior-rotfix/journal.md for the gap list.",
+    "skill_gap": "Distinguishing a DESIGN grading band from a sim-sourced number is easy to state and easy to get wrong once 24 specs are on the page; the labels exist but a reviewer should spot-check that every band carries [DESIGN]. Also: the operator's taxonomy changed twice mid-lane, and re-deriving the whole target set each time is expensive - worth agreeing the taxonomy before the lane starts next time."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

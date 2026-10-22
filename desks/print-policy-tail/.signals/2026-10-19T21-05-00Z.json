@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T21:05:00Z",
+  "run_id": "print-policy-tail-2026-10-19",
+  "agent_name": "print-policy-tail",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-verifying the bars-lane filing against the source before editing found that main.lua's alias made its output ALREADY chat output (the identifier was the trap, not the mechanism) while config_presets.lua was a genuine bare global - two different defects needing the same fix shape. Copying the bars-lane pin shape (source scan + alias pin + global-print spy + chat-frame report) gave 8 checks that killed 7/7 mutants, each for the named reason.",
+    "what_was_hard": "The st.debug-gated trailers are unreachable by default, so a runtime pin would have been vacuous without flipping the switch in the sandbox - and flipping it inside the shared options_load_state loader would have pulled config.lua (a sibling lane's file, still on the old path) into this lane's verdict, so a dedicated sandbox was needed. The tree was also moving under the lane (concurrent lane added a harness step and 2 files mid-run), so validation numbers had to be re-taken from the final tree and the mutation base rebuilt.",
+    "skill_gap": "Building a mutation base copy that excluded bench/ produced a false hunter_state failure that looked like a mutant casualty; the base itself has to be proven green before its mutants mean anything."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

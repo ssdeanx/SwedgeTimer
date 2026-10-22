@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T21:40:00Z",
+  "run_id": "practice-scenario-engine-2026-10-19",
+  "agent_name": "practice-scenario-engine",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Putting the pure half (the rotation run state machine, the grade bands, the contract accessors) in practice.lua made the whole engine offline-testable; the three operator corrections (the panel map, the registry reconciliation, the class-module lookup) were all resolved WITHOUT breaking a class suite once the reconciliation switched from 'retire the built-in' to 'keep it registered, delegate its grading, route the class to its own list'.",
+    "what_was_hard": "The registry reconciliation: retiring the superseded built-ins was the literal reading of the ruling and it reddened three class suites (24 pins + 2 crashes) whose files are outside this lane's scope. The backward-compatible shape (all eight stay registered; the class list wins in the routing; the built-in's grading is delegated) satisfied the ruling and kept every class suite green.",
+    "skill_gap": "The class-module lookup read the namespace table while the class tables live on the AceAddon table - a cross-module table split the offline sandbox hides (the sandbox keeps them apart; the client does not). The offline harness cannot catch that class of bug; a wiring check against the AceAddon table would."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

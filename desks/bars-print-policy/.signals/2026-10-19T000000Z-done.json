@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T00:00:00Z",
+  "run_id": "f12-bars-print-policy-2026-10-19",
+  "agent_name": "bars-print-policy",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-reading the finding's premise against the in-tree source instead of taking it at face value: bars.lua:13 aliased print to st.utils.print_msg, so F12's 'raw global print' mechanism was wrong, but its policy gap was real (the only live chat call in the tree hidden behind an ambiguous identifier). Both the fix (explicit st.utils.print_msg, alias removed) and the pins (source scan + a global-print spy in the sandbox + behavioural checks) landed, and the sweep found two genuine unprotected paths in the same file (a nil-index in the pips design template, an unguarded LibDataBroker feed).",
+    "what_was_hard": "The tree is being edited concurrently by sibling lanes: the luacheck count moved 2 -> 3 -> 2 during the lane (a warning in tests/main_init_state.lua appeared and was fixed by its owner), so the floor had to be re-verified rather than assumed. Also had to design the source scan so a commented-out debug print is still caught without false positives on print_msg and on the word 'printed'.",
+    "skill_gap": "None material. The mutation-proof discipline (each pin has a named killer mutation on a /tmp/opencode copy, plus an end-to-end harness run on the mutated copy) was applied without needing iteration."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Route the two out-of-scope observations to the config lane: config.lua:74 and config_presets.lua:1393 still hold live (st.debug-gated) bare-global print calls, and main.lua:50 still holds the local print alias shape this lane removed from bars.lua. Details in bench/bars_print_policy_2026-10-19.md section 4."
+  }
+}

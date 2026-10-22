@@ -88,6 +88,14 @@ local function build_profile(opts)
         local mod = assert(loadfile(ROOT .. opts.module))
         setfenv(mod, env)
         mod("SwedgeTimer", st)
+        -- Class files register their body as a loader (operator order 2026-10-21:
+        -- only the selected class executes). This sandbox activates the class it
+        -- loads, as the shipped init does for the selected one.
+        local class = opts.module:match("classes/(%a+)%.lua")
+        if class and type(st.class_loaders) == "table"
+            and type(st.class_loaders[class:upper()]) == "function" then
+            st.class_loaders[class:upper()]()
+        end
     end
     return env, st
 end
@@ -338,6 +346,115 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+-- TBC Anniversary client (name-vs-id rule, operator 2026-10-19): the native
+-- global answers NAMES only, so the rank walk has to reach the client through
+-- the name path. The candidate id is turned into a name first, by the C_Spell
+-- namespace - it accepts a spell id on every branch
+-- (SpellDocumentation.lua:190-197: "Spell ID, name, name(subtext), or link",
+-- answer is a SpellInfo structure with a `name` field, ...:782-786).
+-- ---------------------------------------------------------------------------
+do
+    local queries = {}
+    local by_name = { ["Heroic Strike"] = 29707, ["Maul"] = 26996 }
+    local by_id = { [29707] = "Heroic Strike", [26996] = "Maul" }
+    local _, st = build_profile({
+        project = 5,
+        interface = 20506,
+        globals = {
+            -- The global indexes names only: an id query finds nothing.
+            GetSpellInfo = function(query)
+                queries[#queries + 1] = query
+                if type(query) ~= "string" then return nil end
+                local id = by_name[query]
+                if not id then return nil end
+                return query, nil, 1, 0, 0, 0, id
+            end,
+            C_Spell = {
+                GetSpellInfo = function(id)
+                    local name = by_id[id]
+                    if not name then return nil end
+                    return { name = name, iconID = 1, castTime = 0,
+                        minRange = 0, maxRange = 0, spellID = id }
+                end,
+            },
+        },
+    })
+    eq(st.family, "TBC", "tbc-name: family")
+    eq(st.api.get_family_spell_id({47450, 30324, 29707, 25286, 78}), 29707,
+        "tbc-name: HS resolves to the TBC rank through the NAME path")
+    eq(st.api.get_family_spell_id({6807, 9881, 48480, 26996}), 26996,
+        "tbc-name: Maul resolves to the TBC rank through the NAME path")
+    local asked_name = false
+    for i = 1, #queries do
+        if type(queries[i]) == "string" then asked_name = true end
+    end
+    check(asked_name, "tbc-name: the client was asked by NAME (the id form alone cannot answer)")
+    -- The state variant: the same answer, plus which verdict it is.
+    local id, state = st.api.get_family_spell_id_state({47450, 30324, 29707, 25286, 78})
+    eq(id, 29707, "tbc-name: the state variant resolves the same rank")
+    eq(state, "resolved", "tbc-name: the state variant reports 'resolved'")
+    local absent_id, absent_state = st.api.get_family_spell_id_state({48480, 47450})
+    eq(absent_id, nil, "tbc-name: ids absent from this client resolve nil")
+    eq(absent_state, "absent", "tbc-name: the state variant reports 'absent'")
+end
+
+-- ---------------------------------------------------------------------------
+-- Classic Era client (the other direction of the same rule): the id form is
+-- the query form, and no name is ever asked for.
+-- ---------------------------------------------------------------------------
+do
+    local queries = {}
+    local _, st = build_profile({
+        project = 2,
+        interface = 11509,
+        globals = {
+            GetSpellInfo = function(query)
+                queries[#queries + 1] = query
+                if type(query) ~= "number" then return nil end
+                if query == 29707 or query == 78 then
+                    return "Heroic Strike", nil, 1, 0, 0, 0, query
+                end
+                return nil
+            end,
+        },
+    })
+    eq(st.family, "ERA", "era-id: family")
+    eq(st.api.get_family_spell_id({47450, 30324, 29707, 25286, 78}), 29707,
+        "era-id: HS resolves to the Era rank by ID")
+    local asked_name = false
+    for i = 1, #queries do
+        if type(queries[i]) == "string" then asked_name = true end
+    end
+    check(not asked_name, "era-id: the client is never asked by name")
+    local id, state = st.api.get_family_spell_id_state({47450, 30324, 29707, 25286, 78})
+    eq(id, 29707, "era-id: the state variant resolves the same rank")
+    eq(state, "resolved", "era-id: the state variant reports 'resolved'")
+    local absent_id, absent_state = st.api.get_family_spell_id_state({48480, 47450})
+    eq(absent_id, nil, "era-id: ids absent from this client resolve nil")
+    eq(absent_state, "absent", "era-id: the state variant reports 'absent'")
+end
+
+-- ---------------------------------------------------------------------------
+-- A client that cannot answer at all is "unresolved", never "absent": the two
+-- verdicts must stay apart, so a caller can retry instead of latching a false
+-- negative on a book the client could not read.
+-- ---------------------------------------------------------------------------
+do
+    local _, st = build_profile({
+        project = 5,
+        interface = 20506,
+        globals = {
+            GetSpellInfo = function() error("restricted") end,
+        },
+    })
+    local id, state = st.api.get_family_spell_id_state({29707, 78})
+    eq(id, nil, "unresolved: an unreadable client resolves no rank")
+    eq(state, "unresolved", "unresolved: the state variant reports 'unresolved'")
+    eq(st.api.get_family_spell_id({29707, 78}), nil,
+        "unresolved: an unreadable client never claims a rank")
+end
+
+-- ---------------------------------------------------------------------------
 -- Engine selection + player combat continuity (proctor G1/G4): load the REAL
 -- main.lua read-only over compat.lua + swing_source.lua (the main_init_state.lua
 -- discipline - nothing in main.lua/bars.lua/tocs is touched) with the Cata/Mists
@@ -562,7 +679,10 @@ end
 
 do
     -- R3 probe: classic-line profiles expose the combat-log global, so CLEU
-    -- chains can arm; Mainline-code ones (Forever, Retail) do not.
+    -- chains can arm; Mainline-code ones (Forever, Retail) do not - even when
+    -- Blizzard's deprecation shim defines the same global there
+    -- (Deprecated_CombatLog.lua, loadDeprecationFallbacks-gated), which runs
+    -- no classic combat log behind it.
     local _, tbc = build_profile({
         project = 5,
         globals = { CombatLogGetCurrentEventInfo = function() return nil end },
@@ -572,6 +692,37 @@ do
     eq(forever.cleu_supported, false, "forever: no combat-log global, CLEU chains stay inert")
     local _, retail = build_profile({ project = 1 })
     eq(retail.cleu_supported, false, "retail: no combat-log global, CLEU chains stay inert")
+    local _, forever_shim = build_profile({
+        project = 18,
+        globals = { CombatLogGetCurrentEventInfo = function() return nil end },
+    })
+    eq(forever_shim.cleu_supported, false, "forever: a shimmed combat-log global still leaves CLEU inert")
+    local _, retail_shim = build_profile({
+        project = 1,
+        globals = { CombatLogGetCurrentEventInfo = function() return nil end },
+    })
+    eq(retail_shim.cleu_supported, false, "retail: a shimmed combat-log global still leaves CLEU inert")
+end
+
+do
+    -- Shapeshift form: the bare global answers where it exists; C_ShapeshiftForm
+    -- exists on no client, so even a stubbed namespace is ignored and a client
+    -- without the global reports 0 (unknown form).
+    local _, era = build_profile({
+        project = 2,
+        globals = {
+            GetShapeshiftForm = function() return 3 end,
+            C_ShapeshiftForm = { GetShapeshiftForm = function() return 99 end },
+        },
+    })
+    eq(era.api.GetShapeshiftForm(), 3, "era: the bare form global answers, C_ShapeshiftForm ignored")
+    local _, lone_ns = build_profile({
+        project = 2,
+        globals = { C_ShapeshiftForm = { GetShapeshiftForm = function() return 99 end } },
+    })
+    eq(lone_ns.api.GetShapeshiftForm(), 0, "era: a lone C_ShapeshiftForm stub is ignored (unknown form)")
+    local _, retail_form = build_profile({ project = 1 })
+    eq(retail_form.api.GetShapeshiftForm(), 0, "retail: no form global reports 0 (unknown form)")
 end
 
 do
@@ -616,6 +767,206 @@ do
     local remaining, stacks = st.api.scan_player_aura(function(id) return id == 2825 end)
     eq(remaining, 30, "retail scan: C_ path remaining = expirationTime - now")
     eq(stacks, nil, "retail scan: single application reads as unstacked")
+end
+
+-- ---------------------------------------------------------------------------
+-- Generalised unit-aura scan + equipped-item probe (compat probe lane)
+-- ---------------------------------------------------------------------------
+do
+    -- api.scan_unit_aura is the player scan with the unit as a parameter and the
+    -- filter selectable: the default is the debuff list ("HARMFUL"), a buff scan
+    -- asks for "HELPFUL" explicitly.
+    local seen_unit, seen_filter
+    local function debuff_stub(entries)
+        return function(unit, index, filter)
+            seen_unit, seen_filter = unit, filter
+            if unit ~= "target" or filter ~= "HARMFUL" then return nil end
+            local entry = entries[index]
+            if not entry then return nil end
+            return "Debuff " .. tostring(entry.spell_id), nil, entry.count, nil,
+                entry.duration, entry.expiration, nil, nil, nil, entry.spell_id
+        end
+    end
+    local _, st = build_profile({
+        project = 5,
+        globals = {
+            GetTime = function() return 1000 end,
+            UnitAura = debuff_stub({
+                { spell_id = 13554, count = 1, duration = 12, expiration = 1012 },
+            }),
+        },
+    })
+    local remaining, stacks = st.api.scan_unit_aura("target", function(id) return id == 13554 end)
+    eq(remaining, 12, "unit scan: the target debuff is found (expirationTime - now)")
+    eq(stacks, nil, "unit scan: a single-application debuff reads as unstacked")
+    eq(seen_unit, "target", "unit scan: the scan reads the unit it was given")
+    eq(seen_filter, "HARMFUL", "unit scan: the default filter is the debuff filter")
+    remaining, stacks = st.api.scan_unit_aura("target", function(id) return id == 999999 end)
+    check(remaining == nil and stacks == nil, "unit scan: a non-match reports nil, nil")
+    remaining, stacks = st.api.scan_unit_aura("target", nil)
+    check(remaining == nil and stacks == nil, "unit scan: a nil predicate reports nil, nil")
+    remaining, stacks = st.api.scan_unit_aura(nil, function() return true end)
+    check(remaining == nil and stacks == nil, "unit scan: a nil unit reports nil, nil")
+    remaining, stacks = st.api.scan_unit_aura("player", function() return true end)
+    check(remaining == nil and stacks == nil, "unit scan: a unit with no readable aura reports nil, nil")
+end
+
+do
+    -- The filter argument: a buff scan asks for the helpful list, and the
+    -- default debuff scan must not see a helpful row.
+    local function two_list_stub()
+        return function(unit, index, filter)
+            if unit ~= "target" or index ~= 1 then return nil end
+            if filter == "HARMFUL" then
+                return "Serpent Sting", nil, 1, nil, 12, 1012, nil, nil, nil, 13554
+            end
+            if filter == "HELPFUL" then
+                return "Aspect of the Wild", nil, 1, nil, 30, 1030, nil, nil, nil, 13165
+            end
+            return nil
+        end
+    end
+    local _, st = build_profile({
+        project = 5,
+        globals = {
+            GetTime = function() return 1000 end,
+            UnitAura = two_list_stub(),
+        },
+    })
+    local remaining, stacks = st.api.scan_unit_aura("target", function(id) return id == 13554 end)
+    eq(remaining, 12, "unit scan: the default debuff scan finds the debuff")
+    eq(stacks, nil, "unit scan: the default debuff scan reports no stacks")
+    remaining, stacks = st.api.scan_unit_aura("target", function(id) return id == 13165 end)
+    check(remaining == nil and stacks == nil, "unit scan: the default debuff scan does not see a buff")
+    remaining, stacks = st.api.scan_unit_aura("target", function(id) return id == 13165 end, "HELPFUL")
+    eq(remaining, 30, "unit scan: the explicit buff scan finds the buff")
+    eq(stacks, nil, "unit scan: the explicit buff scan reports no stacks")
+end
+
+do
+    -- R2 for the generalised scan: a restricted row above the match does not
+    -- truncate the walk, and the restricted row itself is never a match - the
+    -- wrapper degrades the whole entry to absent (one secret field -> the entry
+    -- reads absent), so it cannot match as a truncated entry.
+    local function secret_stub(entries)
+        return function(unit, index, filter)
+            if unit ~= "target" or filter ~= "HARMFUL" then return nil end
+            local entry = entries[index]
+            if not entry then return nil end
+            return entry.name, nil, entry.count, nil,
+                entry.duration, entry.expiration, nil, nil, nil, entry.spell_id
+        end
+    end
+    local _, st = build_profile({
+        project = 5,
+        globals = {
+            GetTime = function() return 1000 end,
+            -- The wrapper's own secret guard fires on the marked value, exactly
+            -- as it does on a restricted client.
+            issecretvalue = function(value) return value == "SECRET" end,
+            UnitAura = secret_stub({
+                { name = "SECRET", spell_id = 99999, count = 1, duration = 5, expiration = 1005 },
+                { name = "Serpent Sting", spell_id = 13554, count = 1, duration = 12, expiration = 1012 },
+            }),
+        },
+    })
+    local remaining, stacks = st.api.scan_unit_aura("target", function(id) return id == 13554 end)
+    eq(remaining, 12, "unit scan secret: the match below a restricted row is still found")
+    eq(stacks, nil, "unit scan secret: the match below a restricted row reports no stacks")
+    remaining, stacks = st.api.scan_unit_aura("target", function(id) return id == 99999 end)
+    check(remaining == nil and stacks == nil, "unit scan secret: a restricted row reads as not found, not as a truncated match")
+end
+
+do
+    -- No aura API on this profile: the scan reports nil, nil - unknown, never
+    -- "no debuff".
+    local _, st = build_profile({ project = 2 })
+    local remaining, stacks = st.api.scan_unit_aura("target", function() return true end)
+    check(remaining == nil and stacks == nil, "unit scan: no aura API on the profile -> nil, nil")
+end
+
+do
+    -- The Mainline C_ path (retail here, Forever shares it): the generalised
+    -- scan runs through C_UnitAuras exactly like the player scan does.
+    local _, st = build_profile({
+        project = 1,
+        globals = {
+            GetTime = function() return 1000 end,
+            C_UnitAuras = {
+                GetAuraDataByIndex = function(unit, index, filter)
+                    if unit ~= "target" or filter ~= "HARMFUL" or index ~= 1 then
+                        return nil
+                    end
+                    return {
+                        name = "Serpent Sting", applications = 1, duration = 12,
+                        expirationTime = 1012, spellId = 13554,
+                    }
+                end,
+            },
+        },
+    })
+    local remaining, stacks = st.api.scan_unit_aura("target", function(id) return id == 13554 end)
+    eq(remaining, 12, "unit scan C_ path: the target debuff is found (expirationTime - now)")
+    eq(stacks, nil, "unit scan C_ path: a single application reads as unstacked")
+    remaining, stacks = st.api.scan_unit_aura("target", function(id) return id == 999999 end)
+    check(remaining == nil and stacks == nil, "unit scan C_ path: a non-match reports nil, nil")
+end
+
+do
+    -- Equipped-item probe: true on an exact id match, false on a readable
+    -- non-match, nil when the answer is not knowable.
+    local function inv_stub(items)
+        return function(unit, slot)
+            if unit ~= "player" then return nil end
+            return items[slot]
+        end
+    end
+    local _, st = build_profile({
+        project = 5,
+        globals = {
+            INVSLOT_FIRST_EQUIPPED = 1,
+            INVSLOT_LAST_EQUIPPED = 19,
+            GetInventoryItemID = inv_stub({ [1] = 8345 }),
+        },
+    })
+    eq(st.api.is_item_equipped(8345), true, "equipped probe: the head slot holds 8345 -> true")
+    eq(st.api.is_item_equipped(12345), false, "equipped probe: a readable non-match -> false")
+    eq(st.api.is_item_equipped(nil), nil, "equipped probe: a non-numeric id -> nil")
+end
+
+do
+    -- No GetInventoryItemID on this client: the probe reports nil (unknown),
+    -- never false.
+    local _, st = build_profile({
+        project = 5,
+        globals = { INVSLOT_FIRST_EQUIPPED = 1, INVSLOT_LAST_EQUIPPED = 19 },
+    })
+    eq(st.api.is_item_equipped(8345), nil, "equipped probe: no GetInventoryItemID -> nil")
+end
+
+do
+    -- A restricted equipment read degrades to nil in the wrapper, so the probe
+    -- reports nil (unknown) instead of claiming the item is not equipped.
+    local _, st = build_profile({
+        project = 5,
+        globals = {
+            INVSLOT_FIRST_EQUIPPED = 1,
+            INVSLOT_LAST_EQUIPPED = 19,
+            issecretvalue = function(value) return value == "SECRET" end,
+            GetInventoryItemID = function() return "SECRET" end,
+        },
+    })
+    eq(st.api.is_item_equipped(8345), nil, "equipped probe: a restricted read -> nil, not false")
+end
+
+do
+    -- A client that does not define the INVSLOT_* range: the probe reports nil
+    -- (unknown) instead of guessing.
+    local _, st = build_profile({
+        project = 5,
+        globals = { GetInventoryItemID = function() return 8345 end },
+    })
+    eq(st.api.is_item_equipped(8345), nil, "equipped probe: no INVSLOT_* range -> nil")
 end
 
 -- ---------------------------------------------------------------------------

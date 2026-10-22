@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T16:16:51Z",
+  "run_id": "docstruth-fix-2026-10-20",
+  "agent_name": "docstruth-audit",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Every claim was re-derived from the tree before it was written down, not from the audit: the slash handler (main.lua:2013-2046), the diag block shape (diag.lua:681-709 + main.lua:1947-1998), the rogue SnD verdict (rogue_guide.lua:1123-1156 + the family tables at :480-495), the hunter's pre-pull table (classes/hunter.lua:3419-3462) and its Era UNKNOWN branch (:4406-4409), the rogue builder chain (classes/rogue.lua:264 + rogue_guide.lua:630-666), the paladin's 17 rotation rows and 11 pre-pull rows (classes/paladin.lua:4425-4571,4630-4719), the trinket usable-only gate (hud.lua:319-350,735-746), the warrior W-21 mirror (config_presets.lua:1339, classes/warrior.lua:4050-4056,4262-4281) and the two practice strings (practice_ui.lua:5459-5460 vs option_tables.lua:486-490).",
+    "what_hard": "Two brief statements did not match the tree and were corrected against it rather than copied: the W-21 Sunder mirror ships OFF (hud_show_sunder = false) and is display-only (no GCD swipe, no cooldown count) - the guide's Sunder icon is the one that counts the debuff down; and the Cata/Mists flavours load with the inert stand-in because their TOCs omit LibClassicSwingTimerAPI, not because the library misbehaves. Also had to re-point a dozen drifted file:line citations that the audit had not listed.",
+    "skill_gap": "No offline check can prove a doc claim about in-client behaviour; every touched row was kept UNCONFIRMED and no in-client proof is claimed anywhere in the three files."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

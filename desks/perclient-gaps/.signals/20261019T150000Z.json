@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T15:00:00Z",
+  "agent_name": "perclient-gaps",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 3
+  },
+  "patterns": {
+    "what_worked": "Fresh git-show verification of every surviving claim on all 5 branches; 3 compat gaps re-confirmed with exact citations; 2 citation refinements (family-detect variant files, Cata-variant bare globals) that keep values but correct lines.",
+    "what_was_hard": "G1-G8 list itself is truncated off the bench (line 52 literal marker); no brief/journal/memory holds the 5 non-compat gap definitions.",
+    "skill_gap": null
+  },
+  "escalation": {
+    "reason": "5 of 8 gap definitions unrecoverable from disk — need orchestrator to supply ses_eaabf8ba6ffe5OcD3QHmpLXS9S dispatch objectives or rule the 3 recovered gaps + refinements as closure.",
+    "blocked_on": "orchestrator",
+    "recommendation": "supply the objectives or close; nothing in addon/test scope is owed (all 3 recovered bugs already fixed in tree by ses_eaab3285)"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T21:37:15Z",
+  "agent_name": "rogue-pd",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "archive-first reconciliation (cmp-identical TBC/Forever gave one pattern); mirroring the established hunter/shaman drill-shell shape for rogue; live sandbox drive pins caught a real predicate-name bug",
+    "what_was_hard": "six-lane crossfire on shared files (verified every failure non-rogue via HEAD-isolation); two self-caught pin holes (untested pin text, syntax-breaking mutation)",
+    "skill_gap": "none lane-blocking; orchestrator owns checker-vs-seams reconcile + shared Practice page entries"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "harness shows 38/3, all three proven sibling-lane crossfire (shaman SODOPT, pips registry, druid/hunter dead hooks); rogue files contribute zero failures \u2014 see bench/buildout_rogue-pd_2026-10-19.md sections 4-5"
+  }
+}

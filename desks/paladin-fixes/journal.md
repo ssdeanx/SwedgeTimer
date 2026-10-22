@@ -1,0 +1,15 @@
+# Paladin Fixes — Journal
+
+## 2026-10-19 — Desk opened
+- **Purpose:** Close the gaps in bench/paladin_rotation_audit_2026-10-19.md (engine side only).
+- **Scope:** ONLY classes/paladin.lua, twist.lua, nextaction.lua, tests/twist_state.lua, tests/nextaction_state.lua, tests/paladin_state.lua. Everything else OUT (no guide_contract, option_tables, config_presets, smoke, run.sh, TOCs, compat, hud, bars, practice, docs, versions). Gaps needing those files: engine side with nil-safe engine-constant defaults, wiring filed as follow-up.
+- **Next step:** Read the six in-scope files in full, map each audit gap to an engine change or a filed follow-up, implement, then harness + luacheck + mutations.
+
+## 2026-10-19 — Gaps closed (engine side), wiring filed
+- **Worked on:** Mapped all 19 audit rows. Implemented: twist.lua (SOC_PROC_ICD_SECONDS=1 + is_proc_icd_clear; SOD_WINDOW_SECONDS=0.2 + narrow_window_for_sod); nextaction.lua (TBC_PULL_CS_HOLD_SECONDS=11 + cs_hold_remaining; TBC_RESEAL_AUTO_GUARD_SECONDS=0.5 + auto_age/reseal_auto_guard; twist_mana_threshold plug-in; how_cast_seconds instant + FOREVER_HOW_AUTO_WINDOW=0.2 recency; SOD_EXECUTE_FIGHT_PCT=10 + fight_remaining_pct; Forever Exo creature-gate bypass); classes/paladin.lua (ICD stamp/consult/reset, SoD rune narrowing in band + landmarks via is_sod_client, TBC pull-hold latch, auto-age stamp + TBC guard, empty Echo tables + Forever seal folding, filed-wiring nils). Updated 3 Forever filler pins to the sim-faithful shape (audit GAP).
+- **Current state:** twist 84, nextaction 477, paladin 295 checks all PASS; six files luacheck 0/0; CRLF kept; no trailing WS. 15/15 behavior mutations killed on /tmp/opencode/palmut copies. Full harness 34/37: the 3 failures are sibling-lane crossfire (warrior_state, shaman_guide_state, wiring_check warrior row — files never touched, warrior.lua edited live mid-session; druid_guide flipped FAIL→PASS mid-session). Baseline at start: 36/37 (druid_guide) + 3 luacheck warnings in out-of-scope files (now 2, sibling-fixed).
+- **Filed follow-ups (needs out-of-scope files, reason each):** SoC Rank-1 advice (new UI slot + option); Era Judgement-stopattack (macro/UI); Era prepull (pull-timer/main.lua); SoD seal-maintenance in FCFS (new guide slot + nextaction_ui + provider map); SoD twist/Shockadin/Wrath-like variants (build selector + options + dispatch); fight_remaining provider source (boss-HP/encounter timer); how_cast_seconds provider probe (compat cast-time API); twist_mana_threshold value (options key); strictSequence hard-wait (nextaction_ui). TBC Judge-gate shape accepted as-is (ours richer, unvalidated — no code).
+- **Next step:** Orchestrator validates; reconcile owns the 3 crossfire failures. In-client test session per standing rules.
+
+## 2026-10-19 — [signal:done] Paladin gaps closed engine-side, wiring filed
+- twist 84 + nextaction 477 + paladin 295 checks PASS; luacheck 0/0 (six files); 15/15 mutations killed; journal holds the filed follow-up list. Validation owner: orchestrator.

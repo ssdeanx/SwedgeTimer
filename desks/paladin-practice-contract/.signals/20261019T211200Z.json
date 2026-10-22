@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T21:12:00Z",
+  "run_id": "paladin-practice-contract-2026-10-19",
+  "agent_name": "paladin-practice-contract",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reusing the guide's own pure engine (nextaction.evaluate / evaluate_fcfs) as the single decision source kept practice and guide provably in step, and publishing the engine's FCFS tables (st.nextaction.FCFS_ORDERS) removed any chance of a copied order drifting. Reading the spec's checklist against the CURRENT tree (not the checklist's snapshot) showed the SoD variants and the Holy-Power/Templar inputs are already closed by the variants lane, so the remaining class-side rows were filed with the exact file or id each needs.",
+    "what_was_hard": "The orchestrator's contract fixes only { now, last_action, resources, cooldowns }, but a rotation decision needs the swing and GCD clocks and the seal state. The step therefore reads a tolerant alias list from the context AND from the session (and ships an adapter that builds the context from the shipped practice sim), degrading to nil whenever the data cannot be read. Deciding what a HOLD should answer was the other judgement call: nil (unknown) was chosen over a sentinel key so a correct pause is never graded wrong.",
+    "skill_gap": "Two contract decisions (hold answers nil; the canonical key space is the guide's while the practice sim spells Consecration 'consec') are assumptions about a sibling lane that has not written its lookup yet. They are documented in the bench report's sections 1 and 7, but they are unproven coordination, not proven fact."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

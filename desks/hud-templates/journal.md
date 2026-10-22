@@ -1,0 +1,18 @@
+# hud-templates — Journal
+
+## 2026-10-19 — Desk opened
+- **Purpose:** Build the HUD template system per bench/hud_templates_2026-10-19.md (the spec).
+- **Scope:** option_tables.lua (template widget + handler), config_presets.lua (template tables + nil default), tests/options_load_state.lua (template pins), NEW tests/hud_templates_state.lua, tests/run.sh (one registration line). No class files, no hud/design/designmode edits (preview uses existing tick path; optionals filed as follow-up).
+- **Next step:** implement, then harness + luacheck + mutation proofs on /tmp/opencode copies.
+
+## 2026-10-19 — Built + verified (done)
+- **Worked on:** config_presets.lua: `hud_template = nil` per class (6) + `ST.<TOKEN>.HUD_TEMPLATES` tables (18 templates, explicit full slot sets + 4 geometry keys; W-T3 = provisional arms/SoD union, R-T3 includes exempted kidney/restealth/bandage). option_tables.lua: shared `hud_template_matches` + `hud_template_widget` helper (order 8.02, nil-safe get/set, Custom fallback, unknown-hides, dirty-detect as derived state) + 6 per-class insertions. tests/hud_templates_state.lua (new, 813 checks). tests/options_load_state.lua §12 surface pins. tests/run.sh one registration line.
+- **Current state:** harness 38/0 green, luacheck 2/0 floor held, 7/7 mutation proofs kill on /tmp/opencode copies (M1 slot-drop, M2 rename, M3 geometry, M4 nil-default x2 suites, M5 order, M6 store, M7 values). Endings preserved (presets still CRLF, rest LF). No class/guide/hud/design/designmode/TOC/version edits.
+- **Next step:** orchestrator validates. Filed follow-ups (not built): (1) extend `HUD.preview_state` samples beyond cs/consecration/exorcism/wings/trinkets so template previews demo-loop for all classes (hud.lua:1027-1043); (2) register `DM.register_template` row rhythms for the match-width Full rows (designmode.lua:813-847); (3) re-verify W-T3/R-T3 provisional sets after warrior-followups + rogue-followups lanes land.
+- [signal:done] templates selectable per class with persistence + Custom fallback, pinned + mutated, harness green.
+
+## 2026-10-19 — Gallery shortlist mapped (done, crossfire noted)
+- **Worked on:** bench/weakaura_templates_2026-10-19.md 7-item shortlist mapped onto the existing 18 templates (TBC + Classic Era/SoD only; WOTLK D2/D3 flagged NOT inputs). Zero slot/geometry/behavior change: gallery provenance comments in config_presets.lua (6 HUD_TEMPLATES headers) + option_tables.lua (6 widget entries); exact label pins (new §4, 18 labels) in tests/hud_templates_state.lua (845 checks, 0 failed); exact values-string pins (§12 VALUES) in tests/options_load_state.lua (1540 checks, 0 failed).
+- **Current state:** my 4 files luacheck-clean (0 warnings in them); 4/4 mutation proofs kill on /tmp/opencode copies, exit 1 each (M1 label rename, M2 values rename, M3 slot drop, M4 nil-default flip; copies removed). Full harness red from sibling crossfire only — failing set churns run-to-run (rogue/hunter/shaman/guide spell-resolution checks owned by the running WA-consume + name-vs-id lanes; e.g. shaman LB/CL rank resolution, rogue coldblood slot id). One accidental read-only `git diff --stat` ran during verification (no mutation, no further git).
+- **Next step:** orchestrator validates (validation owner per dispatch); re-run harness after sibling lanes land. Beyond-contract bar/weave borrows (hand colors, Delta readout, WF shading, cast-zone bracket) stay UNCONFIRMED for the bar lane + in-client check.
+- [signal:done] shortlist styles mapped to template entries with persistence + Custom fallback, pinned + mutated; harness green on owned suites, crossfire filed

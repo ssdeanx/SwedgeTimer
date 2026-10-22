@@ -59,6 +59,7 @@ run "lua5.1 tests/shaman_state.lua" lua5.1 tests/shaman_state.lua
 run "lua5.1 tests/warrior_state.lua" lua5.1 tests/warrior_state.lua
 run "lua5.1 tests/hunter_state.lua" lua5.1 tests/hunter_state.lua
 run "lua5.1 tests/rogue_state.lua" lua5.1 tests/rogue_state.lua
+run "lua5.1 tests/class_activation_state.lua" lua5.1 tests/class_activation_state.lua
 run "lua5.1 tests/rogue_guide_state.lua" lua5.1 tests/rogue_guide_state.lua
 run "lua5.1 tests/hunter_window_state.lua" lua5.1 tests/hunter_window_state.lua
 run "lua5.1 tests/druid_energy_state.lua" lua5.1 tests/druid_energy_state.lua
@@ -72,7 +73,12 @@ run "lua5.1 tests/druid_guide_state.lua" lua5.1 tests/druid_guide_state.lua
 run "lua5.1 tests/shaman_guide_state.lua" lua5.1 tests/shaman_guide_state.lua
 run "lua5.1 tests/hunter_guide_state.lua" lua5.1 tests/hunter_guide_state.lua
 run "lua5.1 tests/practice_state.lua" lua5.1 tests/practice_state.lua
+run "lua5.1 tests/practice_progress_state.lua" lua5.1 tests/practice_progress_state.lua
+run "lua5.1 tests/practice_stats_state.lua" lua5.1 tests/practice_stats_state.lua
+run "lua5.1 tests/practice_progress_ui_state.lua" lua5.1 tests/practice_progress_ui_state.lua
 run "lua5.1 tests/practice_ui_state.lua" lua5.1 tests/practice_ui_state.lua
+run "lua5.1 tests/neutral_actions_state.lua" lua5.1 tests/neutral_actions_state.lua
+run "lua5.1 tests/prepull_contract_state.lua" lua5.1 tests/prepull_contract_state.lua
 run "lua5.1 tests/bars_state.lua" lua5.1 tests/bars_state.lua
 run "lua5.1 tests/hud_state.lua" lua5.1 tests/hud_state.lua
 run "lua5.1 tests/rotationtext_state.lua" lua5.1 tests/rotationtext_state.lua
@@ -81,8 +87,11 @@ run "lua5.1 tests/designmode_state.lua" lua5.1 tests/designmode_state.lua
 run "lua5.1 tests/diag_state.lua" lua5.1 tests/diag_state.lua
 run "lua5.1 tests/main_init_state.lua" lua5.1 tests/main_init_state.lua
 run "lua5.1 tests/options_load_state.lua" lua5.1 tests/options_load_state.lua
+run "lua5.1 tests/hud_templates_state.lua" lua5.1 tests/hud_templates_state.lua
 run "lua5.1 tests/secret_guard_state.lua" lua5.1 tests/secret_guard_state.lua
 run "lua5.1 tests/lrc_guard_state.lua" lua5.1 tests/lrc_guard_state.lua
+run "lua5.1 tests/spell_known_state.lua" lua5.1 tests/spell_known_state.lua
+run "lua5.1 tests/range_source_state.lua" lua5.1 tests/range_source_state.lua
 run "lua5.1 tests/toc_check.lua" lua5.1 tests/toc_check.lua
 run "lua5.1 tests/wiring_check.lua" lua5.1 tests/wiring_check.lua
 

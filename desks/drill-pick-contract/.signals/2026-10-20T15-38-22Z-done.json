@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T15:38:22Z",
+  "run_id": "drill-pick-contract-2026-10-20",
+  "agent_name": "drill-pick-contract",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "The six class modules load cleanly in the practice-UI sandbox with no extra stubs (the class's own pure guide first, then the class module), so the REAL graders could be driven end to end: the row's ACTION press (the pick) and the DRILL press (the pick in hand) each reach the class's own grader and answer S. The alias readers that are file-local (practice_action, practice_pressed, the warrior's and the druid's inline reads) became reachable through the class's own exported drill grader, which is the only way to reach them. The ctx the drill-list path really delivered was reused and only the pick aliases were stripped, so each class's own reader was exercised with the ctx shape it actually reads, and the negative half (the same grader answers nil without the alias) made the positive half attributable.",
+    "what_was_hard": "The F2 fix's pin (§24) used a hand-written paladin-shaped stub, so the alias block was never exercised against a reader that reads a different alias. Reaching the real readers needed the class modules in the sandbox, and the alias replay had to reuse the real ctx (a hand-built ctx does not survive the class's decision machinery - the hunter's practice_decision reads ctx.last_action to model the cast, so stripping the aliases changes the verdict).",
+    "skill_gap": "I took the brief's 'the shipped behaviour is currently correct' at face value for too long; the shadowing hole only surfaced when I probed the interaction the brief itself named (a class publishing its own ctx.action). Probing the named risk before writing the pin is cheaper than discovering it afterwards."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

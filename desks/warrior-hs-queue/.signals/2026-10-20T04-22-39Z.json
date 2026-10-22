@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T04:22:39Z",
+  "run_id": "warrior-hs-queue-2026-10-20",
+  "agent_name": "warrior-hs-queue",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The sim answered the operator's mechanic outright (the tbc-new comment on consumeQueue plus the DisableDWMissPenalty flag in four sim branches, the +19 % penalty in spell_outcome.go and the 5 % white base in target.go), so every number in the drill is cited and the two client-only figures (the in-client lift timing, the 7 % spell cap) are marked UNCONFIRMED instead of invented. The pure verdict in warrior_guide.lua plus the class-side drill keeps the shared engine untouched; the gather's new offhand readings are the addon's own swing data, exactly the input the sim is silent about.",
+    "what_was_hard": "The window model took the longest: the press window is the gap between the mainhand's last swing and the offhand's next swing, and the sim's 250 ms queue delay is its reaction-time MODEL, not a client fact - using it as a window edge would have failed the operator's own ideal press (right before the offhand swing). W-21 also carried an internal contradiction in the sweep (the row's width grows by three slots AND the mirrors are provider-hidden by default): the gate is nil-off per the objective, but the shipped hud_show_sunder = true means the live TBC row gains one icon - flagged for the options lane.",
+    "skill_gap": "The band's first cut used the house max-band shape with a bigger-is-better value, so every good press graded D; the mutation proof caught it (30 mutations, first run 10 void) and the table is now min-threshold shaped."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

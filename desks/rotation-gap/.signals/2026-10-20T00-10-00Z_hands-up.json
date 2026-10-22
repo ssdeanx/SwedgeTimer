@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T00:10:00Z",
+  "run_id": "rotation-gap-2026-10-20",
+  "agent_name": "rotation-gap",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the APLs as three row classes (rotation / sim-harness / prepull) made the operator's request answerable without inventing a scope, and made the open question crisp.",
+    "what_was_hard": "Deciding whether the harness rows belong in a rotation table is a product call, not a source fact - the APL itself does not settle it.",
+    "skill_gap": "When a brief says 'add the missing lines', the row-granularity of the source matters as much as the content."
+  },
+  "escalation": {
+    "reason": "HU-12: should the shipped practice_rotation tables carry the APL's SPELL rows only (with a per-class prepull table) or the FULL APL including consumables/trinkets/potions? The second reading needs new options toggles (no default-visible change without an explicit gate) and makes the rotation display a 'press my trinkets' list. The operator's own example lines (Charge, Battle Stance, Blood Rage) sit on the prepull/upkeep side of that split, so the choice changes where they land.",
+    "blocked_on": "operator ruling on HU-12",
+    "recommendation": "Rule (i): the rotation table keeps the APL's spell-decision rows; a per-class prepull/upkeep table (the hunter's existing ST.HUNTER.PRACTICE_PREPULLS shape) takes the prepull and utility rows. Sim-harness rows (trinkets, Engineering, autocastOtherCooldowns, potions) stay out of both - they are not rotation decisions."
+  }
+}

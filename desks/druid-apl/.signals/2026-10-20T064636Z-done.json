@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T06:46:36Z",
+  "run_id": "druid-apl-2026-10-20",
+  "agent_name": "druid-apl",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-fetching all five druid APL files and naming every id against the sims' own spell data (plus the Classic 1.15 client's own tables) instead of trusting the gap analysis caught four errors in it - including the family-split trap it warned about (9850 is Claw r5 on Era, TBC AND Forever, never Mangle). HU-13's two flags made the honest shape of the lane obvious: four lines have a read AND an arm, three have a read but no honest arm, and every filed line names the exact read it waits for.",
+    "what_was_hard": "Deciding which lines can be armed at all. The Cat Form line is the APL's form upkeep, but the guide has no feral-spec gate (main.lua's talent_positions is WRATH-only), so an arm would nag every resto druid in combat; the same class of doubt applies to the Bloodlust (the APL's own Bloodlust Time variable) and the Claw (can_shred is RESERVED). Each of those was filed with the exact missing piece instead of being armed on a guess.",
+    "skill_gap": "The mutation harness needed a CRLF-aware pattern matcher - the first run reported every mutation as 'pattern gone' because the druid's files keep CRLF. The pin round also exposed a sparse-table bug in my own test helper (#cat_form[40] is nil, not the row), which the mutants surfaced before the tests did."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

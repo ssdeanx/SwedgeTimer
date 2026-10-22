@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T07:48:00Z",
+  "run_id": "warrior-utility-residuals-2026-10-20",
+  "agent_name": "warrior-utility-residuals",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the sim sources directly (wowsims/sod, tbc-new, classic, forever, wotlk) settled the three filed gates in one pass: auraIsKnown is a REGISTERED-aura check, so the Gladiator Stance gate is the T1 damage SET bonus (an equipment fact), not a rune - which names the exact missing read (the six set item ids, buildable from the existing api.is_item_equipped). The class's own guide slot set turned out to be exactly the engine's askable vocabulary per family and spec, so the rotation slice could reuse it instead of inventing a second family gate.",
+    "what_was_hard": "The chunk's 200-local cap: the first cut of the per-family slot map was a file-scope local and the module stopped loading (the map moved inside the function). The remaining unmodelled APL gates needed real judgement - the WotLK Bloodrage rage ceiling (20, not 90) and the Forever stance dance were found while reading the APLs and are filed, not built, because both are a second lane's worth of work.",
+    "skill_gap": "The execute-phase wire changes what the guide says on TBC / Forever inside the execute phase (the dump is withheld, so the guide can show no action while the Execute row is reserved for the core). That is APL-faithful but it is a visible behaviour change, and it wants an in-client look before it ships."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T22:38:44Z",
+  "run_id": "stale-claims-2026-10-20",
+  "agent_name": "stale-claims",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the previous lane's own landed wording (paladin/warrior/shaman) and reusing it verbatim as the house form for the three out-of-scope class files kept one wording across six classes, and the three existing stale-phrase pins (paladin/warrior/shaman suites) needed no re-wording because those files were untouched. The CHANGELOG passage was rewritten from the publish tables themselves (four bucketless classes verified one by one), not from the previous lane's prose.",
+    "what_was_hard": "Telling which of the many same-shaped rank-art claims were in scope: the three 'FOR THE RECORD' notes in the same class files and the two practice_ui.lua icon comments make the same false claim but were not named, so they were filed rather than silently expanded into.",
+    "skill_gap": "The resolver has TWO fallback tiers (ids[1] inside the name leg, then the ladder walk that takes the highest existing cited id) - the house wording mentions only the first, so 'the ERA rank-1 id' is shorthand rather than the whole truth. Worth a one-line note in the house wording if the next lane rewrites it."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Dispatch a follow-up for the five remaining false-claim sites (classes/hunter.lua:4967, classes/druid.lua:4233-4234, classes/rogue.lua:2997, practice_ui.lua:419-423, practice_ui.lua:508-512) and for the missing source-shape pins in the hunter/druid/rogue suites - the three stale-phrase pins cover paladin/warrior/shaman only, so nothing would catch a reintroduction in the three files this lane corrected. No suite reads CHANGELOG.md either."
+  },
+  "artifacts": [
+    "bench/stale_claims_2026-10-20.md",
+    "desks/stale-claims/journal.md"
+  ],
+  "files_changed": [
+    "CHANGELOG.md",
+    "classes/hunter.lua",
+    "classes/druid.lua",
+    "classes/rogue.lua"
+  ],
+  "verification": {
+    "harness": "43 steps, 0 failed (bash tests/run.sh)",
+    "luacheck": "2 warnings / 0 errors in 85 files (the standing floor, both pre-existing)",
+    "mutation_proofs": "3 kills / 0 escapes - the old phrase restored in each of paladin.lua, warrior.lua, shaman.lua kills its suite (2 of N checks, exit 1); the control run on the unmutated copy is green",
+    "behaviour": "unchanged - every edited line in the three class files is a comment (verified mechanically); no id, no table, no resolution branch touched",
+    "line_endings": "CRLF kept: CHANGELOG.md 993 CRLF / 0 lone LF, classes/hunter.lua 5363/0, classes/druid.lua 4639/0, classes/rogue.lua 3695/0"
+  }
+}

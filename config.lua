@@ -33,6 +33,14 @@ ST.defaults = {
 		-- the hostile-target swing bar on the classic-line families (inert elsewhere).
 		enemy_swing_enabled = false,
 
+		-- Practice progression + stats (practice_progress.lua / practice_stats.lua).
+		-- The default shape of the saved blob: a fresh profile starts from a valid,
+		-- fully-shaped practice state instead of an absent one. The table is the
+		-- AceDB DEFAULT - it is never mutated: the hook (practice_ui.lua) REPLACES
+		-- the profile key with the repaired blob
+		-- (db.profile.practice = st.practice_progress.migrate(db.profile.practice)).
+		practice = ST.PRACTICE_DEFAULTS,
+
 		-- Frame strata/draw level
 		frame_strata = "MEDIUM",
 		draw_level = 10,
@@ -71,4 +79,4 @@ ST.defaults = {
 --=========================================================================================
 -- End, if debug verify module was read.
 --=========================================================================================
-if st.debug then print('-- Parsed config.lua module correctly') end
+if st.debug then st.utils.print_msg('-- Parsed config.lua module correctly') end

@@ -1,0 +1,11 @@
+# Desk: shaman-icd — Journal
+
+## 2026-10-19 — Desk opened
+- **Purpose:** (1) Competitor S1 ICD/status row, shaman leg (HUD row + shaman inputs + compat probe; per-item ICD durations UNCONFIRMED, never invent). (2) Follow-ups: shaman secret-regime lust affordance (toggle + consumer), weave_range hide-on-unknown options copy, rogue bars_state/design pins D3/D4, hud.lua:514 fallback verify + note.
+- **Scope:** ONLY hud.lua, classes/shaman.lua, compat.lua, config_presets.lua (shaman block), option_tables.lua (shaman + weave_range sections), tests/shaman_state.lua, tests/secret_guard_state.lua, tests/options_load_state.lua (shaman pins), tests/bars_state.lua (rogue boot), tests/design_state.lua (rogue pin). Everything else OUT.
+- **Next step:** implement lust latch + lazy badge (nil-off), options copy lines, TRINKET_DATA UNCONFIRMED marking + CLEU fallback note, rogue boot case + design pin, then harness + luacheck + mutations.
+
+## 2026-10-19 — lane done
+- **Worked on:** (1) S1 shaman leg: `ST.SHAMAN.update_lust_state` (0.5 s throttle, `st.lust_supported == true` gate, id+name+Farseer scan, M5 unknown latch) + lazy `weave_lust_text` badge (`BL Ns` / `BL ?` / bare `BL` / hidden, `show_shaman_lust_status ~= true` = off, nil = off); TRINKET_DATA header marks every `icd` UNCONFIRMED + never-invent rule; secret_guard 13d pins the scan-player-aura probe shape. (2) Follow-ups: shaman toggle + widget (order 2.92) + options_load §6 pin; weave_range hide-on-unknown copy line; rogue boot case (MODULES + hook + CLASSES extras 4/3/0/0 + 7 widget pins) + design_state D4 static pin; hud.lua:514 fallback note (poll-driven on-use + proc swipes stay live, only reversed ICD swipe lost).
+- **Current state:** my suites green (shaman 420, secret 325, options 892/0, design 322), luacheck 0/0 on all 8 touched files, M1-M6 mutations discriminate (exit 1) on /tmp/opencode/mut_shaman_icd (restored byte-identical). Full harness 33/37: the 4 failures are parallel-lane crossfire (hunter H1, paladin P1 math, bars 4 count pins, wiring hunter dead-hook) + 4 luacheck warnings in files I never touched. Rogue boot proven via /tmp rogue-only copy (515 PASS) + zero ROGUE failures in-tree.
+- **Next step:** orchestrator reconcile + rerun harness after parallel lanes land; D1 hunter order untouched (out of scope, matrix-recorded).

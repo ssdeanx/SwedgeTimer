@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-21T19:40:50Z",
+  "agent_name": "class-isolation-shared",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Targeted greps + small sed reads kept a 334 KB practice_ui.lua and six 160-310 KB class files out of context; a single provider contract replaced four hardcoded routes; the fixture-provider pattern let the existing suites keep their behavioural coverage; mutation proofs on a /tmp copy proved every new guard.",
+    "what_was_hard": "The carry-over from the aborted attempt: the resume brief said no code had changed but the edits were on disk, so disk state had to be re-verified before doing anything. The 2-warning luacheck floor also forced two fixture-local cleanups (unused helper, shadowed name).",
+    "skill_gap": "The error-path wording generalisation (per-class refusal strings -> generic) is a user-visible change that should have been decided with the orchestrator up front rather than noted after the fact."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Orchestrator review + operator in-client check: Auto and an explicit non-playing pick on each class, a Start/Stop Fight round-trip per drill, and design mode showing the paladin's seal/success elements only with PALADIN active."
+  }
+}

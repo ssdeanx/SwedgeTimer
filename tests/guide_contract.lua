@@ -11,12 +11,16 @@
 --     the glow, the labels and the rotation text,
 --   * degenerate providers (gather/evaluate that return their table unchanged,
 --     nil-returning gather, unknown slot keys) never error,
---   * the paladin provider: contract shape, the eight slots with the shipped display
---     fields, gather delegation into the caller's reused table, evaluate parity with
---     the pre-refactor engine mapping over scripted input cases, the Era HoW
---     pass-through onto its slot, and the published
+--   * the paladin provider: contract shape, the twelve slots with the shipped
+--     display fields, gather delegation into the caller's reused table, evaluate
+--     parity with the pre-refactor engine mapping over scripted input cases, the
+--     Era HoW pass-through onto its slot, and the published
 --     twist_sounds map,
---   * the paladin guide through the real frame (structures + one combat tick + idle).
+--   * the paladin guide through the real frame (structures + one combat tick + idle),
+--   * the shaman provider: its twenty-two guide slots through the real frame, the
+--     two maintain slots (Lightning Shield S-19, Searing Totem S-17) with their
+--     client-resolved icons, the APL utility layer's four slots (bench/
+--     rotation_gap_vs_apl_2026-10-20.md §5) and the HUD mirror's nil=off hide.
 -- Run from the repo root: lua5.1 tests/guide_contract.lua  (any cwd works).
 
 local script_dir = (arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
@@ -56,6 +60,12 @@ local function make_fontstring()
     function f:SetShadowOffset() end
     function f:SetFont(path, size, flags) f.font = { path, size, flags }; return true end
     function f:SetText(text)
+        -- SoD-faithful: a FontString that was never fonted rejects its text on a
+        -- real client ("Font not set"). The sandbox must say so too, or a fontless
+        -- site stays invisible to the suite.
+        if not f.font then
+            error("Font not set", 0)
+        end
         f.text = text
         f.set_text_calls = (f.set_text_calls or 0) + 1
     end
@@ -140,10 +150,39 @@ local SPELL_INFOS = {
     [1004] = { name = "Fake Mark", icon = "tex_mark" },
     [1005] = { name = "Fake Fill A", icon = "tex_fa" },
     [1006] = { name = "Fake Fill B", icon = "tex_fb" },
+    -- Shockadin slots (shipped ids, rank-invariant art like the other fillers).
+    [20930] = { name = "Holy Shock", icon = "icon_hs" },
+    [407624] = { name = "Aura Mastery", icon = "icon_am" },
+    -- Rogue slots (names answer too: the class resolves its ids from the client's own
+    -- spell data by name).
+    [5101] = { name = "Slice and Dice", icon = "i_snd" },
+    [5102] = { name = "Rupture", icon = "i_rp" },
+    [5103] = { name = "Eviscerate", icon = "i_ev" },
+    [5104] = { name = "Envenom", icon = "i_env" },
+    [5105] = { name = "Expose Armor", icon = "i_ea" },
+    [5106] = { name = "Shiv", icon = "i_shiv" },
+    [5107] = { name = "Thistle Tea", icon = "i_tea" },
+    [5108] = { name = "Sinister Strike", icon = "i_ss" },
+    [5109] = { name = "Deadly Poison", icon = "i_dp" },
+    [5110] = { name = "Adrenaline Rush", icon = "i_ar" },
+    [5111] = { name = "Blade Flurry", icon = "i_bf" },
+    [5112] = { name = "Kick", icon = "i_kick" },
+    -- R3 short-CD fixtures (test-owned ids, never shipped): Kidney resolves the
+    -- interrupt row, Vanish the Re-stealth CD (mapping UNCONFIRMED), the
+    -- Heavy Netherweave rank the Bandage slot (rank UNCONFIRMED).
+    [5113] = { name = "Kidney Shot", icon = "i_kidney" },
+    [5114] = { name = "Vanish", icon = "i_vanish" },
+    [5115] = { name = "Heavy Netherweave Bandage", icon = "i_bandage" },
+    -- Shaman maintain slots (S-19 / S-17): the shipped ids are UNCONFIRMED, so
+    -- the client's own spell data answers by NAME and re-points the slot icon.
+    -- The fixture ids are test-owned (never shipped) - they stand for "whatever
+    -- the client answers".
+    [9201] = { name = "Lightning Shield", icon = "icon_ls" },
+    [9202] = { name = "Searing Totem", icon = "icon_searing" },
 }
 
-local BASE_MODULES = { "compat.lua", "utils.lua", "nextaction.lua", "nextaction_ui.lua" }
-local PALADIN_MODULES = { "compat.lua", "utils.lua", "nextaction.lua", "nextaction_ui.lua",
+local BASE_MODULES = { "compat.lua", "utils.lua", "guard.lua", "nextaction.lua", "nextaction_ui.lua" }
+local PALADIN_MODULES = { "compat.lua", "utils.lua", "guard.lua", "nextaction.lua", "nextaction_ui.lua",
     "classes/paladin.lua" }
 
 local function build(opts)
@@ -178,9 +217,18 @@ local function build(opts)
         return make_frame(select(2, ...))
     end
     env.GetSpellInfo = function(spell)
-        local info = SPELL_INFOS[spell]
-        if info then
-            return info.name, nil, info.icon, 0, 0, 0, spell
+        if type(spell) == "number" then
+            local info = SPELL_INFOS[spell]
+            if info then
+                return info.name, nil, info.icon, 0, 0, 0, spell
+            end
+            return nil
+        end
+        -- A name lookup (the rogue resolver's shape): first name match wins.
+        for id, info in pairs(SPELL_INFOS) do
+            if info.name == spell then
+                return info.name, nil, info.icon, 0, 0, 0, id
+            end
         end
         return nil
     end
@@ -203,6 +251,8 @@ local function build(opts)
 
     local ST = {
         PALADIN = {},
+        ROGUE = {},
+        SHAMAN = {},
         player_class = opts.player_class or "WARRIOR",
         interfaces_are_initialised = true,
         in_combat = false,
@@ -260,6 +310,13 @@ local function build(opts)
         local chunk = assert(loadfile(ROOT .. modules[i]))
         setfenv(chunk, env)
         chunk("SwedgeTimer", st)
+        -- Operator order 2026-10-21: a wrapped class file registers its body as a
+        -- loader; the sandbox activates it exactly as main.lua does at init.
+        local class = modules[i]:match("classes/(%a+)%.lua")
+        if class and type(st.class_loaders) == "table"
+            and type(st.class_loaders[class:upper()]) == "function" then
+            st.class_loaders[class:upper()]()
+        end
     end
 
     sb.env, sb.st, sb.ST = env, st, ST
@@ -643,8 +700,9 @@ eq(pst.nextaction_ui.get_provider(pST), pST.PALADIN.guide,
     "the paladin guide resolves as the frame's provider")
 
 local slots = pST.PALADIN.guide.slots
-eq(#slots, 8, "the paladin declares eight slots (twist composite + judge + three fillers)")
-local expected_keys = { "cs", "soc", "sob", "twist", "judge", "consecration", "exorcism", "how" }
+eq(#slots, 12, "the paladin declares twelve slots (twist composite + judge + five fillers + the WotLK APL band)")
+local expected_keys = { "cs", "soc", "sob", "twist", "judge", "consecration", "exorcism", "how",
+    "holy_shock", "aura_mastery", "hor", "how_wrath" }
 local keys_ok = true
 for i = 1, #expected_keys do
     if slots[i].key ~= expected_keys[i] then keys_ok = false end
@@ -676,6 +734,20 @@ eq(slots[8].label, "FILLER", "how carries the filler caption")
 eq(slots[8].cooldown_key, nil, "how carries no swipe, like the other fillers")
 eq(slots[8].name_suffix, "FillerH", "how keeps a unique frame-name suffix")
 eq(slots[8].level, 15, "how draws above the other fillers")
+eq(slots[9].key, "holy_shock", "the ninth slot is the Holy Shock shockadin cue")
+eq(slots[9].spell_id, 20930, "holy_shock carries the Holy Shock max-rank id")
+eq(slots[9].zoom, 0.15, "holy_shock matches the single-target filler zoom")
+eq(slots[9].label, "FILLER", "holy_shock carries the filler caption")
+eq(slots[9].cooldown_key, nil, "holy_shock carries no swipe, like the other fillers")
+eq(slots[9].name_suffix, "FillerHS", "holy_shock keeps a unique frame-name suffix")
+eq(slots[9].level, 16, "holy_shock draws above how")
+eq(slots[10].key, "aura_mastery", "the tenth slot is the Aura Mastery shockadin cue")
+eq(slots[10].spell_id, 407624, "aura_mastery carries the legs-rune id")
+eq(slots[10].zoom, 0.15, "aura_mastery matches the single-target filler zoom")
+eq(slots[10].label, "FILLER", "aura_mastery carries the filler caption")
+eq(slots[10].cooldown_key, nil, "aura_mastery carries no swipe, like the other fillers")
+eq(slots[10].name_suffix, "FillerAM", "aura_mastery keeps a unique frame-name suffix")
+eq(slots[10].level, 17, "aura_mastery draws above holy_shock")
 eq(slots[6].label, "FILLER", "the filler icons keep their caption")
 eq(slots[1].cooldown_key, "cs", "cs swipes from the cs inputs")
 eq(slots[2].cooldown_key, "soc", "soc swipes from the soc inputs")
@@ -707,9 +779,9 @@ pST.sob_expires = nil
 pST.sob_duration = nil
 pST.guide_melee_count = 0
 pST.guide_waiting_judgement = false
-pal.known = { [35395] = true }
-pal.cooldowns[35395] = { 1.0, 4.0 }   -- CS: 4 s running, 4 s long
-pal.cooldowns[20271] = { 0.0, 8.0 }   -- Judgement: 8 s running, 8 s long
+pal.known = { [35395] = true, ["Crusader Strike"] = true }
+pal.cooldowns["Crusader Strike"] = { 1.0, 4.0 }   -- CS: 4 s running, 4 s long
+pal.cooldowns["Judgement"] = { 0.0, 8.0 }   -- Judgement: 8 s running, 8 s long
 
 local gathered_target = {}
 pal.clock = 1.0
@@ -760,6 +832,15 @@ eq(no_swing.inputs_unknown, true, "M6: no swing record marks the inputs unknown"
 pST.mainhand = { speed = 3.0, ends_at = 3.0, start = 1.0, is_full = true }
 eq(pST.PALADIN.guide.gather(pST, {}).inputs_unknown, true, "M6: a full bar marks the inputs unknown")
 pST.mainhand = saved_swing
+
+-- The rotation order the running client plays: the gather publishes it next to
+-- the FCFS mode it decided, so the practice surface (ST.PALADIN.practice_
+-- rotation_for) and the guide can never name different orders.
+eq(pST.PALADIN.practice_running_order,
+    pST.PALADIN.practice_order_for_mode(gathered.fcfs_mode),
+    "gather: the published running order matches the FCFS mode it decided")
+eq(pST.PALADIN.practice_running_order, "twist",
+    "gather: a client with no FCFS mode plays the twist order")
 
 --=========================================================================================
 -- 6) The paladin evaluate: parity with the pre-refactor display mapping
@@ -895,9 +976,9 @@ eq(how_out.waiting_judgement, how_engine_out.waiting_judgement,
 pal.frames = 0
 pui.init(pST)
 check(pui.frame ~= nil, "the paladin provider builds the shipped frame")
-eq(#pui.icons, 8, "the paladin frame holds one icon per slot")
-eq(pal.frames, 24,
-    "frame count: group + hold + 8 icons/borders + twist overlay + 4 cooldown frames")
+eq(#pui.icons, 12, "the paladin frame holds one icon per slot")
+eq(pal.frames, 32,
+    "frame count: group + hold + 12 icons/borders + twist overlay + 4 cooldown frames")
 eq(pui.icons[4].icon.overlay ~= nil, true, "the twist slot carries its overlay icon")
 eq(pui.icons[4].icon.overlay.texture.texture, "icon_sob", "the overlay shows the Blood icon")
 eq(pui.icons[4].icon.overlay.points[1][4], 11.25, "the overlay anchors on the right half")
@@ -906,6 +987,10 @@ eq(pui.icons[6].icon.texture.texture, "icon_consec", "the consecration filler sh
 eq(pui.icons[6].icon.points[1][4], 0, "the filler sits centred")
 eq(pui.icons[8].icon.texture.texture, "icon_how", "the how filler shows the HoW icon")
 eq(pui.icons[8].icon.points[1][4], 0, "the how filler sits centred")
+eq(pui.icons[9].icon.texture.texture, "icon_hs", "the holy_shock filler shows the Holy Shock icon")
+eq(pui.icons[9].icon.points[1][4], 0, "the holy_shock filler sits centred")
+eq(pui.icons[10].icon.texture.texture, "icon_am", "the aura_mastery filler shows the Aura Mastery icon")
+eq(pui.icons[10].icon.points[1][4], 0, "the aura_mastery filler sits centred")
 eq(pui.icons[6].fade.frame, pui.icons[6].icon, "every slot icon carries its fade element")
 eq(pui.icons[2].remaining_key, "soc_remaining", "the swipe field names are derived once")
 eq(pui.icons[2].expires_key, "soc_expires", "the expiry field name is derived once")
@@ -922,8 +1007,8 @@ pST.sob_expires = nil
 pST.guide_melee_count = 0
 pST.guide_waiting_judgement = false
 pal.cooldowns = {}
-pal.cooldowns[35395] = { 2.0, 4.0 }   -- CS on cooldown: no override on the reseal tick
-pal.cooldowns[20271] = { 0.0, 8.0 }
+pal.cooldowns["Crusader Strike"] = { 2.0, 4.0 }   -- CS on cooldown: no override on the reseal tick
+pal.cooldowns["Judgement"] = { 0.0, 8.0 }
 pST.in_combat = true
 pST.mainhand.ends_at = pal.clock + 3.0
 pal.advance(1.0)
@@ -998,6 +1083,7 @@ local ref_targets = {}
 local function reference_display(self, out, inputs, db, now)
     local cs_target, command_target, blood_target, twist_target = 0, 0, 0, 0
     local judge_target, hold_target, consec_target, exo_target, how_target = 0, 0, 0, 0, 0
+    local hs_target, am_target = 0, 0
     if out.riding then
         blood_target = 1
     elseif out.action == "cs" then
@@ -1006,7 +1092,9 @@ local function reference_display(self, out, inputs, db, now)
         command_target = 1
     elseif out.action == "twist" then
         twist_target = 1
-    else
+    elseif out.filler_kind == nil then
+        -- FCFS filler ticks (action nil, filler set) light the filler alone;
+        -- the blood fallthrough is the twist tree's idle reseal shape.
         blood_target = 1
     end
     local hold_text
@@ -1019,6 +1107,10 @@ local function reference_display(self, out, inputs, db, now)
             exo_target = 1
         elseif out.filler_kind == "how" then
             how_target = 1
+        elseif out.filler_kind == "holy_shock" then
+            hs_target = 1
+        elseif out.filler_kind == "aura_mastery" then
+            am_target = 1
         else
             consec_target = 1
         end
@@ -1044,6 +1136,8 @@ local function reference_display(self, out, inputs, db, now)
     ref_targets.consec = consec_target
     ref_targets.exo = exo_target
     ref_targets.how = how_target
+    ref_targets.hs = hs_target
+    ref_targets.am = am_target
     ref_targets.hold_text = hold_text
     return ref_targets
 end
@@ -1054,7 +1148,13 @@ local SCRIPT_KEYS = { "speed", "swing_remaining", "G", "gcd_remaining", "twist_w
     "reaction", "cs_remaining", "judge_remaining", "seal", "cs_delay_max",
     "waiting_judgement", "melee_count", "mana_pct", "creature_type", "filler_remaining",
     "cs_duration", "judge_duration", "soc_expires", "soc_duration", "sob_expires",
-    "sob_duration", "era", "cs_known", "target_health_pct", "how_remaining" }
+    "sob_duration", "era", "cs_known", "target_health_pct", "how_remaining",
+    "fcfs_mode", "holy_power_stacks", "holy_power_set_known", "exo_remaining",
+    "am_remaining", "hs_remaining", "am_rune_known", "sod_libram_known",
+    "sunlight_remaining", "templar_stack_remaining", "templar_wrath_remaining",
+    "sod_dual_seal_active", "soc_remaining_seconds", "som_remaining_seconds",
+    "sod_t2_known", "sod_naxx_known", "ds_remaining", "cons_remaining",
+    "strict_sequence" }
 local scripted = {}
 local real_gather = pST.PALADIN.guide.gather
 pST.PALADIN.guide.gather = function(self, out)
@@ -1099,9 +1199,15 @@ local function parity_tick(label, scenarios, mutate_db)
         script("sob_duration", case.sob_duration)
         if mutate_db then mutate_db(pST.get_class_table(), case) end
 
-        -- The reference side: the engine consumes the same inputs.
+        -- The reference side: the engine consumes the same inputs. FCFS ticks
+        -- (shock/wrath-like/stack) run the priority-winner engine, twist ticks
+        -- the archived tree.
         local engine_out = {}
-        na.evaluate(inp(case.inputs), engine_out)
+        if case.inputs.fcfs_mode ~= nil then
+            na.evaluate_fcfs(inp(case.inputs), engine_out)
+        else
+            na.evaluate(inp(case.inputs), engine_out)
+        end
         pST.mainhand.ends_at = pal.clock + 3.0
         pal.advance(0.1)
         local ref = reference_display(pST, engine_out, inp(case.inputs),
@@ -1118,6 +1224,8 @@ local function parity_tick(label, scenarios, mutate_db)
         eq(ptarget("consecration"), ref.consec, tag .. ": consecration filler")
         eq(ptarget("exorcism"), ref.exo, tag .. ": exorcism filler")
         eq(ptarget("how"), ref.how, tag .. ": how filler")
+        eq(ptarget("holy_shock"), ref.hs, tag .. ": holy_shock filler")
+        eq(ptarget("aura_mastery"), ref.am, tag .. ": aura_mastery filler")
         if ref.hold_text then
             eq(pui.frame.hold.text.text, ref.hold_text, tag .. ": hold text")
         end
@@ -1180,6 +1288,19 @@ parity_tick("real", {
         cs_remaining = 6, melee_count = 3, mana_pct = 50, era = true,
         cs_known = false, target_health_pct = 20, how_remaining = 0 },
         soc_expires = 130, soc_duration = 30 },
+    { name = "shock hs lit", inputs = { fcfs_mode = "sod_shock", holy_power_stacks = 3,
+        exo_remaining = 6, am_remaining = 6, hs_remaining = 0, cs_remaining = 6,
+        am_rune_known = true, sod_libram_known = true },
+        soc_expires = 130, soc_duration = 30 },
+    { name = "shock am lit", inputs = { fcfs_mode = "sod_shock", holy_power_stacks = 3,
+        exo_remaining = 6, am_remaining = 0, hs_remaining = 6, cs_remaining = 6,
+        am_rune_known = true, sod_libram_known = true },
+        soc_expires = 130, soc_duration = 30 },
+    { name = "shock hs withheld", inputs = { fcfs_mode = "sod_shock",
+        holy_power_stacks = 2, exo_remaining = 6, am_remaining = 0,
+        hs_remaining = 0, cs_remaining = 0, am_rune_known = true,
+        sod_libram_known = true },
+        soc_expires = 130, soc_duration = 30 },
     { name = "unknown-state fallthrough", inputs = { seal = "soc", cs_remaining = 6,
         speed = 1.2, swing_remaining = 1.2, G = 1.5, melee_count = 4 } },
 }, function(db, case)
@@ -1201,7 +1322,7 @@ pal.advance(0.1)
 local idle_now = pal.clock
 local idle_ref = {
     cs = 0, command = 0, blood = 0.5, twist = 0, judge = 0, hold = 0, consec = 0, exo = 0,
-    how = 0,
+    how = 0, hs = 0, am = 0,
 }
 rec_set_icon_cooldown(ref_icons.cs, 0, 6, idle_now)
 rec_set_icon_cooldown(ref_icons.judge, 0, 8, idle_now)
@@ -1217,6 +1338,8 @@ eq(pui.frame.hold.fade.target, idle_ref.hold, "idle parity: hold overlay")
 eq(ptarget("consecration"), idle_ref.consec, "idle parity: consecration filler")
 eq(ptarget("exorcism"), idle_ref.exo, "idle parity: exorcism filler")
 eq(ptarget("how"), idle_ref.how, "idle parity: how filler")
+eq(ptarget("holy_shock"), idle_ref.hs, "idle parity: holy_shock filler")
+eq(ptarget("aura_mastery"), idle_ref.am, "idle parity: aura_mastery filler")
 eq(pui.icons[pui.slot_index.soc].icon.cooldown_set, ref_icons.command.cooldown_set,
     "idle parity: command swipe cleared")
 eq(pui.icons[pui.slot_index.soc].icon.cooldown.cooldown_sets or 0,
@@ -1224,7 +1347,310 @@ eq(pui.icons[pui.slot_index.soc].icon.cooldown.cooldown_sets or 0,
 eq(pui.icons[pui.slot_index.sob].icon.cooldown_set, ref_icons.blood.cooldown_set,
     "idle parity: blood swipe cleared")
 pST.in_combat = true
+
+--=========================================================================================
+-- 8b) The SoD strictSequence hard wait: the HOLD/RIDE overlay paints WAIT
+--=========================================================================================
+-- The engine publishes out.hard_wait (nextaction.lua), the paladin provider
+-- feeds it and the frame owns the overlay: a held twist on a strict build
+-- waits the swing out instead of filling, and the guide says so. Driven
+-- through the REAL provider + frame (the scripted gather feeds the engine).
+for k = 1, #SCRIPT_KEYS do
+    scripted[SCRIPT_KEYS[k]] = nil
+end
+script("speed", 3.0)
+script("swing_remaining", 0.5)
+script("G", 1.5)
+script("gcd_remaining", 0)
+script("twist_window", 0.4)
+script("reaction", 0.1)
+script("cs_remaining", 6)
+script("judge_remaining", 6)
+script("seal", "sob")
+script("cs_delay_max", 1.7)
+script("waiting_judgement", false)
+script("melee_count", 0)
+script("mana_pct", 50)
+script("creature_type", nil)
+script("filler_remaining", 0)
+script("strict_sequence", true)
+pST.mainhand.ends_at = pal.clock + 3.0
+pal.advance(0.1)
+pui.update(pST)
+eq(pui.frame.hold.fade.target, 1, "hard wait: the HOLD overlay lights")
+eq(pui.frame.hold.text.text, "WAIT", "hard wait: the overlay reads WAIT")
+-- The same state without the strict build keeps the archived text (the ride).
+script("strict_sequence", nil)
+pST.mainhand.ends_at = pal.clock + 3.0
+pal.advance(0.1)
+pui.update(pST)
+eq(pui.frame.hold.fade.target, 1, "no hard wait: the overlay still lights")
+eq(pui.frame.hold.text.text, "RIDE", "no hard wait: the overlay keeps the archived RIDE")
+-- The hard wait adds no slot: the paladin frame still carries exactly ten.
+eq(#pui.icons, 12, "hard wait: the paladin slot count stays twelve")
+
 pST.PALADIN.guide.gather = real_gather
+
+--=========================================================================================
+-- 6) Rogue provider: gather -> evaluate -> frame parity over the real shared frame
+--=========================================================================================
+local ROGUE_MODULES = { "compat.lua", "utils.lua", "guard.lua", "druid_energy.lua", "nextaction.lua",
+    "nextaction_ui.lua", "rogue_guide.lua", "classes/rogue.lua" }
+-- Cold Blood fixture (test-owned id, never shipped): the wired F3/V-G5 slot
+-- resolves through the client's own spell data like every other slot.
+SPELL_INFOS[5116] = { name = "Cold Blood", icon = "i_cb" }
+local rmain = build({ modules = ROGUE_MODULES, player_class = "ROGUE" })
+local rST, rst = rmain.ST, rmain.st
+local rui = rst.nextaction_ui
+check(type(rst.rogue_guide) == "table", "the rogue pure engine loads beside the provider")
+check(type(rST.ROGUE) == "table", "the rogue class module loads")
+rmain.power = { [3] = 50, [4] = 0 }
+rmain.st.api.UnitPower = function(_, power) return rmain.power[power or 0] end
+rmain.st.api.UnitPowerMax = function() return 100 end
+rmain.st.api.UnitAura = function() return nil end
+rmain.st.api.UnitHealth = function() return nil end
+rmain.st.api.GetSpellCooldown = function() return 0, 0, 0, 0 end
+rmain.st.api.IsSpellUsable = function() return true, false end
+rmain.st.api.is_spell_known = function() return true end
+rmain.st.api.auras_may_be_secret = function() return false end
+
+rST.ROGUE.post_init(rST)
+check(rui.frame ~= nil, "the rogue provider creates the shared frame")
+eq(#rui.icons, 11, "the rogue frame builds all eleven action slots")
+local rogue_guide_by_key = {}
+for i = 1, #rST.ROGUE.guide.slots do
+    rogue_guide_by_key[rST.ROGUE.guide.slots[i].key] = rST.ROGUE.guide.slots[i]
+end
+for _, key in ipairs({ "snd", "ar", "bf", "coldblood" }) do
+    check(rogue_guide_by_key[key] ~= nil and rogue_guide_by_key[key].spell_id ~= nil,
+        "rogue guide: the " .. key .. " slot resolves from the client's spell data")
+    check(rui.slot_index[key] ~= nil, "rogue guide: the frame indexes the " .. key .. " slot")
+end
+rST.in_combat = true
+rST.mainhand = { speed = 2.6, start = 0, ends_at = 0, is_full = false }
+
+-- One parity tick: the reference maps the provider's own frozen output exactly like the
+-- frame's display_active does, then the real frame must agree icon-by-icon.
+local function rogue_parity(label, energy, cp, clock, secret)
+    rmain.power[3], rmain.power[4] = energy, cp
+    rmain.clock = clock
+    rST.mainhand.start = clock - 0.5
+    rST.mainhand.ends_at = clock + 2.1
+    rmain.st.api.auras_may_be_secret = function() return secret == true end
+    rST.rogue_lust_at = nil
+
+    local rg_gathered = rST.ROGUE.guide.gather(rST, {})
+    local out = rST.ROGUE.guide.evaluate(rg_gathered, {})
+    out.lust_unknown = rg_gathered.lust_unknown
+    local expected = {}
+    local expected_hold = 0
+    local expected_hold_text
+    if not out.inputs_unknown then
+        if out.action and rui.slot_index[out.action] then
+            expected[rui.slot_index[out.action]] = 1
+        end
+        if out.hold then
+            expected_hold = 1
+            expected_hold_text = out.hold_text or (out.riding and "NOW" or "POOL")
+        end
+    end
+
+    rui.update(rST)
+    for i = 1, #rui.icons do
+        eq(rui.targets[i] ~= 0 and 1 or 0, expected[i] or 0,
+            label .. ": slot " .. rui.icons[i].slot.key .. " target")
+    end
+    eq(rui.frame.hold.fade.target, expected_hold, label .. ": hold overlay")
+    if expected_hold_text then
+        eq(rui.frame.hold.text.text, expected_hold_text, label .. ": hold text")
+    end
+    if out.inputs_unknown then
+        eq(rui.frame.label.text, "…", label .. ": unknown renders …")
+    else
+        check(rui.frame.label.text ~= "…", label .. ": known inputs clear the … label")
+    end
+    return out
+end
+
+local pool_out = rogue_parity("pool", 50, 0, 100)
+eq(pool_out.hold, true, "parity case pool: the engine holds")
+eq(pool_out.hold_text, "POOL", "parity case pool: the hold text is POOL")
+local spend_out = rogue_parity("spend", 90, 0, 110)
+eq(spend_out.action, "builder", "parity case spend: the engine spends (builder)")
+eq(spend_out.riding, true, "parity case spend: the action rides")
+rmain.class_db.rogue_ea_duty = true
+local expose_out = rogue_parity("expose", 50, 0, 120)
+eq(expose_out.action, "expose", "parity case expose: a due EA refresh prompts")
+rmain.class_db.rogue_ea_duty = false
+local unknown_out = rogue_parity("unknown", nil, 0, 130)
+eq(unknown_out.inputs_unknown, true, "parity case unknown: unreadable energy is unknown")
+local snd_out = rogue_parity("snd", 50, 5, 132)
+eq(snd_out.action, "snd", "parity case snd: a missing SnD with CP prompts snd")
+local ar_out = rogue_parity("ar", 30, 0, 134)
+eq(ar_out.action, "ar", "parity case ar: low energy with AR ready prompts ar")
+-- BF/Cold Blood need SnD riding: the sandbox aura stub answers nil by default,
+-- so these two cases temporarily answer the SnD buff, then restore the stub.
+local saved_aura = rmain.st.api.UnitAura
+local saved_cd = rmain.st.api.GetSpellCooldown
+rmain.st.api.UnitAura = function(unit, index)
+    if unit == "player" and index == 1 then
+        return "Slice and Dice", "i_snd", 1, nil, 30, rmain.clock + 20,
+            nil, nil, nil, 5101
+    end
+    return nil
+end
+local bf_out = rogue_parity("bf", 90, 0, 136)
+eq(bf_out.action, "bf", "parity case bf: SnD riding with BF ready prompts bf")
+rmain.st.api.GetSpellCooldown = function(spell)
+    if spell == 5111 or spell == "Blade Flurry" then
+        return rmain.clock - 10, 300, 1, 1
+    end
+    return 0, 0, 0, 0
+end
+local cb_out = rogue_parity("cb", 90, 0, 138)
+eq(cb_out.action, "coldblood", "parity case cb: SnD riding with BF cooling prompts Cold Blood")
+rmain.st.api.UnitAura = saved_aura
+rmain.st.api.GetSpellCooldown = saved_cd
+local latch_out = rogue_parity("latch", 50, 0, 140, true)
+eq(latch_out.lust_unknown, true, "parity case latch: the secret regime latches lust unknown")
+eq(latch_out.inputs_unknown, true, "parity case latch: the latch owns the unknown bit")
+
+-- R3 short-CD row + Cold Blood through the real provider (rogue parts only):
+-- the slots resolve from the client's spell data, hide on a nil toggle (no
+-- default-visible change), and the Kidney cooldown answers live.
+eq(#rST.ROGUE.HUD_SLOTS, 13, "R3: the HUD declares eleven spell slots + two trinkets")
+local r3_by_key = {}
+for i = 1, #rST.ROGUE.HUD_SLOTS do
+    r3_by_key[rST.ROGUE.HUD_SLOTS[i].key] = rST.ROGUE.HUD_SLOTS[i]
+end
+check(r3_by_key.kidney ~= nil and r3_by_key.kidney.spell ~= nil,
+    "R3: Kidney Shot resolves from the client's spell data")
+check(r3_by_key.restealth ~= nil and r3_by_key.restealth.spell ~= nil,
+    "R3: Re-stealth resolves from the client's spell data (Vanish mapping UNCONFIRMED)")
+check(r3_by_key.bandage ~= nil and r3_by_key.bandage.spell ~= nil,
+    "R3: Bandage resolves from the client's spell data (rank UNCONFIRMED)")
+eq(rST.ROGUE.get_hud_state(rST, r3_by_key.kidney, 150).hidden, true,
+    "R3: a nil Kidney toggle hides (no default-visible change)")
+eq(rST.ROGUE.get_hud_state(rST, r3_by_key.restealth, 150).hidden, true,
+    "R3: a nil Re-stealth toggle hides")
+eq(rST.ROGUE.get_hud_state(rST, r3_by_key.bandage, 150).hidden, true,
+    "R3: a nil Bandage toggle hides")
+check(r3_by_key.coldblood ~= nil and r3_by_key.coldblood.spell ~= nil,
+    "Cold Blood: resolves from the client's spell data")
+eq(rST.ROGUE.get_hud_state(rST, r3_by_key.coldblood, 150).hidden, true,
+    "Cold Blood: a nil toggle hides (no default-visible change; widget/default filed)")
+
+-- Degenerate inputs never error through the frame (contract robustness).
+local degenerate = rST.ROGUE.guide.evaluate({}, {})
+eq(degenerate.action, nil, "degenerate inputs produce no action")
+eq(degenerate.inputs_unknown, true, "degenerate inputs render unknown")
+local degenerate_ok = pcall(rui.update, rST)
+check(degenerate_ok, "a degenerate frame tick does not error")
+
+--=========================================================================================
+-- 7) Shaman provider: the guide slots through the real frame
+--=========================================================================================
+-- The guide contract is per class: the shaman's own section pins its slot set.
+-- This lane landed the two maintain slots (Lightning Shield S-19, Searing Totem
+-- S-17) - the lines the drill/audit lanes filed as "practiced but never taught":
+-- they carry a slot, a rule and a live feed, so the frame can show them.
+local SHAMAN_MODULES = { "compat.lua", "utils.lua", "guard.lua", "nextaction_ui.lua",
+    "shaman_guide.lua", "weave.lua", "classes/shaman.lua" }
+local smain = build({ modules = SHAMAN_MODULES, player_class = "SHAMAN" })
+local sST, sst = smain.ST, smain.st
+check(type(sst.shaman_guide) == "table", "shaman contract: the pure engine loads beside the provider")
+check(type(sST.SHAMAN.guide) == "table", "shaman contract: the class module loads")
+check(type(sST.SHAMAN.guide.gather) == "function", "shaman contract: the guide has gather")
+check(type(sST.SHAMAN.guide.evaluate) == "function", "shaman contract: the guide has evaluate")
+
+sST.in_combat = true
+sST.mainhand = { speed = 3.0, ends_at = 3.0, start = 0.0, is_full = false }
+sST.gcd = { expires = 0 }
+-- The weave visuals ride the bars' visuals frame (main.lua owns it); the guide
+-- contract needs no widget, so the stub answers nil (the shaman module skips
+-- the widget work).
+sST.get_visuals_frame = function() return nil end
+sST.SHAMAN.post_init(sST)
+local sui = sst.nextaction_ui
+check(sui.frame ~= nil, "shaman contract: post_init builds the shared guide frame")
+check(sui.inert ~= true, "shaman contract: the shaman provider is live")
+eq(sui.get_provider(sST), sST.SHAMAN.guide, "shaman contract: the shaman guide is the frame's provider")
+
+local sslots = sST.SHAMAN.guide.slots
+eq(#sslots, 22, "shaman contract: twenty-two guide slots are declared")
+eq(#sui.icons, 22, "shaman contract: the frame builds one icon per slot")
+local sslot_keys = {}
+for i = 1, #sslots do sslot_keys[sslots[i].key] = true end
+check(sslot_keys.lightningshield == true, "shaman contract: the Lightning Shield slot is declared")
+check(sslot_keys.searing == true, "shaman contract: the Searing Totem slot is declared")
+check(sslot_keys.coe == true, "shaman contract: the Call of the Elements slot is declared")
+-- The APL utility layer's four slots (bench/rotation_gap_vs_apl_2026-10-20.md §5).
+check(sslot_keys.bloodlust == true, "shaman contract: the Bloodlust slot is declared")
+check(sslot_keys.strength_of_earth == true,
+    "shaman contract: the Strength of Earth Totem slot is declared")
+check(sslot_keys.mana_spring == true,
+    "shaman contract: the Mana Spring Totem slot is declared")
+check(sslot_keys.frostshock == true, "shaman contract: the Frost Shock slot is declared")
+for i = 1, #sslots do
+    eq(sui.icons[i].slot, sslots[i], "shaman contract: icon " .. i .. " follows the slot order")
+end
+-- The two maintain slots resolve their icon from the client's own spell data
+-- (the shipped ids are UNCONFIRMED, so the name is the probe).
+local s_by_key = {}
+for i = 1, #sslots do s_by_key[sslots[i].key] = sslots[i] end
+eq(s_by_key.lightningshield.spell_id, 9201,
+    "shaman contract: the Lightning Shield icon resolves from the client's own data")
+eq(s_by_key.searing.spell_id, 9202,
+    "shaman contract: the Searing Totem icon resolves from the client's own data")
+eq(sui.icons[sui.slot_index.lightningshield].icon.texture.texture, "icon_ls",
+    "shaman contract: the Lightning Shield icon shows the client's art")
+eq(sui.icons[sui.slot_index.searing].icon.texture.texture, "icon_searing",
+    "shaman contract: the Searing Totem icon shows the client's art")
+-- Every action the engine can return names a declared slot (the contract rule).
+local s_actions = {
+    sst.shaman_guide.evaluate({ stormstrike_remaining = 0, flameshock_remaining = 10 }, {}).action,
+    sst.shaman_guide.evaluate({ stormstrike_remaining = 8, flameshock_remaining = 10,
+        firenova_remaining = 5, lightningshield_due = true }, {}).action,
+}
+local s_actions_ok = true
+for i = 1, #s_actions do
+    if s_actions[i] ~= nil and not sslot_keys[s_actions[i]] then s_actions_ok = false end
+end
+check(s_actions_ok, "shaman contract: every action the engine can return names a declared slot")
+-- The HUD mirror: the two maintain slots are declared (they have a live read) and
+-- hide until their toggle reads exactly true (nil = off - no default-visible
+-- change; the options pass owns the default + the widget).
+eq(#sST.SHAMAN.HUD_SLOTS, 11, "shaman contract: the HUD declares nine ability slots + two trinkets")
+local s_hud_by_key = {}
+for i = 1, #sST.SHAMAN.HUD_SLOTS do
+    s_hud_by_key[sST.SHAMAN.HUD_SLOTS[i].key] = sST.SHAMAN.HUD_SLOTS[i]
+end
+check(s_hud_by_key.lightningshield ~= nil, "shaman contract: the HUD declares the Lightning Shield slot")
+check(s_hud_by_key.searing ~= nil, "shaman contract: the HUD declares the Searing Totem slot")
+check(s_hud_by_key.coe ~= nil, "shaman contract: the HUD declares the Call of the Elements slot")
+eq(sST.SHAMAN.get_hud_state(sST, s_hud_by_key.lightningshield, 10).hidden, true,
+    "shaman contract: a nil Lightning Shield toggle hides the mirror")
+eq(sST.SHAMAN.get_hud_state(sST, s_hud_by_key.searing, 10).hidden, true,
+    "shaman contract: a nil Searing toggle hides the mirror")
+eq(sST.SHAMAN.get_hud_state(sST, s_hud_by_key.coe, 10).hidden, true,
+    "shaman contract: a nil Call of the Elements toggle hides the mirror")
+
+--=========================================================================================
+-- F10: the guide's compute isolation is the shared guard (one implementation)
+--=========================================================================================
+do
+    local f = assert(io.open(ROOT .. "nextaction_ui.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    check(src:find("st.guard.run", 1, true) ~= nil,
+        "the guide isolates a throwing provider through the shared guard")
+    check(src:find("QUARANTINE_THROWS = ", 1, true) == nil,
+        "the guide keeps no second quarantine threshold")
+    check(src:find("errors.by_site", 1, true) == nil,
+        "the guide keeps no second counter bookkeeping")
+    check(src:find('st.guard.label("nextaction", "Next action")', 1, true) ~= nil,
+        "the guide wording stays at the call site")
+end
 
 if failures == 0 then
     print("PASS  guide_contract.lua (" .. tostring(checks) .. " checks)")

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T11:40:00Z",
+  "run_id": "perclient-api-truth-2026-10-20",
+  "agent_name": "perclient-api-truth",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Read the reference repo per branch with `git show <branch>:<path>` and `git grep <branch>` instead of guessing from the checked-out branch: that is what turned 'the re-audit's L-3 premise' into a REFUTATION (SpellBookDocumentation.lua:82 on classic_era DOES carry Name = \"IsSpellKnown\", and loadDeprecationFallbacks is in 33 files there, 40 on live). Each API was then answered with branch:file:line + a quote, and the load-game-type gating on origin/forever (camelot vs mainline) was checked too, which surfaced two facts no one had: the UnitAura global is classic-gated (absent on Retail and on the WoW Forever client) and the totem slot constants are not defined as globals on WoW Forever.",
+    "what_was_hard": "The checklist's framing invited false premises: check 7 asserted '0 hits on classic_era' for IsSpellKnownOrInSpellBook (there is one, at :98), check 13's '0 call sites on classic_era' had to be separated from 'the C API does not exist' (it is absent from the TREE on all five branches - a native global with no FrameXML call site and no doc entry), and check 14's '3rd return' does not exist - GetSpellPowerCost has ONE return (an array of SpellPowerCostInfo), and the addon's consumers read costs[1].cost (warrior/druid) or the type-matched entry (rogue), not index 3. Answering those honestly rather than in the checklist's terms took the cross-checking.",
+    "skill_gap": "Reading a native C API's contract out of a FrameXML tree is impossible when Blizzard's own code no longer calls it (the classic global GetItemInfo): the tree can only say 'absent from the tree'. That limit had to be stated in the truth table instead of papered over with a remembered shape."
+  },
+  "escalation": {
+    "reason": "HU-17: the dispatch brief instructed 're-cut the bench claim' for L-3, but the claim is verifiably TRUE and the brief's premises are false. The desk deviated (kept the claim, re-cut it with per-branch evidence, added a dated correction note recording the refutation) rather than replace a correct citation with a false one. The operator should confirm that deviation and may want L-3 withdrawn at source - the re-audit's own report is not on disk (HU-16).",
+    "blocked_on": null,
+    "recommendation": "Confirm the L-3 deviation; the bench file is correct and pinned under either reading of the brief."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T13:43:01Z",
+  "agent_name": "warrior-rotation",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "firecrawl_scrape on GitHub trees + webfetch on raw files gave full APL + Go mechanics for all 4 sim repos; brief's tool guidance was accurate",
+    "what_was_hard": "gh_grep repo-scoped search returned nothing; TBC/Forever APL id-to-spell bindings need client data for ~10 custom ids",
+    "skill_gap": "none"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator: prioritize X1 ww_ids audit, X2 TBC HS ranks, X10 SoD Blood Surge aura — all HIGH with exact citations in bench/warrior_rotation_audit_2026-10-19.md"
+  }
+}

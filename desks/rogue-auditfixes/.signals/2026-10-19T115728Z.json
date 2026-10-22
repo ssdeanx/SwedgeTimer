@@ -1,0 +1,44 @@
+{
+  "agent_name": "rogue-auditfixes",
+  "disposition": {
+    "F1": "CLOSED: NaN guards in energy_tick_marker (explicit marker + interval/latency), grade_energy_spend start_fraction, grade_ss_after_swing offset/window/ideal; 2 pins in tests/practice_state.lua; M1/M2 mutations fail as predicted (D/B) and pass restored",
+    "F2": "CLOSED: type(count) == number symmetry guard in api.GetItemCount (covers classic + C_Item probes, one shared probe); pin in tests/secret_guard_state.lua; M3 mutation fails, passes restored",
+    "F3": "NO ACTION per brief + journal reconcile (accepted residual, E2 whole-or-nothing contract; worst case Tea prompt on real CD is a no-op press)",
+    "F4": "CLOSED: WRATH.post + FOREVER.pre pins in tests/rogue_guide_state.lua; M4 corrupt-cell mutation fails, passes restored",
+    "F5": "CLOSED: 3 rule-order one-liners (shiv+envenom->shiv, EA+envenom->expose, shiv+dying->shiv); M5/M6/M7 order-swap mutations each fail the covered new pin(s), pass restored",
+    "F6": "CLOSED as CONFIRMED intent (no engine change): BOGUS + cp=5 -> eviscerate pin documents unknown-family finisher behavior; M8 family-gate mutation fails the pin alone, passes restored",
+    "F7": "NO ACTION per brief (adequate as-is, recorded so no future lane invents a third TTD state)",
+    "F8": "NO ACTION per brief (moot: pool-band defaults kept in config_presets.lua; stable-side triple fallback untouched)"
+  },
+  "escalation": {
+    "blocked_on": null,
+    "reason": null,
+    "recommendation": null
+  },
+  "harness": {
+    "counts": {
+      "practice_state": "1153 checks PASS (+2)",
+      "rogue_guide_state": "216 checks 0 failures (+10: 6 new eq + 4 helper eq)",
+      "secret_guard_state": "321 checks PASS (+1)"
+    },
+    "luacheck": "2 warnings / 0 errors (floor held)",
+    "mutations": "8/8 fail-when-stripped on /tmp/opencode/rogue-auditfixes-mut/tree copies, pass restored; tree verified IDENTICAL to working copy after restore",
+    "run_sh": "37 steps, 0 failed"
+  },
+  "patterns": {
+    "skill_gap": "Coverage-pin lanes need an order-swap mutation vocabulary distinct from guard-strip mutations; both proved here.",
+    "what_was_hard": "Keeping the SS window guard tight without widening scope: non-number window reads now grade nil too (same H4 rule), verified against the existing suite.",
+    "what_worked": "Audit evidence gave exact predicted failure grades (D/B), so mutations doubled as confirmation of the audit itself."
+  },
+  "run_id": "rogue-auditfixes-2026-10-19",
+  "self_assessment": {
+    "accuracy": 5,
+    "completeness": 5,
+    "confidence": 5,
+    "intent": 5
+  },
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T11:57:28Z",
+  "touched_lines_only": true
+}

@@ -47,6 +47,19 @@ if not lib then
   return
 end
 
+-- VENDORED CHANGE (2026-10-21): this copy builds NO interaction-distance checkers.
+-- CheckInteractDistance is a PROTECTED function on TBC Anniversary 2.5.x: every call
+-- raises ADDON_ACTION_BLOCKED for addon code (operator in-client BugGrabber dump,
+-- 2026-10-21 - the hunter range helper called it every frame and the blocked call took
+-- the whole hunter class hook down). A block is not a catchable Lua error, so no pcall
+-- can contain it. Blizzard's only call sites are secure popup code
+-- (UnitPopupSharedUtils.lua:194, classic_anniversary); the addon restriction is
+-- runtime/client-side, not documented. The addon's own range state now reads exact yards
+-- (compat.api.UnitDistance), so the library's interact ladder - and its min-range
+-- fallback - is retired here: every checker-list consumer reports "no checker" (nil)
+-- instead of reaching a protected client API. Reverting this file = restore from
+-- upstream; the rest of the addon does not need the interact bands.
+
 local IsClassicVanilla = (_G.WOW_PROJECT_ID == _G.WOW_PROJECT_CLASSIC)
 local IsClassicBC = (_G.WOW_PROJECT_ID == _G.WOW_PROJECT_BURNING_CRUSADE_CLASSIC)
 local IsClassicWrath = (_G.WOW_PROJECT_ID == _G.WOW_PROJECT_WRATH_CLASSIC)
@@ -57,26 +70,9 @@ local IsMainline = (_G.WOW_PROJECT_ID == _G.WOW_PROJECT_MAINLINE)
 local UpdateDelay = .5
 local ItemRequestTimeout = 10.0
 
--- interact distance based checks. ranges are based on my own measurements (thanks for all the folks who helped me with this)
-local DefaultInteractList = {
-  [3] = 8,
-  -- [2] = 9,
-  [4] = 28,
-}
-
--- interact list overrides for races
-local InteractLists = {
-  ["Tauren"] = {
-    [3] = 6,
-    -- [2] = 7,
-    [4] = 25,
-  },
-  ["Scourge"] = {
-    [3] = 7,
-    -- [2] = 8,
-    [4] = 27,
-  },
-}
+-- Interact-distance bands: GONE (vendored change 2026-10-21, see the header).
+-- The call these tables fed (CheckInteractDistance) is protected on the shipped
+-- clients, so there is no checker to build from them and the tables are not kept.
 
 local MeleeRange = 2
 
@@ -417,7 +413,6 @@ local UnitCanAttack = UnitCanAttack
 local UnitCanAssist = UnitCanAssist
 local UnitExists = UnitExists
 local UnitIsDeadOrGhost = UnitIsDeadOrGhost
-local CheckInteractDistance = CheckInteractDistance
 local IsSpellInRange = IsSpellInRange
 local IsItemInRange = (C_Item and C_Item.IsItemInRange) or _G.IsItemInRange
 local UnitClass = UnitClass
@@ -432,6 +427,26 @@ local UnitIsVisible = UnitIsVisible
 -- compat.lua, so probe the global here; on every classic client it is absent and the
 -- guards below are exact no-ops.
 local issecretvalue = rawget(_G, "issecretvalue")
+-- Item-range guard (2026-10-21): every supported client exposes C_Item.IsItemInRange,
+-- and the client BLOCKS that call for addon code (a block is not a catchable Lua error,
+-- the addon's pcall cannot help; on classic_era the legacy IsItemInRange global IS this
+-- same function, see Blizzard_DeprecatedItemScript/Deprecated_ItemScript.lua:29). So the
+-- item checkers are not built at all where this API exists; only a client with the legacy
+-- global and no C_Item replacement keeps the old item checkers.
+local modernItemRange = (C_Item and C_Item.IsItemInRange) ~= nil
+-- Spell-range guards (2026-10-21): the lib's spell checkers use the LEGACY index/
+-- bookType call shape. FrameXML defines no IsSpellInRange global on any supported
+-- branch, but a global implemented in the client BINARY would not appear there, so
+-- presence is probed at runtime rather than assumed; on a client that still has it the
+-- spell checkers would otherwise be built with a call shape that is superseded there.
+local spellRangeAvailable = type(IsSpellInRange) == "function"
+-- The index-form modern replacement (C_SpellBook.IsSpellBookItemInRange) only exists on
+-- the 11.0-spellbook-revamp clients (live/forever), NOT on the classic branches, so a
+-- client that ships the modern range API gets no spell checkers at all: that makes the
+-- ladder identical on every family (interact bands only) and calls ZERO client range
+-- APIs. C_Spell.IsSpellInRange itself is deliberately not used here (deferred pending
+-- one in-client confirmation); only its presence is probed.
+local modernSpellRange = (C_Spell and C_Spell.IsSpellInRange) ~= nil
 
 -- temporary stuff
 
@@ -443,13 +458,14 @@ local friendItemRequests
 local harmItemRequests
 local lastUpdate = 0
 
--- minRangeCheck is a function to check if spells with minimum range are really out of range, or fail due to range < minRange. See :init() for its setup
-local minRangeCheck = function(unit)
-  if type(CheckInteractDistance) ~= "function" then
-    return nil
-  end
-  return CheckInteractDistance(unit, 2)
-end
+-- minRangeCheck is a function to check if spells with minimum range are really out of
+-- range, or fail due to range < minRange. See :init() for its setup. It is nil until
+-- init() finds a NON-protected source for it: the old interact fallback called
+-- CheckInteractDistance, which is protected on TBC Anniversary (vendored change
+-- 2026-10-21), so init may now leave it nil. Every caller must tolerate that: a nil
+-- min-check simply means "a minimum-range spell that reports out of range is out of
+-- range" - no min-range refinement, and no client call.
+local minRangeCheck = nil
 
 local checkers_Spell = setmetatable({}, {
   __index = function(t, spellIdx)
@@ -484,7 +500,7 @@ local checkers_SpellWithMin = setmetatable({}, {
       end
       if r == 1 then
         return true
-      elseif minRangeCheck(unit) then
+      elseif minRangeCheck and minRangeCheck(unit) then
         return true, true
       end
     end
@@ -501,20 +517,9 @@ local checkers_Item = setmetatable({}, {
     return func
   end
 })
-local checkers_Interact = setmetatable({}, {
-  __index = function(t, index)
-    local func = function(unit)
-      if type(CheckInteractDistance) ~= "function" then
-        return nil
-      end
-      if CheckInteractDistance(unit, index) then
-         return true
-      end
-    end
-    t[index] = func
-    return func
-  end
-})
+-- Interact checkers: REMOVED (vendored change 2026-10-21). The checker this table
+-- built called CheckInteractDistance, a protected function on TBC Anniversary (see the
+-- header); it is not defined here at all, so no caller can reach that API through it.
 
 -- helper functions
 
@@ -576,9 +581,11 @@ local function addChecker(t, range, minRange, checker, info)
   tinsert(t, rc)
 end
 
-local function createCheckerList(spellList, itemList, interactList)
+local function createCheckerList(spellList, itemList)
   local res = {}
-  if itemList then
+  -- Item checkers are suppressed where the modern item API exists (modernItemRange):
+  -- the client blocks the call for addon code there.
+  if itemList and not modernItemRange then
     for range, items in pairs(itemList) do
       for i = 1, #items do
         local item = items[i]
@@ -590,7 +597,13 @@ local function createCheckerList(spellList, itemList, interactList)
     end
   end
 
-  if spellList then
+  -- Skip the spell list where the legacy global is absent (it could only answer
+  -- "unknown") and where the client ships the modern range API (the legacy index/
+  -- bookType shape is superseded there and has no modern index-form counterpart on the
+  -- classic branches): such a list ends up empty, and every consumer treats an empty
+  -- checker list as "no estimate" (vendored change 2026-10-21: there is no interaction
+  -- fallback ladder any more, see the header).
+  if spellList and spellRangeAvailable and not modernSpellRange then
     for i = 1, #spellList do
       local sid = spellList[i]
       local name, _, _, _, minRange, range = GetSpellInfo(sid)
@@ -614,17 +627,16 @@ local function createCheckerList(spellList, itemList, interactList)
     end
   end
 
-  if interactList and not next(res) then
-    for index, range in pairs(interactList) do
-      addChecker(res, range, nil,  checkers_Interact[index], "interact:" .. index)
-    end
-  end
-
   return res
 end
 
 -- returns minRange, maxRange  or nil
 local function getRange(unit, checkerList)
+  -- Vendored change (2026-10-21): an empty list means "no estimate" (nil), never a
+  -- bogus 0..unbounded reading and never an index error on checkerList[0]/[#+1].
+  if not checkerList or #checkerList == 0 then
+    return nil
+  end
   local lo, hi = 1, #checkerList
   while lo <= hi do
     local mid = math_floor((lo + hi) / 2)
@@ -733,9 +745,9 @@ end
 -- friendRC and harmRC will be properly initialized later when we have all the necessary data for them
 lib.checkerCache_Spell = lib.checkerCache_Spell or {}
 lib.checkerCache_Item = lib.checkerCache_Item or {}
-lib.miscRC = createCheckerList(nil, nil, DefaultInteractList)
-lib.friendRC = createCheckerList(nil, nil, DefaultInteractList)
-lib.harmRC = createCheckerList(nil, nil, DefaultInteractList)
+lib.miscRC = createCheckerList(nil, nil)
+lib.friendRC = createCheckerList(nil, nil)
+lib.harmRC = createCheckerList(nil, nil)
 
 lib.failedItemRequests = {}
 
@@ -776,12 +788,13 @@ function lib:init(forced)
   end
   self.initialized = true
   local _, playerClass = UnitClass("player")
-  local _, playerRace = UnitRace("player")
 
   ---@diagnostic disable-next-line: assign-type-mismatch, cast-local-type
   minRangeCheck = nil
   -- first try to find a nice item we can use for minRangeCheck
-  if HarmItems[15] then
+  -- Never build the item-based minRangeCheck where the modern item API exists: the
+  -- client blocks that call for addon code.
+  if HarmItems[15] and not modernItemRange then
     local items = HarmItems[15]
     for i = 1, #items do
       local item = items[i]
@@ -829,27 +842,21 @@ function lib:init(forced)
       end
     end
   end
-  if not minRangeCheck then
-    -- fall back to interact distance checks
-    if playerClass == "HUNTER" or playerRace == "Tauren" then
-      -- for hunters, use interact4 as it's safer
-      -- for Taurens interact4 is actually closer than 25yd and interact3 is closer than 8yd, so we can't use that
-      minRangeCheck = checkers_Interact[4]
-    else
-      minRangeCheck = checkers_Interact[3]
-    end
-  end
+  -- Vendored change (2026-10-21): there is no interaction-distance fallback any more.
+  -- That fallback called CheckInteractDistance, a protected function on TBC Anniversary
+  -- (a blocked call is not catchable, see the header), so when the item/spell sources
+  -- above do not exist minRangeCheck simply stays nil and min-range spells get no
+  -- refinement.
 
-  local interactList = InteractLists[playerRace] or DefaultInteractList
   self.handSlotItem = GetInventoryItemLink("player", HandSlotId)
   local changed = false
-  if updateCheckers(self.friendRC, createCheckerList(FriendSpells[playerClass], FriendItems, interactList)) then
+  if updateCheckers(self.friendRC, createCheckerList(FriendSpells[playerClass], FriendItems)) then
     changed = true
   end
-  if updateCheckers(self.harmRC, createCheckerList(HarmSpells[playerClass], HarmItems, interactList)) then
+  if updateCheckers(self.harmRC, createCheckerList(HarmSpells[playerClass], HarmItems)) then
     changed = true
   end
-  if updateCheckers(self.miscRC, createCheckerList(nil, nil, interactList)) then
+  if updateCheckers(self.miscRC, createCheckerList(nil, nil)) then
     changed = true
   end
   if changed and self.callbacks then

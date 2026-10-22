@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "20261019T212630Z",
+  "run_id": "shaman-practice-designer-2026-10-19",
+  "agent_name": "shaman",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "hunter-lane 1:1 mirror kept shared diff to 7 behavior-identical condition touches; archive cmp + per-branch API cites done before coding; mutation proofs caught nothing post-fix (self-bug caught by own tests pre-harness)",
+    "what_was_hard": "parallel-lane churn shifted line numbers mid-build (re-anchored twice); SODOPT absence-pins contradict the ordered feature but live in an out-of-scope file",
+    "skill_gap": "cross-lane shared-file coordination (routing ownership overlapped practice-every-class lane)"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator: update 6 SODOPT absence-pins (tests/options_load_state.lua), reconcile designmode count + wiring dead-hooks from parallel lanes; in-client drill-feel session owed (R4)"
+  }
+}

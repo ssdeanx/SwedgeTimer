@@ -38,6 +38,51 @@ st.twist.SOC_PROC_IDS = {
 st.twist.BASE_WINDOW_SECONDS = 0.4
 st.twist.SOC_PROC_DELAY_SECONDS = 0.5
 
+-- SoD twist window (all SoD twist APLs: p4-twist, p8-twist): the sim twists
+-- inside 200 ms after the swing (autoTimeToNext <= 200ms + strictSequence
+-- wait), not the 0.4 s classic/TBC baseline above. narrow_window_for_sod
+-- swaps the baseline while preserving the user's configured padding.
+st.twist.SOD_WINDOW_SECONDS = 0.2
+
+-- Pure: SoD-narrow a caller-computed window (padding already applied).
+-- Non-SoD (nil/false) passes through untouched; a nil/non-number window
+-- passes through for the caller to handle, never a guessed number.
+function st.twist.narrow_window_for_sod(window_seconds, sod_active)
+    if sod_active ~= true then
+        return window_seconds
+    end
+    if type(window_seconds) ~= "number" or window_seconds ~= window_seconds then
+        return window_seconds
+    end
+    local narrowed = window_seconds
+        - (st.twist.BASE_WINDOW_SECONDS - st.twist.SOD_WINDOW_SECONDS)
+    if narrowed < st.twist.SOD_WINDOW_SECONDS then
+        narrowed = st.twist.SOD_WINDOW_SECONDS
+    end
+    return narrowed
+end
+
+-- Seal of Command proc model (both sims: classic soc.go, forever
+-- seal_of_command.go): ~7 PPM on white hits only with a 1 s ICD. A swing
+-- landing inside the ICD after a proc cannot proc, so it must arm no
+-- attempt and score nothing. is_proc_icd_clear is the pure gate: true when
+-- a swing may proc (no proc yet, or the ICD has cleared), false inside the
+-- window. Unusable inputs degrade to true (the archived attempt behaviour),
+-- never to a suppressed attempt.
+st.twist.SOC_PROC_ICD_SECONDS = 1
+
+-- Pure: may a swing landing now produce a Command proc?
+function st.twist.is_proc_icd_clear(now_seconds, last_proc_at_seconds)
+    if type(now_seconds) ~= "number" or now_seconds ~= now_seconds then
+        return true
+    end
+    if type(last_proc_at_seconds) ~= "number"
+        or last_proc_at_seconds ~= last_proc_at_seconds then
+        return true
+    end
+    return (now_seconds - last_proc_at_seconds) >= st.twist.SOC_PROC_ICD_SECONDS
+end
+
 -- Pure helper: is twisting even possible right now?
 -- twisting requires a Command-style seal or Righteousness-style seal up (the seal
 -- whose damage actually lands with the swing). See the archived is_twist_seal_active().
@@ -109,6 +154,36 @@ function st.twist.get_window_seconds(mode, lag_ms, fixed_ms)
     if result < window then result = window end
     if result > 0.8 then result = 0.8 end
     return result
+end
+
+-- Pure: GCD-aware reseal marker fraction (SST 3.1.0 "reseal marker for twist
+-- seals", bench/competitor_gaps_2026-10-19.md sec Paladin P1 - SST in-client
+-- behavior UNCONFIRMED). The marker sits where the running GCD clears inside the
+-- current swing, so the player sees when a reseal press becomes possible relative
+-- to the twist window the band already draws (left of the band = clears early,
+-- inside it = clears in-window): fraction = 1 - (swing_remaining - gcd_remaining)
+-- / swing_duration. nil (hidden) when the inputs cannot time it: no running GCD
+-- (nothing to wait for), an unreadable/degenerate swing, or a GCD that clears
+-- outside this swing. The twist window itself stays on the band; this helper only
+-- times the GCD clear, so it takes no window input.
+function st.twist.get_reseal_marker_fraction(swing_duration, swing_remaining, gcd_remaining)
+    if type(swing_duration) ~= "number" or swing_duration ~= swing_duration
+        or swing_duration <= 0 then
+        return nil
+    end
+    if type(swing_remaining) ~= "number" or swing_remaining ~= swing_remaining then
+        return nil
+    end
+    if type(gcd_remaining) ~= "number" or gcd_remaining ~= gcd_remaining
+        or gcd_remaining <= 0 then
+        return nil
+    end
+    if swing_remaining < 0 then swing_remaining = 0 end
+    local fraction = 1 - (swing_remaining - gcd_remaining) / swing_duration
+    if fraction < 0 or fraction > 1 then
+        return nil
+    end
+    return fraction
 end
 
 -- Pure: impossible-twist heuristic, matching the archived build (player.lua:743-771):

@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-21T22:16:59Z",
+  "run_id": "compat-tbc-defects-2026-10-21",
+  "agent_name": "compat-tbc-defects",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Loading the real compat.lua over a TBC deprecated-shim sandbox (loadfile + setfenv, no code copy) made both client failures executable offline. The LAZY resolution (probe the caller's token first; only a throwing probe resolves once and retries the same probe with the id) keeps the classic clients' name-form answer source intact - the literal eager reading broke 7 suites that model those clients - while the TBC shim gets the id exactly where it throws. Six single-edit mutants on a /tmp copy each failed their owning check, and the pre-fix compat fails the new suite with the operator's exact message shape.",
+    "what_was_hard": "The brief's 'resolve the string first' wording conflicts with the existing name-form client suites; the fix had to satisfy both, so the deviation is documented with the 7-suite evidence instead of silently choosing one. The shared tree was moving during verification (hunter_ui switch to UnitDistance, vendored LibRangeCheck edits), so every remaining red was re-checked against a fresh copy with the pre-fix compat to attribute it away from this lane.",
+    "skill_gap": "No client run: real TBC Anniversary behavior of the lazy retry, the shim's exact throw, and GetSpellInfo's 7th-return id stay UNCONFIRMED until the operator re-tests in-client."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Add the filed tests/run.sh line after line 91 and apply the filed secret_guard_state.lua replacement (lines 90, 203, 1412-1415), then hand the operator the in-client re-test list."
+  },
+  "journal_marker": "desks/compat-tbc-defects/journal.md § 2026-10-21 Both defects fixed, offline proofs complete"
+}

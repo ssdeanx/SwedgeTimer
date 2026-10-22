@@ -18,8 +18,16 @@
 --     (flat-zero overhead), the enabled gate counts per hand, passes elapsed through,
 --     sums st.api.get_time attribution, and degrades when the clock is absent;
 --   * family rendering for all eight compat families and the three swing-engine modes;
---   * the guide summary for all five provider classes (on/off/none/?) and the provider
+--   * the guide summary for all six provider classes (on/off/none/?) and the provider
 --     count;
+--   * the ids section: UNRESOLVED without an api, resolved name/icon/cast/known with a
+--     stub api, throwing/partial probes degrade, and cap truncation with a +N count line;
+--   * the error ring: record/install/chaining/restore never throw, the ring is bounded,
+--     the verbose report prints newest-last and truncates inside MAX_LINES, login stays
+--     one line, and the two empty states are distinguishable (F1: "nothing threw" with
+--     the handler installed vs "nothing was watched" without it);
+--   * the printer fallback (F3): an absent or shadowed global print hands the report to
+--     the addon's chat printer and announces the switch once;
 --   * static wiring: main.lua's init report call, the /st diag route, the OnUpdate hook
 --     line's st.diag.wrap_onupdate gate, the engine tokens, addon_version exposure,
 --     init_deadline_fired, diag.lua's purity, and its TOC placement.
@@ -130,6 +138,7 @@ local function healthy_self()
                 DRUID = { nextaction_enabled = true },
                 SHAMAN = { nextaction_enabled = false },
                 HUNTER = {},
+                ROGUE = {},
             },
         },
         PALADIN = { guide = provider() },
@@ -137,6 +146,7 @@ local function healthy_self()
         DRUID = { guide = provider() },
         SHAMAN = { guide = provider() },
         HUNTER = { guide = provider() },
+        ROGUE = { guide = provider() },
     }
 end
 
@@ -155,7 +165,7 @@ end
 local HEALTHY_LINE = table.concat({
     "SwedgeTimer diag: family=WRATH iface=38002 version=9.9.9 engine=vendored-lib",
     "lrc=ready lcd=absent ldb=object",
-    "guides=PALADIN:on WARRIOR:off DRUID:on SHAMAN:off HUNTER:on",
+    "guides=PALADIN:on WARRIOR:off DRUID:on SHAMAN:off HUNTER:on ROGUE:on",
 }, " ")
 
 --=========================================================================================
@@ -200,7 +210,7 @@ do
     contains(captured[1], "lrc=?", "empty state: LibRangeCheck renders ?")
     contains(captured[1], "lcd=?", "empty state: LibClassicDurations renders ?")
     contains(captured[1], "ldb=?", "empty state: LibDataBroker renders ?")
-    for _, class in ipairs({ "PALADIN", "WARRIOR", "DRUID", "SHAMAN", "HUNTER" }) do
+    for _, class in ipairs({ "PALADIN", "WARRIOR", "DRUID", "SHAMAN", "HUNTER", "ROGUE" }) do
         contains(captured[1], class .. ":none", "empty state: " .. class .. " has no provider")
     end
 
@@ -258,6 +268,38 @@ do
     local st = load_diag({ print = false })
     check(run_report(st, healthy_self(), false), "an absent print global does not throw")
     check(run_report(st, healthy_self(), true), "an absent print global: verbose does not throw")
+
+    -- F3 (deep audit 2026-10-19): the global print was the report's only output path,
+    -- so a client (or another addon) that removed it made the whole report vanish
+    -- silently. The fallback is the addon's own chat printer, and the switch is
+    -- announced once.
+    local chat = {}
+    local st_fb = load_diag({ print = false, st = healthy_st(), libstub = function() return nil end })
+    st_fb.utils = {
+        print_msg = function(msg) chat[#chat + 1] = tostring(msg) end,
+    }
+    check(run_report(st_fb, healthy_self(), false), "F3: a report without a global print does not throw")
+    check(#chat > 0, "F3: the report falls back to the addon's chat printer")
+    contains(chat[1], "the global print is unavailable",
+        "F3: the fallback announces that it took over")
+    eq(#chat, 2, "F3: the fallback announces the switch once, then prints the line")
+    contains(chat[2], HEALTHY_LINE, "F3: the fallback prints the whole report line")
+    check(run_report(st_fb, healthy_self(), false), "F3: a second report without a global print does not throw")
+    eq(#chat, 3, "F3: the fallback is announced only once per session")
+
+    -- A broken (non-function) print is the same case: the fallback takes over.
+    local chat2 = {}
+    local st_brk = load_diag({ print = "not a function", st = healthy_st(), libstub = function() return nil end })
+    st_brk.utils = {
+        print_msg = function(msg) chat2[#chat2 + 1] = tostring(msg) end,
+    }
+    check(run_report(st_brk, healthy_self(), false), "F3: a non-function print does not throw")
+    check(#chat2 > 0, "F3: a shadowed print falls back to the chat printer too")
+
+    -- No fallback available at all: degrade to silence, never to an error.
+    local st_none = load_diag({ print = false, st = healthy_st(), libstub = function() return nil end })
+    check(run_report(st_none, healthy_self(), false),
+        "F3: with neither print nor a chat printer the report degrades to silence")
 
     st = load_diag({ st = healthy_st(), libstub = function() return nil end })
     st.diag.sink = function() error("broken sink") end
@@ -344,10 +386,11 @@ do
     local st = load_diag()
     local self = healthy_self()
     check(run_report(st, self, false), "healthy guides: no throw")
-    contains(captured[1], "guides=PALADIN:on WARRIOR:off DRUID:on SHAMAN:off HUNTER:on",
-        "all five guide states render in provider order")
+    contains(captured[1], "guides=PALADIN:on WARRIOR:off DRUID:on SHAMAN:off HUNTER:on ROGUE:on",
+        "all six guide states render in provider order")
     local expected = {
         PALADIN = "on", WARRIOR = "off", DRUID = "on", SHAMAN = "off", HUNTER = "on",
+        ROGUE = "on",
     }
     for class, state in pairs(expected) do
         contains(captured[1], class .. ":" .. state, class .. " renders " .. state)
@@ -358,7 +401,14 @@ do
     self.SHAMAN = {}
     check(run_report(st, self, true), "missing provider: no throw")
     contains(captured[1], "SHAMAN:none", "a missing provider renders none")
-    contains(captured[3], "providers=4/5", "the provider count drops with a missing provider")
+    contains(captured[3], "providers=5/6", "the provider count drops with a missing provider")
+
+    -- ROGUE absent degrades the same way: none in the guide summary, count 5/6.
+    self = healthy_self()
+    self.ROGUE = {}
+    check(run_report(st, self, true), "rogue missing provider: no throw")
+    contains(captured[1], "ROGUE:none", "a missing ROGUE provider renders none")
+    contains(captured[3], "providers=5/6", "the provider count drops with ROGUE absent")
 
     -- A provider present, but no profile table for it.
     self = healthy_self()
@@ -374,7 +424,7 @@ do
 
     -- No providers at all.
     check(run_report(st, {}, true), "no providers: no throw")
-    contains(captured[3], "providers=0/5", "the provider count is 0/5 with no class modules")
+    contains(captured[3], "providers=0/6", "the provider count is 0/6 with no class modules")
 end
 
 --=========================================================================================
@@ -389,14 +439,14 @@ do
     eq(#captured, 1, "non-verbose: exactly one line")
 
     check(run_report(st, self, true), "verbose: no throw")
-    eq(#captured, 5, "verbose: exactly five lines")
+    eq(#captured, 73, "verbose: exactly 73 lines (5 base + 67 ids + 1 errors-none)")
     eq(captured[1], login_line, "verbose: line 1 is the same login line")
     eq(captured[2],
         "SwedgeTimer diag: flags stl_ready=true llm_ready=false lrc_ready=true "
         .. "lrc_unavailable=false deadline=no init=yes",
         "verbose line 2 is the exact readiness-flag line")
     eq(captured[3],
-        "SwedgeTimer diag: modules practice=yes hud=yes rotation=yes design=yes providers=5/5",
+        "SwedgeTimer diag: modules practice=yes hud=yes rotation=yes design=yes providers=6/6",
         "verbose line 3 is the exact module/provider line")
     eq(captured[4],
         "SwedgeTimer diag: ticks on=no mainhand=? offhand=? ranged=? cpu=?",
@@ -404,6 +454,10 @@ do
     eq(captured[5],
         "SwedgeTimer diag: secrets api=no",
         "verbose line 5 is the exact secrets line (no C_Secrets in this sandbox)")
+    contains(captured[6], "SwedgeTimer diag: ids ", "verbose line 6 opens the ids section")
+    contains(captured[72], "SwedgeTimer diag: ids 60052", "verbose: last wanted id (60052) renders")
+    eq(captured[73], "SwedgeTimer diag: errors not observed (no error handler installed)",
+        "verbose line 73 reports that no error handler was installed (F1)")
 
     self = healthy_self()
     self.init_deadline_fired = true
@@ -411,7 +465,7 @@ do
     contains(captured[2], "deadline=fired", "the fired init deadline is reported")
 
     check(run_report(st, {}, true), "verbose over an empty state: no throw")
-    eq(#captured, 5, "verbose over an empty state still prints five lines")
+    eq(#captured, 73, "verbose over an empty state still prints 73 lines")
     contains(captured[2], "stl_ready=? llm_ready=? lrc_ready=? lrc_unavailable=?",
         "unset readiness flags render ?")
     contains(captured[2], "deadline=no init=no", "empty state: deadline/init render no")
@@ -420,7 +474,7 @@ do
     run_report(empty_st, {}, true)
     contains(captured[3], "practice=no hud=no rotation=no design=no",
         "unloaded UI modules render no")
-    contains(captured[3], "providers=0/5", "an empty namespace has no providers")
+    contains(captured[3], "providers=0/6", "an empty namespace has no providers")
 
     -- The hard cap: the report must never exceed MAX_LINES, and MAX_LINES must fall back
     -- to a safe default when it is not a number.
@@ -430,10 +484,14 @@ do
     st.diag.MAX_LINES = 2
     run_report(st, healthy_self(), true)
     eq(#captured, 2, "MAX_LINES = 2 caps the verbose report at two lines")
+    st.diag.MAX_LINES = 6
+    run_report(st, healthy_self(), true)
+    eq(#captured, 6, "MAX_LINES = 6 truncates ids with an explicit +N count line")
+    contains(captured[6], "+67 more (cap 6)", "ids truncation carries the remaining count")
     st.diag.MAX_LINES = "junk"
     run_report(st, healthy_self(), true)
-    eq(#captured, 5, "a non-numeric MAX_LINES falls back to the default cap")
-    st.diag.MAX_LINES = 6
+    eq(#captured, 73, "a non-numeric MAX_LINES falls back to the default cap")
+    st.diag.MAX_LINES = 85
 end
 
 --=========================================================================================
@@ -443,7 +501,7 @@ do
     -- Absent (every classic client, and the offline harness): api=no, no probes touched.
     local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
     check(run_report(st, healthy_self(), true), "no C_Secrets: verbose does not throw")
-    eq(#captured, 5, "no C_Secrets: verbose still prints five lines")
+    eq(#captured, 73, "no C_Secrets: verbose still prints 73 lines")
     eq(captured[5], "SwedgeTimer diag: secrets api=no",
         "no C_Secrets: the secrets line reports api=no")
 
@@ -598,10 +656,19 @@ do
         "main.lua passes the addon self, the hand and the original to wrap_onupdate")
     check(main:find('SetScript("OnUpdate", onupdate)', 1, true) ~= nil,
         "main.lua installs the (possibly counted) onupdate as the bar frame's script")
+    -- F1: the error-handler chain has one installer and one remover, both in main.lua.
+    check(main:find("st.diag.install_error_handler()", 1, true) ~= nil,
+        "main.lua installs the chained error handler")
+    check(main:find("st.diag.uninstall_error_handler()", 1, true) ~= nil,
+        "main.lua removes the chained error handler again")
+    check(main:find('self:RegisterEvent("PLAYER_LOGOUT")', 1, true) ~= nil,
+        "main.lua registers PLAYER_LOGOUT for the uninstall")
 
     local diag_src = read("diag.lua")
     check(diag_src:find("function diag.wrap_onupdate", 1, true) ~= nil,
         "diag.lua exposes the OnUpdate counting wrapper")
+    check(diag_src:find('rawget(utils, "print_msg")', 1, true) ~= nil,
+        "diag.lua falls back to the addon's chat printer when print is gone")
     -- Purity is checked against executable code: whole-line comments (the header explains
     -- these rules and may name them) are stripped first.
     local code_only = {}
@@ -636,6 +703,166 @@ do
         check(read(toc):find("LibClassicSwingTimerAPI") == nil,
             toc .. " does not ship the bits-y LibClassicSwingTimerAPI")
     end
+end
+
+--=========================================================================================
+-- 13. Wanted-id resolution: UNRESOLVED, resolved, hostile, truncation
+--=========================================================================================
+do
+    local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    check(run_report(st, healthy_self(), true), "ids no-api: verbose does not throw")
+    eq(#captured, 73, "ids no-api: 5 base + 67 UNRESOLVED + 1 errors-none")
+    contains(captured[6], "ids 1310785=UNRESOLVED", "ids no-api: first wanted id UNRESOLVED")
+    contains(captured[72], "ids 60052=UNRESOLVED", "ids no-api: last wanted id UNRESOLVED")
+    check(run_report(st, nil, true), "ids nil-self: verbose does not throw")
+    contains(captured[6], "UNRESOLVED", "ids nil-self still degrades to UNRESOLVED")
+
+    local st2 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    st2.api = {
+        GetSpellInfo = function(id)
+            if id == 1310785 then
+                return "Sniper Shot", nil, 999, 1500, 0, 30, id
+            end
+            if id == 34428 then
+                error("probe exploded")
+            end
+            if id == 32216 then
+                return "Victorious", nil, nil, "junk", 0, 0, id
+            end
+            return nil
+        end,
+        is_spell_known = function(id)
+            if id == 1310785 then
+                return true
+            end
+            if id == 32216 then
+                error("known exploded")
+            end
+            return false
+        end,
+    }
+    check(run_report(st2, healthy_self(), true), "ids stub-api: verbose does not throw")
+    contains(captured[6], "ids 1310785 name=Sniper Shot", "resolved id renders the name")
+    contains(captured[6], "icon=999", "resolved id renders the icon")
+    contains(captured[6], "cast=1500", "resolved id renders the cast time")
+    contains(captured[6], "known=true", "resolved id renders known=true")
+    contains(captured[13], "ids 34428=UNRESOLVED", "a throwing GetSpellInfo degrades to UNRESOLVED")
+    contains(captured[14], "ids 32216 name=Victorious", "partial probe still renders the name")
+    contains(captured[14], "known=?", "a throwing is_spell_known renders ?")
+
+    local st3 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    st3.api = { GetSpellInfo = "junk", is_spell_known = "junk" }
+    check(run_report(st3, healthy_self(), true), "ids junk-api: verbose does not throw")
+    contains(captured[6], "UNRESOLVED", "a non-function GetSpellInfo degrades to UNRESOLVED")
+
+    local st4 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    st4.diag.MAX_LINES = 10
+    check(run_report(st4, healthy_self(), true), "ids capped: verbose does not throw")
+    eq(#captured, 10, "MAX_LINES = 10 caps at ten lines")
+    contains(captured[10], "+63 more (cap 10)", "ids truncation carries the remaining count")
+    st4.diag.MAX_LINES = 85
+
+    local diag_src = read("diag.lua")
+    check(diag_src:find("WANTED_IDS", 1, true) ~= nil, "diag.lua keeps the DATA-only wanted-id list")
+    check(diag_src:find("bench/ids_research_2026-10-19.md", 1, true) ~= nil,
+        "diag.lua cites the ids research bench file")
+end
+
+--=========================================================================================
+-- 14. Error ring: record, chain/restore, bound, report prints + truncates
+--=========================================================================================
+do
+    local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    check(pcall(st.diag.record_error, nil), "record nil: never throws")
+    check(pcall(st.diag.record_error, {}), "record table: never throws")
+    st.diag.error_ring = {}
+    st.diag.record_error("first\nsecond")
+    eq(st.diag.error_ring[1], "first second", "record flattens newlines to one chat line")
+    st.diag.record_error(string.rep("x", 500))
+    check(#st.diag.error_ring[2] <= 200, "record truncates long messages")
+
+    st.diag.error_ring = {}
+    st.diag.ERROR_MAX = 3
+    st.diag.record_error("e1")
+    st.diag.record_error("e2")
+    st.diag.record_error("e3")
+    st.diag.record_error("e4")
+    st.diag.record_error("e5")
+    eq(#st.diag.error_ring, 3, "the ring respects ERROR_MAX")
+    eq(st.diag.error_ring[1], "e3", "the ring evicts oldest first")
+    eq(st.diag.error_ring[3], "e5", "the ring keeps newest last")
+    st.diag.ERROR_MAX = 8
+
+    local st2, env2 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    check(st2.diag.install_error_handler() == false,
+        "install without seterrorhandler returns false")
+    local set_arg
+    local prev_called = {}
+    local fake_prev = function(msg) prev_called[#prev_called + 1] = msg end
+    env2.seterrorhandler = function(h) set_arg = h end
+    env2.geterrorhandler = function() return fake_prev end
+    check(st2.diag.install_error_handler() == true, "install with fakes returns true")
+    check(type(set_arg) == "function", "install sets a chained handler")
+    st2.diag.error_ring = {}
+    set_arg("boom")
+    eq(#prev_called, 1, "the chained handler calls the previous handler")
+    eq(prev_called[1], "boom", "the previous handler gets the same message")
+    eq(st2.diag.error_ring[1], "boom", "the chained handler records the message")
+    check(st2.diag.uninstall_error_handler() == true, "uninstall returns true")
+    check(set_arg == fake_prev, "uninstall restores the previous handler")
+    check(st2.diag.install_error_handler() == true, "re-install after uninstall returns true")
+    st2.diag.uninstall_error_handler()
+
+    local st3 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    st3.diag.error_ring = {}
+    st3.diag.record_error("err-one")
+    st3.diag.record_error("err-two")
+    check(run_report(st3, healthy_self(), false), "errors login: non-verbose does not throw")
+    eq(#captured, 1, "errors login: non-verbose stays one line")
+    check(run_report(st3, healthy_self(), true), "errors verbose: does not throw")
+    contains(captured[#captured - 1], "err-one", "the ring prints oldest first")
+    contains(captured[#captured], "err-two", "the ring prints newest last")
+
+    local st4 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    st4.diag.error_ring = {}
+    for i = 1, 8 do
+        st4.diag.record_error("e" .. tostring(i))
+    end
+    st4.diag.MAX_LINES = 75
+    check(run_report(st4, healthy_self(), true), "errors capped: verbose does not throw")
+    eq(#captured, 75, "errors truncation respects MAX_LINES")
+    contains(captured[75], "+6 more (cap 75)", "errors truncation carries the remaining count")
+    st4.diag.MAX_LINES = 85
+end
+
+--=========================================================================================
+-- 14b. F1: the two empty states are distinguishable
+--=========================================================================================
+-- The chain was never installed, so "errors none" was a false negative: with no
+-- handler there was nothing that could ever have been observed. The report must say
+-- which of the two empty states it is - "nothing threw" (handler installed) is not
+-- "nothing was watched" (no handler).
+do
+    local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    st.diag.error_ring = {}
+    check(run_report(st, healthy_self(), true), "F1: no handler: verbose does not throw")
+    contains(captured[#captured], "errors not observed (no error handler installed)",
+        "F1: without a handler the empty ring reports that nothing was watched")
+
+    local st2, env2 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    env2.seterrorhandler = function() end
+    env2.geterrorhandler = function() return nil end
+    check(st2.diag.install_error_handler() == true, "F1: the handler installs with a fake client")
+    eq(st2.diag._error_handler_installed, true, "F1: the install flag records the installed chain")
+    st2.diag.error_ring = {}
+    check(run_report(st2, healthy_self(), true), "F1: installed handler: verbose does not throw")
+    contains(captured[#captured], "errors none (handler installed, nothing thrown)",
+        "F1: with the handler installed the empty ring reports that nothing threw")
+    check(st2.diag.uninstall_error_handler() == true, "F1: the handler uninstalls again")
+    eq(st2.diag._error_handler_installed, false, "F1: the install flag is cleared by the uninstall")
+    check(run_report(st2, healthy_self(), true), "F1: after the uninstall: verbose does not throw")
+    contains(captured[#captured], "errors not observed (no error handler installed)",
+        "F1: after the uninstall the empty ring reports that nothing is watched")
 end
 
 if failures == 0 then

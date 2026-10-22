@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-19T22:50:00Z",
+  "run_id": "gamification-visibility-2026-10-19",
+  "agent_name": "gamification-visibility",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Pinning the change BEHAVIOURALLY instead of textually: a mini sandbox loads the real practice_stats.lua + practice_progress.lua + practice_ui.lua and drives the real session path (begin_progress_session -> record_progress_attempt -> end_progress_session), so the 'notice ignores the toggle' mutant dies on behaviour rather than on a pattern that a sibling lane's refactor would break.",
+    "what_was_hard": "The dispatch asked for a 'widget exists and round-trips' pin, but NO options widget for practice_panel_badge exists anywhere (option_tables.lua is out of scope). The round-trip had to be pinned on the module entry points (st.practice_ui.set_badge_enabled / badge_is_enabled) - the surface an options widget would call - and the missing widget was filed as HU-9 instead of being silently ignored.",
+    "skill_gap": "Simulating AceDB's default merge faithfully (saved value wins, then the class defaults, then the shared '**' defaults) needed reading Libs/AceDB-3.0/AceDB-3.0.lua's copyDefaults before the pins could claim 'a user who turned it off stays off'."
+  },
+  "escalation": {
+    "reason": "HU-9: the practice level badge / XP bar / notices now ship ON by default (operator order 2026-10-19 is the gate), but the db key practice_panel_badge has NO options widget anywhere - the Progress page is read-only by design. There is no in-game way to turn the visible surface off; only a SavedVariables edit. option_tables.lua was out of this lane's scope, so nothing was added. The operator rules: land the toggle widget on the Progress page, or ship the badge as unconditional-on.",
+    "blocked_on": "the operator's ruling on HU-9 (option_tables.lua is out of the lane's scope)",
+    "recommendation": "Land a small toggle on the Progress group calling st.practice_ui.set_badge_enabled - the entry point is already built, pinned and round-trips; the widget is the only missing piece."
+  }
+}

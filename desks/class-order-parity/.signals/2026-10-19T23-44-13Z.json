@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T23:44:13Z",
+  "run_id": "class-order-parity-2026-10-19",
+  "agent_name": "class-order-parity",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Choosing the five-class majority for both findings meant four of six class files needed no code movement at all (comments only), and the two movers were provable as zero-behaviour by comparing the extracted statement multisets of all twelve post_init/on_bar_update bodies before and after (identical) plus a zero-cross-reference grep between nextaction_ui/hud/practice_ui. Two independent pins per class (source order + runtime spies) made each mutation killable, including a code-line decoy that only the source pin could catch.",
+    "what_was_hard": "The hunter's F8 reorder had to move a block that carried the class-table read (local db) used later by the cast sampler, so the move had to keep the db definition ahead of its use. A first pass of the pin generator shipped doubled braces into the shaman block (that template was not passed through str.format), which produced a silently malformed spy table - the shaman suite caught it and the template was corrected and the file regenerated from the pristine backup.",
+    "skill_gap": "Python str.format templates with literal braces are easy to half-escape when two templates are concatenated with different escaping rules; generating the pin block from one template and formatting exactly once would have removed the failure."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

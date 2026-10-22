@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T16:05:00Z",
+  "run_id": "class-neutral-hunter-druid-2026-10-20",
+  "agent_name": "class-neutral-hunter-druid",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Mirroring classes/paladin.lua's shape verbatim (publish + ability list + resolver + panel slot list + widening seam) made the two classes land in one pass; the corpus (/home/sam/wow.export) plus the Classic spell pages gave every id a citable name, and the druid's Restoration skill line (573) completed the Healing Touch ladder the filed spec left open.",
+    "what_was_hard": "The filed sets could not be landed literally: the hunter's flat publish would invent a WotLK key and make a wrong Raptor Strike press free on Forever, and the SoD build (the ERA token) asks for both the Raptor Strike and the Rake. The fix was the class's OWN build decision (the hunter's SoD slot swap, the druid's SoD rune probe) - and the druid's pick had to ride the probe's own latch, because consulting the probe earlier moved its latch and broke tests/druid_guide_state.lua's pinned probe semantics.",
+    "skill_gap": "The filed spec's §5 id ladders were carried over from a sister lane without a corpus cross-check, and one of them (9844 under Regrowth) is a Rejuvenation id - a filed ladder needs the same corpus check as a fresh one."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

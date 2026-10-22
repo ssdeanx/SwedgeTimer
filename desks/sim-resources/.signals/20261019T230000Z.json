@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T23:00:00Z",
+  "agent_name": "sim-resources",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Sim-cited rage math (wowsims/classic rage.go fetched live) with fail-closed pools; nil-gated UI hooks leaving all in-game defaults byte-identical; 7/7 mutations killed.",
+    "what_was_hard": "Warrior has no drill panel and class files are read-only, so in-game activation awaits a class-shell lane; pools are live in sim+UI+pins, dormant in game by design.",
+    "skill_gap": "Queue-fired cast spend bypasses the cast site (filed follow-up)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Dispatch class-shell lane for live damage/cost feeds; mana regen and focus costs need sources not in tree."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T00:00:00Z",
+  "agent_name": "hunter-seam",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "per-client fallback table with zero behavior delta on defaults (live probe wins, engine DEFAULTs cover nil); comp reuses main.lua calibrated field (defaults-identical); pins at gather + sampler + table levels; 6/6 mutants killed",
+    "what_was_hard": "placing comp pins without touching out-of-scope hunter_ui (its own raw reader); keeping query-count pins green (moved ladder block after them)",
+    "skill_gap": "in-client GetSpellInfo confirmation still owed for UNCONFIRMED entries; hunter_ui alignment filed as follow-up"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator validates; note luacheck 3rd warning (shaman.lua, out of scope) and hunter_ui raw-reader divergence filed in journal"
+  }
+}

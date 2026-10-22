@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "checkpoint",
+  "timestamp": "2026-10-19T22:43:30Z",
+  "agent_name": "guide-hud-behaviour",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "ordered flips + Behaviour move + SoD callable-guards + paladin-parity closes (druid orphan rename, hunter knobs); options_load_state 2473/0 with sections 17/18/19; 6/6 mutations kill and restore cmp-clean; scoped luacheck 0/0",
+    "what_was_hard": "attributing 7 harness reds: 5 guide suites + hud_state + rogue_state pin old false defaults (ordered-flip crossfire); rogue_state practice-bridge + wiring_check owned by practice/class lanes; practice_ui_state red self-resolved as sibling crossfire",
+    "skill_gap": "in-client verification impossible offline (SoD shaman HUD/design-mode report stays UNCONFIRMED); cross-suite default pins need orchestrator reconcile"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator: update ordered-flip pins in hunter/druid/shaman/warrior_guide_state, hud_state, rogue_state; practice lane owns bridge pins; run in-client SoD shaman check per live_test_script"
+  }
+}

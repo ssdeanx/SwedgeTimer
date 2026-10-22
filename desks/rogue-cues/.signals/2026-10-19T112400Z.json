@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T11:24:00Z",
+  "run_id": "rogue-cues-provider-2026-10-19",
+  "agent_name": "rogue-cues",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "bench-read first (journal, readiness §§2/4/5-B/C, both fix buildouts/journals, both rogue research files, lessons, hands-up) then a single ship of the whole slice: proc-aware predictor, Era SS window, swap/poison cues, live HUD/provider, TTD EMA. Every cue pinned both directions; 12/12 mutation proofs on /tmp/opencode copies; harness 37/0 and luacheck 2/0 (floor).",
+    "what_was_hard": "compat.lua is out of scope but the new probes (GetWeaponEnchantInfo, GetItemCount/GetItemCooldown/GetItemInfo, UnitGUID) are owed to it: they ship as load-time rawget probes in classes/rogue.lua, documented as owing a compat wrapper. Poison charges stay unrendered (probe shape UNCONFIRMED in-client).",
+    "skill_gap": "none material; one transient harness flap from the parallel practice lane is expected and was ignored per the brief."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

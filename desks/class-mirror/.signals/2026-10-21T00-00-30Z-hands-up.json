@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-21T00:00:30Z",
+  "run_id": "class-mirror-2026-10-20",
+  "agent_name": "class-mirror",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The brief was executed in full; the disagreement is about the STATED CAUSE, not the work.",
+    "what_was_hard": "Deciding what to do with a rule in the brief that the tree contradicts.",
+    "skill_gap": "Reading a brief's cause-claim as a hypothesis rather than a fact."
+  },
+  "escalation": {
+    "reason": "The brief attributes the operator's client crash (LUA_WARNING: SwedgeTimer/SwedgeTimer_TBC.toc:77 Error loading SwedgeTimer/classes/rogue.lua) to the namespace mirror, on the grounds that 'writing to the addon's namespace table is not a supported operation on a real client (the namespace is protected)'. That mechanism is NOT supported by the evidence: (a) the tree's own house idiom is a file-scope namespace write - 326 writes in 30 root modules (compat.lua:99, utils.lua:2-3, practice.lua:78, druid_guide.lua:547, ...) - and every one of those files loads on the operator's client; (b) Blizzard's own addons write to their namespace table at file scope in the reference client source (classic_anniversary: Interface/AddOns/Blizzard_ChatFrameBase/Shared/ChatFrameFiltersSecure.lua:7 addonTbl.CreateSecureFiltersArray = ...; MacroExecutionManager.lua:13 addonTbl.MacroEditBox = ...); (c) the mirror's shape is not special - main.lua:67 creates ST.ROGUE as a plain table, so st.ROGUE = ST.ROGUE is the same kind of write as st.api = api. What IS true and now enforced: the mirror was the only namespace write in any CLASS module, and every class file is in every TOC, so its file scope runs on every client. The mirrors were removed (dead weight since the engine resolves the class module from the AceAddon table first - practice.lua:3421), and two guards now fail the build if one comes back.",
+    "blocked_on": "The operator's ruling on two points: (1) whether the brief's blanket rule ('any addon file assigns to the namespace table at file scope' -> fail) is wanted as written - it would fail the tree on the addon's own 326 bootstrap writes, so it needs a count-pinned accept list first; (2) the client's own error text above the LUA_WARNING line (the .../classes/rogue.lua:<line>: <message> pair), or an in-client re-test, to settle the crash cause.",
+    "recommendation": "Re-test in-client on the TBC client after this change and paste the full error block if the class file still fails to load. If the crash is gone, close it; if not, the cause lies elsewhere and the two guards stay as the structural invariant they are (the file-scope namespace write in a class module is now a build failure either way)."
+  }
+}

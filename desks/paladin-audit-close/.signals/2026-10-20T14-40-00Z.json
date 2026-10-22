@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T14:40:00Z",
+  "run_id": "paladin-audit-close-2026-10-20",
+  "agent_name": "paladin-audit-close",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Reading the ENGINE's own arms before the gate: the execute Hammer of Wrath is Era/Forever only (nextaction.lua's filler branch), which is the proof that the TBC button was never askable. Deriving the family token from the ORDER (the SoD game runs on the ERA client, so the SoD variants' own orders name the family) kept the gate consistent with the client's live order without a new read.",
+    "what_was_hard": "The corpus's family gate for the two filler rows excludes ERA, so the strict gate drops the Era client's cons/exo from the rotation strip even though the class's own Era rule still asks for them; the press stays reachable only through the panel's asked-for vocabulary (practice_ui's scenario_note_action). Proving that the 'unknown' branch of the new state-based band gate matters needed a source-shape pin: both branches hide, so no behaviour pin can tell them apart.",
+    "skill_gap": "Deciding a per-template slot value from the class's own precedent rather than from a default-off reflex - the band rides P-T2 'Full Ret' (the 'all visible' promise, the druid's Claw shape), not 'false everywhere'."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

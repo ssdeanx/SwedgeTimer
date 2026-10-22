@@ -1,0 +1,14 @@
+# sim-resources — Journal
+
+## 2026-10-19 — Desk opened
+- **Purpose:** Model combat resources in the practice sim (operator order; warrior rage first). Energy + combo windows exist; add rage, mana, focus where the sim can model them faithfully. File the rest with source-backed reason, never fake.
+- **Scope:** practice.lua (resource models only), practice_ui.lua (resource display + drill consumption only), class seams READ-ONLY, tests/practice_state.lua + tests/practice_ui_state.lua pins only.
+- **Next step:** Implement rage pool + sim math (wowsims/classic sim/core/rage.go), mana/focus pools caller-fed with filed gaps, UI display + consumption hooks (nil-gated), pins, harness 38/0 + luacheck floor, mutation proofs on /tmp/opencode copies.
+
+## 2026-10-19 — Resource models landed (rage first)
+- **Worked on:** practice.lua: appended "Combat resource pools" — rage constants (MaxRage 100, dealt 7.5, taken 2.5, BT refund 0.8, costs bt30/ww25/slam15/op5, all sim-cited to wowsims/classic sim/core/rage.go + warrior sim files via bench/warrior_rotation_audit), rage_conversion (tested 25/40 pins, quadratic base), white/taken gain fns, new_rage_state/gain/spend(fail-closed)/drain_all/can_spend(pool twin of ST.WARRIOR.composite_rage_gate, fails closed where the live gate degrades-allow)/spend_grade S/F; mana + focus pools (mechanics only, max caller-fed). practice_ui.lua: panel resource_text row (empty+hidden default, zero new frames), set_session_rage/mana/focus_pool + clear_session_pools + update_resource_display (rage>mana>focus), tick generation on landed drill swings (pool+damage+level all required, else no-op), cast_key mana spend/refuse with OOM flash (queue-fired casts excluded, documented), stop() clears pools. Tests: practice_state 1312 checks, practice_ui_state 1119 checks (new §12e: display/priority, warrior swing generation ~37.5/cap/nil-damage, mana spend/refuse/OOM/uncosted-free, stop lifecycle).
+- **Current state:** Harness 38/0; luacheck my-4-files 0 warnings (tree 3: 2 KEEP-ruled floor + 1 shaman-lane). Mutation proofs 7/7 killed on /tmp/opencode copies (M1 mult, M2 cap, M3 fail-open spend, M4 OOM-neuter, M5 generation-neuter, M6 grade-swap, M7 mana fail-open). CRLF kept; no class/options/config/toc changes. Warrior routing untouched (shared session pin holds).
+- **Next step:** ORCHESTRATOR — (1) class-shell lane: ST.WARRIOR rage-drill shell (live avg white damage + level feed to set_session_rage_pool, costed drill casts) to activate the dormant pools in-game; (2) mana cost feed (rank-dependent GetSpellPowerCost tables) + regen model (spirit/5s-rule, gear-dependent) — filed, not faked; (3) focus costs/regen need cata-sim numbers not in tree — filed; (4) queue-fired cast spend is a filed follow-up (internal queue path bypasses the cast site).
+
+## 2026-10-19 — [signal:done] Resource models live in sim+UI+pins
+- Harness 38/0, my files luacheck 0 warnings, 7/7 mutations killed, journal filed with activation seams.

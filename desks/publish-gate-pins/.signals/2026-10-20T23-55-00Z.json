@@ -1,0 +1,40 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T23:55:00Z",
+  "run_id": "publish-gate-pins-2026-10-20",
+  "agent_name": "publish-gate-pins",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Deriving each pin from the tree's own published data instead of from a hand-written list: the collision vocabulary is assembled from what the classes already publish (guide.slots, practice_rotation_for, practice_common_actions), so no class file had to be touched and the pin cannot drift from the class seam. The CHANGELOG pin reads BOTH sides (the passage and the six publish tables) and compares them, so it catches a passage edit and a tree edit with one mechanism. The registry counter-guard lives in a second suite, which makes the two guards mutual - neither can be switched off alone.",
+    "what_was_hard": "The passage's per-class claims are not uniform: the paladin enumerates its keys, the hunter and the druid name only the key the tree drops, and the hunter's and the druid's claims share one sentence with the keys interleaved. The key-to-class attribution had to follow the possessive ('the hunter's without `raptor`'), and the per-family comparisons had to survive three different shapes (a list qualifier, a negative 'WITHOUT' clause and a 'the same ten keys' back-reference).",
+    "skill_gap": "The F-1 pin compares the guide slots' icon ids and the common abilities' ladder heads in their own id spaces and never across them (the guide's rank-invariant icon id against the APL's cited rank would read as two ids for one spell). A guide slot and a rotation row of DIFFERENT spells that canonicalise together is therefore only caught when both publish a name - the guide slot never does."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "The re-audit's own report file is NOT on disk (desks/final-reaudit/ does not exist) - this lane worked from the brief and re-derived all three findings against the live tree; if the report is filed later, it is worth a diff against bench/publish_gate_pins_2026-10-20.md. No registry line was needed: tests/run.sh was NOT touched, and classes/paladin.lua was NOT touched (the vocabulary is assembled from what the classes already publish)."
+  },
+  "artifacts": [
+    "bench/publish_gate_pins_2026-10-20.md",
+    "desks/publish-gate-pins/journal.md"
+  ],
+  "files_changed": [
+    "tests/practice_ui_state.lua",
+    "tests/neutral_actions_state.lua",
+    "tests/toc_check.lua"
+  ],
+  "verification": {
+    "harness": "43 steps, 0 failed (bash tests/run.sh)",
+    "luacheck": "2 warnings / 0 errors in 85 files (the standing floor, both pre-existing); the three touched test files are 0/0 on their own",
+    "mutation_proofs": "12 kills / 0 escapes - F-1: M1 two different spells merge (the guide slots' ids differ), M2 a common ability merges onto a rotation key (the names differ), M3 a single-key-space class grows an alias table (the identity check fails), M4 two common abilities merge (the new pin is the ONLY guard - all 6 failing checks are from the new block); F-2: M5 the passage drops a key, M6 the tree publishes a new key, M7 the tree's 4.0+ bucket gains sotc, M8 the passage excludes the wrong key, M9 the passage attaches a key to the wrong family, M10 the tree gives the warrior a Cata bucket; F-3: M11 run.sh loses the toc_check line (the full harness on the mutant: 42 steps, 2 failed - it was 42 steps, 0 failed before this lane), M12 run.sh loses the neutral_actions_state line. The control copy is green in all three suites.",
+    "suites": "tests/practice_ui_state.lua 2459 -> 2493 checks (+34), tests/toc_check.lua 924 -> 1074 (+150), tests/neutral_actions_state.lua 7023 -> 7026 (+3). The baselines were measured by removing the new blocks on a disposable copy.",
+    "behaviour": "no addon file changed at all - the three findings were test-pin findings and the pins are the fix; classes/paladin.lua and tests/run.sh were not touched",
+    "line_endings": "the three touched test files are LF (0 CR bytes) and their EOF bytes are unchanged"
+  }
+}

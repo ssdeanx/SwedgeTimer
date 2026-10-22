@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T04:35:00Z",
+  "run_id": "phase8-docs-truth-2026-10-20",
+  "agent_name": "docs-truth",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The bench corpus was the whole evidence base: every CHANGELOG line carries the bench file that carries the claim, and every claim was re-verified in-tree before it was written down (the drill lists, the guard entry points, the F1/F2 install sites, the TOC interfaces, the mastery constants, the six class scenario steps). The export correction was settled by reading the tree: the only import_export.lua files in the repo belong to the archived addons under docs/swedge/.",
+    "what_was_hard": "Three class rows in the operator's live script had gone stale because the items they described (the CoE slot, the Serpent target read, the Wolfshead probe) landed after the script was written. Documenting them as 'expect NOTHING' would have sent the operator looking for a surface the build does not have, so each row was rewritten in place with the new behaviour plus the in-client check that is still owed. The renumbering of the script's sections (old 7/8/9 became 8/9/10) had to be done with every cross-reference chased.",
+    "skill_gap": "I asserted the warrior HS/Cleave queue drill as 'not shipped' from the tree rather than from a lane report, and the empty desks/warrior-hs-queue/ directory (no journal, only an empty .signals/) was the tell. A lane that opens a desk and never writes its journal is indistinguishable from a lane that was never dispatched; the plan is the only record that it was ordered."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

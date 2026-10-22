@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T17:31:26Z",
+  "agent_name": "settings-build",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "audit rows mapped to exact orders/names; harness caught the tracker_header dup before land",
+    "what_was_hard": "druid NAG 7.5x collided with 7.5/7.6 trackers so used 7.95x; warrior 3.10 band needed full renumber for numeric=file order",
+    "skill_gap": "none"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

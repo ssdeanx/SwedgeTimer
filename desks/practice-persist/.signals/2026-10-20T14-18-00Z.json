@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T14:18:00Z",
+  "run_id": "practice-persist-2026-10-20",
+  "agent_name": "practice-persist",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "A dedicated flush (ui.flush_progress_session) with three callers - the session stop, the logout handler and the panel's OnHide - closed H2 without touching the frame teardown. M1 needed two halves (the hook lane ensures the profile AND the reset clears the live session's counters); the second half only became visible once the badge-on path started re-creating the profile. Ten mutation proofs on disposable copies, each killed by a named pin.",
+    "what_was_hard": "practice_ui.lua sits at 199 of Lua 5.1's 200 file-scope locals, so every new piece of state had to ride the ui table. The test sandbox mirrors its stubs into _G and cannot restore an ABSENT global (a nil previous value drops the key from the restore table), so date/time leaked between builds and the first M4 pin read a stale calendar until the leak was cleared inside the M4 builds.",
+    "skill_gap": "I read the audit's '/reload' symptom as a logout symptom at first; the reload case fires no PLAYER_LOGOUT and writes no SavedVariables, so no addon hook can land it on disk. The finding was re-read against the client's behaviour and the caveat is now stated in the artifact instead of being papered over."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

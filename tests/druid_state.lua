@@ -42,6 +42,25 @@ local function colour_eq(vertex, db_table, label)
     near(vertex[4], db_table[4], label .. " (alpha)")
 end
 
+-- Mirrored Unit* globals for the D1 sampler (restored per build, smoke pattern).
+local mirrored_unit_globals = {}
+
+-- The equipped-item probe reads the client's INVSLOT_* range through the real
+-- global table at call time (compat.lua's rawget(_G, ...)), so the range is
+-- mirrored into _G for the duration of the read and restored afterwards. The
+-- slot range is the client's own: INVSLOT_FIRST_EQUIPPED ..
+-- INVSLOT_LAST_EQUIPPED is 1..19 on every supported family.
+local function with_equipment_range(fn)
+    local previous_first = rawget(_G, "INVSLOT_FIRST_EQUIPPED")
+    local previous_last = rawget(_G, "INVSLOT_LAST_EQUIPPED")
+    _G.INVSLOT_FIRST_EQUIPPED = 1
+    _G.INVSLOT_LAST_EQUIPPED = 19
+    local ok, err = pcall(fn)
+    _G.INVSLOT_FIRST_EQUIPPED = previous_first
+    _G.INVSLOT_LAST_EQUIPPED = previous_last
+    if not ok then error(err, 0) end
+end
+
 --=========================================================================================
 -- Sandbox builder
 --=========================================================================================
@@ -60,8 +79,15 @@ local function build(opts)
         power_type = 0,           -- what UnitPowerType reports (3 = cat energy, 1 = bear)
         rage_cost = nil,          -- what GetSpellPowerCost returns (nil = no cost data)
         known = opts.known or {}, -- spell ids this client knows
+        target_guid = opts.target_guid, -- what UnitGUID("target") reports (D1 sampler)
+        target_hp = opts.target_hp,     -- what UnitHealth("target") reports (D1 sampler)
         -- Spell names this client knows (knowledge-level, for the SoD rune probe).
         known_names = opts.known_names or {},
+        -- Every GetSpellInfo query, in order (the name-vs-id direction proof).
+        spell_queries = {},
+        -- A client that cannot answer at all: the stub raises, so compat's pcall
+        -- reports "could not answer" ("unresolved") instead of "not here" ("absent").
+        spell_info_throws = false,
         current_spell = opts.current_spell, -- the only id IsCurrentSpell answers true for
         form = 0,                 -- what GetShapeshiftForm reports
         talents = opts.talents or {}, -- talent index -> rank (11 = moonkin, 19 = tree)
@@ -69,6 +95,7 @@ local function build(opts)
         player_auras = opts.player_auras or {}, -- what UnitAura("player", i) serves
         -- call counters
         get_family_spell_id_calls = 0,
+        get_family_spell_id_state_calls = 0,
         get_spell_info_calls = 0,
         cost_queries = 0,
         is_current_spell_calls = 0,
@@ -88,9 +115,46 @@ local function build(opts)
         vertex = nil,
         -- Cooldown readings by query (id or name) -> { start, duration }.
         cooldowns_by_query = opts.cooldowns or {},
+        -- The equipped-item fixture (the Wolfshead Helm read): the equipped
+        -- slot -> item id map the client's GetInventoryItemID serves, and the
+        -- ids the class asked the probe for.
+        equipment_items = opts.equipment_items,
+        item_queries = {},
     }
 
     local env = setmetatable({}, { __index = _G })
+    -- D1 TTD sampler reads target identity/health through compat (raw _G at load,
+    -- like smoke.lua): mirror per-build stubs, restoring the previous build's
+    -- first so sequential builds never leak into each other.
+    for name, prev in pairs(mirrored_unit_globals) do
+        if prev.present then
+            _G[name] = prev.value
+        else
+            _G[name] = nil
+        end
+    end
+    mirrored_unit_globals = {}
+    local function mirror_unit_global(name, fn)
+        if mirrored_unit_globals[name] == nil then
+            mirrored_unit_globals[name] = {
+                present = rawget(_G, name) ~= nil,
+                value = rawget(_G, name),
+            }
+        end
+        _G[name] = fn
+    end
+    mirror_unit_global("UnitGUID", function(unit)
+        if unit == "target" then
+            return sb.target_guid
+        end
+        return nil
+    end)
+    mirror_unit_global("UnitHealth", function(unit)
+        if unit == "target" then
+            return sb.target_hp
+        end
+        return nil
+    end)
     env.WOW_PROJECT_ID = opts.project or 11
     env.WOW_PROJECT_CLASSIC = 2
     env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5
@@ -100,19 +164,51 @@ local function build(opts)
     env.WOW_PROJECT_MAINLINE = 1
     env.WOW_PROJECT_FOREVER = 18
     env.GetTime = function() return sb.clock end
-    env.GetSpellInfo = function(id)
+    -- The TBC Anniversary client answers by NAME (operator rule 2026-10-19): the id
+    -- form finds nothing and the C_Spell namespace carries the id -> name mapping.
+    -- opts.name_only_client turns the fixture into that client.
+    local name_only_client = opts.name_only_client == true
+    env.GetSpellInfo = function(query)
         sb.get_spell_info_calls = sb.get_spell_info_calls + 1
-        if type(id) == "string" then
+        sb.spell_queries[#sb.spell_queries + 1] = query
+        if sb.spell_info_throws then
+            error("restricted")
+        end
+        if type(query) == "string" then
             -- Knowledge-level: a name answers only for a known spell.
-            if sb.known_names[id] then
-                return id, nil, 1, 0, 0, 0, 0
+            if sb.known_names[query] then
+                return query, nil, 1, 0, 0, 0, 0
+            end
+            -- The client's own name for a known spell answers too: a client that
+            -- named a spell answers to that name (the TBC name path).
+            local back = query:match("^Spell (%d+)$")
+            local back_id = back and tonumber(back)
+            if back_id and sb.known[back_id] then
+                return query, nil, 1, 0, 0, 0, back_id
             end
             return nil
         end
-        if sb.known[id] then
-            return "Spell " .. tostring(id), nil, 1, 0, 0, 0, id
+        if name_only_client then
+            -- The TBC client indexes names only: an id query finds nothing.
+            return nil
+        end
+        if sb.known[query] then
+            return "Spell " .. tostring(query), nil, 1, 0, 0, 0, query
         end
         return nil
+    end
+    if name_only_client then
+        -- The C_Spell namespace carries the id -> name mapping (the shape the compat
+        -- lane verified on the client source: C_Spell.GetSpellInfo takes an id and
+        -- answers with that spell's data).
+        env.C_Spell = {
+            GetSpellInfo = function(id)
+                if sb.known[id] then
+                    return { name = "Spell " .. tostring(id), spellID = id }
+                end
+                return nil
+            end,
+        }
     end
     env.GetSpellPowerCost = function(id)
         sb.cost_queries = sb.cost_queries + 1
@@ -172,6 +268,15 @@ local function build(opts)
     -- Classic GetTalentInfo(tab, index) -> name, icon, tier, column, rank, maxRank.
     env.GetTalentInfo = function(_, index)
         return "Talent", nil, 1, 1, (sb.talents[index] or 0), 1
+    end
+    -- The equipped-item read (the Wolfshead Helm probe): the client answers the
+    -- equipped slot -> item id, and nothing else. A sandbox without this stub is
+    -- a client that cannot answer at all.
+    if opts.equipment_items then
+        env.GetInventoryItemID = function(unit, slot)
+            if unit ~= "player" then return nil end
+            return sb.equipment_items[slot]
+        end
     end
 
     -- compat.lua reads some legacy globals through _G (annotation-safe on Mainline-code
@@ -341,12 +446,26 @@ local function build(opts)
     setfenv(utils, env)
     utils("SwedgeTimer", st)
 
-    -- Count resolver calls: the module calls api.get_family_spell_id through the api table,
-    -- so wrapping the table entry after load is enough.
+    -- Count resolver calls: the module calls api.get_family_spell_id_state through
+    -- the api table, so wrapping the table entry after load is enough. The plain
+    -- resolver is counted too: the class must not use it any more (audit F4).
     local real_resolver = st.api.get_family_spell_id
+    local real_state_resolver = st.api.get_family_spell_id_state
     st.api.get_family_spell_id = function(ids)
         sb.get_family_spell_id_calls = sb.get_family_spell_id_calls + 1
         return real_resolver(ids)
+    end
+    st.api.get_family_spell_id_state = function(ids)
+        sb.get_family_spell_id_state_calls = sb.get_family_spell_id_state_calls + 1
+        return real_state_resolver(ids)
+    end
+    -- The equipped-item probe: the class asks it for an item id, so the queried
+    -- ids are recorded (the sim's own HasItemEquipped(8345) check) while the
+    -- answer still comes from the real compat probe.
+    local real_item_probe = st.api.is_item_equipped
+    st.api.is_item_equipped = function(item_id)
+        sb.item_queries[#sb.item_queries + 1] = item_id
+        return real_item_probe(item_id)
     end
 
     -- The pure druid maths module loads before the class module (as the TOCs order it).
@@ -354,9 +473,22 @@ local function build(opts)
     setfenv(energy, env)
     energy("SwedgeTimer", st)
 
+    -- The pure decision engine (as the TOCs order it: before classes/druid.lua), so
+    -- the practice surface pins below run the SHIPPED model and not a copy of it.
+    local guide = assert(loadfile(ROOT .. "druid_guide.lua"))
+    setfenv(guide, env)
+    guide("SwedgeTimer", st)
+
     local mod = assert(loadfile(ROOT .. "classes/druid.lua"))
     setfenv(mod, env)
     mod("SwedgeTimer", st)
+    -- classes/druid.lua registers its body as a loader (operator order 2026-10-21:
+    -- only the selected class executes). Activate it here, right after its file
+    -- loads - the same load-time position its body occupied before the wrapper.
+    assert(type(st.class_loaders) == "table"
+        and type(st.class_loaders["DRUID"]) == "function",
+        "classes/druid.lua registers the DRUID loader")
+    st.class_loaders["DRUID"]()
 
     sb.st = st
     sb.ST = ST
@@ -586,10 +718,11 @@ do
     sb.rage_cost = { { cost = 10 } }
 
     ST.DRUID.on_rage_update(ST)
-    eq(sb.get_family_spell_id_calls, 1, "the first rage tick resolves the rank")
+    eq(sb.get_family_spell_id_state_calls, 1, "the first rage tick resolves the rank")
+    eq(sb.get_family_spell_id_calls, 0, "the class resolves through the state API, not the plain one")
     ST.DRUID.on_rage_update(ST)
     ST.DRUID.on_rage_update(ST)
-    eq(sb.get_family_spell_id_calls, 1, "a negative result is latched: no re-walk per tick")
+    eq(sb.get_family_spell_id_state_calls, 1, "a negative result is latched: no re-walk per tick")
     eq(ST.insufficient_rage, false, "latched false keeps the bar out of the rage colour")
 end
 
@@ -1730,18 +1863,20 @@ do
 end
 
 --=========================================================================================
--- 28) D2 TF/Berserk HUD slots: the static list, the rank re-point and the
---     per-family liveness gates
+-- 28) D2 TF/Berserk + Claw HUD slots: the static list, the rank re-point and the
+--     per-family liveness gates (Claw display-only; rule still filed)
 --=========================================================================================
 do
     local sb = build()
     local ST = sb.ST
     local slots = ST.DRUID.HUD_SLOTS
-    eq(#slots, 10, "ten descriptors ship (six rotational + TF/Berserk + two trinkets)")
+    eq(#slots, 11, "eleven descriptors ship (seven rotational + TF/Berserk + two trinkets)")
     local by_key = {}
     for i = 1, #slots do by_key[slots[i].key] = slots[i] end
-    eq(slots[7].key, "tf", "TF follows the six rotational slots")
-    eq(slots[8].key, "berserk", "Berserk follows TF")
+    eq(slots[7].key, "claw", "Claw mirrors the guide slot after Shred")
+    eq(by_key.claw.spell, 9850, "Claw ships the sim Forever id (no rank table)")
+    eq(slots[8].key, "tf", "TF follows the seven rotational slots")
+    eq(slots[9].key, "berserk", "Berserk follows TF")
     eq(by_key.berserk.spell, 50334, "Berserk ships the WotLK id")
     eq(by_key.tf.spell, 9845, "TF ships the Era/TBC rank as its fallback icon")
 
@@ -1774,21 +1909,36 @@ do
     EST.interfaces_are_initialised = true
     EST.DRUID.post_init(EST)
     local eslots = EST.DRUID.HUD_SLOTS
-    eq(EST.DRUID.get_hud_state(EST, eslots[8], 100).hidden, true,
+    eq(EST.DRUID.get_hud_state(EST, eslots[9], 100).hidden, true,
         "runeless Era hides Berserk (not baseline there)")
     local sod = build({ project = 2, known = { [33983] = true } })
     local SST = sod.ST
     SST.interfaces_are_initialised = true
     SST.DRUID.post_init(SST)
-    eq(SST.DRUID.get_hud_state(SST, SST.DRUID.HUD_SLOTS[8], 100).hidden, nil,
+    eq(SST.DRUID.get_hud_state(SST, SST.DRUID.HUD_SLOTS[9], 100).hidden, nil,
         "the SoD rune basis flips Berserk live on the Era token")
     -- Era TF data keeps the TF slot live.
     local era_tf = build({ project = 2, known = { [9845] = true } })
     local ETST = era_tf.ST
     ETST.interfaces_are_initialised = true
     ETST.DRUID.post_init(ETST)
-    eq(ETST.DRUID.get_hud_state(ETST, ETST.DRUID.HUD_SLOTS[7], 100).hidden, nil,
+    eq(ETST.DRUID.get_hud_state(ETST, ETST.DRUID.HUD_SLOTS[8], 100).hidden, nil,
         "Era TF data keeps the TF slot live")
+    -- Claw display mirror: nil toggle hides (no default-visible change), true
+    -- shows the rotational GCD/ready path; no probe, no rule.
+    eq(ST.DRUID.get_hud_state(ST, by_key.claw, 100).hidden, true,
+        "nil hud_show_claw hides the Claw slot")
+    sb.class_db.hud_show_claw = true
+    local claw_live = ST.DRUID.get_hud_state(ST, by_key.claw, 100)
+    eq(claw_live.hidden, nil, "hud_show_claw true shows the Claw slot")
+    eq(claw_live.remaining, nil, "a ready Claw with no GCD reports no cooldown")
+    ST.gcd = { expires = 101.4, spell_length = 1.5 }
+    claw_live = ST.DRUID.get_hud_state(ST, by_key.claw, 100)
+    near(claw_live.remaining, 1.4, "Claw takes the GCD swipe like the other rotationals")
+    ST.gcd = {}
+    sb.class_db.hud_show_claw = nil
+    eq(ST.DRUID.get_hud_state(ST, by_key.claw, 100).hidden, true,
+        "clearing the toggle hides Claw again")
 end
 
 -- The provider reads the D2 cooldowns by the client's own localized name and
@@ -1799,7 +1949,7 @@ do
     ST.interfaces_are_initialised = true
     ST.DRUID.post_init(ST)
     local slots = ST.DRUID.HUD_SLOTS
-    local tf = slots[7]
+    local tf = slots[8]
     eq(tf.spell, 50213, "post_init re-points TF at the highest resolving rank")
     ST.in_combat = true
     sb.clock = 700
@@ -1864,6 +2014,2025 @@ do
     pb.clock = 100
     PST.DRUID.on_bar_update(PST, "mainhand")
     check(not pb.visuals.druid_omen_glow.hidden, "R2: Clearcasting glows below a secret row")
+end
+
+--=========================================================================================
+-- D2 pure: proc-aware tick classifier (Combat-Potency-style grants never re-anchor)
+--=========================================================================================
+do
+    local de = build().druid_energy
+    -- adjust_gain_for_procs: nil-safe subtraction, legacy degrade on junk.
+    eq(de.adjust_gain_for_procs(80, 60), 20, "D2: a TF+tick frame adjusts to the tick")
+    eq(de.adjust_gain_for_procs(20, nil), 20, "D2: a nil proc grant degrades to the raw delta")
+    eq(de.adjust_gain_for_procs(20, 0), 20, "D2: a zero proc grant degrades to the raw delta")
+    eq(de.adjust_gain_for_procs(20, "60"), 20, "D2: a non-number proc grant degrades to the raw delta")
+    eq(de.adjust_gain_for_procs(20, 0 / 0), 20, "D2: a NaN proc grant degrades to the raw delta")
+    eq(de.adjust_gain_for_procs(nil, 60), nil, "D2: a missing delta reads nil")
+    eq(de.adjust_gain_for_procs(0 / 0, 60), nil, "D2: a NaN delta reads nil")
+    -- is_tick_gain: legacy parity with a nil grant.
+    eq(de.is_tick_gain(19, nil), true, "D2: the lower bound still qualifies without a proc")
+    eq(de.is_tick_gain(20, nil), true, "D2: the common tick still qualifies without a proc")
+    eq(de.is_tick_gain(22, nil), true, "D2: the upper bound still qualifies without a proc")
+    eq(de.is_tick_gain(18.999, nil), false, "D2: just below the window still misses without a proc")
+    eq(de.is_tick_gain(22.001, nil), false, "D2: just above the window still misses without a proc")
+    eq(de.is_tick_gain(nil, nil), false, "D2: a missing delta never qualifies")
+    eq(de.is_tick_gain("20", nil), false, "D2: a non-number delta never qualifies")
+    -- is_tick_gain: proc-aware (the Combat-Potency shapes: 15/25 never re-anchor,
+    -- a tick hiding in the same frame still does).
+    eq(de.is_tick_gain(80, 60), true, "D2: TF+tick in one frame still re-anchors")
+    eq(de.is_tick_gain(60, 60), false, "D2: the proc alone never re-anchors")
+    eq(de.is_tick_gain(20, 60), false, "D2: a capped proc partial never forges a tick")
+    eq(de.is_tick_gain(35, 15), true, "D2: a masked tick recovers (combat-potency shape)")
+    eq(de.is_tick_gain(15, 15), false, "D2: a 15-energy grant never re-anchors")
+    eq(de.is_tick_gain(45, 25), true, "D2: a masked tick recovers (relentless shape)")
+    eq(de.is_tick_gain(25, 25), false, "D2: a 25-energy grant never re-anchors")
+end
+
+--=========================================================================================
+-- D1 pure: TTD readout formatter (unknown-hides, never a guessed number)
+--=========================================================================================
+do
+    local de = build().druid_energy
+    eq(de.format_time_to_die(8.2), "TTD 8s", "D1: the estimate formats as whole seconds")
+    eq(de.format_time_to_die(8.5), "TTD 9s", "D1: the estimate rounds to nearest")
+    eq(de.format_time_to_die(0), "TTD 0s", "D1: a zero estimate reads TTD 0s, never nil")
+    eq(de.format_time_to_die(nil), nil, "D1: a missing estimate hides the readout")
+    eq(de.format_time_to_die(0 / 0), nil, "D1: a NaN estimate hides the readout")
+    eq(de.format_time_to_die(-1), nil, "D1: a negative estimate hides the readout")
+    eq(de.format_time_to_die("8"), nil, "D1: a non-number estimate hides the readout")
+end
+
+--=========================================================================================
+-- D1 wiring: TTD readout text (any form, option-gated, unknown-hides)
+--=========================================================================================
+do
+    local sb = build({ target_guid = "Target-1", target_hp = 1000 })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    local vf = sb.visuals
+    check(vf.druid_ttd_text ~= nil, "D1: post_init creates the TTD readout text")
+
+    sb.clock = 100
+    sb.power = 40
+    sb.power_type = 3
+    ST.form_index = 3
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_ttd_text.hidden, "D1: option nil hides the readout (default off)")
+
+    -- Enable: the first sample seeds the baseline, still no estimate.
+    sb.class_db.show_druid_ttd_readout = true
+    sb.clock = 100.3
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_ttd_text.hidden, "D1: the first TTD sample seeds, no estimate yet")
+
+    -- 1000 -> 900 over 0.3 s seeds 333.3 HP/s: 900 / 333.3 = 2.7 -> "TTD 3s".
+    sb.target_hp = 900
+    sb.clock = 100.6
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(not vf.druid_ttd_text.hidden, "D1: a readable target shows the readout")
+    eq(vf.druid_ttd_text.text, "TTD 3s", "D1: the readout shows the EMA estimate")
+
+    -- Riding the EMA inside the throttle repaints nothing.
+    local text_calls = vf.druid_ttd_text.set_text_calls
+    sb.clock = 100.7
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(vf.druid_ttd_text.set_text_calls, text_calls, "D1: an unchanged readout costs no re-set")
+    eq(vf.druid_ttd_text.text, "TTD 3s", "D1: the riding estimate keeps its text")
+
+    -- Unreadable health hides and drops the baseline; the next sample re-seeds
+    -- (hidden), the one after estimates again (800 -> 700 over 0.3 s seeds
+    -- 333.3 HP/s: 700 / 333.3 = 2.1 -> "TTD 2s").
+    sb.target_hp = nil
+    sb.clock = 100.9
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_ttd_text.hidden, "D1: unreadable health hides the readout")
+    sb.target_hp = 800
+    sb.clock = 101.2
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_ttd_text.hidden, "D1: the re-seed estimates nothing yet")
+    sb.target_hp = 700
+    sb.clock = 101.5
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(not vf.druid_ttd_text.hidden, "D1: the second sample estimates again")
+    eq(vf.druid_ttd_text.text, "TTD 2s", "D1: 700 hp at 333.3 HP/s reads TTD 2s")
+    sb.class_db.show_druid_ttd_readout = nil
+    sb.clock = 101.8
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(vf.druid_ttd_text.hidden, "D1: option nil hides the readout again")
+
+    -- No target identity at all: no estimate, never a guessed number.
+    local sb2 = build({})
+    local ST2 = sb2.ST
+    ST2.interfaces_are_initialised = true
+    ST2.DRUID.post_init(ST2)
+    sb2.class_db.show_druid_ttd_readout = true
+    sb2.clock = 100
+    sb2.power = 40
+    sb2.power_type = 3
+    ST2.form_index = 3
+    ST2.DRUID.on_bar_update(ST2, "mainhand")
+    check(sb2.visuals.druid_ttd_text.hidden, "D1: no target identity hides the readout")
+end
+
+--=========================================================================================
+-- D2 wiring: SoD TF proc edge (capped partial never forges, combo still anchors)
+--=========================================================================================
+do
+    -- SoD: ERA family plus the Mangle rune known, so the TF +60 attribution is live.
+    local sb = build({ project = 2, known = { [33983] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    eq(ST.druid_tf_was_active, nil, "D2: the TF edge starts unsettled")
+    eq(ST.druid_proc_gain, nil, "D2: no proc grant is pending at boot")
+
+    sb.clock = 100
+    sb.power = 0
+    sb.power_type = 3
+    ST.form_index = 3
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.druid_energy_anchor, 100, "D2: the first cat sample seats the anchor")
+    eq(ST.druid_proc_gain, nil, "D2: no TF edge means no proc grant")
+
+    -- TF + tick in one uncapped frame (0 + 60 + 20 = 80): the adjusted 20 anchors.
+    sb.player_auras[1] = { name = "Tiger's Fury", source = "player",
+        duration = 6, expiration = 107 }
+    sb.clock = 101
+    sb.power = 80
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.druid_tf_was_active, true, "D2: the TF rising edge latches")
+    eq(ST.druid_energy_anchor, 101, "D2: the TF+tick frame still re-anchors")
+    eq(ST.druid_proc_gain, nil, "D2: the grant is one-shot (consumed by the sample)")
+
+    -- TF alone (delta 60, no tick): the adjusted 0 never anchors.
+    sb.clock = 102
+    sb.power = 140
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.druid_energy_anchor, 101, "D2: the proc alone never moves the anchor")
+
+    -- Capped TF partial (80 + 60 capped to 100, delta 20, no tick): the adjusted
+    -- -40 never forges the anchor the legacy window would have stamped.
+    sb.player_auras[1] = nil
+    sb.clock = 103
+    sb.power = 80
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.druid_tf_was_active, false, "D2: the faded buff clears the edge")
+    sb.player_auras[1] = { name = "Tiger's Fury", source = "player",
+        duration = 6, expiration = 110 }
+    sb.clock = 104
+    sb.power = 100
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.druid_energy_anchor, 101, "D2: a capped proc partial never forges the anchor")
+    eq(ST.druid_proc_gain, nil, "D2: the forged grant is consumed too")
+
+    -- Control: off the SoD gate (Wrath) the same edge stamps nothing and the
+    -- legacy window decides alone (no honest TF amount exists there to attribute).
+    local wb = build({ project = 11, known = { [33983] = true } })
+    local WST = wb.ST
+    WST.interfaces_are_initialised = true
+    WST.DRUID.post_init(WST)
+    wb.clock = 100
+    wb.power = 80
+    wb.power_type = 3
+    WST.form_index = 3
+    WST.DRUID.on_bar_update(WST, "mainhand")
+    wb.player_auras[1] = { name = "Tiger's Fury", source = "player",
+        duration = 6, expiration = 107 }
+    wb.clock = 101
+    wb.power = 100
+    WST.DRUID.on_bar_update(WST, "mainhand")
+    eq(WST.druid_proc_gain, nil, "D2: off-SoD the TF edge stamps no grant")
+    eq(WST.druid_energy_anchor, 101, "D2: off-SoD the legacy window decides alone")
+end
+
+--=========================================================================================
+-- Follow-up groundwork: the tick-remaining + window helpers and the fight clock
+--=========================================================================================
+do
+    local de = build().druid_energy
+    -- get_tick_remaining: seconds to the next tick from the tracker's anchor.
+    eq(de.get_tick_remaining(100, 100, 2), 2, "tick: a fresh anchor waits a full cycle")
+    eq(de.get_tick_remaining(100, 101, 2), 1, "tick: half a cycle in waits 1 s")
+    near(de.get_tick_remaining(100, 101.5, 2), 0.5, "tick: the phase counts down")
+    eq(de.get_tick_remaining(100, 102, 2), 2, "tick: on the boundary the next cycle waits full")
+    eq(de.get_tick_remaining(nil, 101, 2), nil, "tick: a missing anchor reads nil (unknown)")
+    eq(de.get_tick_remaining(100, nil, 2), nil, "tick: a missing clock reads nil")
+    eq(de.get_tick_remaining(0 / 0, 101, 2), nil, "tick: a NaN anchor reads nil")
+    eq(de.get_tick_remaining(100, 0 / 0, 2), nil, "tick: a NaN clock reads nil")
+    eq(de.get_tick_remaining(102, 100, 2), 2, "tick: a future anchor reads the full cycle")
+    eq(de.get_tick_remaining(100, 101, nil), 1, "tick: a missing cycle falls back to 2 s")
+    eq(de.get_tick_remaining(100, 101, 0), 1, "tick: a non-positive cycle falls back to 2 s")
+    -- is_energy_in_window: the trick bands, both ends inclusive, nil-safe.
+    eq(de.is_energy_in_window(35, 35, 39), true, "window: the low bound qualifies")
+    eq(de.is_energy_in_window(39, 35, 39), true, "window: the high bound qualifies")
+    eq(de.is_energy_in_window(37, 35, 39), true, "window: inside qualifies")
+    eq(de.is_energy_in_window(34.999, 35, 39), false, "window: below misses")
+    eq(de.is_energy_in_window(39.001, 35, 39), false, "window: above misses")
+    eq(de.is_energy_in_window(nil, 35, 39), false, "window: unreadable energy never opens")
+    eq(de.is_energy_in_window(0 / 0, 35, 39), false, "window: NaN energy never opens")
+    eq(de.is_energy_in_window(37, nil, 39), false, "window: an unreadable bound never opens")
+end
+
+-- The fight clock lifecycle: nil at boot, cleared on combat exit.
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    eq(ST.druid_fight_start_at, nil, "fight clock: post_init starts with no stamp")
+    -- A stale stamp dies with the fight.
+    ST.druid_fight_start_at = 100
+    ST.DRUID.on_combat_exit(ST)
+    eq(ST.druid_fight_start_at, nil, "fight clock: combat exit clears the stamp")
+    -- Pre-init combat exit stays safe (no stamp, no error).
+    local bare = build({ no_visuals = true })
+    local ok, err = pcall(bare.ST.DRUID.on_combat_exit, bare.ST)
+    check(ok, "fight clock: pre-init combat exit does not error (" .. tostring(err) .. ")")
+    eq(bare.ST.druid_fight_start_at, nil, "fight clock: pre-init exit leaves no stamp")
+end
+
+-- RipCP gather wiring: the module feeds db.guide_rip_min_cp raw (nil until
+-- the widget ships); the engine defaults to 4 and clamps 2-5.
+do
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).rip_min_cp, nil,
+        "gather: no RipCP option -> nil (engine defaults to 4)")
+    sb.class_db.guide_rip_min_cp = 2
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).rip_min_cp, 2,
+        "gather: the low-end RipCP override feeds through")
+    sb.class_db.guide_rip_min_cp = 5
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).rip_min_cp, 5,
+        "gather: the high-end RipCP override feeds through")
+    sb.class_db.guide_rip_min_cp = 1
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).rip_min_cp, 1,
+        "gather: a below-range RipCP passes through raw (the engine clamps to 4)")
+    sb.class_db.guide_rip_min_cp = nil
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).rip_min_cp, nil,
+        "a missing RipCP option clears back to nil")
+    -- Stale reuse: a previous override never survives a missing option.
+    sb.class_db.guide_rip_min_cp = 3
+    local reused = { rip_min_cp = 3 }
+    eq(ST.DRUID.gather_guide_inputs(ST, reused).rip_min_cp, 3,
+        "gather: the wired override rides the reused table")
+    sb.class_db.guide_rip_min_cp = nil
+    eq(ST.DRUID.gather_guide_inputs(ST, reused).rip_min_cp, nil,
+        "gather: a stale RipCP override is cleared")
+end
+
+-- 31) Name-vs-id rule (bench/lessons.md): TBC Anniversary resolves by NAME
+-- never bare id; Classic Era by id. Classification: gather slots (Maul/Mangle
+-- costs), cooldown reads (TF/Berserk/SP/FF via resolve_cooldown_query),
+-- known-spell probes (SoD ERA-only, never on TBC), HUD/rotation lookups and
+-- the Maul queue hooks branch via st.family (spell_query); aura scans match
+-- id OR name (nil-safe fallback) and are pinned by the debuff/player sections
+-- above. Both resolutions are pinned here.
+do
+    -- Maul queue hook: TBC NAME, Era id.
+    local tbc_sb = build({ project = 5, known = { [48480] = true }, current_spell = "Maul" })
+    local TST = tbc_sb.ST
+    TST.interfaces_are_initialised = true
+    TST.DRUID.post_init(TST)
+    tbc_sb.is_current_spell_calls = 0
+    TST:get_class_table().enable_maul_color = true
+    TST.DRUID.on_current_spell_cast_changed(TST, false)
+    eq(TST.maul_queued, true, "TBC: the Maul queue answers the NAME probe")
+    local era_sb = build({ project = 2, known = { [48480] = true }, current_spell = 48480 })
+    local EST = era_sb.ST
+    EST.interfaces_are_initialised = true
+    EST.DRUID.post_init(EST)
+    EST:get_class_table().enable_maul_color = true
+    EST.DRUID.on_current_spell_cast_changed(EST, false)
+    eq(EST.maul_queued, true, "Era: the Maul queue answers the id probe")
+
+    -- Maul cost: TBC NAME, Era id (recorded GetSpellPowerCost query).
+    tbc_sb.cost_queries = 0
+    tbc_sb.last_cost_id = nil
+    TST.maul_queued = true
+    TST.DRUID.on_rage_update(TST)
+    eq(tbc_sb.last_cost_id, "Maul", "TBC: Maul cost reads by NAME, never bare id")
+    era_sb.cost_queries = 0
+    era_sb.last_cost_id = nil
+    EST.maul_queued = true
+    EST.DRUID.on_rage_update(EST)
+    check(type(era_sb.last_cost_id) == "number", "Era: Maul cost reads by id")
+
+    -- Guide slots: TBC carry NAMES (GetSpellInfo takes names there), Era keeps ids.
+    eq(type(TST.DRUID.guide.slots[1].spell_id) == "string", true, "TBC: guide slots carry names")
+    eq(EST.DRUID.guide.slots[1].spell_id, 48480, "Era: guide slots keep the rank-resolved id")
+end
+
+--=========================================================================================
+-- 30) Practice seam: practice_sync + the post_init practice_ui hook
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    -- practice_sync reports no seal state (the druid has none to mirror).
+    eq(ST.DRUID.practice_sync(ST), 0, "practice_sync reports zero seal state")
+    check(ST.has_soc == nil and ST.has_sob == nil,
+        "practice_sync stamps no paladin seal fields")
+    local ok, err = pcall(ST.DRUID.practice_sync, ST)
+    check(ok, "pre-init practice_sync does not error (" .. tostring(err) .. ")")
+
+    -- post_init builds the shared session UI when the module is present: the
+    -- options Practice toggle (and the shared session flow) needs it on a druid.
+    local init_self = nil
+    sb.st.practice_ui = { init = function(self) init_self = self end }
+    ST.DRUID.post_init(ST)
+    eq(init_self, ST, "post_init inits the shared practice UI")
+    -- Without the module the hook stays inert (every earlier post_init call in
+    -- this file proves the nil path: st.practice_ui is nil by default).
+    local bare = build()
+    local ok2, err2 = pcall(bare.ST.DRUID.post_init, bare.ST)
+    check(ok2, "post_init without the practice module does not error (" .. tostring(err2) .. ")")
+end
+
+--=========================================================================================
+-- 31) Practice routing wrappers degrade to nil without the practice modules
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    eq(sb.st.practice, nil, "the default sandbox loads no practice module")
+    eq(ST.DRUID.practice_scenario_key(), nil, "no practice module: no scenario key")
+    eq(ST.DRUID.new_practice_session(0), nil, "no practice module: no session starts")
+    eq(ST.DRUID.practice_drill_key(), "druid_powershift_rework",
+        "the class names its own drill even without the practice module")
+    local out = {}
+    eq(ST.DRUID.tick_practice_session(nil, 0, 0.05, out), out,
+        "no session: the tick returns the out table untouched")
+    eq(ST.DRUID.tick_practice_session(nil, 0, 0.05, nil), nil,
+        "no session and no out table: the tick stays nil-safe")
+    eq(ST.DRUID.practice_shift(nil, 0), nil, "no session: no shift grades")
+    eq(ST.DRUID.practice_summary(nil), nil, "no session: no summary")
+    eq(ST.DRUID.end_practice_session(nil, 0), false, "no session: end reports false")
+end
+
+--=========================================================================================
+-- 32) Practice drill end-to-end: the wrapper starts the class's OWN drill and grades
+--     through it (never the retired built-in)
+--=========================================================================================
+do
+    -- The pure engine loads standalone (no WoW API, no addon state).
+    local practice_st = {}
+    local chunk = assert(loadfile(ROOT .. "practice.lua"))
+    setfenv(chunk, setmetatable({}, { __index = _G }))
+    chunk("SwedgeTimer", practice_st)
+    local H = practice_st.practice.harness
+    check(H.get_scenario("druid_powershift") ~= nil, "the registry carries druid_powershift")
+    eq(H.get_scenario("druid_powershift").class, "DRUID", "the drill is classed DRUID")
+    local found = false
+    for _, spec in ipairs(H.scenarios_for_class("DRUID")) do
+        if spec.key == "druid_powershift" then
+            found = true
+        end
+    end
+    check(found, "scenarios_for_class(DRUID) routes to the drill")
+    -- The retired built-in stays registered for backward compatibility and names
+    -- the class drill that owns the skill (the engine's delegation map).
+    eq(H.SUPERSEDED_DRILLS.druid_powershift, "druid_powershift_rework",
+        "the built-in drill names the class drill that owns the shift rule")
+
+    -- The wrappers drive the class's OWN drill through the shared scoring pipeline.
+    -- The Era build is the one with a shift trigger (the sim's cost trigger); the
+    -- families without one answer nil (unknown-hides, never a guess).
+    local sb = build({ project = 2 })
+    local ST = sb.ST
+    sb.st.practice = practice_st.practice
+    eq(ST.DRUID.practice_scenario_key(), "druid_powershift",
+        "the wrapper resolves the DRUID drill key")
+    eq(ST.DRUID.practice_drill_key(), "druid_powershift_rework",
+        "the class publishes the drill its session runs")
+    local session = ST.DRUID.new_practice_session(0)
+    check(session ~= nil, "the wrapper starts a drill run")
+    if session == nil then
+        check(false, "no drill run: session pins skipped, never throw")
+    else
+        eq(session.active, true, "the run begins active")
+        eq(session.key, "druid_powershift_rework",
+            "the run is the class's own drill, not the retired built-in")
+        local tick_out = {}
+        ST.DRUID.tick_practice_session(session, 0, 0.05, tick_out)
+        eq(tick_out.energy, 0, "the first tick establishes the regen baseline")
+        ST.DRUID.tick_practice_session(session, 1, 0.05, tick_out)
+        eq(tick_out.energy, 10, "the run clock advances the energy pool")
+        eq(ST.DRUID.practice_shift(session, 1), "S",
+        "shifting at 10 energy grades S through the class drill")
+        eq(session.state.energy, 50, "the fixed refund lands in the pool")
+        eq(session.state.shifts, 1, "the shift is counted")
+        eq(ST.DRUID.practice_shift(session, 2), "A",
+        "shifting at 50 energy grades A through the class drill")
+        local summary = ST.DRUID.practice_summary(session)
+        eq(summary.attempts, 2, "both shifts recorded on the session score")
+        eq(summary.score, 90, "S (100) + A (80) average 90")
+        eq(summary.best_grade, "S", "the best grade rides the summary")
+        check(ST.DRUID.end_practice_session(session, 2), "ending an active run reports true")
+        eq(ST.DRUID.end_practice_session(session, 2), false,
+        "ending an ended run reports false")
+    end
+end
+
+--=========================================================================================
+-- 33) Practice wiring: the DRUID options entry + the shared bridge branches
+--=========================================================================================
+do
+    local function read(path)
+        local f = assert(io.open(ROOT .. path, "r"))
+        local text = f:read("*a")
+        f:close()
+        return text
+    end
+    check(read("classes/druid.lua"):find("st%.practice_ui%.init%(self%)", 1) ~= nil,
+        "classes/druid.lua: post_init inits the shared practice UI")
+    local options = read("option_tables.lua")
+    local druid_block = options:match(
+        "ST%.class_opts_funcs%.DRUID%(.-ST%.class_opts_funcs%.SHAMAN") or ""
+    check(druid_block ~= "", "the DRUID options block is found ahead of SHAMAN")
+    check(druid_block:find("%f[%a_]druid_practice_toggle%s*=") ~= nil,
+        "the DRUID section carries a Practice toggle entry")
+    check(druid_block:find("st%.practice_ui%.toggle%(ST%)") ~= nil,
+        "the DRUID Practice entry invokes the shared session toggle")
+    -- class-isolation 2026-10-21: the shared bridge carries no DRUID branch - it
+    -- asks the ACTIVE class's provider, and the druid module owns the seam.
+    local bridge = read("practice_ui.lua")
+    local _, druid_branches = bridge:gsub('player_class == "DRUID"', "")
+    eq(druid_branches, 0, "the shared bridge carries no DRUID branch (the provider owns it)")
+    check(bridge:find("function ui.practice_panel()", 1, true) ~= nil,
+        "the shared bridge asks the ACTIVE class's provider")
+    local druid_src = read("classes/druid.lua")
+    check(druid_src:find("sync_sim = function(self)", 1, true) ~= nil,
+        "the DRUID sync seam is the druid module's own provider seam")
+    check(druid_src:find("ST.DRUID.practice_sync(self)", 1, true) ~= nil,
+        "the DRUID sync seam calls ST.DRUID.practice_sync, never the paladin mirror")
+end
+
+--=========================================================================================
+-- 34) Designer: every element the druid creates is positionable in design mode
+--=========================================================================================
+do
+    local sb = build()
+    local ST = sb.ST
+    -- Cooldown HUD (the hud design target's live content).
+    check(type(ST.DRUID.HUD_SLOTS) == "table", "the druid defines HUD slots")
+    check(#ST.DRUID.HUD_SLOTS > 0, "the HUD slot list is non-empty")
+    for i = 1, #ST.DRUID.HUD_SLOTS do
+        local slot = ST.DRUID.HUD_SLOTS[i]
+        check(type(slot.key) == "string" and type(slot.title) == "string",
+            "HUD slot " .. i .. " carries the design contract shape")
+    end
+    check(type(ST.DRUID.get_hud_state) == "function", "the druid defines the HUD provider")
+    -- Next Action Guide + rotation label (the nag + rottext targets' content).
+    check(type(ST.DRUID.guide) == "table", "the druid defines the guide provider")
+    check(type(ST.DRUID.guide.slots) == "table" and #ST.DRUID.guide.slots > 0,
+        "the guide slot set is non-empty")
+    check(type(ST.DRUID.get_rotation_key) == "function",
+        "the druid defines the rotation source")
+    -- post_init builds the HUD + guide frames the designer moves.
+    local hud_self, nag_self = nil, nil
+    sb.st.hud = { init = function(self) hud_self = self end }
+    sb.st.nextaction_ui = { init = function(self) nag_self = self end }
+    ST.DRUID.post_init(ST)
+    eq(hud_self, ST, "post_init builds the druid HUD frame")
+    eq(nag_self, ST, "post_init builds the druid guide frame")
+    -- The design registry covers every element the druid creates: the swing bars,
+    -- the HUD, the rotation label, the guide, and the practice panel + rotation +
+    -- timeline. Bar-relative sidebars ride the bar overlay by design (and the pips
+    -- row registers itself with a stable key, pinned in section 23).
+    local f = assert(io.open(ROOT .. "designmode.lua", "r"))
+    local design = f:read("*a")
+    f:close()
+    check(design:find('key = "bar_"', 1, true) ~= nil,
+        "designmode covers the druid swing bars")
+    for _, key in ipairs({ "hud", "rottext", "nag", "practice_panel" }) do
+        check(design:find('key = "' .. key .. '"', 1, true) ~= nil,
+            "designmode covers the druid " .. key .. " element")
+    end
+    check(design:find('practice_descriptor("practice_rotation"', 1, true) ~= nil,
+        "designmode covers the practice rotation display")
+    check(design:find('practice_descriptor("practice_timeline"', 1, true) ~= nil,
+        "designmode covers the practice timeline")
+end
+
+--=========================================================================================
+-- 35) Family matrix: the new seams behave identically on Era / TBC / Wrath / Forever
+--=========================================================================================
+-- None of the practice/design seams branch on family (no name-vs-id, no probe, no
+-- client API at all): the same calls return the same values on the classic line and
+-- on the Mainline-code Forever client. Anything client-unknown hides (nil-safe),
+-- never throws.
+do
+    local practice_st = {}
+    local chunk = assert(loadfile(ROOT .. "practice.lua"))
+    setfenv(chunk, setmetatable({}, { __index = _G }))
+    chunk("SwedgeTimer", practice_st)
+    for _, project in ipairs({ 2, 5, 11, 18 }) do
+        local sb = build({ project = project })
+        local ST = sb.ST
+        sb.st.practice = practice_st.practice
+        local tag = "project " .. project .. " (" .. sb.st.family .. ")"
+        local ok, err = pcall(ST.DRUID.post_init, ST)
+        check(ok, tag .. ": post_init does not error (" .. tostring(err) .. ")")
+        eq(ST.DRUID.practice_sync(ST), 0, tag .. ": practice_sync reports zero")
+        eq(ST.DRUID.practice_scenario_key(), "druid_powershift",
+            tag .. ": the drill key resolves")
+        local session = ST.DRUID.new_practice_session(0)
+        check(session ~= nil and session.active == true,
+            tag .. ": a drill run starts")
+        if session == nil then
+            check(false, tag .. ": no drill run, session pins skipped")
+        else
+            eq(session.key, "druid_powershift_rework",
+                tag .. ": the run is the class's own drill")
+            -- The class's own shift rule grades the attempt, and it only has a
+            -- trigger where a sim does (the TBC fixed line, the classic/sod cost
+            -- trigger): the families without one answer nil (unknown-hides).
+            local grade = ST.DRUID.practice_shift(session, 0)
+            if project == 2 or project == 5 then
+                eq(grade, "S", tag .. ": the first shift grades S")
+            else
+                eq(grade, nil, tag .. ": no shift trigger on this family grades nothing")
+            end
+            check(ST.DRUID.end_practice_session(session, 0),
+            tag .. ": the run ends")
+        end
+    end
+end
+
+--=========================================================================================
+-- 36) Shared class order: the per-frame hook and the post_init init order (F8 + F9)
+--=========================================================================================
+-- The six class modules are copy-paste siblings and used to diverge on two orders:
+-- the hunter ticked the HUD before the guide, and the paladin built the practice
+-- surface before the HUD. The shared contract is now pinned here, per class:
+--   * the per-frame class hook ticks the guide BEFORE the HUD;
+--   * post_init builds the guide, then the HUD, then the practice surface.
+-- Both the runtime order (spies record the calls) and the source order (the call
+-- sites) are pinned, so a reordering in either place fails this suite.
+do
+    local fh = assert(io.open(ROOT .. "classes/druid.lua", "r"))
+    local src = fh:read("*a")
+    fh:close()
+    -- Comment lines are dropped first: a call quoted inside a comment (the paladin
+    -- HUD block quotes st.hud.init(self)) must not be read as the call itself.
+    local code = {}
+    for line in src:gmatch("[^\r\n]+") do
+        if line:match("^%s*%-%-") == nil then
+            code[#code + 1] = line
+        end
+    end
+    code = table.concat(code, "\n")
+    local at_guide_tick = code:find("st.nextaction_ui.on_bar_update(self, hand)", 1, true)
+    local at_hud_tick = code:find("st.hud.on_bar_update(self, hand)", 1, true)
+    local at_guide_init = code:find("st.nextaction_ui.init(self)", 1, true)
+    local at_hud_init = code:find("st.hud.init(self)", 1, true)
+    local at_practice_init = code:find("st.practice_ui.init(self)", 1, true)
+    check(at_guide_tick ~= nil and at_hud_tick ~= nil,
+        "order: the class hook drives both the guide and the HUD")
+    check(at_guide_init ~= nil and at_hud_init ~= nil and at_practice_init ~= nil,
+        "order: post_init drives the guide, the HUD and the practice surface")
+    check(at_guide_tick < at_hud_tick,
+        "order: the guide tick comes before the HUD tick")
+    check(at_guide_init < at_hud_init and at_hud_init < at_practice_init,
+        "order: post_init builds the guide, then the HUD, then the practice surface")
+
+    -- Runtime order: the spies record the calls the class actually makes.
+    local sbox = build()
+    local T = sbox.ST
+    local init_order = {}
+    local saved = {
+        nextaction_ui = sbox.st.nextaction_ui,
+        hud = sbox.st.hud,
+        practice_ui = sbox.st.practice_ui,
+    }
+    sbox.st.nextaction_ui = { init = function() init_order[#init_order + 1] = "guide" end }
+    sbox.st.hud = { init = function() init_order[#init_order + 1] = "hud" end }
+    sbox.st.practice_ui = {
+        init = function() init_order[#init_order + 1] = "practice" end,
+        is_active = function() return false end,
+    }
+    local ok_init, err_init = pcall(T.DRUID.post_init, T)
+    check(ok_init, "order: post_init runs with the order spies (" .. tostring(err_init) .. ")")
+    eq(init_order[1], "guide", "order: post_init builds the guide first")
+    eq(init_order[2], "hud", "order: post_init builds the HUD second")
+    eq(init_order[3], "practice", "order: post_init builds the practice surface third")
+    eq(#init_order, 3, "order: post_init builds exactly the three surfaces")
+
+    local tick_order = {}
+    sbox.st.nextaction_ui = {
+        apply_settings = function() end,
+        on_bar_update = function() tick_order[#tick_order + 1] = "guide" end,
+    }
+    sbox.st.hud = { on_bar_update = function() tick_order[#tick_order + 1] = "hud" end }
+    local ok_tick, err_tick = pcall(T.DRUID.on_bar_update, T, "mainhand")
+    check(ok_tick, "order: the class hook runs with the order spies (" .. tostring(err_tick) .. ")")
+    eq(tick_order[1], "guide", "order: the guide ticks before the HUD")
+    eq(tick_order[2], "hud", "order: the HUD ticks after the guide")
+    eq(#tick_order, 2, "order: the class hook ticks the guide and the HUD once each")
+
+    sbox.st.nextaction_ui = saved.nextaction_ui
+    sbox.st.hud = saved.hud
+    sbox.st.practice_ui = saved.practice_ui
+
+end
+
+--=========================================================================================
+-- 37) Audit F4 (class side): the rank latch tells "absent" from "unresolved"
+--     The resolver's verdict is three-valued (bench/f4_family_spell_id_2026-10-19.md):
+--     a client that refutes every candidate is FINAL (the negative latches), a client
+--     that cannot answer is RETRYABLE (nothing latches, the next attempt asks again).
+--     Both resolution directions are pinned too: the TBC client resolves by NAME, the
+--     Era client by ID.
+--=========================================================================================
+do
+    -- (a) ABSENT: the client refutes every Maul rank. The negative is FINAL - it
+    --     latches and the table is never walked again, not even after the retry window.
+    local ab = build({ known = {} })
+    local ABT = ab.ST
+    ABT.interfaces_are_initialised = true
+    ABT.maul_queued = true
+    ab.rage_cost = { { cost = 10 } }
+    ABT.DRUID.on_rage_update(ABT)
+    eq(ab.get_family_spell_id_state_calls, 1, "F4 absent: the client is asked once")
+    eq(ab.cost_queries, 0, "F4 absent: a refuted rank reads no rage cost")
+    ab.clock = 6
+    ABT.DRUID.on_rage_update(ABT)
+    eq(ab.get_family_spell_id_state_calls, 1, "F4 absent: the negative is final (never re-walked)")
+
+    -- (b) UNRESOLVED: the client cannot answer (its GetSpellInfo raises). Nothing is
+    --     latched, so the next attempt asks again once the retry backoff has passed -
+    --     a cold spell book can no longer poison the rank for the rest of the session.
+    local us = build({ known = {} })
+    local UST = us.ST
+    UST.interfaces_are_initialised = true
+    UST.maul_queued = true
+    us.rage_cost = { { cost = 10 } }
+    us.spell_info_throws = true
+    UST.DRUID.on_rage_update(UST)
+    eq(us.get_family_spell_id_state_calls, 1, "F4 unresolved: the client is asked once")
+    eq(us.cost_queries, 0, "F4 unresolved: an unanswered rank reads no rage cost")
+    -- Still silent: the retry backoff holds the walk (no hot loop per bar frame).
+    UST.DRUID.on_rage_update(UST)
+    eq(us.get_family_spell_id_state_calls, 1, "F4 unresolved: the retry backoff holds the walk")
+    -- The client answers again after the backoff: the rank resolves and latches.
+    us.spell_info_throws = false
+    us.known[48480] = true
+    us.clock = 6
+    UST.DRUID.on_rage_update(UST)
+    eq(us.get_family_spell_id_state_calls, 2, "F4 unresolved: the attempt after the backoff asks again")
+    eq(us.cost_queries, 1, "F4 unresolved: the resolved rank reaches the cost query")
+    eq(us.last_cost_id, 48480, "F4 unresolved: the cost reads the rank the client confirmed")
+    -- The resolved rank latches: no further walk.
+    UST.DRUID.on_rage_update(UST)
+    eq(us.get_family_spell_id_state_calls, 2, "F4 unresolved: the resolved rank latches")
+
+    -- (c) ERA: the rank resolves by ID - the client is never asked by name.
+    local era = build({ project = 2, known = { [48480] = true } })
+    local ERT = era.ST
+    ERT.interfaces_are_initialised = true
+    era.spell_queries = {}
+    ERT.DRUID.resolve_guide_icons()
+    eq(ERT.DRUID.guide.slots[1].spell_id, 48480, "F4 Era: the rank resolves by ID and latches")
+    local era_asked_by_name = false
+    for i = 1, #era.spell_queries do
+        if type(era.spell_queries[i]) == "string" then era_asked_by_name = true end
+    end
+    check(not era_asked_by_name, "F4 Era: the client is never asked by name")
+
+    -- (d) TBC: a client that answers NO id resolves the rank through the NAME path
+    --     (the operator rule: the TBC client indexes names, never bare ids).
+    local tbc = build({ project = 5, name_only_client = true, known = { [48480] = true } })
+    local TBT = tbc.ST
+    TBT.interfaces_are_initialised = true
+    TBT.DRUID.post_init(TBT)
+    tbc.rage_cost = { { cost = 10 } }
+    eq(tbc.st.api.GetSpellInfo(48480), nil, "F4 TBC: the name-only client answers no id")
+    local tbc_inputs = TBT.DRUID.gather_guide_inputs(TBT, {})
+    eq(tbc_inputs.maul_cost, 10,
+        "F4 TBC: the rank resolves through the NAME path (the client answers no id)")
+    local tbc_asked_by_name = false
+    for i = 1, #tbc.spell_queries do
+        if type(tbc.spell_queries[i]) == "string" then tbc_asked_by_name = true end
+    end
+    check(tbc_asked_by_name, "F4 TBC: the client is asked by NAME")
+end
+
+--=========================================================================================
+-- 36) Practice surface: the rotation table, the scenario step and the druid drills
+--=========================================================================================
+-- The shared practice engine looks the class surface up by player_class: the rotation
+-- table, the scenario step and the drill list. The scenario step and the priority
+-- drill run the SHIPPED guide engine (the pure module is loaded into the sandbox
+-- above), so these pins are the real decision model, not a copy of it.
+do
+    local sb = build()
+    local ST = sb.ST
+    local rotation = ST.DRUID.practice_rotation
+    check(type(rotation) == "table", "the druid ships a rotation table")
+    check(#rotation > 0, "the rotation table is not empty")
+    -- Every entry names an action, a family gate, a label and its source. The gate
+    -- rides in two shapes: the sim priority rows carry the single `family` of the
+    -- slice they belong to, the APL utility spine carries the cross-class
+    -- `families` set.
+    local families = {}
+    for i = 1, #rotation do
+        local entry = rotation[i]
+        check(type(entry.action) == "string" and entry.action ~= "",
+            "rotation entry " .. tostring(i) .. " names an action")
+        local gated = (type(entry.family) == "string" and entry.family ~= "")
+            or (type(entry.families) == "table")
+        check(gated, "rotation entry " .. tostring(i) .. " names its family gate")
+        check(type(entry.label) == "string" and entry.label ~= "",
+            "rotation entry " .. tostring(i) .. " carries a label")
+        check(type(entry.source) == "string"
+            and (entry.source:find("sim ", 1, true) ~= nil
+                or entry.source:find("wowsims/", 1, true) ~= nil),
+            "rotation entry " .. tostring(i) .. " cites its source")
+        -- HU-13's two flags ride every row: the read and the arm.
+        check(entry.live == true or entry.live == false,
+            "rotation entry " .. tostring(i) .. " carries the live flag")
+        check(entry.engine == true or entry.engine == false,
+            "rotation entry " .. tostring(i) .. " carries the engine flag")
+        if entry.family then
+            families[entry.family] = true
+        end
+        if type(entry.families) == "table" then
+            for family in pairs(entry.families) do
+                families[family] = true
+            end
+        end
+    end
+    for _, family in ipairs({ "ERA", "SOD", "TBC", "WRATH", "FOREVER", "BEAR" }) do
+        check(families[family] == true, "the rotation table covers " .. family)
+    end
+    -- The Wrath slice is the sim's priority order (the audit's W1-W9 chain).
+    local wrath = ST.DRUID.practice_rotation_for("WRATH")
+    eq(#wrath, 10, "the Wrath slice carries the sim's ten priority slots")
+    eq(wrath[1].action, "tigers_fury", "Wrath: Tiger's Fury is the first priority")
+    eq(wrath[2].action, "faerie_fire", "Wrath: the Faerie Fire fish follows")
+    eq(wrath[3].action, "berserk", "Wrath: Berserk follows the fish")
+    eq(wrath[4].action, "savage_roar", "Wrath: the Roar upkeep follows")
+    eq(wrath[5].action, "shred", "Wrath: the Omen proc is a free Shred")
+    eq(wrath[6].action, "rip", "Wrath: the Rip finisher follows the proc")
+    eq(wrath[7].action, "mangle", "Wrath: Mangle sits above Rake")
+    eq(wrath[8].action, "rake", "Wrath: Rake follows Mangle")
+    eq(wrath[9].action, "bite", "Wrath: the execute Bite sits above the builder")
+    eq(wrath[10].action, "shred", "Wrath: the builder is the last resort")
+    -- The SoD slice leads with the two cooldowns and the Roar upkeep.
+    local sod = ST.DRUID.practice_rotation_for("SOD")
+    eq(sod[1].action, "tigers_fury", "SoD: Tiger's Fury is the first priority")
+    eq(sod[2].action, "berserk", "SoD: Berserk follows Tiger's Fury")
+    eq(sod[3].action, "savage_roar", "SoD: the Roar upkeep is the first branch")
+    -- The Era slice: the Omen proc first, then the Rip, then the builder.
+    local era = ST.DRUID.practice_rotation_for("ERA")
+    eq(era[1].action, "shred", "Era: the Omen proc is the sim's first branch")
+    eq(era[2].action, "rip", "Era: the Rip finisher follows")
+    -- The bear chain is its own slice (shared by every family).
+    local bear = ST.DRUID.practice_rotation_for("BEAR")
+    eq(#bear, 3, "the bear chain carries three slots")
+    eq(bear[1].action, "ride", "bear: a queued Maul rides the swing")
+    eq(bear[2].action, "maul", "bear: the Maul comes next")
+    eq(bear[3].action, "mangle", "bear: the Mangle is the fallback")
+    -- The family helper: the running client (the sandbox is the Wrath project).
+    eq(ST.DRUID.practice_rotation_family(), "WRATH", "the rotation family follows the client")
+    eq(#ST.DRUID.practice_rotation_for("NOPE"), 0, "an unknown family has no rotation slice")
+
+    -- The scenario step: the shipped guide engine's own answer.
+    local step = ST.DRUID.practice_scenario_step
+    check(type(step) == "function", "the druid ships a scenario step")
+    local rip_state = {
+        family = "WRATH", form_index = 3, combo_points = 5, energy = 50,
+        rip_remaining = 0, rake_remaining = 10, mangle_remaining = 10,
+        sr_remaining = 20, tf_ready = false, ff_ready = false, berserk_ready = false,
+    }
+    local expected = step(ST, rip_state)
+    check(type(expected) == "table", "the scenario step answers an action")
+    eq(expected.action, "rip", "the scenario step answers the guide's own Rip")
+    check(type(expected.reason) == "string" and #expected.reason > 0,
+        "the scenario step carries a reason")
+    -- A spell-naming hold is a CALL too: the key is the spell's, not the overlay
+    -- text. Nine of the guide's ten hold texts name a spell to PRESS, so the step
+    -- is a decision to cast and never an explicit hold statement (the operator
+    -- ruling HU-8: a hold is a decision to CAST NOTHING - the druid's guide names
+    -- the spell instead).
+    local held = step(ST, {
+        family = "WRATH", form_index = 3, combo_points = 0, energy = 10,
+        tf_ready = true, gcd_remaining = 0, clearcast = false,
+    })
+    eq(held.action, "tigers_fury", "a Tiger's Fury hold is the spell key")
+    eq(held.hold, nil,
+        "a spell-naming hold states no hold: the guide names a spell to press")
+    -- The ONE exception: the bear chain's "RIDE" (the queued Maul) means PRESS
+    -- NOTHING, so it is stated as a hold - never as an action. A synthetic "ride"
+    -- key would be a button the player can only press dishonestly (points for
+    -- idling, which the engine's contract forbids) and would bank a false
+    -- mis-pick in the priority drill for every real pick.
+    local held_bear = step(ST, {
+        family = "WRATH", form_index = 1, rage = 0, maul_queued = true,
+    })
+    eq(held_bear.action, nil,
+        "the queued Maul names no action: RIDE means press nothing")
+    eq(held_bear.hold, true, "the queued Maul states an explicit hold")
+    eq(held_bear.reason, "RIDE", "the hold carries the guide's own caption")
+    -- A proven false survives the merge: the SoD S2 branch reads tf_ready == false.
+    eq(step(ST, {
+        family = "ERA", sod_runes = true, form_index = 3, combo_points = 0, energy = 60,
+        tf_ready = false, berserk_ready = true,
+    }).action, "berserk", "a proven 'Tiger's Fury is on cooldown' survives the merge")
+    -- The Omen proc is a free Shred.
+    eq(step(ST, {
+        family = "WRATH", form_index = 3, combo_points = 0, energy = 50, clearcast = true,
+        rip_remaining = 10, rake_remaining = 10, mangle_remaining = 10, sr_remaining = 20,
+    }).action, "shred", "the Omen proc is a free Shred")
+    -- The state may sit in ctx.resources / ctx.cooldowns too.
+    eq(step(ST, {
+        family = "WRATH", form_index = 3, combo_points = 5, energy = 50,
+        resources = { rip_remaining = 0, rake_remaining = 10, mangle_remaining = 10,
+            sr_remaining = 20 },
+        cooldowns = { tf_ready = false, ff_ready = false, berserk_ready = false },
+    }).action, "rip", "the ctx may carry the state in resources / cooldowns")
+    -- The engine's own cooldown table drops the "_remaining" suffix.
+    eq(step(ST, {
+        family = "WRATH", form_index = 3, combo_points = 5,
+        resources = { energy = 50 },
+        cooldowns = { rip = 0, rake = 10, mangle = 10, sr = 20 },
+    }).action, "rip", "the engine's stripped cooldown names feed the guide inputs")
+    -- An undecidable state answers nil (the engine grades "unknown").
+    eq(step(ST, nil), nil, "no ctx: no decision")
+    eq(step(ST, { family = "WRATH", form_index = 0 }), nil, "an unknown form decides nothing")
+    -- The live path: the class gathers its own state (the engine's own rule: a class
+    -- that needs more gathers it itself).
+    local live = build()
+    live.ST.form_index = 3
+    live.power_type = 3
+    live.power = 50
+    live.clock = 10
+    local live_step = live.ST.DRUID.practice_scenario_step(live.ST, { now = 10 })
+    check(type(live_step) == "table" and type(live_step.action) == "string",
+        "the scenario step answers from the class's own gathered state")
+    check(type(live_step.reason) == "string" and #live_step.reason > 0,
+        "the live step carries a reason too")
+    -- Retail: the guide itself is inert there, so the scenario decides nothing.
+    local retail = build({ project = 1 })
+    eq(retail.ST.DRUID.practice_scenario_step(retail.ST,
+        { family = "RETAIL", form_index = 3, combo_points = 5, energy = 50 }), nil,
+        "Retail: the guide is inert, so the scenario decides nothing")
+
+    -- The drill list: the audit's target set (D-D1..D-D4).
+    local drills = ST.DRUID.practice_drills
+    check(type(drills) == "table", "the druid ships a drill list")
+    eq(#drills, 4, "the druid ships the four audited drills")
+    local by_key = {}
+    for i = 1, #drills do
+        local drill = drills[i]
+        check(type(drill.key) == "string" and drill.key ~= "",
+            "drill " .. tostring(i) .. " has a key")
+        check(type(drill.label) == "string" and drill.label ~= "",
+            "drill " .. tostring(i) .. " has a label")
+        check(type(drill.grade) == "function", "drill " .. tostring(i) .. " grades")
+        by_key[drill.key] = drill
+    end
+    for _, key in ipairs({ "druid_finisher_order", "druid_powershift_rework",
+        "druid_roar_upkeep", "druid_bite_execute" }) do
+        check(by_key[key] ~= nil, "the drill set carries " .. key)
+    end
+
+    -- D-D1: the priority drill grades the guide's own pick.
+    local order = by_key.druid_finisher_order.grade
+    local order_ctx = {
+        family = "WRATH", form_index = 3, combo_points = 5, energy = 50,
+        rip_remaining = 0, rake_remaining = 10, mangle_remaining = 10, sr_remaining = 20,
+    }
+    local hit = {}
+    for k, v in pairs(order_ctx) do hit[k] = v end
+    hit.last_action = "rip"
+    eq(order(ST, hit), "S", "the priority drill: the guide's own pick is an S")
+    local miss = {}
+    for k, v in pairs(order_ctx) do miss[k] = v end
+    miss.last_action = "shred"
+    eq(order(ST, miss), "F", "the priority drill: a wrong pick without a ledger is an F")
+    -- With the engine's ledger the band is the spec's window over the last ten picks.
+    local ledger = {}
+    local windowed = {}
+    for k, v in pairs(order_ctx) do windowed[k] = v end
+    windowed.state = ledger
+    windowed.last_action = "shred"
+    eq(order(ST, windowed), "A", "the priority drill: one mis-pick in the window is an A")
+    windowed.last_action = "rip"
+    eq(order(ST, windowed), "A", "the priority drill: the window keeps the mis-pick")
+    eq(order(ST, nil), nil, "the priority drill: no state grades nothing")
+
+    -- D-D2: the shift drill grades the SIM's trigger, not the shipped 20-energy rule
+    -- (the operator ruling: a drill must mirror the real thing).
+    local shift = by_key.druid_powershift_rework.grade
+    eq(shift(ST, { family = "TBC", energy = 8, last_action = "shift" }), "S",
+        "the shift drill: below the sim's 10-energy line is an S")
+    eq(shift(ST, { family = "TBC", energy = 15, last_action = "shift" }), "A",
+        "the shift drill: 5 above the sim's line is an A (the 20-energy rule would say S)")
+    eq(shift(ST, { family = "TBC", energy = 25, last_action = "shift" }), "B",
+        "the shift drill: 15 above the sim's line is a B")
+    eq(shift(ST, { family = "TBC", energy = 45, last_action = "shift" }), "D",
+        "the shift drill: far above the sim's line is a wasted shift")
+    eq(shift(ST, { family = "TBC", energy = 100, last_action = "shift" }), "F",
+        "the shift drill: a capped pool is an F (the shift was never taken)")
+    -- ERA / SoD: the cost trigger - the energy at the next tick below the builder cost.
+    eq(shift(ST, { family = "ERA", energy = 30, last_action = "shift" }), "S",
+        "the shift drill: below the builder cost the sim shifts")
+    eq(shift(ST, { family = "ERA", energy = 45, last_action = "shift" }), "A",
+        "the shift drill: 3 above the builder cost is an A")
+    eq(shift(ST, { family = "SOD", energy = 30, last_action = "shift" }), "S",
+        "the shift drill: the SoD token shifts on the same cost trigger")
+    eq(shift(ST, { family = "ERA", energy = 35, tick_remaining = 1, last_action = "shift" }),
+        "A", "the shift drill: the energy at the next tick is what the sim reads")
+    eq(shift(ST, { family = "ERA", energy = 35, tick_remaining = 1, mangle_cost = 50,
+        last_action = "shift" }), "S",
+        "the shift drill: the live builder cost moves the line")
+    -- No shift basis on Wrath / Forever; no energy: no grade; a spend: not an attempt.
+    eq(shift(ST, { family = "WRATH", energy = 5, last_action = "shift" }), nil,
+        "the shift drill: Wrath has no shift basis")
+    eq(shift(ST, { family = "FOREVER", energy = 5, last_action = "shift" }), nil,
+        "the shift drill: Forever has no shift basis")
+    eq(shift(ST, { family = "TBC" }), nil, "the shift drill: an unknown energy grades nothing")
+    eq(shift(ST, { family = "TBC", energy = 8, last_action = "shred" }), "S",
+        "the shift drill: it judges the moment, so a spend does not change the verdict")
+
+    -- D-D3: the Roar upkeep (the sim refreshes on expiry and clips to cover the end).
+    local roar = by_key.druid_roar_upkeep.grade
+    eq(roar(ST, { family = "ERA", sr_remaining = 0, last_action = "savage_roar" }), nil,
+        "the Roar drill: the Era sim has no Savage Roar")
+    eq(roar(ST, { family = "TBC", sr_remaining = 0, last_action = "savage_roar" }), nil,
+        "the Roar drill: the TBC sim has no Savage Roar")
+    eq(roar(ST, { family = "SOD", sr_remaining = 0, combo_points = 3,
+        sr_expired_seconds = 0 }), "S",
+        "the Roar drill: an on-time repair is an S")
+    eq(roar(ST, { family = "SOD", sr_remaining = 0, combo_points = 3,
+        sr_expired_seconds = 3 }), "B",
+        "the Roar drill: a repair 3 s late is a B")
+    eq(roar(ST, { family = "SOD", sr_remaining = 0, combo_points = 3,
+        sr_expired_seconds = 9 }), "C",
+        "the Roar drill: a lapsed upkeep is a C")
+    eq(roar(ST, { family = "SOD", sr_remaining = 0, combo_points = 3,
+        builders_since_expiry = 2 }), "D",
+        "the Roar drill: a lapsed upkeep that burned a builder is a D")
+    eq(roar(ST, { family = "SOD", sr_remaining = 5, combo_points = 3,
+        time_to_die = 20 }), "S",
+        "the Roar drill: the cover-to-end clip is an S")
+    eq(roar(ST, { family = "SOD", sr_remaining = 5, combo_points = 3 }), nil,
+        "the Roar drill: a cast while the Roar is up is not an upkeep event")
+    eq(roar(ST, { family = "SOD", sr_remaining = 0, combo_points = 3, sr_seen = false }),
+        "F", "the Roar drill: a Roar never maintained is an F")
+    eq(roar(ST, { family = "SOD" }), nil, "the Roar drill: an unknown Roar state grades nothing")
+
+    -- D-D4: the execute (the sim Bites only at the end, with both minima met).
+    local bite = by_key.druid_bite_execute.grade
+    eq(bite(ST, { family = "ERA", time_to_die = 5, last_action = "bite" }), nil,
+        "the execute drill: the Era sim never Bites")
+    eq(bite(ST, { family = "SOD", time_to_die = 5, last_action = "bite" }), nil,
+        "the execute drill: the SoD sim never Bites")
+    eq(bite(ST, { family = "WRATH", time_to_die = 5, combo_points = 5,
+        rip_remaining = 8, sr_remaining = 8, last_action = "bite" }), "S",
+        "the execute drill: the Bite in the window with both minima is an S")
+    eq(bite(ST, { family = "WRATH", time_to_die = 5, combo_points = 5,
+        rip_remaining = 2, sr_remaining = 8, last_action = "bite" }), "A",
+        "the execute drill: one minimum short by 2 s is an A")
+    eq(bite(ST, { family = "WRATH", time_to_die = 5, combo_points = 5,
+        rip_remaining = 0, sr_remaining = 8, last_action = "bite" }), "B",
+        "the execute drill: one minimum short by 4 s is a B")
+    eq(bite(ST, { family = "WRATH", time_to_die = 60, combo_points = 5,
+        rip_remaining = 8, sr_remaining = 8, last_action = "bite" }), "D",
+        "the execute drill: a mid-fight Bite is a D")
+    eq(bite(ST, { family = "WRATH", time_to_die = 15, combo_points = 5,
+        rip_remaining = 8, sr_remaining = 8, last_action = "bite" }), "C",
+        "the execute drill: a Bite just outside the window is a C")
+    eq(bite(ST, { family = "WRATH", time_to_die = 5, combo_points = 5 }), "F",
+        "the execute drill: no Bite in the window is an F")
+    eq(bite(ST, { family = "WRATH", time_to_die = 5, combo_points = 5,
+        last_action = "bite" }), nil,
+        "the execute drill grades nothing on an unknown minimum")
+end
+
+--=========================================================================================
+-- 37) The class-side feature closures: the world latency and the Omen-ICD probe
+--=========================================================================================
+do
+    -- The latency: the sim's Tiger's Fury leeway reads max(gcd_remaining, latency),
+    -- so the W1 line needs the real reading instead of the GCD remainder alone.
+    local sb = build()
+    local ST = sb.ST
+    ST.latency = { world_ms = 120 }
+    local inputs = ST.DRUID.gather_guide_inputs(ST, {})
+    near(inputs.latency, 0.12, "the gather reads the raw world latency in seconds")
+    ST.latency = { world_ms = nil }
+    local unmeasured = ST.DRUID.gather_guide_inputs(ST, {})
+    eq(unmeasured.latency, nil, "an unmeasured latency reads nil (the W1 line degrades)")
+    ST.latency = nil
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).latency, nil,
+        "no latency table at all: the input stays unknown")
+
+    -- The Omen of Clarity's internal cooldown: the proc buff is the witness.
+    local osb = build()
+    local OST = osb.ST
+    OST.interfaces_are_initialised = true
+    OST.DRUID.post_init(OST)
+    osb.class_db.nextaction_enabled = true
+    OST.form_index = 3
+    osb.power_type = 3
+    osb.power = 50
+    osb.clock = 100
+    osb.player_auras = {
+        { name = "Clearcasting", spell_id = 16870, source = "player",
+            duration = 10, expiration = 110 },
+    }
+    OST.DRUID.on_bar_update(OST, "mainhand")
+    local during = OST.DRUID.gather_guide_inputs(OST, {})
+    eq(during.clearcast, true, "the proc reads as a Clearcast")
+    eq(during.omen_icd_ready, false, "the Omen proc up: the ICD is not ready")
+    -- The proc is gone and a full proc window has passed: the lockout has expired.
+    osb.player_auras = {}
+    osb.clock = 101
+    OST.DRUID.on_bar_update(OST, "mainhand")
+    local early = OST.DRUID.gather_guide_inputs(OST, {})
+    eq(early.omen_icd_ready, nil,
+        "the proc just fell: the lockout window has not passed yet, so the ICD stays unknown")
+    osb.clock = 111
+    OST.DRUID.on_bar_update(OST, "mainhand")
+    local after = OST.DRUID.gather_guide_inputs(OST, {})
+    eq(after.clearcast, nil, "the proc is gone: no Clearcast")
+    eq(after.omen_icd_ready, true, "the Omen lockout window has passed: the ICD is ready")
+    -- A fresh sandbox has never seen a proc: the ICD stays unknown.
+    local fresh = build()
+    fresh.ST.interfaces_are_initialised = true
+    fresh.ST.DRUID.post_init(fresh.ST)
+    fresh.class_db.nextaction_enabled = true
+    fresh.clock = 100
+    fresh.ST.DRUID.on_bar_update(fresh.ST, "mainhand")
+    eq(fresh.ST.DRUID.gather_guide_inputs(fresh.ST, {}).omen_icd_ready, nil,
+        "no proc seen yet: the Omen ICD stays unknown (the fish stays dormant)")
+
+    -- The Roar's own window: the class remembers the aura's expiry and whether the
+    -- Roar was ever up this fight (the upkeep drill's two measures).
+    local ssb = build()
+    local SST = ssb.ST
+    SST.interfaces_are_initialised = true
+    SST.DRUID.post_init(SST)
+    ssb.class_db.nextaction_enabled = true
+    ssb.clock = 100
+    ssb.player_auras = {
+        { name = "Savage Roar", spell_id = 52610, source = "player",
+            duration = 30, expiration = 130 },
+    }
+    SST.DRUID.on_bar_update(SST, "mainhand")
+    local with_roar = SST.DRUID.gather_guide_inputs(SST, {})
+    check(with_roar.sr_remaining ~= nil, "the Roar aura feeds the Roar input")
+    eq(with_roar.sr_seen, true, "the Roar was up this fight")
+    eq(with_roar.sr_expired_seconds, nil, "the Roar is up: no expired measure")
+    -- The Roar falls: the class knows how long it has been down.
+    ssb.player_auras = {}
+    ssb.clock = 133
+    SST.DRUID.on_bar_update(SST, "mainhand")
+    local without = SST.DRUID.gather_guide_inputs(SST, {})
+    near(without.sr_expired_seconds, 3, "the Roar has been down for 3 s")
+    -- A fight that never saw the Roar: the class says so (in combat, scan ran).
+    local nb = build()
+    local NST = nb.ST
+    NST.interfaces_are_initialised = true
+    NST.DRUID.post_init(NST)
+    NST.in_combat = true
+    nb.class_db.nextaction_enabled = true
+    nb.clock = 100
+    NST.DRUID.on_bar_update(NST, "mainhand")
+    eq(NST.DRUID.gather_guide_inputs(NST, {}).sr_seen, false,
+        "in combat with a scan and no Roar: the Roar was never up")
+    -- The gathered verdict reaches the drill: a proven false must survive the merge.
+    local roar_drill = NST.DRUID.practice_drills[3].grade
+    eq(roar_drill(NST, { sr_remaining = 0 }), "F",
+        "the Roar drill: the gathered 'never maintained' verdict grades the F")
+    -- The fight ends: the latch dies with it.
+    NST.DRUID.on_combat_exit(NST)
+    eq(NST.DRUID.gather_guide_inputs(NST, {}).sr_seen, nil,
+        "the fight's end clears the Roar latch")
+end
+
+--=========================================================================================
+-- 38) The Wolfshead Helm probe (bench/filed_closure_sweep_2026-10-19.md §7 BS-2): the
+--     gather publishes the tri-state; nothing consumes it yet
+--=========================================================================================
+-- The sim's own check is HasItemEquipped(8345) (tbc-new feralcat.go) and 8345 is the
+-- wowhead-confirmed Wolfshead Helm. The read path is compat.lua's api.is_item_equipped
+-- (true / false / nil - unknown is never false). The input is a RESERVED plug-in point:
+-- the Furor half of the powershift basis is still unproven (DU-16), so no rule reads it
+-- and the SHIFT branch stays removed.
+do
+    -- The Helm is worn: the probe answers true.
+    local sb = build({ equipment_items = { [1] = 8345 } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    local worn
+    with_equipment_range(function()
+        worn = ST.DRUID.gather_guide_inputs(ST, {})
+    end)
+    eq(worn.wolfshead_equipped, true,
+        "the gather: the equipped Wolfshead Helm reads true")
+    eq(sb.item_queries[#sb.item_queries], 8345,
+        "the gather asks the probe for the sim's own id (8345)")
+
+    -- The read works and no equipped slot holds it: a proven false, NOT nil.
+    local other = build({ equipment_items = { [1] = 12345 } })
+    local OST = other.ST
+    OST.interfaces_are_initialised = true
+    OST.DRUID.post_init(OST)
+    local readable
+    with_equipment_range(function()
+        readable = OST.DRUID.gather_guide_inputs(OST, {})
+    end)
+    eq(readable.wolfshead_equipped, false,
+        "the gather: a readable non-match reads false (not nil)")
+
+    -- The client cannot answer at all: unknown, never a guess about the gear.
+    local blind = build()
+    local BST = blind.ST
+    BST.interfaces_are_initialised = true
+    BST.DRUID.post_init(BST)
+    local unknown
+    with_equipment_range(function()
+        unknown = BST.DRUID.gather_guide_inputs(BST, {})
+    end)
+    eq(unknown.wolfshead_equipped, nil,
+        "the gather: an unreadable equipment read stays unknown (nil)")
+
+    -- An empty equipment map is not a proof either: no readable slot at all, so
+    -- the read is unknown, never "not equipped".
+    local empty = build({ equipment_items = {} })
+    local EST = empty.ST
+    EST.interfaces_are_initialised = true
+    EST.DRUID.post_init(EST)
+    local blank
+    with_equipment_range(function()
+        blank = EST.DRUID.gather_guide_inputs(EST, {})
+    end)
+    eq(blank.wolfshead_equipped, nil,
+        "the gather: no readable equipped slot stays unknown (never false)")
+
+    -- Stale reuse: a previous true never survives an unreadable read.
+    local reused = { wolfshead_equipped = true }
+    local cleared
+    with_equipment_range(function()
+        cleared = BST.DRUID.gather_guide_inputs(BST, reused)
+    end)
+    eq(cleared.wolfshead_equipped, nil,
+        "the gather: a stale Helm reading is cleared when the read goes unknown")
+    eq(reused.wolfshead_equipped, nil,
+        "the gather: the reused table never keeps a stale Helm reading")
+
+    -- The throttled read (the hot-read fix): the probe walks all 19 equipped
+    -- slots, so reading it on every gather costs ~380 item reads/s at the
+    -- guide's 0.05 s tick - for an input no rule reads yet. Inside the throttle
+    -- window the cached answer is published and the probe is not asked again;
+    -- once the window closes the probe runs again and a gear change shows up.
+    local calls_before = #sb.item_queries
+    for _ = 1, 20 do
+        with_equipment_range(function()
+            ST.DRUID.gather_guide_inputs(ST, {})
+        end)
+    end
+    eq(#sb.item_queries - calls_before, 0,
+        "the gather: twenty gathers inside the throttle window never re-read the gear")
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).wolfshead_equipped, true,
+        "the gather: the cached answer is published between refreshes")
+
+    -- The window closes: the probe runs again and a gear change becomes visible.
+    other.clock = other.clock + 2
+    other.equipment_items[1] = 8345
+    local refreshed
+    with_equipment_range(function()
+        refreshed = OST.DRUID.gather_guide_inputs(OST, {})
+    end)
+    eq(refreshed.wolfshead_equipped, true,
+        "the gather: after the throttle window the gear change is visible")
+    eq(#other.item_queries, 2,
+        "the gather: the probe runs again once the throttle window has passed")
+end
+
+--=========================================================================================
+-- The pull moment in the ctx (BS-8 item 2 / P-17) + the "no hold" contract
+--=========================================================================================
+-- The druid publishes NO ctx builder: the shared engine's fallback builder owns the
+-- ctx, and it is the one that carries the live pull clock (the engine's
+-- apply_pull_clock). So the class-side read has no builder to land in, and the
+-- class's step must never disturb a pull-carrying ctx.
+-- The druid has NO general hold concept: nine of the guide's ten hold texts name a
+-- spell to PRESS, so a step is either an action or unknown - never an explicit hold
+-- statement. The tenth ("RIDE", the bear chain's queued Maul) is the press-nothing
+-- hold and IS stated as one (section 41 below).
+do
+    local sb = build()
+    local ST = sb.ST
+    eq(ST.DRUID.practice_context, nil,
+        "pull: the druid publishes no ctx builder (the engine's fallback owns it)")
+    local answer = ST.DRUID.practice_scenario_step(ST, { now = 10,
+        family = "WRATH", form_index = 3, combo_points = 5, energy = 50,
+        rip_remaining = 0, rake_remaining = 10, mangle_remaining = 10,
+        sr_remaining = 20, pull_at = 120, pull_in_seconds = 20 })
+    eq(answer and answer.action, "rip",
+        "pull: a pull-carrying ctx still answers the engine's own verdict")
+    eq(answer and answer.hold, nil, "pull: an action step states no hold")
+
+    -- The engine's own rule for a step with neither an action nor a hold: it stays
+    -- UNKNOWN, and an unknown decision records no attempt (never a wrong grade).
+    local practice_st = {}
+    local chunk = assert(loadfile(ROOT .. "practice.lua"))
+    setfenv(chunk, setmetatable({}, { __index = _G }))
+    chunk("SwedgeTimer", practice_st)
+    practice_st.DRUID = ST.DRUID
+    local H = practice_st.practice and practice_st.practice.harness
+    check(type(H) == "table", "hold: the shared harness is loaded")
+    local unknown_answer = H.practice_scenario_step("DRUID", ST, nil)
+    eq(unknown_answer, nil, "hold: an unreadable state stays unknown (no hold statement)")
+    local unknown_run = H.new_rotation_run()
+    local unknown = H.rotation_run_decide(unknown_run, nil, "shred")
+    eq(unknown.outcome, "unknown", "hold: an unknown step stays unknown")
+    eq(H.ROTATION_OUTCOME_GRADES[unknown.outcome], nil,
+        "hold: an unknown decision records no attempt")
+    eq(unknown_run.mispicks, 0, "hold: an unknown decision is never a mis-pick")
+end
+
+--=========================================================================================
+-- 39) The APL utility layer (the rotation table's utility spine) + the pre-pull table
+--=========================================================================================
+-- The wowsims APLs carry an upkeep/cooldown layer the sim's own rotation.go does not
+-- (bench/rotation_gap_vs_apl_2026-10-20.md section 4.3): the form upkeep, the party
+-- buff rider, the mana tool, the burst cooldowns and the builder the APL names. The
+-- spine rows carry the per-family spell id, the APL citation and HU-13's two flags
+-- (`live` = the read exists, `engine` = the frozen engine has an arm).
+do
+    local sb = build()
+    local ST = sb.ST
+    local rotation = ST.DRUID.practice_rotation
+    local by_action = {}
+    for i = 1, #rotation do
+        local entry = rotation[i]
+        if entry.families then
+            local list = by_action[entry.action] or {}
+            list[#list + 1] = entry
+            by_action[entry.action] = list
+        end
+    end
+
+    -- The Cat Form upkeep: the APL's form row on four families, ARMED since
+    -- 2026-10-20 (the gate the lane filed is now the class's own Feral-tree
+    -- probe plus the player's Cat Form aura plus the form state).
+    local cat_form = by_action.cat_form
+    check(cat_form ~= nil, "utility: the rotation table carries the Cat Form row")
+    local cat_row = cat_form and cat_form[#cat_form]
+    if cat_row then
+        eq(cat_row.ids.ERA, 768, "utility: Cat Form is 768 on Era")
+        eq(cat_row.ids.SOD, 768, "utility: Cat Form is 768 on SoD")
+        eq(cat_row.ids.TBC, 768, "utility: Cat Form is 768 on TBC")
+        eq(cat_row.ids.FOREVER, 768, "utility: Cat Form is 768 on Forever")
+        eq(cat_row.families.WRATH, nil, "utility: the WotLK APL carries no Cat Form row")
+        eq(cat_row.live, true, "utility: the Cat Form read exists")
+        eq(cat_row.engine, true, "utility: the Cat Form line has an engine arm")
+        check(type(cat_row.gate) == "string" and cat_row.gate:find("feral_spec", 1, true) ~= nil,
+            "utility: the Cat Form row names the spec gate the arm proves")
+        check(cat_row.gate:find("cat_form_active", 1, true) ~= nil,
+            "utility: the Cat Form row names the Cat Form aura proof")
+        check(cat_row.needs == nil,
+            "utility: the Cat Form row carries no filed need any more")
+        check(cat_row.source:find("i=14", 1, true) ~= nil,
+            "utility: the Cat Form row cites the Era APL index")
+        check(cat_row.source:find("i=0", 1, true) ~= nil,
+            "utility: the Cat Form row cites the SoD APL index")
+        check(cat_row.source:find("i=1", 1, true) ~= nil,
+            "utility: the Cat Form row cites the Forever APL index")
+    end
+
+    -- The Leader of the Pack (the Era APL's i=1): the client's own id (17007), not
+    -- the id the APL casts (13494 - "Haste" in the 1.15 client).
+    local lop = by_action.leader_of_the_pack
+    check(lop ~= nil, "utility: the rotation table carries the Leader of the Pack row")
+    local lop_row = lop and lop[#lop]
+    if lop_row then
+        eq(lop_row.ids.ERA, 17007, "utility: the Leader of the Pack is 17007 on Era")
+        eq(lop_row.families.SOD, nil, "utility: the SoD APL carries no Leader of the Pack row")
+        eq(lop_row.live, true, "utility: the Leader of the Pack read exists")
+        eq(lop_row.engine, true, "utility: the Leader of the Pack has an engine arm")
+        check(lop_row.source:find("13494", 1, true) ~= nil,
+            "utility: the Leader of the Pack row names the APL's dead id")
+    end
+
+    -- The Faerie Fire upkeep (the Era and TBC rows).
+    local ff = by_action.faerie_fire
+    check(ff ~= nil, "utility: the rotation table carries the Faerie Fire upkeep row")
+    local ff_row = ff and ff[#ff]
+    if ff_row then
+        eq(ff_row.ids.ERA, 17392, "utility: the Era Faerie Fire is 17392")
+        eq(ff_row.ids.TBC, 27011, "utility: the TBC Faerie Fire is 27011")
+        eq(ff_row.live, true, "utility: the Faerie Fire read exists")
+        eq(ff_row.engine, true, "utility: the Faerie Fire upkeep has an engine arm")
+    end
+
+    -- The Claw builder: the read that decides "the Shred cannot land" does not
+    -- exist, so the row is filed (live = false, engine = false).
+    local claw = by_action.claw
+    check(claw ~= nil, "utility: the rotation table carries the Claw row")
+    local claw_row = claw and claw[#claw]
+    if claw_row then
+        eq(claw_row.ids.ERA, 9850, "utility: the Claw is 9850 on Era")
+        eq(claw_row.ids.FOREVER, 9850, "utility: the Claw is 9850 on Forever")
+        eq(claw_row.live, false, "utility: the Claw read does not exist yet")
+        eq(claw_row.engine, false, "utility: the Claw line has no engine arm")
+        check(type(claw_row.needs) == "string" and claw_row.needs:find("can_shred", 1, true) ~= nil,
+            "utility: the Claw row names the read it waits for")
+    end
+
+    -- The Innervate (the mana row on three families).
+    local inn = by_action.innervate
+    check(inn ~= nil, "utility: the rotation table carries the Innervate row")
+    local inn_row = inn and inn[#inn]
+    if inn_row then
+        eq(inn_row.ids.ERA, 29166, "utility: the Innervate is 29166 on Era")
+        eq(inn_row.ids.SOD, 29166, "utility: the Innervate is 29166 on SoD")
+        eq(inn_row.ids.FOREVER, 29166, "utility: the Innervate is 29166 on Forever")
+        eq(inn_row.families.TBC, nil, "utility: the TBC APL carries no Innervate row")
+        eq(inn_row.live, true, "utility: the Innervate read exists")
+        eq(inn_row.engine, true, "utility: the Innervate has an engine arm")
+    end
+
+    -- The Elune's Light (the Forever row): the id is the APL's own, the name is
+    -- UNCONFIRMED outside the APL.
+    local el = by_action.elunes_light
+    check(el ~= nil, "utility: the rotation table carries the Elune's Light row")
+    local el_row = el and el[#el]
+    if el_row then
+        eq(el_row.ids.FOREVER, 1259799, "utility: the Elune's Light is 1259799 on Forever")
+        eq(el_row.families.ERA, nil, "utility: the Elune's Light is the Forever row")
+        eq(el_row.live, true, "utility: the Elune's Light read exists")
+        eq(el_row.engine, true, "utility: the Elune's Light has an engine arm")
+        check(el_row.source:find("UNCONFIRMED", 1, true) ~= nil,
+            "utility: the Elune's Light row marks the name UNCONFIRMED")
+    end
+
+    -- The Bloodlust (the TBC row): the line CANNOT be evaluated - 2825 is the
+    -- Shaman's Bloodlust, a spell the druid does not have, and the APL's own
+    -- gate (the "Bloodlust Time" variable) has no addon counterpart. Both flags
+    -- say so.
+    local bl = by_action.bloodlust
+    check(bl ~= nil, "utility: the rotation table carries the Bloodlust row")
+    local bl_row = bl and bl[#bl]
+    if bl_row then
+        eq(bl_row.ids.TBC, 2825, "utility: the Bloodlust is 2825 on TBC")
+        eq(bl_row.live, false, "utility: the Bloodlust line cannot be evaluated")
+        eq(bl_row.engine, false, "utility: the Bloodlust line has no engine arm")
+        check(type(bl_row.needs) == "string" and bl_row.needs:find("GetSpellCooldown", 1, true) ~= nil,
+            "utility: the Bloodlust row names the read it has and the gate it lacks")
+        check(bl_row.needs:find("shaman", 1, true) ~= nil,
+            "utility: the Bloodlust row names the spell the druid cannot cast")
+        check(bl_row.needs:find("Bloodlust Time", 1, true) ~= nil,
+            "utility: the Bloodlust row names the APL's own variable")
+    end
+
+    -- The shipped sim rows carry their per-family id too (the gap analysis found
+    -- every one of them id-less).
+    local ids_by_rule = {}
+    for i = 1, #rotation do
+        local entry = rotation[i]
+        if entry.rule then
+            ids_by_rule[entry.rule] = entry.ids
+        end
+    end
+    eq(ids_by_rule.S1 and ids_by_rule.S1.SOD, 417045,
+        "utility: the SoD Tiger's Fury row carries its rune id")
+    eq(ids_by_rule.S2 and ids_by_rule.S2.SOD, 417141,
+        "utility: the SoD Berserk row carries its rune id")
+    eq(ids_by_rule.S3 and ids_by_rule.S3.SOD, 407988,
+        "utility: the SoD Savage Roar row carries its rune id")
+    eq(ids_by_rule.T2 and ids_by_rule.T2.TBC, 33983,
+        "utility: the TBC Mangle row carries its id")
+    eq(ids_by_rule.T5 and ids_by_rule.T5.TBC, 27002,
+        "utility: the TBC Shred row carries its id")
+    eq(ids_by_rule.F1 and ids_by_rule.F1.FOREVER, 1322605,
+        "utility: the Forever Shifting Power row carries its id")
+    eq(ids_by_rule.F5, nil,
+        "utility: the Forever slice carries no Mangle row (the client has no Mangle)")
+    -- HU-14 (closed 2026-10-20): the FOREVER rotation names no Mangle at all.
+    local forever_mangle_rows = 0
+    for i = 1, #rotation do
+        local entry = rotation[i]
+        if entry.action == "mangle" and entry.family == "FOREVER" then
+            forever_mangle_rows = forever_mangle_rows + 1
+        end
+        if entry.action == "mangle" and entry.families and entry.families.FOREVER == true then
+            forever_mangle_rows = forever_mangle_rows + 1
+        end
+    end
+    eq(forever_mangle_rows, 0,
+        "utility: no rotation row names a Mangle for the Forever client")
+    -- The ERA reconciliation: the APL's i=1 row casts 13494 ("Haste" on the 1.15
+    -- client - a dead row) and the APL has NO Rip row at all, so the table's
+    -- Leader of the Pack row carries the CLIENT's own id and the Rip row says
+    -- so in its source.
+    eq(ids_by_rule.E1 and ids_by_rule.E1.ERA, 9896,
+        "utility: the Era Rip row carries the client's Rip r6 (the APL has no Rip row)")
+    local era_rip_row = nil
+    local era_lop_row = nil
+    for i = 1, #rotation do
+        local entry = rotation[i]
+        if entry.rule == "E1" then
+            era_rip_row = entry
+        end
+        if entry.action == "leader_of_the_pack" then
+            era_lop_row = entry
+        end
+    end
+    check(era_rip_row ~= nil, "utility: the Era slice carries its Rip row")
+    if era_rip_row then
+        check(era_rip_row.source:find("NO Rip row", 1, true) ~= nil,
+            "utility: the Era Rip row states that the Era APL has no Rip row")
+    end
+    check(era_lop_row ~= nil, "utility: the Era slice carries its Leader of the Pack row")
+    if era_lop_row then
+        check(era_lop_row.source:find("dead as written", 1, true) ~= nil,
+            "utility: the Leader of the Pack row states that the APL's row is dead")
+        eq(era_lop_row.ids.ERA, 17007,
+            "utility: the Leader of the Pack row carries the client's own id, not the APL's 13494")
+    end
+
+    -- The slices: the utility rows join the families the APL plays them on.
+    local era = ST.DRUID.practice_rotation_for("ERA")
+    local era_actions = {}
+    for i = 1, #era do
+        era_actions[era[i].action] = true
+    end
+    check(era_actions.cat_form == true, "utility: the Era slice carries the Cat Form row")
+    check(era_actions.leader_of_the_pack == true,
+        "utility: the Era slice carries the Leader of the Pack row")
+    check(era_actions.faerie_fire == true,
+        "utility: the Era slice carries the Faerie Fire upkeep row")
+    check(era_actions.innervate == true, "utility: the Era slice carries the Innervate row")
+    local sod = ST.DRUID.practice_rotation_for("SOD")
+    local sod_actions = {}
+    for i = 1, #sod do
+        sod_actions[sod[i].action] = true
+    end
+    check(sod_actions.cat_form == true, "utility: the SoD slice carries the Cat Form row")
+    check(sod_actions.innervate == true, "utility: the SoD slice carries the Innervate row")
+    check(sod_actions.leader_of_the_pack == nil,
+        "utility: the SoD slice carries no Leader of the Pack row")
+    local tbc = ST.DRUID.practice_rotation_for("TBC")
+    local tbc_actions = {}
+    for i = 1, #tbc do
+        tbc_actions[tbc[i].action] = true
+    end
+    check(tbc_actions.bloodlust == true, "utility: the TBC slice carries the Bloodlust row")
+    check(tbc_actions.cat_form == true, "utility: the TBC slice carries the Cat Form row")
+    check(tbc_actions.innervate == nil, "utility: the TBC slice carries no Innervate row")
+    local forever = ST.DRUID.practice_rotation_for("FOREVER")
+    local forever_actions = {}
+    for i = 1, #forever do
+        forever_actions[forever[i].action] = true
+    end
+    check(forever_actions.elunes_light == true,
+        "utility: the Forever slice carries the Elune's Light row")
+    check(forever_actions.claw == true, "utility: the Forever slice carries the Claw row")
+    check(forever_actions.mangle == nil,
+        "utility: the Forever slice names no Mangle (the client has no Mangle)")
+    check(forever_actions.bloodlust == nil,
+        "utility: the Forever slice carries no Bloodlust row")
+    -- The WotLK APL carries no utility row at all: its slice stays the sim's ten.
+    local wrath = ST.DRUID.practice_rotation_for("WRATH")
+    eq(#wrath, 10, "utility: the WotLK slice stays the sim's ten priority slots")
+    for i = 1, #wrath do
+        check(wrath[i].families == nil, "utility: the WotLK slice carries no utility row")
+    end
+
+    -- The pre-pull table (HU-12): the APL's pre-pull rows never join the combat
+    -- rotation - they live in their own table.
+    local prepulls = ST.DRUID.PRACTICE_PREPULLS
+    check(type(prepulls) == "table", "utility: the druid ships a pre-pull table")
+    check(type(prepulls.ERA) == "table", "utility: the pre-pull table carries the Era opener")
+    check(type(prepulls.SOD) == "table", "utility: the pre-pull table carries the SoD opener")
+    check(type(prepulls.TBC) == "table", "utility: the pre-pull table carries the TBC opener")
+    check(type(prepulls.WRATH) == "table", "utility: the pre-pull table carries the WotLK opener")
+    eq(prepulls.ERA[1].spell, 17392, "utility: the Era opener is the Faerie Fire (Feral)")
+    eq(prepulls.ERA[1].at, -1.0, "utility: the Era opener fires 1 s before the pull")
+    eq(prepulls.ERA[2].spell, 9846, "utility: the Era opener's second row is the Tiger's Fury")
+    eq(prepulls.ERA[2].at, -3.5, "utility: the Tiger's Fury fires 3.5 s before the pull")
+    eq(prepulls.SOD[1].spell, 407988, "utility: the SoD opener is the Savage Roar")
+    eq(prepulls.SOD[1].at, -8, "utility: the SoD opener fires 8 s before the pull")
+    eq(prepulls.TBC[1].spell, 768, "utility: the TBC opener is the Cat Form")
+    eq(prepulls.TBC[1].at, -10, "utility: the TBC opener fires 10 s before the pull")
+    eq(prepulls.WRATH[1].spell, 50334, "utility: the WotLK opener is the Berserk")
+    eq(prepulls.WRATH[1].at, -1, "utility: the WotLK opener fires 1 s before the pull")
+    -- The pre-pull rows never join the combat rotation.
+    for i = 1, #rotation do
+        local entry = rotation[i]
+        check(entry.at == nil, "utility: no combat rotation row carries a pre-pull offset")
+    end
+end
+
+--=========================================================================================
+-- 40) The form upkeep's class-side reads: the Feral-tree spec probe and the
+--     Cat Form aura (the rotation table's cat_form row's gate)
+--=========================================================================================
+-- The Cat Form arm (druid_guide.lua's U-CF line) needs three proofs: the class
+-- must prove the player is a Feral-tree druid (the family's Feral-tree talent,
+-- through api.is_spell_known) and must prove the Cat Form aura is absent (the
+-- player's own aura walk). Unknown stays unknown: an unreadable read never
+-- prompts.
+do
+    local function gather_with(opts)
+        local sb = build(opts)
+        local ST = sb.ST
+        ST.interfaces_are_initialised = true
+        ST.DRUID.post_init(ST)
+        return sb, ST, ST.DRUID.gather_guide_inputs(ST, {})
+    end
+    -- The Era client's probe is the Faerie Fire (Feral) (17392) - a Feral-tree
+    -- talent (wowsims/classic sim/druid/faerie_fire.go:26).
+    local _, _, era_feral = gather_with({ project = 2, known = { [17392] = true } })
+    eq(era_feral.feral_spec, true,
+        "form upkeep: a known Faerie Fire (Feral) proves the Feral tree on Era")
+    local _, _, era_caster = gather_with({ project = 2 })
+    eq(era_caster.feral_spec, false,
+        "form upkeep: an unknown Faerie Fire (Feral) never proves the Feral tree")
+    -- The TBC client's probe is the Faerie Fire (Feral) r5 (27011) - the TBC sim
+    -- gates the spell on the Feral talent (wowsims/tbc-new sim/druid/
+    -- faerie_fire.go:49).
+    local _, _, tbc_feral = gather_with({ project = 5, known = { [27011] = true } })
+    eq(tbc_feral.feral_spec, true,
+        "form upkeep: a known Faerie Fire (Feral) proves the Feral tree on TBC")
+    -- The Forever client's probe is the Leader of the Pack (17007) - the Feral
+    -- Combat tree talent (wowsims/forever sim/druid/druid.go:115).
+    local _, _, forever_feral = gather_with({ project = 18, known = { [17007] = true } })
+    eq(forever_feral.feral_spec, true,
+        "form upkeep: a known Leader of the Pack proves the Feral tree on Forever")
+    -- The WotLK client has no Cat Form row, so it carries no probe at all.
+    local _, _, wrath = gather_with({ project = 11, known = { [17007] = true } })
+    eq(wrath.feral_spec, nil,
+        "form upkeep: the WotLK client has no Cat Form row, so no spec probe")
+    -- The Cat Form aura: the player's own aura walk answers up / proven absent /
+    -- not answered yet.
+    local sb = build({ project = 2, known = { [17392] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).cat_form_active, nil,
+        "form upkeep: before the aura walk answers, the Cat Form aura stays unknown")
+    sb.class_db.nextaction_enabled = true
+    sb.clock = 100
+    sb.player_auras = {
+        { name = "Cat Form", spell_id = 768, source = "player",
+            duration = 3600, expiration = 3700 },
+    }
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    local with_aura = ST.DRUID.gather_guide_inputs(ST, {})
+    eq(with_aura.cat_form_active, true,
+        "form upkeep: the Cat Form aura reads up when the walk finds it")
+    sb.player_auras = {}
+    sb.clock = 101
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    local without_aura = ST.DRUID.gather_guide_inputs(ST, {})
+    eq(without_aura.cat_form_active, false,
+        "form upkeep: a vanished Cat Form aura reads proven absent")
+end
+
+--=========================================================================================
+-- 41) The press-nothing hold (the bear chain's RIDE) - the deep-audit's H1
+--=========================================================================================
+-- The druid was the only class of six that turned the guide's HOLD into a synthetic
+-- ACTION: `druid_expected` mapped EVERY hold text to a key, so the bear chain's
+-- "RIDE" (a queued Maul - the guide rides the queue the player already placed, so the
+-- player presses NO key) became a "ride" action.
+--
+-- The consequences were wrong grades in both directions: pressing nothing (correct)
+-- read as a MISS (F, the streak broke and the band decayed), pressing the rendered
+-- "ride" button read as a correct S with points - points for idling, which the
+-- engine's contract forbids (a correct hold records no attempt) - and the class's own
+-- priority drill banked a false mis-pick for every real pick.
+--
+-- The fix keeps the nine SPELL-NAMING holds as actions (the guide has no slot for the
+-- spell, so the hold overlay names it) and states the ONE press-nothing hold as a
+-- hold: { action = nil, hold = true, reason = "RIDE" }.
+do
+    local sb = build()
+    local ST = sb.ST
+    local step = ST.DRUID.practice_scenario_step
+
+    -- The RIDE state: the bear form with a queued Maul.
+    local ride_ctx = { family = "WRATH", form_index = 1, rage = 0, maul_queued = true }
+
+    -- 1. The class's own step: a hold, never an action.
+    local answer = step(ST, ride_ctx)
+    check(type(answer) == "table", "ride: the step answers the guide's verdict")
+    eq(answer.action, nil, "ride: the step names no action (press nothing)")
+    eq(answer.hold, true, "ride: the step states an explicit hold")
+    eq(answer.reason, "RIDE", "ride: the hold carries the guide's own caption")
+
+    -- 2. The shared engine's accessor keeps the hold statement (the engine's
+    --    contract: a step with no action and a hold is a hold, not an unknown).
+    local practice_st = {}
+    local chunk = assert(loadfile(ROOT .. "practice.lua"))
+    setfenv(chunk, setmetatable({}, { __index = _G }))
+    chunk("SwedgeTimer", practice_st)
+    practice_st.DRUID = ST.DRUID
+    local H = practice_st.practice and practice_st.practice.harness
+    check(type(H) == "table", "ride: the shared harness is loaded")
+    local engine_answer = H.practice_scenario_step("DRUID", ST, ride_ctx)
+    check(type(engine_answer) == "table" and engine_answer.hold == true,
+        "ride: the engine's accessor keeps the hold statement")
+    eq(engine_answer.action, nil, "ride: the engine's accessor names no action")
+
+    -- 3. The three states through the engine's own decision:
+    --      hold + a cast   -> the illegal cast (an attempt, an F)
+    --      hold + nothing  -> a correct hold (no attempt, no points)
+    --      unknown         -> unknown (no attempt)
+    local run = H.new_rotation_run()
+    local cast = H.rotation_run_decide(run, engine_answer.action, "maul", engine_answer.hold)
+    eq(cast.outcome, "illegal_cast", "ride: a cast during the hold is an illegal cast")
+    eq(H.ROTATION_OUTCOME_GRADES[cast.outcome], "F", "ride: the illegal cast grades F")
+    eq(run.mispicks, 1, "ride: the illegal cast counts against the run's band")
+    local idle_run = H.new_rotation_run()
+    local idle = H.rotation_run_decide(idle_run, engine_answer.action, nil, engine_answer.hold)
+    eq(idle.outcome, "hold_ok", "ride: doing nothing during the hold is correct")
+    eq(H.ROTATION_OUTCOME_GRADES[idle.outcome], nil,
+        "ride: a correct hold records no attempt (no points for idling)")
+    eq(idle_run.mispicks, 0, "ride: a correct hold is never a mis-pick")
+    local unknown_run = H.new_rotation_run()
+    local unknown = H.rotation_run_decide(unknown_run, nil, "maul")
+    eq(unknown.outcome, "unknown", "ride: an unknown step stays unknown")
+    eq(H.ROTATION_OUTCOME_GRADES[unknown.outcome], nil,
+        "ride: an unknown decision records no attempt")
+
+    -- 4. The priority drill skips the hold: no attempt, and NO mis-pick banked in
+    --    the drill's own window (the ledger stays empty).
+    local order = nil
+    for i = 1, #ST.DRUID.practice_drills do
+        if ST.DRUID.practice_drills[i].key == "druid_finisher_order" then
+            order = ST.DRUID.practice_drills[i].grade
+        end
+    end
+    check(type(order) == "function", "ride: the priority drill is registered")
+    local ledger = {}
+    local drill_ctx = { family = "WRATH", form_index = 1, rage = 0, maul_queued = true,
+        last_action = "maul", state = ledger }
+    eq(order(ST, drill_ctx), nil, "ride: the priority drill grades nothing on a hold")
+    eq(ledger.druid_priority_window, nil,
+        "ride: the priority drill banks no mis-pick on a hold")
+
+    -- 5. A spell-naming hold still grades as that spell (the druid's guide names
+    --    the spell to press, so the step and the drill stay actions).
+    local tf_ctx = { family = "WRATH", form_index = 3, combo_points = 0, energy = 10,
+        tf_ready = true, gcd_remaining = 0, clearcast = false }
+    eq(step(ST, tf_ctx).action, "tigers_fury",
+        "ride: a spell-naming hold still grades as that spell")
+    local tf_drill = { family = "WRATH", form_index = 3, combo_points = 0, energy = 10,
+        tf_ready = true, gcd_remaining = 0, clearcast = false, last_action = "tigers_fury" }
+    eq(order(ST, tf_drill), "S",
+        "ride: the priority drill grades the named spell as a hit")
+
+    -- 6. The scenario vocabulary: no "ride" button. The panel's buttons are the
+    --    published rotation slice plus the keys the class asks for; no published
+    --    slice carries a "ride" key and the class never asks for one.
+    for _, family in ipairs({ "ERA", "SOD", "TBC", "WRATH", "FOREVER" }) do
+        local slice = ST.DRUID.practice_rotation_for(family)
+        for i = 1, #slice do
+            check(slice[i].action ~= "ride",
+                "ride: the " .. family .. " slice carries no 'ride' key")
+        end
+    end
+    local published = ST.DRUID.practice_rotation_for()
+    for i = 1, #published do
+        check(published[i].action ~= "ride",
+            "ride: the published slice carries no 'ride' key")
+    end
+    eq(step(ST, ride_ctx).action, nil,
+        "ride: the class never asks the panel for a 'ride' key")
+
+    -- 7. The class's hold vocabulary: the press-nothing set is exactly the guide's
+    --    one press-nothing hold, and the spell-naming set never names it.
+    local nothing = ST.DRUID.PRACTICE_HOLD_PRESSES_NOTHING
+    local keys = ST.DRUID.PRACTICE_HOLD_KEYS
+    check(type(nothing) == "table" and type(keys) == "table",
+        "ride: the class publishes its hold vocabulary")
+    eq(nothing["RIDE"], true, "ride: RIDE is the press-nothing hold")
+    eq(keys["RIDE"], nil, "ride: RIDE is never a spell-naming hold")
+    local nothing_count = 0
+    for text in pairs(nothing) do
+        nothing_count = nothing_count + 1
+        check(keys[text] == nil, "ride: " .. text .. " is not in both hold tables")
+    end
+    eq(nothing_count, 1, "ride: the guide has exactly one press-nothing hold")
+end
+
+--=========================================================================================
+-- 42) M2 (re-audit 2026-10-20): an UNKNOWN hold text is UNKNOWN, never a guessed key
+--=========================================================================================
+-- The class used to fall back to the hold text's slug ("SOME FUTURE HOLD" ->
+-- "some_future_hold"), so a hold text in neither published table became a
+-- synthetic ACTION - the deep audit's H1 shape (the class invents a button the
+-- player can only press dishonestly). The closed-vocabulary pin
+-- (tests/druid_guide_state.lua) is the tripwire that keeps a new hold text from
+-- ever reaching the class; this is the behaviour behind it: the unknown case
+-- answers UNKNOWN - no attempt, no wrong action.
+do
+    local sb = build()
+    local ST = sb.ST
+    local guide = sb.st.druid_guide
+    local real_evaluate = guide.evaluate
+    local function unknown_hold(_inputs, out)
+        out.hold = true
+        out.hold_text = "SOME FUTURE HOLD"
+    end
+
+    -- 1. The scenario step: UNKNOWN, so the engine grades "unknown" and the panel
+    --    asks for no button at all.
+    guide.evaluate = unknown_hold
+    local ok, answer = pcall(ST.DRUID.practice_scenario_step, ST, {
+        family = "WRATH", form_index = 3, combo_points = 0, energy = 10,
+    })
+    guide.evaluate = real_evaluate
+    check(ok, "M2: an unknown hold text does not raise (" .. tostring(answer) .. ")")
+    eq(answer, nil, "M2: an unknown hold text is UNKNOWN (the step answers nil)")
+
+    -- 2. The priority drill: nothing to grade, so no attempt and no mis-pick.
+    local order = nil
+    for i = 1, #ST.DRUID.practice_drills do
+        if ST.DRUID.practice_drills[i].key == "druid_finisher_order" then
+            order = ST.DRUID.practice_drills[i].grade
+        end
+    end
+    check(type(order) == "function", "M2: the priority drill is registered")
+    if type(order) == "function" then
+        local ledger = {}
+        guide.evaluate = unknown_hold
+        local ok2, grade = pcall(order, ST, {
+            family = "WRATH", form_index = 3, combo_points = 0, energy = 10,
+            last_action = "shred", state = ledger,
+        })
+        guide.evaluate = real_evaluate
+        check(ok2, "M2: the drill does not raise on an unknown hold (" .. tostring(grade) .. ")")
+        eq(grade, nil, "M2: an unknown hold text grades nothing (no attempt)")
+        eq(ledger.druid_priority_window, nil,
+            "M2: an unknown hold text banks no mis-pick in the priority drill")
+    end
+
+    -- 3. The production source never slugs a hold text into a key.
+    local function read(path)
+        local f = assert(io.open(ROOT .. path, "r"))
+        local text = f:read("*a")
+        f:close()
+        return text
+    end
+    local src = read("classes/druid.lua")
+    check(src:find('hold_text:lower()', 1, true) == nil,
+        "M2: the class never slugs an unknown hold text into an action key")
+end
+
+--=========================================================================================
+-- The NEUTRAL action set and the practice-panel ability list
+--
+-- The class publishes ST.DRUID.practice_neutral_actions (the contract fixed by the
+-- orchestrator, practice.lua's class contract block): the keys the practice panel
+-- offers but the rotation never grades. A key that is neither a rotation action nor
+-- neutral stays a mis-pick, so the set is a deliberate, CLOSED list.
+--
+-- The publish is FAMILY-SCOPED (a family key -> a set of action keys, resolved for the
+-- running client family - st.family). The Rake is the one key a BUILD can change: the
+-- SoD build runs on the Era client (the engine's publish reads st.family only) and
+-- the SoD rotation DOES ask for the Rake (its upkeep S7) - so the class's own build
+-- decision drops the key there. A rotation action can never be neutral.
+--=========================================================================================
+do
+    local published = base.ST.DRUID.practice_neutral_actions
+    eq(type(published), "table", "neutral: the druid publishes a neutral action set")
+
+    local COMMON = { "cheetah", "food", "healthstone", "healing_potion", "healing_touch",
+        "regrowth", "rejuvenation" }
+    local BUCKETS = {
+        ERA = { "cheetah", "food", "healthstone", "healing_potion", "healing_touch",
+            "rake", "regrowth", "rejuvenation" },
+        TBC = { "cheetah", "food", "healthstone", "healing_potion", "healing_touch",
+            "rake", "regrowth", "rejuvenation" },
+        WRATH = { "cheetah", "food", "healthstone", "healing_potion", "healing_touch",
+            "regrowth", "rejuvenation" },
+        FOREVER = { "cheetah", "food", "healthstone", "healing_potion", "healing_touch",
+            "regrowth", "rejuvenation" },
+    }
+    local function sorted(list)
+        local out = {}
+        for i = 1, #list do out[i] = list[i] end
+        table.sort(out)
+        return out
+    end
+    local function same_set(a, b)
+        if #a ~= #b then return false end
+        for i = 1, #a do
+            if a[i] ~= b[i] then return false end
+        end
+        return true
+    end
+    local function bucket_keys(bucket)
+        local out = {}
+        for k, v in pairs(bucket) do
+            if v == true then out[#out + 1] = k end
+        end
+        return sorted(out)
+    end
+
+    for family, want in pairs(BUCKETS) do
+        local bucket = published[family]
+        eq(type(bucket), "table", "neutral: the " .. family .. " bucket is a set")
+        if type(bucket) == "table" then
+            local want_sorted = sorted(want)
+            check(same_set(bucket_keys(bucket), want_sorted),
+                "neutral: the " .. family .. " bucket is exactly {"
+                .. table.concat(want_sorted, ", ") .. "}")
+            for k, v in pairs(bucket) do
+                check(type(k) == "string" and k ~= "" and v == true,
+                    "neutral: the " .. family .. " bucket holds key = true entries")
+            end
+        end
+    end
+
+    -- NO ROTATION ACTION IS EVER PUBLISHED AS NEUTRAL: the engine grades the
+    -- EXPECTED action first, so a rotation press still hits - but a rotation
+    -- action published as neutral would make a WRONG rotation press free.
+    -- The SoD slice runs on the Era client, so its bucket is the ERA one - and it
+    -- is the PICKED one (the SoD build's rotation asks for the Rake), so the SoD
+    -- slice is checked on a SoD sandbox.
+    local era = build({ project = 2 })
+    era.ST.DRUID.post_init(era.ST)
+    -- The class's own build decision (the SoD rune basis): reading the rotation
+    -- family latches the probe, and the latch corrects the publish.
+    eq(era.ST.DRUID.practice_rotation_family(), "ERA",
+        "neutral: the Era-base build is the Era rotation family")
+    local sod = build({ project = 2, known_names = { ["Mangle"] = "Mangle" } })
+    -- The class's own build decision (the SoD rune basis): reading the rotation
+    -- family latches the probe, and the latch corrects the publish.
+    eq(sod.ST.DRUID.practice_rotation_family(), "SOD",
+        "neutral: the SoD build is the SoD rotation family")
+    eq(sod.ST.DRUID.practice_neutral_actions.ERA.rake, nil,
+        "neutral: the SoD build drops the Rake (a rotation action there)")
+    for _, family in ipairs({ "ERA", "SOD", "TBC", "WRATH", "FOREVER" }) do
+        local is_sod = (family == "SOD")
+        local module = is_sod and sod.ST.DRUID or base.ST.DRUID
+        local bucket = is_sod and sod.ST.DRUID.practice_neutral_actions.ERA
+            or published[family]
+        local entries = module.practice_rotation_for(family)
+        check(type(entries) == "table" and #entries > 0,
+            "neutral: the " .. family .. " rotation slice resolves")
+        if type(entries) == "table" and type(bucket) == "table" then
+            for i = 1, #entries do
+                local entry = entries[i]
+                if type(entry) == "table" and type(entry.action) == "string" then
+                    check(bucket[entry.action] ~= true,
+                        "neutral: the rotation action " .. entry.action
+                        .. " is not published as neutral on " .. family)
+                end
+            end
+        end
+    end
+
+    -- THE BUILD PICK: the Era-base build keeps the Rake (its cat rotation asks
+    -- for neither the Rake nor the Bite), the SoD build drops it (the SoD
+    -- rotation asks for the Rake, under the key `rake`).
+    eq(era.ST.DRUID.practice_neutral_actions.ERA.rake, true,
+        "neutral: the Era-base build publishes the Rake")
+
+    -- THE PRACTICE-PANEL ABILITY LIST: the common abilities the panel offers but
+    -- the rotation never grades. Every entry names the client's spell, carries a
+    -- label and cites at least one spell id - an ability whose id nobody can
+    -- source is not published at all.
+    local common = base.ST.DRUID.practice_common_actions
+    eq(type(common), "table", "panel: the druid publishes a practice-panel ability list")
+    check(#common > 0, "panel: the practice-panel ability list is not empty")
+    for i = 1, #common do
+        local action = common[i]
+        eq(type(action), "table", "panel: common action " .. tostring(i) .. " is a table")
+        eq(type(action.key), "string", "panel: common action " .. tostring(i) .. " carries a key")
+        eq(type(action.label), "string", "panel: common action " .. tostring(action.key)
+            .. " carries a label")
+        eq(type(action.names), "table", "panel: common action " .. tostring(action.key)
+            .. " carries the client's spell name")
+        check(#action.names > 0, "panel: common action " .. tostring(action.key)
+            .. " names the client's spell")
+        eq(type(action.ids), "table", "panel: common action " .. tostring(action.key)
+            .. " cites a spell id")
+        check(#action.ids > 0, "panel: common action " .. tostring(action.key)
+            .. " cites at least one spell id")
+        for j = 1, #action.ids do
+            eq(type(action.ids[j]), "number", "panel: common action " .. tostring(action.key)
+                .. " cites a numeric spell id")
+        end
+        -- Published as neutral on every family the class publishes a bucket for.
+        for _, family in ipairs({ "ERA", "TBC", "WRATH", "FOREVER" }) do
+            eq(published[family][action.key], true, "panel: " .. tostring(action.key)
+                .. " is published as neutral on " .. family)
+        end
+        -- Never a rotation action on any family the druid plays.
+        for _, family in ipairs({ "ERA", "SOD", "TBC", "WRATH", "FOREVER" }) do
+            local entries = base.ST.DRUID.practice_rotation_for(family)
+            local rotation = false
+            for k = 1, #entries do
+                if entries[k].action == action.key then rotation = true end
+            end
+            check(not rotation, "panel: the common ability " .. tostring(action.key)
+                .. " is not a rotation action on " .. family)
+        end
+    end
+    -- The seven common abilities are exactly the ones the publish names.
+    eq(#common, 7, "panel: the druid publishes seven common abilities")
+    local common_keys = {}
+    for i = 1, #common do common_keys[common[i].key] = true end
+    for _, key in ipairs(COMMON) do
+        eq(common_keys[key], true, "panel: the common ability " .. key .. " is published")
+    end
+
+    -- THE WIDENING SEAM: the class publishes the widened slot list and applies it
+    -- to the guide slot list (the shaman's apply_family_slots precedent), so the
+    -- practice panel offers the common abilities.
+    eq(type(base.ST.DRUID.practice_panel_slots), "function",
+        "panel: the class publishes the panel slot list")
+    eq(type(base.ST.DRUID.apply_practice_panel_actions), "function",
+        "panel: the class publishes the widening seam")
+    local seam = build({ project = 11,
+        known = { [5185] = true, [774] = true, [8936] = true, [5118] = true,
+            [5720] = true, [439] = true, [433] = true } })
+    local seamST = seam.ST
+    local before = #seamST.DRUID.guide.slots
+    local widened = seamST.DRUID.practice_panel_slots()
+    eq(type(widened), "table", "panel: the panel slot list is a table")
+    eq(#widened, before + 7, "panel: the panel slot list carries the common abilities")
+    seamST.DRUID.apply_practice_panel_actions()
+    eq(#seamST.DRUID.guide.slots, before + 7,
+        "panel: the widening seam appends the common abilities to the slot list")
+    seamST.DRUID.apply_practice_panel_actions()
+    eq(#seamST.DRUID.guide.slots, before + 7,
+        "panel: the widening seam is idempotent")
+    -- The widened slots carry their own icons (the client's own rank) and the
+    -- common marker the seam looks for.
+    local common_slot = nil
+    for i = 1, #seamST.DRUID.guide.slots do
+        local slot = seamST.DRUID.guide.slots[i]
+        if type(slot) == "table" and slot.key == "healing_touch" then common_slot = slot end
+    end
+    check(common_slot ~= nil, "panel: the Healing Touch joins the slot list")
+    eq(common_slot and common_slot.spell_id, 5185,
+        "panel: the Healing Touch carries the client's own spell id")
+    eq(common_slot and common_slot.practice_common, true,
+        "panel: the common slot carries the common marker")
+    -- UNKNOWN-HIDES: a client that does not have the spell never gets the button.
+    local blind = build({ project = 11 })
+    eq(#blind.ST.DRUID.practice_panel_slots(), #blind.ST.DRUID.guide.slots,
+        "panel: a client without the spells is offered no common ability")
+    -- The WIRING: post_init widens the panel's slot list (the seam runs inside the
+    -- practice block, after the guide frame has built its icons).
+    local wired = build({ project = 11,
+        known = { [5185] = true, [774] = true, [8936] = true, [5118] = true,
+            [5720] = true, [439] = true, [433] = true } })
+    wired.st.practice_ui = { init = function() end }
+    local before_wired = #wired.ST.DRUID.guide.slots
+    wired.ST.DRUID.post_init(wired.ST)
+    eq(#wired.ST.DRUID.guide.slots, before_wired + 7,
+        "panel: post_init widens the panel's slot list with the common abilities")
+end
+
+-- ---- the shipped comment matches the code (the final-gate claim) -------------
+-- The FOR THE RECORD note claimed "the NAME-first resolution finds the client's
+-- own rank": the classic-line name leg is UNCONFIRMED in-client (the audit's
+-- §6 C1) and the id table is the citation and the fallback - the client's own
+-- rank only where that id still exists on it. The pins keep the stale claim OUT
+-- and the corrected statement IN (source-shape pins, so a correct rewording
+-- still passes).
+--
+-- THE MATCH IS ON PROSE, NOT ON SOURCE LINES: the claim is wrapped across
+-- three source lines here, so the file is flattened (the line-leading comment
+-- marker dropped, the lines joined with one space) and the sentence is matched
+-- whole.
+do
+    local function prose(path)
+        local fh = io.open(path, "r")
+        local src = fh and fh:read("*a") or ""
+        if fh then fh:close() end
+        local parts = {}
+        for line in (src:gsub("\r\n", "\n")):gmatch("[^\n]*") do
+            parts[#parts + 1] = (line:gsub("^%s*%-%-%s*", ""))
+        end
+        return (table.concat(parts, " "):gsub("%s+", " "))
+    end
+    local p = prose(ROOT .. "classes/druid.lua")
+    check(p:find("every client family answers its own rank art", 1, true) == nil,
+        "comment: the stale 'every client family answers its own rank art' claim is gone")
+    check(p:find("the NAME-first resolution finds the client's own rank", 1, true) == nil,
+        "comment: the stale 'the NAME-first resolution finds the client's own rank' claim is gone")
+    check(p:find("answers its own rank id", 1, true) ~= nil,
+        "comment: the resolver note says what the code does")
+    check(p:find("the NAME-first leg finds the client's own rank only where the client ANSWERS the name", 1, true) ~= nil,
+        "comment: the FOR THE RECORD note states the name leg as conditional and UNCONFIRMED")
 end
 
 if failures == 0 then

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:10:00Z",
+  "run_id": "hunter-drills-2026-10-19",
+  "agent_name": "hunter-drills",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the shared engine before designing the class side (practice.lua's contract block, practice_ui.lua's scenario_context and drill_list_press) exposed the two facts that shaped everything: the drill press carries no player action, and the cooldown map is keyed by the gathered input without its '_remaining_cd' suffix. The rotation tables cite the sim APLs freshly fetched in this session (tbc-new, sod p7, forever, wowsims/wotlk black arrow / explosive trap / serpent sting / talents), so every id in the tree is quoted from a source rather than remembered, and the class-side closures (LnL wiring on the existing throttled aura probe, the Serpent guard's 'known-down only' semantics, the sourced Serpent / trap / Readiness / ISS data) rest on the same fetches.",
+    "what_was_hard": "The engine's drill press is a moment, not a pick, so the first drill design could never grade in the panel; the drills had to become moment judges with the pick read from the ctx when the class's own ctx injects it (the live cast). The cast-shot lookup also had to move from the action key to the guide's input family, because the Wrath Aimed is instant on WotLK and reading it as a 3 s cast graded every Wrath clip as F. The Serpent guard could not simply be wired: the engine's old rule withheld the Chimera on any unknown debuff, so the knowledge alone would have silenced the MM prompt on Wrath - the guard was corrected to 'known-down only' instead.",
+    "skill_gap": "The audit spec assumed a harness contract that had already moved under it (the audit's session bands vs the engine's per-decision grades, and the pre-pull vs pull-opener reading of the TBC 'currentTime <= 0.5s' entry). The bench's own reading of that APL entry is superseded by the source, and the bench file should have quoted the APL rather than summarising it."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "The engine lane should define SCENARIO_RESOURCE_KEYS (practice_ui.lua:4325 reads it and it exists nowhere in the tree): the default scenario_context path raises on the first scenario tick for every class that does not publish its own practice_context. The hunter is immune (it publishes one), the other five classes are not."
+  }
+}

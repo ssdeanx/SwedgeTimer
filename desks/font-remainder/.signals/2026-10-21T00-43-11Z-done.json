@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-21T00:43:11Z",
+  "run_id": "font-remainder-2026-10-20",
+  "agent_name": "font-remainder",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The last unguarded font sites are gone: every FontString in the shipped tree (82 CreateFontString sites) is fonted before its first SetText. practice_ui.lua (13 sites), designmode.lua (1), classes/rogue.lua (3) and nextaction_ui.lua (4 - the three literal caption fonts were still bare SetFont calls and are now chain-routed too) all go through the shared chain st.utils.apply_font, with the previous path kept as the first candidate so the font that renders does not change. The sandboxes of the four owning suites are SoD-faithful (a SetText with no font throws 'Font not set'), and the pins kill every font-stripped mutant: 14 of 14 on /tmp/opencode copies, five of them with the client's exact error text (practice_ui.lua:2145, designmode.lua:520, classes/rogue.lua:1639). The tree is green: harness 43 steps / 0 failed, luacheck 2 warnings / 0 errors (the floor), practice_ui_state 2493->2522, designmode_state 497->512, nextaction_state 625->631, rogue_state 1100->1116, toc_check 1081.",
+    "what_was_hard": "The source half for practice_ui.lua, designmode.lua and classes/rogue.lua was already in the tree when this session started (mtimes 20:02, right after the TBC client font list was fetched at 20:01) with no journal entry - so the lane that made those edits is unattributed; this session verified all 17 sites against the pre-edit copy rather than trusting the tree, and recorded the provenance. Three of my own pins were vacuous until they were fixed, and finding that out was the hard part: the sandbox stub's GetFont reported only a path (so every SetFontObject line read as fontless, while the client reports a font object's own path); ipairs over a table with a nil hole stops at the hole (the helper hit was silently never reached); and (x == false) and nil or default never removes a value, so the 'no standard font' builds were quietly keeping the default. Worse, the practice sandbox's _G mirror never restored a stub whose previous value was nil (pairs over a table with no key), so STANDARD_TEXT_FONT leaked into every later build and would have made every 'missing STANDARD_TEXT_FONT' check vacuous - the fix and a fidelity pin now kill that leak (M14). The nextaction_ui pins had to be source-level: that suite loads the pure engine only, so a runtime sandbox there would have meant rebuilding the whole UI fixture that tests/guide_contract.lua already owns (and that suite is out of this lane's scope).",
+    "skill_gap": "Every pin here is offline. The client's own definition of STANDARD_TEXT_FONT is locale-dependent (koKR Fonts\\2002.TTF, zhCN ARKai_T, zhTW blei00d, ruRU FRIZQT___CYR, else FRIZQT__) - read from the reference client source, not observed in a live client - and the operator's TBC session is still the only real check that the rendered font is unchanged. Three gaps are filed for the orchestrator in bench/font_remainder_2026-10-20.md §8: tests/toc_check.lua's FONT_CONSUMERS does not list this lane's four consumers (the load order is correct today in all 7 TOCs, but the machine check does not cover them), tests/guide_contract.lua loads nextaction_ui.lua with a FontString stub that is not SoD-faithful, and rotationtext.lua keeps a bare SetFont(STANDARD_TEXT_FONT) fallback that is safe on every live client but not chain-routed."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T02:45:25Z",
+  "run_id": "superseded-wrappers-2026-10-19",
+  "agent_name": "superseded-wrappers",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-pointing the class wrappers at the class's own drill (the class module publishes PRACTICE_DRILL_KEY + practice_drill_key(); the session keeps the harness's shared primitives as its state and grades through the class's own drill function) made the retired built-in's truth provably dead: the mutation proofs (7/7 killed) show a wrapper that still starts the built-in, or that grades with the retired rule, or that carries the namespace alias, all fail a pin.",
+    "what_was_hard": "The engine reads ONE accessor for two different things (the retired built-in's routing key and the scenario id), so the class cannot rename practice_scenario_key without arming the engine's fail-closed 'drill route broken' path - the key therefore stays the built-in and the class's own drill is published through a new accessor. The shaman module sits exactly on Lua 5.1's 200-local limit, so the new helpers had to be inlined. The shaman's own drill needs the decision engine loaded, so the class suite now loads shaman_guide.lua.",
+    "skill_gap": "Deciding, without the engine lane's file, where the mastery row's drill id lives: the panel map (PRACTICE_DRILL_KEYS.*.mode) still names the class's first drill while the wrappers run the superseding drill - filed for the engine lane with the exact one-line change per class."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

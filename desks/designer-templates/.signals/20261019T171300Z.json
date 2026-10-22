@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T17:13:00Z",
+  "run_id": "designer-templates-2026-10-19",
+  "agent_name": "designer-templates",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "per-class audit against frozen contracts found two stale-template gaps (rogue coldblood, warrior hamstring); minimal template+default+suite fixes with zero default-visible change",
+    "what_was_hard": "tree carries parallel-lane edits; isolated own hunks and verified endings/whitespace; preview extension deliberately not built as beyond-contract",
+    "skill_gap": "none"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

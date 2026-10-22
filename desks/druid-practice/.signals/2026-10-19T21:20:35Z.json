@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T21:20:35Z",
+  "agent_name": "druid-practice",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "archive-first reconciliation (cmp-clean TBC/Forever gave one pattern); druid-scoped edits only; 602/602 pins incl. 4-family matrix; 5/5 mutations kill with byte-identical restores",
+    "what_was_hard": "parallel lanes rewriting the same shared files mid-session (rogue/hunter/shaman practice + registry counts); tree reds moved between runs",
+    "skill_gap": "cross-lane caller dependency: per-class wrappers need the running routing lane to land before wiring_check returns green"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator reconcile: routing-lane callers for per-class practice wrappers, design-registry count pin, shaman SODOPT sequencing"
+  }
+}

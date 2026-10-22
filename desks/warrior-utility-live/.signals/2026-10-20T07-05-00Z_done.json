@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T07:05:00Z",
+  "run_id": "warrior-utility-live-2026-10-20",
+  "agent_name": "warrior-utility-live",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-fetching the seven warrior APL files and the sims' own stances.go / overpower.go turned the vague 'ask for the utility line' brief into exact per-family gates: the SoD strictSequence, the TBC Overpower Weaving group, the Forever Stance Dance toggle, the WotLK strictSequences, and the era-vs-SoD split (the SoD APL carries no Battle Shout, no Berserker Rage and no Blood Fury row). One local (WARRIOR_UTILITY) held the ids, the family gates, the labels, the citations and the guide slots, so the rotation table's second block, the gather's reads, the practice surface's reads and the slot sets all read from one place.",
+    "what_was_hard": "Lua 5.1's 200-local chunk cap: the class module was already at the limit, so every new table had to be nested inside one local and the rotation generator had to become a function. The APL's stance rows needed the sims' own conditions - a naive 'ask for Battle Stance when not in it' would ping-pong between the stances forever, so the weave arm is anchored to the Overpower window and the upkeep arm to the APL's last row. The practice surface needed its own path: the shared engine's ctx carries the rows' cooldowns and flags, so the class maps them back into the engine's inputs.",
+    "skill_gap": "The Gladiator Stance row has a read but no arm: the SoD APL gates it on `auraIsKnown` of a rune aura, and the client's aura list reports the ACTIVE auras only. Modelling that honestly needed a read the tree does not have; guessing the rune id would have produced a wrong prompt, so the row stays engine = false and the residual is filed. The APL's target-count, Bloodlust-alignment and execute-phase gates are not modelled either - there is no read for them."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "The tree is green (41 steps, 0 failed) and this lane's four files are luacheck-clean. The orchestrator owns the validation (bench/warrior_apl_utility_live_2026-10-20.md section 8). Two residuals are filed for a later lane: the Gladiator Stance arm (it needs a rune-aura read) and the APL's target-count / Bloodlust-alignment gates (they need a target-count read and a Bloodlust clock)."
+  }
+}

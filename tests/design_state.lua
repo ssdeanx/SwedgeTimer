@@ -589,6 +589,18 @@ do
         "designmode.lua exposes template removal")
     check(mode_src:find("design_mouse_anchor", 1, true) ~= nil,
         "designmode.lua reads the mouse-anchoring toggle")
+
+    -- D4 (class-matrix): the rogue visuals exist and follow the sibling setup
+    -- pattern - setup_rogue_visuals defined, called once from post_init, retried
+    -- from the per-frame on_bar_update hook - so the bars_state rogue boot case
+    -- executes them instead of leaving them unpinned.
+    local rogue_src = read("classes/rogue.lua")
+    check(rogue_src:find("function ST.ROGUE.setup_rogue_visuals", 1, true) ~= nil,
+        "rogue: setup_rogue_visuals is defined")
+    check(rogue_src:find("ST.ROGUE.setup_rogue_visuals(self)", 1, true) ~= nil,
+        "rogue: post_init builds the visuals before the consumers run")
+    check(rogue_src:find("if ST.ROGUE.setup_rogue_visuals(self) then", 1, true) ~= nil,
+        "rogue: on_bar_update retries the setup until the frames exist")
 end
 
 if failures == 0 then

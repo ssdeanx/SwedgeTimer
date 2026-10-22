@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T03:52:00Z",
+  "run_id": "shaman-residuals-2026-10-20",
+  "agent_name": "shaman-residuals",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-reading the lane's own fetched APL files (/tmp/opencode/shaman_apl) instead of trusting the residual's prose confirmed every index: the SoD phase_6 APL's i=8 and phase_4's i=0 cast 10432 r7 'not auraIsActive(10432)', the Forever APL's i=6 casts 10432, and the Era-base and TBC APLs carry no Lightning Shield spell at all - so the maintain's family gate is a fact, not a preference. The same pass caught a citation the shipped row had wrong: the SoD Chain Lightning row is priorityList i=7 (the old '#8' was a 1-based row, while the lane's 'i=8' for the Lightning Shield was 0-based), so both are now cited in the tree's own 'i=N' convention. Settling the Chain Lightning sensor took the residual's own hint - git grep over five client branches (classic_era, classic_anniversary, classic_titan, origin/forever, origin/live) returns 0 Chain Lightning hits each - plus the tree-side half nobody had checked: the live gather feeds target_count = nil AND the shared practice engine never states the frozen input, so rule 13 has no producer at all. That is why the row's engine flag had to come down: a rule nothing can feed is not an arm the row can claim.",
+    "what_was_hard": "Two of the four residuals needed a judgement the filed spec did not settle. (1) Extending the Lightning Shield maintain to SoD and Forever introduced a NEW wrong prompt the extension itself created: the Lightning Shield is a talent, so a build without it would be prompted a spell it cannot cast. The lane's spec said 'the read already exists, no new client API is needed' - true, but the read answers 'no aura up', not 'you have the spell'. The Searing maintain's known gate is the tree's own answer to that shape, so the same gate was added (the client's own resolved id; an unreadable answer keeps the maintain silent). (2) The residual's rule 'no read -> live = false AND engine = false' contradicts the convention the rogue lane shipped an hour earlier (no read + a rule = engine = true), and cutting rule 13 is not this lane's call - it is the operator's O-4 decision. The resolution: the row's flags follow the residual, the rule stays as the filed skeleton, the table's header now spells out both axes ('engine = an arm that can play the line with the inputs the shipped tree produces'), and the convention conflict is flagged for the orchestrator rather than settled here. The class file also had to stay loadable without shaman_guide.lua (the secret_guard sandbox loads it that way), so both new reads carry nil-safe guards - proven by a mutant, not by inspection.",
+    "skill_gap": "The temptation to answer a residual's 'settle it honestly' with the cheapest honest reading was real: the shipped flags (live = false, engine = true) matched the rogue lane's convention, so the path of least resistance was to keep them and argue. The residual's actual demand - settle whether the READ exists, and let the flags follow - was the better one, and the two halves (no client read, no in-tree producer) had to be checked separately: the closure sweep had already proven the client half, but nobody had looked at the practice engine, and that is where the 'engine = true' claim really died. The second lesson: a filed spec that says 'the read already exists' can still leave a wrong prompt behind - 'the aura is up' and 'you can cast this' are different questions, and the maintain needed both answered."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

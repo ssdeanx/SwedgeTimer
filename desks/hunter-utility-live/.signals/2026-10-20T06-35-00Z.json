@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T06:35:00Z",
+  "run_id": "hunter-utility-live-2026-10-20",
+  "agent_name": "hunter-utility-live",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-fetching the six raw APL files from wowsims/*/master (every group expanded) instead of trusting the gap analysis settled the conditions the bench had only summarised - it caught four divergences (the Explosive Trap is gated on a DOT not a cooldown, the Immolation Trap is a melee-range row, the Era Serpent's early-refresh window, the WotLK Kill Shot having no execute condition). The mutation proofs caught two pins that passed with a broken implementation until the fixtures were tightened (the player's aspect buff UP, the target's Hunter's Mark UP).",
+    "what_was_hard": "The hunter's guide-slot contract was 'six of the six allowed' and the utility layer needs up to thirteen slots - the task's 'the guide can light it' forced the contract open, and the pinned slot counts plus the frame-count pins moved with it. The scenario's default state ('every cooldown ready') means the family's top APL row now leads, so the offline verdicts moved (the WotLK -> the Silencing Shot, the Era -> the Rapid Fire) - defensible, but it moved a lot of shipped pins.",
+    "skill_gap": "The edit tool's exact-match behaviour silently joined lines twice when an oldString ended in a newline; both times the join had to be found by reading the file back. Anchors should end on a complete line."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

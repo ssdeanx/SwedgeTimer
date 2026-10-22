@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:51:24Z",
+  "agent_name": "hud-slot-pins",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "mirrored paladin block shape per class with HUD_SLOTS-sourced keys; union for warrior family-conditional sets",
+    "what_was_hard": "warrior terminator has no next class so used own HUD_TEMPLATES; false-pins for claw/kidney/restealth/bandage needed exact false asserts",
+    "skill_gap": "none"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator validation + reconcile"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T20:58:00Z",
+  "run_id": "warrior-drills-2026-10-19",
+  "agent_name": "warrior-drills",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the sim sources directly (wowsims master branch, fetched 2026-10-19) instead of trusting the audit's paraphrase: it confirmed the Execute drain, the Overpower/Execute stance requirements and the Devastate line, and it corrected the audit's Devastate wording (the rage > 60 line is the FURY APL, not the arms one). Reusing the live guide engine for the practice pick made the scenario and the live prompt structurally unable to disagree.",
+    "what_was_hard": "The contract fixed ctx = { now, last_action, resources, cooldowns } with no run-scoped state, so the drills grade ONE decision each and the audit's run-level band tables were moved into pure helpers in warrior_guide.lua for the engine to aggregate. Lua 5.1's 200-local chunk limit also forced the practice helpers onto one table local.",
+    "skill_gap": "Deciding where the audit's [DESIGN] band edges disagree with the sim's own rule (the Sunder stack band) needed a documented interpretation rather than a literal copy; the interpretation is written into the bench file so the operator can overrule it."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

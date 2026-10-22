@@ -29,6 +29,13 @@
 --   * out fields: action ("soc"|"sob"|"twist"|"cs"), hold, riding, judge_call,
 --     filler_kind (nil|"consecration"|"exorcism"|"how", the last Era-only),
 --     prediction_hold, waiting_judgement, inputs_unknown.
+--   * out advisory fields (all false unless the rule below fires; the guide
+--     frame ignores unknown keys, so they are display-inert until a UI lane
+--     consumes them): stopattack (the sim would StopAttack before this cue),
+--     prepull_ready (prepull window open, seal down), seal_maintenance
+--     (FCFS SoD only: primary seal needs its reseal), rank1_advice (SoC
+--     Rank 1 is known: twist on rank 1), hard_wait (strictSequence: wait the
+--     swing out, do not fill).
 --   * inputs.waiting_judgement is the current judgement-cue latch; out.waiting_judgement
 --     is the updated latch — the caller feeds it back in on the next tick.
 --   * inputs.inputs_unknown (optional bool, M6): the caller's own "the core timing
@@ -43,6 +50,52 @@
 --     G plus the configured GCD padding; default G.
 --   * mana_exorcism_threshold      — db.nextaction_filler_mana_exorcism or 30.
 --   * mana_consecration_threshold  — db.nextaction_filler_mana_consecration or 35.
+-- Sim-sourced optional inputs (each defaults to the archived behaviour when
+-- absent; the live paladin provider sets the ones its client can answer):
+--   * cs_hold_remaining            — pull-phase CS hold, seconds left (TBC sim
+--     "Delay Major CDs" 11 s; TBC_PULL_CS_HOLD_SECONDS). While positive the
+--     CS override never fires. nil/<=0 = archived.
+--   * auto_age_seconds             — seconds since the last real auto landed
+--     (nil = unknown = archived). Feeds the two recency rules below.
+--   * reseal_auto_guard_seconds    — TBC reseal guard (TBC sim: no reseal
+--     within TBC_RESEAL_AUTO_GUARD_SECONDS of the last auto). When set, a
+--     fresh auto degrades the immediate reseal to a ride.
+--   * twist_mana_threshold         — mana-sustain governor plug-in (percent;
+--     unset = off = archived). When set and mana sits below it, the
+--     immediate reseal degrades to a ride instead of spending the mana.
+--   * how_cast_seconds             — Hammer of Wrath cast time, seconds
+--     (nil = unknown = archived hp-only rule). An instant (<= 0) HoW cues
+--     regardless of target health (Forever sim shape).
+--   * fight_remaining_pct          — fight remaining, percent (nil = unknown =
+--     archived). FCFS SoD only: below SOD_EXECUTE_FIGHT_PCT the HoW execute
+--     fires without the hp read (SoD APL execute burn).
+--   * hor_remaining                — Hand of Reckoning cooldown remaining,
+--     seconds (nil or the 999 sentinel = unknown on this client). FCFS Wrath
+--     only: the WotLK APL's TOP row (i=1, 67485). The provider feeds it only
+--     when the client's own spell book knows the spell, so a build without the
+--     talent never sees the prompt (the APL UTILITY layer, bench/
+--     rotation_gap_vs_apl_2026-10-20.md §6.2).
+--   * how_wrath_remaining          — Hammer of Wrath (WotLK 48806) cooldown
+--     remaining, seconds (nil = unknown = withheld). FCFS Wrath only: the
+--     WotLK APL's second row (i=2). The client's sim gates the cast on the
+--     execute phase (sim wowsims/wotlk sim/paladin/hammer_of_wrath.go:31-32
+--     ExtraCastCondition: sim.IsExecutePhase20()), so the arm asks for the
+--     spell only below 20 % target health.
+-- Follow-up optional inputs (each nil/false = archived; the live paladin
+-- provider feeds the ones its client can answer, the rest stay filed):
+--   * time_to_pull_seconds         — pull countdown, seconds (nil = unknown =
+--     archived). The classic APL prepulls the primary seal at -1.5 s; the pull
+--     timer itself lives outside this module (filed: main.lua).
+--   * seal_remaining_seconds       — primary-seal remaining, seconds (nil =
+--     unknown = archived). FCFS SoD only: below SEAL_MAINTAIN_RESEAL_SECONDS
+--     the sim refreshes Judge above the damage order (filed: seal-aura source
+--     per SoD build + guide slot + nextaction_ui).
+--   * soc_rank1_known              — SoC Rank 1 (20375) in the book (nil/false =
+--     archived). The min/max consensus twists on rank 1; the reader is the
+--     live spell book (filed: guide slot + option).
+--   * strict_sequence              — SoD strictSequence wait (nil/false =
+--     archived). True on SoD twist builds (rune-gated): a held twist waits the
+--     swing out instead of filling (filed: nextaction_ui hard-wait render).
 -- Era-correctness opt-ins (sourced Era 1.15.9 ret; absent means the archived
 -- behaviour, so old callers are unaffected — the live paladin provider sets them):
 --   * cs_known                     — false when Crusader Strike is unknown on this
@@ -83,7 +136,14 @@
 --     Judgement no longer consumes seals (the fit gate costs Judgement's own
 --     GCD only, no reseal), Consecration is a single-target filler (the beta
 --     Ret ST lists it), and Hammer of Wrath cues below 20% (beta Ret ST).
---     Holy Strike has no sourced spell id and is not probed.
+--   * holy_strike_known              — Holy Strike (10333) in the player's book
+--     on Forever (default nil = unknown = the archived behaviour). The id is
+--     WEB-CONFIRMED but CLIENT-UNCONFIRMED (bench/ids_research_2026-10-19.md
+--     §2), and the class resolves it by NAME before the book is asked, so a
+--     wrong id leaves this unknown rather than answering. PLUG-IN POINT: the
+--     engine does not read it yet - the frozen ten guide slots have no Holy
+--     Strike slot, and a slot-budget ruling is owed before one is added - so
+--     nothing prompts on it yet.
 --=========================================================================================
 -- Retail (12.x) inertness: st.family == "RETAIL" short-circuits evaluate to the
 -- empty display shape before any branch below. The inert stand-in never reports a
@@ -323,6 +383,52 @@ local ERA_HOW_HEALTH_PCT = 20
 -- reseal above, Era the single SoR->SoC reseal.
 local FOREVER_JUDGE_SEAL_GCDS = 1
 
+-- Sim-sourced pull/recency constants (bench/paladin_rotation_audit_2026-10-19.md).
+-- TBC_PULL_CS_HOLD_SECONDS is the TBC APL's "Delay Major CDs" variable: major
+-- cooldowns hold 11 s at pull, so the CS override suppresses that long. The
+-- provider owns the combat-start clock and passes the remainder; the engine
+-- only honours a positive remainder.
+st.nextaction.TBC_PULL_CS_HOLD_SECONDS = 11
+-- TBC_RESEAL_AUTO_GUARD_SECONDS is the TBC APL's reseal age guard: no reseal
+-- within 0.5 s of the last auto. The provider passes it on the TBC twist path
+-- only (nil elsewhere = archived); the age itself rides auto_age_seconds.
+st.nextaction.TBC_RESEAL_AUTO_GUARD_SECONDS = 0.5
+-- FOREVER_HOW_AUTO_WINDOW is the Forever sim's post-auto HoW window: HoW cues
+-- when its cast time is 0 or within 0.2 s after the last auto (an
+-- instant-cast/proc window, not an execute threshold).
+st.nextaction.FOREVER_HOW_AUTO_WINDOW = 0.2
+-- SOD_EXECUTE_FIGHT_PCT is the SoD APL execute burn: below 10% fight
+-- remaining HoW spams without the hp read (FCFS SoD only).
+st.nextaction.SOD_EXECUTE_FIGHT_PCT = 10
+
+-- PREPULL_SEAL_LEAD_SECONDS is the classic APL prepull: the primary seal goes
+-- up 1.5 s before the pull. The engine only reports the window (prepull_ready
+-- below); which seal is family-specific and stays filed with the pull timer.
+st.nextaction.PREPULL_SEAL_LEAD_SECONDS = 1.5
+
+-- SEAL_MAINTAIN_RESEAL_SECONDS is the classic APL reseal freshness line (the
+-- same <1 s the get_seal_state freshness rule already uses): a primary seal
+-- inside it is maintained above the damage order on FCFS SoD.
+st.nextaction.SEAL_MAINTAIN_RESEAL_SECONDS = 1
+
+-- SoD variant reseal/maintenance constants (bench/sod_paladin_variants_2026-10-19.md
+-- §3-§6, all six p8 APLs fetched in-lane; in-client behaviour UNCONFIRMED):
+--   * SOD_STACK_SEAL_RESEAL_SECONDS: p8-stack independent refreshes (SoC <=1 s,
+--     SoM <=1 s, two timers, §3).
+--   * SOD_SHOCK_SEAL_RESEAL_SECONDS: shockadin seal/Judge maintenance at 1.5 s
+--     (wider than Exodin's 1 s, §4).
+--   * SOD_WRATH_RESEAL_SECONDS: p8-wrath reseal <=0.5 s (tightest, §6).
+--   * SOD_WRATH_CONS_FALLBACK_SECONDS: p8-wrath Cons filler ONLY when DS/CS/Exo
+--     all >1.5 s out (or stacks <3, §6).
+--   * SOD_TEMPLAR_WAIT_SECONDS: p8-wrath Templar (1226464 <=1 s at 3 stacks)
+--     wait-for-DS rule (§6); shockadin Templar-stack (1240574 <=1.5 s at
+--     3 stacks, §4) reuses its own 1.5 s maintenance line below.
+st.nextaction.SOD_STACK_SEAL_RESEAL_SECONDS = 1
+st.nextaction.SOD_SHOCK_SEAL_RESEAL_SECONDS = 1.5
+st.nextaction.SOD_WRATH_RESEAL_SECONDS = 0.5
+st.nextaction.SOD_WRATH_CONS_FALLBACK_SECONDS = 1.5
+st.nextaction.SOD_TEMPLAR_WAIT_SECONDS = 1
+
 -- Bloodlust / Heroism override for the twist window (sourced TBC 2.5.6 ret;
 -- bench/verify_bank.md P3 row): under a haste raid buff every action is busy
 -- sooner, so the twist window the caller feeds the landmarks must shrink. The
@@ -367,6 +473,11 @@ function st.nextaction.evaluate(inputs, out)
         out.prediction_hold = 0
         out.waiting_judgement = false
         out.inputs_unknown = true
+        out.stopattack = false
+        out.prepull_ready = false
+        out.seal_maintenance = false
+        out.rank1_advice = false
+        out.hard_wait = false
         return out
     end
 
@@ -406,6 +517,14 @@ function st.nextaction.evaluate(inputs, out)
     -- branch below is byte-identical unless the caller sets it.
     local forever_mode = inputs.forever == true
 
+    -- Swing recency (header contract): seconds since the last real auto
+    -- landed, or nil when the caller cannot time it (unknown = archived
+    -- everywhere below).
+    local auto_age = inputs.auto_age_seconds
+    if type(auto_age) ~= "number" or auto_age ~= auto_age then
+        auto_age = nil
+    end
+
     -- Time from now until each landmark, mirroring the archive's nextSwing / divWhen /
     -- twistGap and their next-swing equivalents (208-214). "div" is the last moment a
     -- seal GCD can start and still finish before the twist window opens.
@@ -422,6 +541,11 @@ function st.nextaction.evaluate(inputs, out)
     local filler = false
     local riding = false
     local prediction_hold = 10
+    -- twist_now marks the immediate (cast-now, inside the window) twist cue:
+    -- the GCD-busy in-gap and GCD-ready in-twist branches below. It feeds the
+    -- stopattack advisory at the end (the sim StopAttacks before a twist or a
+    -- judge that lands inside the window).
+    local twist_now = false
     local waiting_judgement = inputs.waiting_judgement or false
 
     if seal == "sob" then
@@ -431,7 +555,20 @@ function st.nextaction.evaluate(inputs, out)
         -- free before the swing lands so Blood can be recast inside the twist window.
         action = "soc"
         local reseal_deadline = (inputs.gcd_before_swing or G) + reaction
-        if (swing_remaining - gcd_remaining) > reseal_deadline then
+        -- TBC reseal age guard: no reseal within reseal_auto_guard_seconds of
+        -- the last auto (nil guard or unknowable age = archived). Mana
+        -- governor plug-in: below twist_mana_threshold the reseal's mana is
+        -- kept and the swing rides instead (unset = off = archived).
+        local reseal_guard = inputs.reseal_auto_guard_seconds
+        if type(reseal_guard) ~= "number" or reseal_guard ~= reseal_guard then
+            reseal_guard = nil
+        end
+        local auto_fresh = auto_age ~= nil and reseal_guard ~= nil
+            and auto_age < reseal_guard
+        local mana_throttle = type(inputs.twist_mana_threshold) == "number"
+            and mana_pct < inputs.twist_mana_threshold
+        if (swing_remaining - gcd_remaining) > reseal_deadline
+            and not auto_fresh and not mana_throttle then
             -- Reseal now (or queue it for the end of the running GCD)
             prediction_hold = reaction + math.max(rel_gap, 0)
         elseif rel_gap > 0 then
@@ -463,6 +600,7 @@ function st.nextaction.evaluate(inputs, out)
             -- GCD frees inside the twist gap
             if seal == "soc" then
                 action = "twist"
+                twist_now = true
                 prediction_hold = -1
             else
                 if (not cs_known) or cs_remaining <= check + G then
@@ -524,6 +662,7 @@ function st.nextaction.evaluate(inputs, out)
         elseif at == "in twist" then
             if seal == "soc" then
                 action = "twist"
+                twist_now = true
                 prediction_hold = -1
             else
                 if (not cs_known) or cs_remaining <= G then
@@ -561,13 +700,16 @@ function st.nextaction.evaluate(inputs, out)
     -- Crusader Strike override: if delaying CS any longer would exceed the allowed
     -- delay budget, CS becomes the next action (375-396). Era-base has no
     -- Crusader Strike (cs_known false from the client's spell book), so the
-    -- override never fires there.
+    -- override never fires there. Pull-phase hold (TBC sim "Delay Major CDs"):
+    -- while cs_hold_remaining stays positive the override stays suppressed.
     if action == "twist" then
         cs_delay_max = cs_delay_max + 0.1
     end
     local cs_when = prediction_hold + G + reaction
     local cs_delay = cs_remaining - cs_when + cs_delay_max
-    if cs_known and cs_delay <= 0 then
+    local cs_hold_left = inputs.cs_hold_remaining
+    local cs_held = type(cs_hold_left) == "number" and cs_hold_left > 0
+    if cs_known and cs_delay <= 0 and not cs_held then
         action = "cs"
         hold = false
         riding = false
@@ -598,10 +740,26 @@ function st.nextaction.evaluate(inputs, out)
         local how_remaining = inputs.how_remaining
         local how_ready = how_remaining ~= nil and how_remaining < 999
             and how_remaining <= gcd_remaining
-        if (era_mode or forever_mode) and type(target_hp) == "number"
-            and target_hp < ERA_HOW_HEALTH_PCT and how_ready then
+        -- Instant-cast HoW cues regardless of target health (Forever sim
+        -- shape; nil cast time = unknown = archived hp-only rule). Forever
+        -- post-auto recency cues inside FOREVER_HOW_AUTO_WINDOW of the last
+        -- auto (same sim shape; unknowable age = archived).
+        local how_instant = type(inputs.how_cast_seconds) == "number"
+            and inputs.how_cast_seconds <= 0
+        local how_recent_auto = forever_mode and auto_age ~= nil
+            and auto_age <= st.nextaction.FOREVER_HOW_AUTO_WINDOW
+        if (era_mode or forever_mode) and how_ready
+            and (how_instant or how_recent_auto
+                or (type(target_hp) == "number"
+                    and target_hp < ERA_HOW_HEALTH_PCT)) then
             candidate = "how"
-        elseif creature_type and st.nextaction.exorcism_target_types[creature_type] then
+        elseif forever_mode
+            or (creature_type
+                and st.nextaction.exorcism_target_types[creature_type]) then
+            -- Forever treats Exorcism as a generic filler (the sim gates it
+            -- on swing timing + mana, with no creature-type gate); the mana
+            -- threshold below still applies, so the safe direction holds
+            -- (withholds, never over-prompts).
             if mana_pct > (inputs.mana_exorcism_threshold or 30) then
                 candidate = "exorcism"
             end
@@ -691,6 +849,29 @@ function st.nextaction.evaluate(inputs, out)
         waiting_judgement = false
     end
 
+    -- Follow-up advisories (all default off; each cites its sim shape in the
+    -- header). Stopattack discipline (classic IsUsingJudgementStopAttack +
+    -- SoD StopAttack/StartAttack twists/judges): cueing a twist-now or a
+    -- judge while the swing sits inside the window collides with the auto, so
+    -- the sim stops the attack first. Advisory only: the macro/UI that acts
+    -- on it is filed (addons cannot cast anyway), and the frame ignores the
+    -- key meanwhile.
+    local swing_inside_window = swing_remaining <= twist_window
+    local stopattack = (twist_now or judge_call) and swing_inside_window
+    -- Prepull guidance (classic APL -1.5 s): the window is open while the pull
+    -- is that close and no seal is up. The pull countdown itself is filed.
+    local time_to_pull = inputs.time_to_pull_seconds
+    local prepull_ready = type(time_to_pull) == "number"
+        and time_to_pull == time_to_pull and time_to_pull >= 0
+        and time_to_pull <= st.nextaction.PREPULL_SEAL_LEAD_SECONDS
+        and seal == "none"
+    -- Rank-1 advice (min/max consensus; sim APLs cast rank 1): a known book
+    -- rank 1 reads as advice. The slot that would carry it is filed.
+    local rank1_advice = inputs.soc_rank1_known == true
+    -- strictSequence hard-wait groundwork (SoD twist APLs): a held twist on a
+    -- strict build waits the swing out instead of filling. The render is filed.
+    local hard_wait = inputs.strict_sequence == true and hold == true
+
     out.action = action
     out.hold = hold
     out.riding = riding
@@ -698,17 +879,24 @@ function st.nextaction.evaluate(inputs, out)
     out.filler_kind = filler_kind
     out.prediction_hold = prediction_hold
     out.waiting_judgement = waiting_judgement
+    out.stopattack = stopattack
+    out.prepull_ready = prepull_ready
+    out.seal_maintenance = false
+    out.rank1_advice = rank1_advice
+    out.hard_wait = hard_wait
     return out
 end
 
 -- Helpers above are reachable via st.nextaction and pure (no WoW globals).
--- Wrath FCFS + SoD Exodin live below (evaluate_fcfs): same out channels, new
--- branches only. TBC / Era / Retail never set inputs.fcfs_mode, so evaluate()
--- above runs bit-identically there.
+-- Wrath FCFS + SoD Exodin + three SoD-native variants live below
+-- (evaluate_fcfs): same out channels, new branches only. TBC / Era /
+-- Retail never set inputs.fcfs_mode, so evaluate() above runs
+-- bit-identically there.
 if st.debug then st.utils.print_msg('-- Parsed nextaction.lua correctly') end
 
 --=========================================================================================
--- Wrath FCFS + SoD Exodin (first-come-first-served winner): pure, no WoW API.
+-- Wrath FCFS + SoD Exodin + SoD stack / shockadin / wrath-like (first-come-
+-- first-served winner): pure, no WoW API.
 --
 -- Sourced ret min/max (docs/research/rotations_wrath.md, rotations_sod.md):
 --   * Wrath FCFS (single target): CS > Judge > DS > Cons > Exo-instant-via-AoW >
@@ -716,36 +904,119 @@ if st.debug then st.utils.print_msg('-- Parsed nextaction.lua correctly') end
 --     beats waiting on a higher-priority cooldown.
 --   * SoD Exodin: Exo (core, every target) > CS > DS > Judge > Cons (mana, 3+
 --     targets) > HoW (< 20%). Exo < 10% is subsumed (Exo is already first).
+--   * SoD stack (bench/sod_paladin_variants_2026-10-19.md §3, p8-stack APL,
+--     in-client UNCONFIRMED): independent SoC/SoM <=1 s refreshes; DS
+--     stack-gated; CS; Exo; HW r2 Undead + Naxx-6pc; Cons r5; Judge dual-only.
+--   * Shockadin (bench §4-§5, p8-shockadin-1h/2h APLs, in-client UNCONFIRMED):
+--     seal/Judge 1.5 s maintenance (FILED: p8 primary role UNCONFIRMED);
+--     Sunlight/Templar maintenance AM+HS weave; Exo > AM (Libram-gated,
+--     3 stacks) > HS (3 stacks) > CS.
+--   * Wrath-like (bench §6, p8-wrath APL, in-client UNCONFIRMED): Judge
+--     T2-2pc-gated; reseal 0.5 s (FILED: primary role UNCONFIRMED, constant
+--     carried here); Templar <=1 s at 3 stacks waits DS; DS (3 stacks) > CS >
+--     Exo > DS ungated fallback > Judge GCD fallback > Cons (DS/CS/Exo all
+--     >1.5 s out or stacks <3).
 --   * 2pc-T10 note: NO explicit set-bonus input. Post-2pc DS resets surface as
 --     ds_remaining readiness (the live client cooldown), so this walk elevates DS
 --     automatically; the ORDER is unchanged pre/post 2pc. Explicit set-bonus
 --     detection is deferred (no offline-testable probe).
 --
 -- evaluate_fcfs(inputs, out) contract:
---   * inputs.fcfs_mode selects the table: "wrath" or "sod". Any other mode (or
---     Retail, which never sets a mode) yields the empty display shape.
+--   * inputs.fcfs_mode selects the table: "wrath", "sod", "sod_stack",
+--     "sod_shock" or "sod_wrath" (the last three are SoD-native, ERA-gated +
+--     rune/item-gated in the gather, never client-version; bench file above).
+--     Any other mode (or Retail, which never sets a mode) yields the empty
+--     display shape. "sod" (Exodin) is unchanged by every branch below.
 --   * Cooldown inputs (seconds remaining; nil or the 999 sentinel means unknown
 --     on this client and withholds the ability, never prompts it):
 --     cs_remaining, judge_remaining, ds_remaining, cons_remaining,
---     exo_remaining, hw_remaining (Wrath Holy Wrath), how_remaining (SoD HoW).
+--     exo_remaining, hw_remaining (Wrath Holy Wrath), how_remaining (SoD HoW),
+--     hs_remaining (shockadin Holy Shock), am_remaining (shockadin Aura Mastery),
+--     hor_remaining (Wrath Hand of Reckoning), how_wrath_remaining (Wrath
+--     Hammer of Wrath).
 --   * Gates: cs_known (default true, like evaluate), has_aow (Wrath Exo only),
 --     mana_pct with mana_consecration_threshold (35) / mana_exorcism_threshold
---     (30), creature_type (Wrath HW eligibility via exorcism_target_types),
---     target_count (SoD Cons cleave gate), target_health_pct (SoD HoW window).
+--     (30), creature_type (Wrath HW eligibility via exorcism_target_types;
+--     stack HW adds Naxx-6pc), target_count (SoD Cons cleave gate),
+--     target_health_pct (SoD HoW window), fight_remaining_pct (SoD HoW
+--     execute burn: below SOD_EXECUTE_FIGHT_PCT the cue fires without the
+--     hp read; nil = unknown = archived hp-only rule).
+--   * SoD-variant gates (all nil/false = unknown = withheld, never prompted):
+--     holy_power_stacks (1226461 stacks, APL-cited, in-client UNCONFIRMED),
+--     holy_power_set_known (1226460, OR-gate for DS per the twist GAP),
+--     sod_dual_seal_active (stack Judge dual gate), sod_t2_known (467518,
+--     wrath Judge gate), sod_naxx_known (1219193, stack HW gate),
+--     sod_libram_known (1214298, shock AM gate), am_rune_known (407624),
+--     sunlight_remaining (1239543), templar_stack_remaining (1240574),
+--     templar_wrath_remaining (1226464), soc_remaining_seconds /
+--     som_remaining_seconds (stack dual timers, SoC 20920r5 + SoM 407798).
 --   * Ready = remaining <= max(gcd_remaining, 0): castable when the GCD frees.
 --   * out reuses the archived channels so the provider mapping is untouched:
 --     action "cs"; action "sob" (Divine Storm - the sob slot carries the DS
 --     texture on FCFS families, same key); judge_call (Judgement cue);
 --     filler_kind "consecration" | "exorcism" | "how" (Holy Wrath on Wrath,
---     Hammer of Wrath on SoD). hold is true only when nothing is ready (wait on
---     the first known ability); riding never; waiting_judgement always false.
+--     Hammer of Wrath on SoD) | "holy_shock" | "aura_mastery" (shockadin;
+--     new slots carry them, same key). hold is true only when nothing is
+--     ready (wait on the first known ability); riding never;
+--     waiting_judgement always false.
 --   * inputs.inputs_unknown (optional bool, M6) passes through to
 --     out.inputs_unknown exactly as in evaluate above.
 --=========================================================================================
 
 -- Priority orders, first match wins (sourced above; index order is the contract).
-local FCFS_ORDER_WRATH = { "cs", "judge", "ds", "cons", "exo", "hw" }
+--
+-- WRATH carries the WotLK APL's UTILITY BAND at the front (the APL layer,
+-- bench/rotation_gap_vs_apl_2026-10-20.md §6.2 - the APL file was re-fetched
+-- on 2026-10-20 and every group expanded inline):
+--   * "hor"        Hand of Reckoning 67485 - the APL's i=1, its TOP row.
+--   * "how_wrath"  Hammer of Wrath 48806 - the APL's i=2 (the WotLK spell, not
+--                  the Era/Forever execute Hammer of Wrath the "how" key names;
+--                  the sim gates the cast on the execute phase, so the arm asks
+--                  for it only below 20 % target health).
+-- The damage rows below them keep their shipped relative order (cs, judge, ds,
+-- cons, exo, hw): the utility band is ADDED above them, never a re-cut of the
+-- shipped order. The APL's third row (Judgement of Wisdom 53408) is NOT in the
+-- band - it shares the 10 s judgement cooldown with the shipped "judge" row
+-- (Judgement of Light 20271), so an arm would displace the shipped judgement
+-- cue; that row ships in the ROTATION TABLE with engine = false and the reason
+-- filed (bench/paladin_apl_utility_build_2026-10-20.md §4).
+local FCFS_ORDER_WRATH = { "hor", "how_wrath", "cs", "judge", "ds", "cons", "exo", "hw" }
 local FCFS_ORDER_SOD = { "exo", "cs", "ds", "judge", "cons", "how" }
+-- SoD-variant orders (bench/sod_paladin_variants_2026-10-19.md §3-§6):
+--   * stack (§3): DS stack-gated > CS > Exo > HW (Undead + Naxx-6pc) > Cons r5 >
+--     Judge dual-only last. Maintenance (dual 1 s refreshes) overrides below.
+--   * shock (§4): Exo core > AM (Libram-gated, 3 stacks) > HS (3 stacks) > CS.
+--     Sunlight/Templar maintenance elevates AM/HS above Exo below. No Cons/HW
+--     line in the APL (order lacks them).
+--   * wrath-like (§6): DS (3 stacks) > CS > Exo > Judge (T2-2pc-gated,
+--     GCD fallback) > Cons (fallback ONLY when DS/CS/Exo all >1.5 s out or
+--     stacks <3). Templar-wait holds for DS below. DS ungated fallback: when
+--     CS/Exo/Judge/Cons are all ineligible, DS prompts if known+ready even
+--     without stacks (second DS line in the APL).
+local FCFS_ORDER_SOD_STACK = { "ds", "cs", "exo", "hw", "cons", "judge" }
+local FCFS_ORDER_SOD_SHOCK = { "exo", "am", "hs", "cs" }
+local FCFS_ORDER_SOD_WRATH = { "ds", "cs", "exo", "judge", "cons" }
+
+-- The five priority tables, published so no caller has to copy them (the
+-- practice rotation table and the priority-order drill read them instead of
+-- duplicating the order; a copy would drift from the engine on the next
+-- order change). READ-ONLY: the tables are module-level and shared, so a
+-- caller that mutates one changes every later tick. fcfs_order(mode) returns
+-- the table for one mode (nil for an unknown mode).
+st.nextaction.FCFS_ORDERS = {
+    wrath = FCFS_ORDER_WRATH,
+    sod = FCFS_ORDER_SOD,
+    sod_stack = FCFS_ORDER_SOD_STACK,
+    sod_shock = FCFS_ORDER_SOD_SHOCK,
+    sod_wrath = FCFS_ORDER_SOD_WRATH,
+}
+
+function st.nextaction.fcfs_order(mode)
+    if type(mode) ~= "string" then
+        return nil
+    end
+    return st.nextaction.FCFS_ORDERS[mode]
+end
 
 -- Pure: known cooldown (nil / 999 sentinel means the spell is unavailable here).
 local function fcfs_known(remaining)
@@ -754,13 +1025,45 @@ end
 
 -- Pure: eligibility WITHOUT readiness (known spell + mode gates). Readiness is
 -- tested separately so the nothing-ready fallback can wait on a known ability.
+-- New SoD-variant branches (sod_stack / sod_shock / sod_wrath) only fire on
+-- those modes; "wrath" and "sod" (Exodin) run bit-identically below.
 local function fcfs_eligible(mode, key, inputs)
     if key == "cs" then
         return inputs.cs_known ~= false and fcfs_known(inputs.cs_remaining)
     elseif key == "judge" then
-        return fcfs_known(inputs.judge_remaining)
+        if not fcfs_known(inputs.judge_remaining) then
+            return false
+        end
+        if mode == "sod_stack" then
+            -- p8-stack APL (bench §3): Judge ONLY when BOTH seals are
+            -- simultaneously active (dual-seal gate, last line). Unknown
+            -- (nil/false) withholds, never prompts.
+            return inputs.sod_dual_seal_active == true
+        end
+        if mode == "sod_wrath" then
+            -- p8-wrath APL (bench §6): Judge gated on S03 T2 Ret 2P Bonus
+            -- known (467518, APL-cited, in-client UNCONFIRMED). Unknown
+            -- withholds.
+            return inputs.sod_t2_known == true
+        end
+        return true
     elseif key == "ds" then
-        return fcfs_known(inputs.ds_remaining)
+        if not fcfs_known(inputs.ds_remaining) then
+            return false
+        end
+        if mode == "sod_stack" or mode == "sod_wrath" then
+            -- DS stack gate (bench §3/§6: DS stack-gated / DS at 3 stacks;
+            -- Holy-Power stacks 1226461, APL-cited, in-client UNCONFIRMED).
+            -- OR set-unknown mirrors the twist GAP pattern (bench §1: 3 stacks
+            -- OR set-unknown 1226460): without the set the gate cannot apply,
+            -- so DS prompts (archived); with the set DS needs 3 stacks.
+            -- Unknown stacks + known set withholds (unknown-hides).
+            if inputs.holy_power_set_known ~= true then
+                return true
+            end
+            return inputs.holy_power_stacks == 3
+        end
+        return true
     elseif key == "cons" then
         if not fcfs_known(inputs.cons_remaining) then
             return false
@@ -773,6 +1076,33 @@ local function fcfs_eligible(mode, key, inputs)
             -- unknown (nil) keeps the suggestion, mirroring the archived rule.
             local ntargets = inputs.target_count
             return ntargets == nil or ntargets >= 3
+        end
+        if mode == "sod_wrath" then
+            -- p8-wrath APL (bench §6): Cons filler ONLY when DS/CS/Exo all
+            -- >1.5 s out (or stacks <3). Unknown cooldowns cannot prove the
+            -- gap, so they withhold (unknown-hides); unknown stacks keep only
+            -- the gap clause. Mana gate above still applies.
+            local stacks = inputs.holy_power_stacks
+            if type(stacks) == "number" and stacks == stacks and stacks < 3 then
+                return true
+            end
+            local gap = st.nextaction.SOD_WRATH_CONS_FALLBACK_SECONDS
+            local ds = inputs.ds_remaining
+            local cs = inputs.cs_remaining
+            local exo = inputs.exo_remaining
+            return type(ds) == "number" and ds == ds and ds > gap
+                and type(cs) == "number" and cs == cs and cs > gap
+                and type(exo) == "number" and exo == exo and exo > gap
+        end
+        if mode == "sod_stack" then
+            -- p8-stack APL (bench §3): Cons r5, mana-gated, no cleave gate
+            -- named (single-target APL). Unknown (nil) keeps the archived
+            -- mana-only suggestion.
+            return true
+        end
+        if mode == "sod_shock" then
+            -- p8-shockadin APLs (bench §4-§5): no Cons line (Exo/HS/CS only).
+            return false
         end
         return true
     elseif key == "exo" then
@@ -791,14 +1121,96 @@ local function fcfs_eligible(mode, key, inputs)
         return true
     elseif key == "hw" then
         -- Wrath Holy Wrath: Undead/Demon only ("if eligible"), own cooldown.
-        return fcfs_known(inputs.hw_remaining)
-            and inputs.creature_type ~= nil
-            and st.nextaction.exorcism_target_types[inputs.creature_type] == true
+        if not fcfs_known(inputs.hw_remaining) then
+            return false
+        end
+        if inputs.creature_type == nil
+            or st.nextaction.exorcism_target_types[inputs.creature_type] ~= true then
+            return false
+        end
+        if mode == "sod_stack" then
+            -- p8-stack APL (bench §3): Holy Wrath r2 on Undead w/ Naxx-6pc
+            -- (1219193, APL-cited, in-client UNCONFIRMED). Unknown withholds.
+            return inputs.sod_naxx_known == true
+        end
+        if mode == "sod_shock" or mode == "sod_wrath" then
+            -- Neither shockadin (§4-§5) nor wrath-like (§6) lists Holy Wrath.
+            return false
+        end
+        return true
+    elseif key == "hor" then
+        -- Wrath Hand of Reckoning (the WotLK APL's top row, 67485): a pure
+        -- cooldown. The provider feeds the remaining time only when the client's
+        -- own spell book knows the spell, so an unknown read (nil) withholds it
+        -- and a build without the talent is never prompted (unknown-hides).
+        if mode ~= "wrath" then
+            return false
+        end
+        return fcfs_known(inputs.hor_remaining)
+    elseif key == "how_wrath" then
+        -- Wrath Hammer of Wrath (48806): the WotLK APL's second row. The sim's
+        -- own spell gates the cast on the execute phase
+        -- (sim wowsims/wotlk sim/paladin/hammer_of_wrath.go:31-32
+        -- ExtraCastCondition: sim.IsExecutePhase20()), so the arm asks for it
+        -- only below 20 % target health. An unknown target health withholds it
+        -- (unknown-hides): the arm never asks for a spell the client cannot
+        -- cast.
+        if mode ~= "wrath" then
+            return false
+        end
+        if not fcfs_known(inputs.how_wrath_remaining) then
+            return false
+        end
+        local hp = inputs.target_health_pct
+        return type(hp) == "number" and hp == hp and hp < 20
     elseif key == "how" then
-        -- SoD Hammer of Wrath: below 20% target health, own cooldown.
-        return fcfs_known(inputs.how_remaining)
-            and type(inputs.target_health_pct) == "number"
-            and inputs.target_health_pct < 20
+        if mode == "sod_stack" or mode == "sod_shock" or mode == "sod_wrath" then
+            -- No HoW line in the stack (§3), shockadin (§4-§5) or wrath-like
+            -- (§6) p8 APLs (stack uses HW, shock uses HS, wrath-like uses DS).
+            return false
+        end
+        -- SoD Hammer of Wrath: below 20% target health, own cooldown. The
+        -- execute burn fires below SOD_EXECUTE_FIGHT_PCT fight remaining
+        -- without the hp read; nil fight data keeps the archived hp rule.
+        if not fcfs_known(inputs.how_remaining) then
+            return false
+        end
+        if type(inputs.target_health_pct) == "number"
+            and inputs.target_health_pct < 20 then
+            return true
+        end
+        local fight_left = inputs.fight_remaining_pct
+        return type(fight_left) == "number"
+            and fight_left < st.nextaction.SOD_EXECUTE_FIGHT_PCT
+    elseif key == "hs" then
+        -- Shockadin Holy Shock (bench §4: 20930r3, max rank per holy_shock.go;
+        -- HS at 3 stacks; APL-cited, in-client UNCONFIRMED). Shock mode only;
+        -- unknown stacks/cooldown withholds (unknown-hides). No mana gate
+        -- named in the APL (UNCONFIRMED); readiness via the HS cooldown.
+        if mode ~= "sod_shock" then
+            return false
+        end
+        if not fcfs_known(inputs.hs_remaining) then
+            return false
+        end
+        return inputs.holy_power_stacks == 3
+    elseif key == "am" then
+        -- Shockadin Aura Mastery (bench §4: 407624 legs rune, Sanctified
+        -- holy-multiplier, Libram-of-Sanctity-gated 1214298; AM + HS at
+        -- 3 stacks; APL-cited, in-client UNCONFIRMED). Shock mode only.
+        if mode ~= "sod_shock" then
+            return false
+        end
+        if not fcfs_known(inputs.am_remaining) then
+            return false
+        end
+        if inputs.am_rune_known ~= true then
+            return false
+        end
+        if inputs.sod_libram_known ~= true then
+            return false
+        end
+        return inputs.holy_power_stacks == 3
     end
     return false
 end
@@ -820,6 +1232,14 @@ local function fcfs_remaining(key, inputs)
         return inputs.hw_remaining
     elseif key == "how" then
         return inputs.how_remaining
+    elseif key == "hor" then
+        return inputs.hor_remaining
+    elseif key == "how_wrath" then
+        return inputs.how_wrath_remaining
+    elseif key == "hs" then
+        return inputs.hs_remaining
+    elseif key == "am" then
+        return inputs.am_remaining
     end
     return nil
 end
@@ -840,6 +1260,12 @@ function st.nextaction.evaluate_fcfs(inputs, out)
             order = FCFS_ORDER_WRATH
         elseif mode == "sod" then
             order = FCFS_ORDER_SOD
+        elseif mode == "sod_stack" then
+            order = FCFS_ORDER_SOD_STACK
+        elseif mode == "sod_shock" then
+            order = FCFS_ORDER_SOD_SHOCK
+        elseif mode == "sod_wrath" then
+            order = FCFS_ORDER_SOD_WRATH
         end
     end
 
@@ -855,6 +1281,64 @@ function st.nextaction.evaluate_fcfs(inputs, out)
     -- M6: the caller's explicit "core inputs unusable" bit (the paladin provider
     -- sets it when the swing fields are not usable); the UI renders "…" on it.
     local inputs_unknown = inputs.inputs_unknown == true
+    -- SoD seal maintenance (p8-exodin APL: Judge + primary-seal reseal above
+    -- the damage order while the seal runs out). nil remaining = unknown =
+    -- archived order. Wrath keeps the archived order (different seal cadence).
+    -- The Judge elevation reuses the judge channel (no new slot); the reseal
+    -- half is the seal_maintenance advisory below (its slot is filed).
+    local seal_left = inputs.seal_remaining_seconds
+    if type(seal_left) ~= "number" or seal_left ~= seal_left then
+        seal_left = nil
+    end
+    local seal_expiring = mode == "sod" and seal_left ~= nil
+        and seal_left < st.nextaction.SEAL_MAINTAIN_RESEAL_SECONDS
+    -- Stack dual maintenance (p8-stack APL, bench §3): independent SoC <=1 s /
+    -- SoM <=1 s refreshes (SoC 20920r5 + SoM 407798, APL-cited, in-client
+    -- UNCONFIRMED). Either timer inside the line maintains (reseal advisory);
+    -- unlike Exodin the Judge channel is NOT elevated here (stack Judge is
+    -- dual-gated only, last APL line). Unknown (nil/NaN) maintains nothing.
+    local soc_left = inputs.soc_remaining_seconds
+    if type(soc_left) ~= "number" or soc_left ~= soc_left then
+        soc_left = nil
+    end
+    local som_left = inputs.som_remaining_seconds
+    if type(som_left) ~= "number" or som_left ~= som_left then
+        som_left = nil
+    end
+    local stack_expiring = mode == "sod_stack"
+        and ((soc_left ~= nil
+            and soc_left < st.nextaction.SOD_STACK_SEAL_RESEAL_SECONDS)
+            or (som_left ~= nil
+                and som_left < st.nextaction.SOD_STACK_SEAL_RESEAL_SECONDS))
+    -- Shockadin Sunlight/Templar maintenance (bench §4): Aura Mastery + Holy
+    -- Shock woven on Sunlight (1239543 <=1.5 s) / Templar-stack (1240574
+    -- <=1.5 s at 3 stacks). Either condition elevates AM/HS above Exo below
+    -- (the sim shape); unknown withholds. Seal/Judge 1.5 s maintenance
+    -- (primary role UNCONFIRMED for p8: SoR per P5/P7 predecessors vs SoM per
+    -- P7 2H) is FILED in the gather (classes/paladin.lua) — this engine only
+    -- carries the 1.5 s threshold constant for that lane.
+    local function num_or_nil(v)
+        if type(v) == "number" and v == v then
+            return v
+        end
+        return nil
+    end
+    local sun_left = num_or_nil(inputs.sunlight_remaining)
+    local tst_left = num_or_nil(inputs.templar_stack_remaining)
+    local hp_stacks = inputs.holy_power_stacks
+    if type(hp_stacks) ~= "number" or hp_stacks ~= hp_stacks then
+        hp_stacks = nil
+    end
+    local shock_maint = mode == "sod_shock"
+        and ((sun_left ~= nil and sun_left <= 1.5)
+            or (tst_left ~= nil and tst_left <= 1.5 and hp_stacks == 3))
+    -- Wrath-like Templar wait (bench §6: Templar 1226464 <=1 s at 3 stacks
+    -- waits for DS). While the wait holds the tick holds on DS (no lower
+    -- priority prompt); unknown withholds the wait (archived order).
+    local twr_left = num_or_nil(inputs.templar_wrath_remaining)
+    local templar_wait = mode == "sod_wrath" and twr_left ~= nil
+        and twr_left <= st.nextaction.SOD_TEMPLAR_WAIT_SECONDS
+        and hp_stacks == 3
     if order then
         -- Never-wait: the first READY ability in priority order wins (a ready
         -- lower-priority ability beats waiting on a higher-priority cooldown).
@@ -867,10 +1351,32 @@ function st.nextaction.evaluate_fcfs(inputs, out)
                 break
             end
         end
+        -- Seal maintenance above the damage order: an expiring seal judges
+        -- first while Judge is ready, even under a ready higher-priority
+        -- button (the sim shape). Otherwise the never-wait winner stands.
+        -- Wrath-like Templar-wait and shockadin Sunlight/Templar maintenance
+        -- elevate above it (their APL wait/weave outranks the seal line).
+        if templar_wait and fcfs_known(inputs.ds_remaining) then
+            winner = "ds"
+            hold = true
+        elseif shock_maint then
+            if fcfs_eligible(mode, "am", inputs)
+                and fcfs_remaining("am", inputs) <= gcd_remaining then
+                winner = "am"
+            elseif fcfs_eligible(mode, "hs", inputs)
+                and fcfs_remaining("hs", inputs) <= gcd_remaining then
+                winner = "hs"
+            end
+        elseif seal_expiring and fcfs_eligible(mode, "judge", inputs)
+            and fcfs_remaining("judge", inputs) <= gcd_remaining then
+            winner = "judge"
+        end
         if winner == nil then
             -- Nothing castable: wait on the soonest-known ability (hold), never
             -- prompt an unknown spell. Priority order breaks readiness ties. No
-            -- known ability at all: stay empty.
+            -- known ability at all: stay empty. Wrath-like DS ungated fallback
+            -- (bench §6, second DS line): when CS/Exo/Judge/Cons are all
+            -- ineligible, DS prompts if known+ready even without stacks.
             local best_rem = nil
             for n = 1, #order do
                 local key = order[n]
@@ -883,9 +1389,22 @@ function st.nextaction.evaluate_fcfs(inputs, out)
                     end
                 end
             end
+            if winner == nil and mode == "sod_wrath"
+                and fcfs_known(inputs.ds_remaining)
+                and inputs.ds_remaining <= gcd_remaining then
+                winner = "ds"
+            end
         end
         if winner == "cs" then
             action = "cs"
+        elseif winner == "hor" then
+            -- The WotLK APL's top row (Hand of Reckoning 67485): its own slot
+            -- key, so the frame lights the Hand of Reckoning icon.
+            action = "hor"
+        elseif winner == "how_wrath" then
+            -- The WotLK APL's second row (Hammer of Wrath 48806): its own slot
+            -- key (the "how" key is the Era/Forever execute Hammer of Wrath).
+            action = "how_wrath"
         elseif winner == "judge" then
             judge_call = true
         elseif winner == "ds" then
@@ -896,6 +1415,10 @@ function st.nextaction.evaluate_fcfs(inputs, out)
             filler_kind = "exorcism"
         elseif winner == "hw" or winner == "how" then
             filler_kind = "how"
+        elseif winner == "hs" then
+            filler_kind = "holy_shock"
+        elseif winner == "am" then
+            filler_kind = "aura_mastery"
         end
     end
 
@@ -907,5 +1430,11 @@ function st.nextaction.evaluate_fcfs(inputs, out)
     out.prediction_hold = 0
     out.waiting_judgement = false
     out.inputs_unknown = inputs_unknown
+    out.stopattack = false
+    out.prepull_ready = false
+    out.seal_maintenance = seal_expiring or stack_expiring == true
+        or shock_maint == true or templar_wait == true
+    out.rank1_advice = false
+    out.hard_wait = false
     return out
 end

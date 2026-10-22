@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-19T21:42:00Z",
+  "run_id": "rogue-drills-2026-10-19",
+  "agent_name": "rogue-drills",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 3
+  },
+  "patterns": {
+    "what_worked": "The shipped engine's own contract (practice.lua's class-contract header) states that a nil step means 'cannot decide' and that the engine 'never records a wrong action' - so the POOL question had to be answered against that contract, not against the audit's wording alone.",
+    "what_was_hard": "The audit (bench/class_features_drills_2026-10-19.md §2.4 S-R) wants a cast during a POOL verdict to count as an illegal cast, but H.rotation_run_decide compares two strings only: a nil expected reads as UNKNOWN (no attempt) and a mismatched expected/actual reads as out_of_order (F). A 'pool' action key would make every POOL step an automatic F (the panel has no pool button, and doing nothing is graded a miss -> F).",
+    "skill_gap": "A spec rule that the shared engine's data model cannot express is a design gap, not a lane bug - but it only becomes visible when a class lane tries to implement it."
+  },
+  "escalation": {
+    "reason": "The audit's S-R rule ('a press while the verdict is POOL is an illegal cast') cannot be expressed by the shipped engine: H.rotation_run_decide compares expected/actual action strings, a nil expected reads as UNKNOWN, and any other mismatch reads as out_of_order (F). A 'pool' action key would make every POOL step an automatic F (no panel button, and doing nothing grades a 'miss' -> F). All three class lanes that have landed (shaman_guide.practice_step, ST.PALADIN.practice_scenario_step, this lane) answer a hold with nil, so the class sides agree - but the spec rule and the engine's contract do not.",
+    "blocked_on": null,
+    "recommendation": "Operator ruling: (a) the engine grows an explicit hold verdict (e.g. expected = 'hold' with its own outcome, so a cast during a hold is an illegal cast and doing nothing is correct), or (b) the audit's S-R rule is amended to 'a POOL step is ungraded' and the rogue's drills carry the pooling discipline instead (the energy-pool drill already teaches the spend timing). Until then every class lane answers a hold with nil, and the rogue's rotation table lists the hold as the POOL text in the reason line."
+  }
+}

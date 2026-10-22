@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T21:23:30Z",
+  "agent_name": "hunter-practice-designer",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "archive-diff-first: both archives file-identical so one pattern; family-independent drill code runs unmodified on Era/TBC/Forever; thin practice_ui branches with logic owned in hunter.lua kept pins ownable",
+    "what_was_hard": "live parallel writers in practice_ui.lua (shaman lane) and tree-wide crossfire reds; scope discipline (no touching sibling lines, no fixing sibling reds)",
+    "skill_gap": "cross-lane file locking/coordination for shared files under parallel dispatch"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator reconcile owns: designmode count 9-11, shaman SODOPT x6, druid/rogue/shaman dead hooks, top-level Practice tab, luacheck +4 sibling warnings"
+  }
+}

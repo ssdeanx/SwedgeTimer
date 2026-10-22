@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T03:40:00Z",
+  "run_id": "options-pass-2026-10-19",
+  "agent_name": "options-pass",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The sweep's item rows named the live consumer for each widget, so every build was 'find the consumer, then write the widget against it' rather than guesswork. Re-reading the tree before each edit caught that P-22's range widget had ALREADY shipped and only the default was missing - building a second widget would have been a duplicate. Driving the badge widget against the REAL practice_ui module (injected into the options sandbox) proved the whole chain - widget -> module entry point -> class table - instead of a copy of the logic. Mutation proofs on a /tmp/opencode copy (11/11 killed, each restored byte-identical) caught that the Flame Shock flip silently killed the guide icon's countdown swipe; the pins now say 'refresh on expiry' and a separate case proves the explicit override still rides the swipe.",
+    "what_was_hard": "Three of the four items were not 'add a widget' in the simple sense: P-22's widget existed (only the default was owed), the Forever Rend widget's provider read lives in a class file this lane may not touch, and the Flame Shock flip changes visible guide behaviour (a live dot is no longer re-applied, so the slot's swipe never rides). Each needed a documented default-off state and a filed follow-up rather than an invented value. The shaman lane was editing classes/shaman.lua and tests/shaman_guide_state.lua LIVE through the whole run, so the harness was read twice and the mutation baseline had to be re-taken after it landed.",
+    "skill_gap": "I nearly shipped the Forever Rend widget as if it were live. The house rule in this very suite says an unread key must not get a widget - the honest resolution was to ship the key + widget + off default as the spec asked, cite the engine consumer, and pin the missing provider link explicitly (with the exact one-line shape) so the gap is visible rather than silent."
+  },
+  "escalation": {
+    "reason": "Two items need someone else's hand, not another attempt: (a) the Forever Rend toggle's PROVIDER read is classes/warrior.lua:3049-3053 - the warrior lane's file - so the widget is armed but the rule stays dormant until that one line lands (the exact shape is in bench/buildout_options_pass_2026-10-19.md §4.1); (b) a NON-ZERO TBC mana-sustain threshold is operator-gated: the cited source (docs/research/tbc_minmax.md:27) names no percentage, so the default ships 0 = off and a non-zero value needs an operator order the way the badge's default needed one. HU-9's row is answered - the widget landed on the Progress page - and the operator closes it.",
+    "blocked_on": "the warrior lane (classes/warrior.lua) for the Forever Rend provider read; the operator for a P-22 threshold value",
+    "recommendation": "Dispatch the warrior lane with the exact one-line read from the bench artifact, and let the operator rule on the P-22 value (the candidate and its citations are in the artifact §2). Also note for the reconcile owner: the shaman lane and this lane both edited tests/shaman_guide_state.lua during the same window - both sets of pins are green, but a human should confirm they did not interleave badly."
+  }
+}

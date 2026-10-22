@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T12:29:47Z",
+  "agent_name": "hunter-gaps",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "H1 unit-token reads + H2 pure stats math stayed in scope; sandbox mirror/restore leak found and fixed at the root; 8/8 mutations caught on copies",
+    "what_was_hard": "Off-gate inertness pins forced sampler gating; transient rogue failures from concurrent lane edits during harness runs",
+    "skill_gap": "none new; cross-lane tree contention needs orchestrator scheduling"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "reconcile wave owns paladin/warrior/druid bars pins; options pass owns hunter_target_warning_enabled default + report toggle wiring"
+  }
+}

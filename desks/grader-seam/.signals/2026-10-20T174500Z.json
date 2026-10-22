@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T17:45:00Z",
+  "run_id": "grader-seam-2026-10-20",
+  "agent_name": "grader-seam",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the class modules first (the paladin's alias table, its guide slot set, its own practice_filler_key map) showed the two key spaces are the class's OWN statement - the class already normalises its own answer, only the panel and the grader did not. The seam was put in the CALLER (the UI), so H.rotation_run_decide keeps its pure contract, and the closed-list suite's panel model was moved onto the canonical spelling instead of being left to describe a vocabulary the panel no longer offers.",
+    "what_was_hard": "Three independent things had to move together or the fix is half a fix: the panel vocabulary, the icon lookup and the grader comparison - and the pin had to kill a no-normalisation mutant, which the panel's own button cannot do on its own (after the canonicalisation the button's key IS the canonical key, so the alias press is the only thing that can catch a grader that does not normalise). The run's ten-decision budget also forced one session per press.",
+    "skill_gap": "A fix that makes a value CANONICAL changes a vocabulary other suites describe; the closed-list suite had to be re-pointed at the canonical spelling or it would have kept describing a panel that no longer exists - a green suite proving nothing about the shipped panel."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

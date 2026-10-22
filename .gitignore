@@ -7,3 +7,10 @@ undefined/
 .omo/run-continuation/*.json
 docs/media/
 OLD/
+.ruff_cache/
+.vscode/
+Media/Background/
+Media/blizz_textures/
+Media/Platynator/
+Media/Textures/
+Media/StatusBar/

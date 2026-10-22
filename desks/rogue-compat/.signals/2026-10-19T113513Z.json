@@ -1,0 +1,31 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T11:35:13Z",
+  "agent_name": "rogue-compat",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Moved all five rogue client probes into compat.lua st.api wrappers (item info/count/cooldown, weapon enchant, unit guid) with control/secret/throwing/absent pins; the reference-repo inspection caught a latent bug in the poison reminder (hasOffHandEnchant read at return 4 instead of 5, so it could never show in-client).",
+    "what_was_hard": "The brief presumed compat.lua was CRLF; it is LF (verified byte-level) and was kept LF. The weapon-enchant position was only decidable from Blizzard's own consumers (SecureGroupHeaders/BuffFrame/Deprecated_12_1_0), not from memory.",
+    "skill_gap": "None blocking; in-client confirmation of the corrected poison cue remains an owner-side check."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "files_changed": [
+    "compat.lua",
+    "classes/rogue.lua",
+    "tests/secret_guard_state.lua",
+    "tests/rogue_state.lua",
+    "bench/buildout_rogue-compat_2026-10-19.md",
+    "desks/rogue-compat/journal.md"
+  ],
+  "harness": "37 steps, 0 failed; luacheck 2 warnings / 0 errors (floor); mutation battery 13/13 bitten + clean-copy sanity PASS"
+}

@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T12:26:38Z",
+  "agent_name": "rogue-isolation",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "code-vs-comment grep separation; wow-ui-source branch@file citations per API; fail-safe direction checked per cell",
+    "what_was_hard": "C++-global APIs (GetWeaponEnchantInfo classic shape, subclass strings, slots 16/17) have no FrameXML definitions; proven via consumer call-sites and the live deprecated shim instead",
+    "skill_gap": "none blocking; in-client checks remain with orchestrator"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "F1 (vendor druid-D4 EMA into rogue) is the only code follow-up; writer lane owns druid_energy.lua so this lane proposed direction only"
+  }
+}

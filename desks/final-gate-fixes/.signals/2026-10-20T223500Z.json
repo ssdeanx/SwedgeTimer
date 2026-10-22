@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T22:35:00Z",
+  "run_id": "final-gate-fixes-2026-10-20",
+  "agent_name": "final-gate-fixes",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The local-ceiling fix was mechanical and provable: 54 file-scope locals moved onto the module table, every value byte-identical (a literal-by-literal comparison plus new style pins in the three class suites). The guard counts with the COMPILER'S OWN number (luac5.1 -l -l), so it cannot drift from a refactor and it counts names, not lines (demonstrated: one `local a, b` line moved a file from 183 to 185). The audit's own sibling lane had already written the post-fix expectation into tests/neutral_actions_state.lua, so the paladin's family-scoped publish landed green with no out-of-scope test edit. The shaman's fix exposed two GREEN-BUT-WRONG pins (the real client has always carried the common slots on a rotation family), and the suite now states the truth.",
+    "what_was_hard": "The Lua 5.1 ceiling is invisible until it is hit: the two classes at 200 had no failing test, so the headroom had to be created by reading the code rather than by a red test. The exact ceiling semantics had to be pinned down first (luac's 'locals' is the chunk's TOTAL local declarations - an upper bound on the compiler's ACTIVE count - so it is the conservative metric; 201 declarations is the load failure). The publish's family scope needed a judgement call the audit left open (whether the 4.0+ clients get a bucket): the CHANGELOG states the flat paladin answers every family, and a bucket without the seal keeps the offer list unchanged there, so the buckets keep every family and differ only in the seal. /tmp filled up mid-lane from other lanes' mutation copies (16 GB tmpfs at 100%) - the mutation copies were trimmed to the tree minus Media/.",
+    "skill_gap": "Writing the guard against the compiler rather than against the source text is right, but it makes the guard depend on luac5.1 being on PATH - the harness's own first step already needs it, so the floor is unchanged, but the guard could be softened to a source scan if the operator wants it dependency-free. The comment-truth pins are source-shape pins on the ABSENCE of a stale phrase: robust to a correct rewording, but a lane that re-introduces the same false claim in other words would pass them."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

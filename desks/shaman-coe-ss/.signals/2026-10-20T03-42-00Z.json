@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T03:42:00Z",
+  "agent_name": "shaman-coe-ss",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "BS-4a (the Call of the Elements line) and BS-4b (the per-family Stormstrike fallback) are built with cited slot/id/numbers: the water clock (api.GetTotemInfo slot 3), the gather feed (inputs.water_remaining / inputs.water_duration), the engine rule 9c (WRATH, water totem under 20 s, between the Searing maintain and Magma - the APL's own order), the guide slot 18, the HUD mirror, and the Stormstrike fallback (Era 20 / SoD 6 / TBC 10 / Wrath 8) on both the guide slot and the HUD mirror.",
+    "what_was_hard": "The Lua 5.1 200-local wall in classes/shaman.lua, and the guide-contract pin updates that the 18th slot forces in three suites (guide_contract 17->18 + HUD 10->11, hud_state 10->11, and the excluded shaman_guide_state).",
+    "skill_gap": "A static guide-slot fallback cannot know the family at load time, and the SoD build is only known when the MW rune is observed - the descriptor has to be refreshed from the gather before the frame renders it. That coupling is documented in the code but is the kind of thing a future lane could break silently."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

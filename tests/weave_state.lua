@@ -537,6 +537,41 @@ eq(weave.get_totem_twist_remaining(-5, 105), nil, "twist: negative last drop -> 
 eq(weave.get_totem_twist_remaining("100", 105), nil, "twist: non-number last drop -> nil")
 near(weave.get_totem_twist_remaining(100, nil), 10, "twist: nil now reads as the full period")
 
+-- get_windfury_icd_seconds (audit 2026-10-19 §5) --------------------------------
+-- The SoD sim models a 1.5 s ICD, the TBC sim 3 s. Unknown families never shrink
+-- the window on a guess.
+eq(weave.WINDFURY_ICD_SECONDS_ERA, 1.5, "WINDFURY_ICD_SECONDS_ERA == 1.5")
+eq(weave.get_windfury_icd_seconds("ERA"), 1.5, "ICD window: ERA -> 1.5 s")
+eq(weave.get_windfury_icd_seconds("TBC"), 3, "ICD window: TBC -> 3 s")
+eq(weave.get_windfury_icd_seconds("WRATH"), 3, "ICD window: Wrath -> 3 s")
+eq(weave.get_windfury_icd_seconds("FOREVER"), 3, "ICD window: Forever -> 3 s")
+eq(weave.get_windfury_icd_seconds(nil), 3, "ICD window: missing family -> 3 s")
+eq(weave.get_windfury_icd_seconds("era"), 3, "ICD window: the match is case-sensitive (no silent miss)")
+
+-- get_windfury_icd_remaining with the family window: a missing/non-number window
+-- reads the 3 s registry value, so two-arg callers keep the exact TBC behaviour.
+near(weave.get_windfury_icd_remaining(100, 100.5, 1.5), 1.0, "windfury: 0.5 s into the 1.5 s window -> 1.0 s left")
+eq(weave.get_windfury_icd_remaining(100, 101.5, 1.5), 0, "windfury: the 1.5 s window elapsed -> 0")
+eq(weave.get_windfury_icd_remaining(100, 99.5, 1.5), 1.5, "windfury: future stamp floors at the 1.5 s window")
+near(weave.get_windfury_icd_remaining(100, 100.5, nil), 2.5, "windfury: a nil window reads the 3 s registry")
+near(weave.get_windfury_icd_remaining(100, 100.5, "3"), 2.5, "windfury: a non-number window reads the 3 s registry")
+eq(weave.get_windfury_icd_remaining(nil, 5, 1.5), nil, "windfury: no stamp -> nil even with the Era window")
+
+-- get_fireele_remaining (audit 2026-10-19 TBC §) -----------------------------------
+-- The Fire Elemental uptime guard: 120 s of Nova suppression from the drop stamp,
+-- nil when no drop is known (never suppress on a guess).
+eq(weave.FIRE_ELEMENTAL_DURATION_SECONDS, 120, "FIRE_ELEMENTAL_DURATION_SECONDS == 120")
+near(weave.get_fireele_remaining(100, 100), 120, "fireele: just dropped -> full window left")
+near(weave.get_fireele_remaining(100, 160), 60, "fireele: mid-window remainder")
+near(weave.get_fireele_remaining(100, 220), 0, "fireele: window elapsed -> due (0)")
+eq(weave.get_fireele_remaining(100, 400), 0, "fireele: long past the drop -> 0 (floored)")
+eq(weave.get_fireele_remaining(100, 99.5), 120, "fireele: clock before the drop reads the full window")
+eq(weave.get_fireele_remaining(nil, 105), nil, "fireele: no last drop -> nil (no suppress on a guess)")
+eq(weave.get_fireele_remaining(0, 105), nil, "fireele: zero last drop -> nil")
+eq(weave.get_fireele_remaining(-5, 105), nil, "fireele: negative last drop -> nil")
+eq(weave.get_fireele_remaining("100", 105), nil, "fireele: non-number last drop -> nil")
+near(weave.get_fireele_remaining(100, nil), 120, "fireele: nil now reads as the full window")
+
 -- MAGMA_TOTEM_DURATION_SECONDS / get_magma_remaining ---------------------------
 eq(weave.MAGMA_TOTEM_DURATION_SECONDS, 20, "MAGMA_TOTEM_DURATION_SECONDS == 20")
 near(weave.get_magma_remaining(100, 100), 20, "magma: just dropped -> full duration left")
@@ -549,6 +584,51 @@ eq(weave.get_magma_remaining(0, 105), nil, "magma: zero last drop -> nil")
 eq(weave.get_magma_remaining(-5, 105), nil, "magma: negative last drop -> nil")
 eq(weave.get_magma_remaining("100", 105), nil, "magma: non-number last drop -> nil")
 near(weave.get_magma_remaining(100, nil), 20, "magma: nil now reads as the full duration")
+
+-- should_pause_twist_for_mana (audit 2026-10-19 TBC §: twist mana pause) -----
+-- The TBC sim pauses twisting at 10% mana (sim default) and sustains max-rank
+-- through the pause instead of downranking. Rule 7 consumes the pause through
+-- its twist_mana_threshold input (same boundary, inlined - the strict sandbox
+-- forbids the engine from calling back into st.weave); the live gather feed is
+-- filed, so a nil threshold keeps the old prompt and unknown mana never pauses.
+eq(weave.TWIST_MANA_PAUSE_THRESHOLD_TBC, 0.10, "TWIST_MANA_PAUSE_THRESHOLD_TBC == 0.10")
+eq(weave.should_pause_twist_for_mana(0.05, 0.10), true, "twist pause: mana below the threshold pauses")
+eq(weave.should_pause_twist_for_mana(0.10, 0.10), true, "twist pause boundary: exactly the threshold pauses")
+eq(weave.should_pause_twist_for_mana(0.11, 0.10), false, "twist pause: mana above the threshold twists on")
+eq(weave.should_pause_twist_for_mana(0, 0.10), true, "twist pause: zero mana pauses")
+eq(weave.should_pause_twist_for_mana(1, 0.10), false, "twist pause: full mana twists on")
+eq(weave.should_pause_twist_for_mana(nil, 0.10), false, "twist pause: unknown mana never pauses")
+eq(weave.should_pause_twist_for_mana("low", 0.10), false, "twist pause: non-number mana never pauses")
+eq(weave.should_pause_twist_for_mana(0.05, nil), false, "twist pause: unknown threshold never pauses")
+eq(weave.should_pause_twist_for_mana(0.05, "0.10"), false, "twist pause: non-number threshold never pauses")
+eq(weave.should_pause_twist_for_mana(0 / 0, 0.10), false, "twist pause: NaN mana never pauses")
+eq(weave.should_pause_twist_for_mana(0.05, 0 / 0), false, "twist pause: NaN threshold never pauses")
+
+-- get_twist_mana_threshold (the gather plug-in for the rule-7 pause feed) --
+-- TBC reads the sim default; every other family reads nil (no pause - Wrath
+-- never twists, no other family has a sim-backed pause); unknown never pauses.
+eq(weave.get_twist_mana_threshold("TBC"), 0.10, "twist gate: TBC reads the sim default")
+eq(weave.get_twist_mana_threshold("TBC"), weave.TWIST_MANA_PAUSE_THRESHOLD_TBC,
+    "twist gate: the TBC read is the single-source constant")
+eq(weave.get_twist_mana_threshold("WRATH"), nil, "twist gate: Wrath never pauses (no twist)")
+eq(weave.get_twist_mana_threshold("ERA"), nil, "twist gate: ERA never pauses")
+eq(weave.get_twist_mana_threshold("FOREVER"), nil, "twist gate: Forever never pauses")
+eq(weave.get_twist_mana_threshold(nil), nil, "twist gate: unknown family never pauses")
+eq(weave.get_twist_mana_threshold("TBC-classic"), nil, "twist gate: near-miss families never pause")
+
+-- is_fireele_lineup_ready (audit 2026-10-19 TBC §: FE snapshot lineup) -------
+-- The TBC sim lines Fire Elemental up: Wrath of Air up AND a trinket stacked
+-- (the weapon swap is not portable). UNWIRED groundwork: no caller reads this
+-- yet, so there is no default-visible change; unknown never lines up.
+eq(weave.is_fireele_lineup_ready(true, true), true, "lineup: WoA up with a stacked trinket lines up")
+eq(weave.is_fireele_lineup_ready(true, false), false, "lineup: WoA without the trinket never lines up")
+eq(weave.is_fireele_lineup_ready(false, true), false, "lineup: stacked trinket without WoA never lines up")
+eq(weave.is_fireele_lineup_ready(false, false), false, "lineup: neither leg lines up")
+eq(weave.is_fireele_lineup_ready(nil, true), false, "lineup: unknown WoA never lines up")
+eq(weave.is_fireele_lineup_ready(true, nil), false, "lineup: unknown trinket never lines up")
+eq(weave.is_fireele_lineup_ready(nil, nil), false, "lineup: unknown legs never line up")
+eq(weave.is_fireele_lineup_ready("yes", true), false, "lineup: non-boolean WoA never lines up")
+eq(weave.is_fireele_lineup_ready(true, 1), false, "lineup: non-boolean trinket never lines up")
 
 -- FAMILIES / SPELL_GROUPS / FAMILY_COLORS shape ----------------------------
 eq(#weave.FAMILIES, 5, "FAMILIES has 5 entries")

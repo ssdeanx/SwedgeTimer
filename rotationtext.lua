@@ -185,9 +185,12 @@ end
 -- Rotation source (archive 32-40) and the paladin provider
 --=========================================================================================
 
--- The class module that implements the frozen provider contract, or nil.
+-- The ACTIVE class module that implements the frozen provider contract, or nil.
+-- C7 (class-isolation 2026-10-21): the module is the one main.lua activated
+-- (ST.active_class), never the class being played - an explicit non-playing pick
+-- owns its own rotation text. No active class => no provider => the label hides.
 function RT.provider(self)
-    local class_module = self[self.player_class or ""]
+    local class_module = self[self.active_class or ""]
     if class_module and type(class_module.get_rotation_key) == "function" then
         return class_module
     end
@@ -209,34 +212,27 @@ function RT.resolve_live()
     return RT.current_rotation(RT.live_self or ST)
 end
 
--- Paladin provider (the frozen contract above). Practice-aware, like the archive's
--- source: while a practice session runs the simulation's own determine_rotation is used
--- (it honours a locked rotation preset); otherwise the live swing speed and GCD - the
--- exact values the guide feeds its engine (classes/paladin.lua gather_guide_inputs:
--- speed = self.mainhand.speed, G = self:get_spell_gcd_duration()) - run through the
--- shared threshold function st.nextaction.calculate_rotation. The rotation tables live
--- in the pure engine and are never duplicated here.
--- Defined here rather than in classes/paladin.lua because this port's change lane does
--- not touch class modules; the contract is written for a class module, so moving this
--- block into classes/paladin.lua later is a pure cut-and-paste.
-ST.PALADIN.get_rotation_key = function(self)
-    local pui = st.practice_ui
-    if pui and pui.is_active and pui.is_active() and st.practice
-        and st.practice.determine_rotation and pui.sim then
-        return st.practice.determine_rotation(pui.sim)
-    end
-    local na = st.nextaction
-    if not (na and na.calculate_rotation) then
-        return nil
-    end
-    local d = self.mainhand
-    return na.calculate_rotation((d and d.speed) or 0, self:get_spell_gcd_duration())
-end
+-- The paladin provider is the PALADIN's own function and lives in
+-- classes/paladin.lua (class-isolation 2026-10-21 C5): this shared module only
+-- asks the ACTIVE class through RT.provider and treats "no get_rotation_key" as
+-- "no rotation text" - never an error, never a guess.
 
 --=========================================================================================
 -- Live tick state (one reused table: no per-tick allocations)
 --=========================================================================================
 local state = {}
+
+-- N3: source isolation. The driver polls the class get_rotation_key every tick; a
+-- throwing source must hide the label, never freeze the driver. The contract lives in
+-- guard.lua (one implementation for the whole addon): first throw prints once, every
+-- throw counts in self.bar_hook_errors (read by /st diag), the site quarantines after
+-- st.guard.QUARANTINE_THROWS. Degrade is hide, never stale.
+--
+-- What stays here is this module's own wording ("Rotation text ...") and its own site
+-- key.
+local ROTATION_ERROR_SITE = "rotationtext:get_rotation_key"
+
+st.guard.label("rotationtext", "Rotation text")
 
 local function fill_state(self)
     local db = self:get_class_table()
@@ -455,7 +451,15 @@ function RT.update_display(self)
     end
     RT.live_self = self
     local s = fill_state(self)
-    local visible, key = RT.decide_update(s, RT.resolve_live)
+    local visible, key
+    -- Isolated through the shared contract (guard.lua): a quarantined source is not
+    -- called at all, a throwing source hides the label - never a stale one.
+    local ok, v, k = st.guard.run(self, ROTATION_ERROR_SITE, RT.decide_update, s, RT.resolve_live)
+    if ok then
+        visible, key = v, k
+    else
+        visible, key = false, nil
+    end
     if not visible then
         if frame:IsShown() then
             frame:Hide()

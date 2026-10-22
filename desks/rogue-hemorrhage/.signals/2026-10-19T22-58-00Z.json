@@ -1,0 +1,39 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:58:00Z",
+  "run_id": "bs6-rogue-hemorrhage-2026-10-19",
+  "agent_name": "rogue-hemorrhage",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Putting the family gate in the PURE engine (rogue_guide.BUILDER_GATED_FAMILIES + builder_candidate_allowed) and keeping the chain in the class gave one source per fact, made the gate testable in the strict no-WoW sandbox, and made the class side a one-line ask. The SoD latch already existed (ERA + the SoD-only Envenom rune known) and only needed to run BEFORE apply_spell_ids so the builder could see it - that reorder was the only non-obvious piece.",
+    "what_was_hard": "Two spec readings had to be settled from the corpus itself: (1) Hemorrhage sits BEFORE the dagger Backstab (the bench's chain table lists it, and the corrected TBC APL branch order agrees: Hemorrhage 26864 -> Backstab 26863 -> Mutilate 34413 -> Sinister Strike 26862 - the audit's 'Hemo-Ghostly fallback (26862)' was Sinister Strike); (2) the bench's pin-to-file map put the guide-slot pin in the pure-engine suite, but the guide slot is class-side, so that pin moved to tests/rogue_state.lua and the engine suite carries the pure gate. Residual, already filed: the TBC APL's known-spell (talent) branch is still unmodelled - a TBC client resolves 'Hemorrhage' from its spell table, so it can answer for a character without the talent; closing that needs an id-based known-spell probe, which the TBC name-vs-id rule discourages.",
+    "skill_gap": "Proving a chain-order change needs the *prior* corpus evidence, not just the spec text: the corrected id pairing was the only thing that settled Hemorrhage-vs-Backstab. Reading the bench's own audit line against the N1 correction was faster than fetching the APL."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "artifacts": {
+    "files_changed": [
+      "classes/rogue.lua",
+      "rogue_guide.lua",
+      "tests/rogue_state.lua",
+      "tests/rogue_guide_state.lua"
+    ],
+    "validation": {
+      "harness": "41 steps, 0 failed",
+      "luacheck": "2 warnings / 0 errors (floor held, unchanged)",
+      "rogue_state": "796 checks, 0 failures",
+      "rogue_guide_state": "776 checks, 0 failures",
+      "mutations": "7/7 killed (/tmp/opencode/bs6_mutations.sh)"
+    },
+    "note": "No bench file written (the corpus correction is the orchestrator's); the trail is in desks/rogue-hemorrhage/journal.md."
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-19T23:50:50Z",
+  "run_id": "f4-family-spell-id-2026-10-19",
+  "agent_name": "compat-f4",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The cross-client truth pass the audit owed settled the design: C_Spell.GetSpellInfo takes a spell id on every branch (SpellDocumentation.lua:190-197, identical on era/anniversary/titan/forever/live) and reads the spell DATABASE, not the player's book, so the TBC name path resolves a rank without depending on a cold book.",
+    "what_was_hard": "The operator's TBC-name rule and the client source disagree about GetSpellInfo specifically (Blizzard's own ObjectAPI accessor calls the global with an id). The source shows ids working, not names failing, so the two facts are not in conflict on the source alone - and the native's tolerance for a name is not decidable from Lua source.",
+    "skill_gap": "Proving a code path is load-bearing needs a pin that dies when that path is removed. The first draft of the resolver had a redundant branch no pin could kill; it was removed rather than left as unprovable insurance."
+  },
+  "escalation": {
+    "reason": "HU-6 (hands-up.md): on TBC Anniversary 2.5.6, does the native global GetSpellInfo answer a NAME, an ID, or both? The operator's rule (bench/lessons.md:29-32) says name-only; the shipped FrameXML calls it with ids (classic_anniversary:Interface/AddOns/Blizzard_ObjectAPI/Classic/Spell.lua:39). Not blocking this lane - the resolver works under either reading - but it decides whether the OTHER lanes' landed name-vs-id conversions read correctly on TBC.",
+    "blocked_on": "one in-client check on TBC Anniversary 2.5.6: /run print(GetSpellInfo(29707)) and /run print(GetSpellInfo(\"Heroic Strike\"))",
+    "recommendation": "Answer the two-line in-client check and close HU-6; if only the id form answers, the name-vs-id conversions in the class files should be revisited (their reads degrade, not crash)."
+  }
+}

@@ -1,7 +1,7 @@
 -- tests/bars_state.lua: offline execution tests for the swing-timer bar module (bars.lua),
--- its per-frame driver (the real main.lua init/OnUpdate path) and the five class dispatch
+-- its per-frame driver (the real main.lua init/OnUpdate path) and the six class dispatch
 -- hooks (classes/paladin.lua, warrior.lua, hunter.lua (+ hunter_ui.lua), shaman.lua,
--- druid.lua) in a sandbox.
+-- druid.lua, rogue.lua) in a sandbox.
 --
 -- Why this exists: bars.lua was the last large module with zero execution coverage - and
 -- it hid two real defects the first execution found: on_latency_update/on_gcd_length_change
@@ -10,15 +10,16 @@
 -- silently turned every 0-255 array colour into 0,0,0,0. Both are fixed and pinned below.
 -- This suite loads the REAL modules over the real compat.lua + utils.lua in the TOC order
 -- (pure helpers, then hunter_window/hunter_ui, then main.lua, bars.lua, ldb.lua,
--- config_presets/config, then the five class modules), runs the real OnInitialize ->
+-- config_presets/config, then the six class modules), runs the real OnInitialize ->
 -- library-ready -> init_libs -> init_timers construction arc, and drives the OnUpdate
 -- script bars.lua registers on each bar frame exactly as the client does.
 --
 -- Covered here:
---   1. Construction for all five classes (hand sets from main.lua's class_hands): the
+--   1. Construction for all six classes (hand sets from main.lua's class_hands): the
 --      documented frames/regions per hand with exact create counts, the class widget sets
 --      (paladin twist band, warrior tracker set, hunter cast bar set, druid energy column,
---      shaman weave/tracker widgets) and the per-class default bar colour.
+--      shaman weave/tracker widgets, rogue tick spark/pool wash/window/swap/poison) and
+--      the per-class default bar colour.
 --   2. The OnUpdate state machine: fill fraction + texcoord over time, the bar texts and
 --      their hide-inactive rules, the GCD underlay branches, the swing-anchored and
 --      endofswing GCD markers (wrap/clamp), the deadzone width from latency, the class's
@@ -196,7 +197,17 @@ local function make_fontstring(sb)
     sb.touches = sb.touches + 1
     local f = { shown = true }
     make_region_common(f, sb, "fontstring")
-    function f:SetFont(path, size, flags) f.font = { path, size, flags } end
+    -- SoD-faithful: a nil font path latches nothing (the client refuses it), so a
+    -- text that is written with no font on the FontString is the only way to get a
+    -- blank label. GetFont answers what is actually latched.
+    function f:SetFont(path, size, flags)
+        if path == nil then
+            return false
+        end
+        f.font = { path, size, flags }
+        return true
+    end
+    function f:GetFont() return f.font and f.font[1] or nil end
     function f:SetText(text) f.text = text end
     function f:SetTextColor(r, g, b, a) f.color = { r, g, b, a } end
     function f:SetJustifyH(justify) f.justify = justify end
@@ -319,6 +330,11 @@ local function build(opts)
         lcg_stops = 0,
         sounds = {},
         prints = {},
+        -- Every call that reaches the CLIENT's global print (not the addon's chat path)
+        -- lands here. The sandbox has no global print of its own, so this spy is what
+        -- turns "the module printed through the global" into an assertion instead of a
+        -- crash - see section 7.
+        raw_prints = {},
         after = {},
         new_timers = {},
         lrc_cb = {},
@@ -349,7 +365,7 @@ local function build(opts)
         spell_haste = 0,
         range_reads = 0,
         is_spell_in_range = nil,
-        check_interact = nil,
+        target_yards = 20, -- exact target distance (the sweet band is 5 < yd <= 10)
         is_auto_repeat = false,
         mounted = false,
         form_index = 0,
@@ -376,10 +392,29 @@ local function build(opts)
         end,
         -- Media Fetch records the request and returns a stable path per mediatype so the
         -- text font assertions have a real value to compare.
+        -- A statusbar fetch can legitimately come back NIL (the key is not in the
+        -- registry - a registration that failed on this client - or the registered
+        -- path is empty), so the fixture can model it: opts.lsm_missing_key makes
+        -- that one key fetch nil, opts.lsm_missing_all makes EVERY statusbar fetch
+        -- return nil.
         Fetch = function(_, mediatype, key)
             sb.font_requests[#sb.font_requests + 1] = { mediatype = mediatype, key = key }
             if mediatype == "font" then
+                -- A font key that no longer resolves (the font lives in another
+                -- addon's LSM registration) must degrade to a font that exists,
+                -- never to a nil path.
+                if opts.lsm_missing_font then
+                    return nil
+                end
                 return "Fonts\\LSM.ttf"
+            end
+            if mediatype == "statusbar" then
+                if opts.lsm_missing_all then
+                    return nil
+                end
+                if opts.lsm_missing_key and key == opts.lsm_missing_key then
+                    return nil
+                end
             end
             return "Texture\\" .. tostring(key)
         end,
@@ -534,9 +569,13 @@ local function build(opts)
         end
         return nil
     end
-    env.CheckInteractDistance = function()
-        if sb.check_interact ~= nil then return sb.check_interact end
-        return nil
+    -- Exact target distance (R3, 2026-10-21): the hunter sweet spot is a yards band.
+    -- nil yards = unknown, so every probe is answerless and the strip hides.
+    env.UnitDistanceSquared = function(unit)
+        if sb.target_yards == nil then
+            return 0, false
+        end
+        return sb.target_yards * sb.target_yards, true
     end
     env.IsAutoRepeatSpell = function() return sb.is_auto_repeat end
     env.IsMounted = function() return sb.mounted end
@@ -570,6 +609,13 @@ local function build(opts)
     env.DEFAULT_CHAT_FRAME = {
         AddMessage = function(_, msg) sb.prints[#sb.prints + 1] = tostring(msg) end,
     }
+    -- The client's global print, spied. The addon's chat path is st.utils.print_msg
+    -- (utils.lua -> DEFAULT_CHAT_FRAME:AddMessage), so a module that reaches the global
+    -- instead shows up here - and never as an error.
+    env.print = function(...)
+        local first = select(1, ...)
+        sb.raw_prints[#sb.raw_prints + 1] = tostring(first)
+    end
     env.C_Timer = {
         After = function(delay, fn)
             sb.after[#sb.after + 1] = { delay = delay, cb = fn }
@@ -665,13 +711,14 @@ local function build(opts)
     -- tables, HUD, practice UI, nextaction_ui and design modules): pure helpers first,
     -- then hunter_window/hunter_ui, main.lua (the construction driver), bars.lua (the
     -- module under test), ldb.lua (driven from bars.lua), the real config presets/defaults,
-    -- then the five class modules.
+    -- then the six class modules.
     if sb.engine == "source" then
         st.swing_source = source_engine
     end
 
     local MODULES = {
         "utils.lua",
+        "guard.lua",
         "twist.lua",
         "weave.lua",
         "druid_energy.lua",
@@ -687,6 +734,7 @@ local function build(opts)
         "classes/paladin.lua",
         "classes/shaman.lua",
         "classes/warrior.lua",
+        "classes/rogue.lua",
     }
     for i = 1, #MODULES do
         local chunk = assert(loadfile(ROOT .. MODULES[i]))
@@ -696,11 +744,23 @@ local function build(opts)
             print("FAIL  " .. MODULES[i] .. " does not load under the sandbox: " .. tostring(err))
             os.exit(1)
         end
+        -- Class files register their body as a loader (operator order 2026-10-21:
+        -- only the selected class executes). This sandbox activates every class it
+        -- loads, as the shipped init does for the selected one.
+        local class = MODULES[i]:match("classes/(%a+)%.lua")
+        if class and type(st.class_loaders) == "table"
+            and type(st.class_loaders[class:upper()]) == "function" then
+            st.class_loaders[class:upper()]()
+        end
     end
+    -- The fixture has already run every class loader above, exactly as the pre-loader
+    -- files ran their bodies at load. main.lua's init calls activate_class() once, so
+    -- mark activation done: a second run would replace the hooked class functions.
+    ST.class_activated = true
 
     -- Instrument the two boundaries bars.lua drives, keeping the real code behind them:
     -- the class dispatch hook and the LibDataBroker feed.
-    for _, class_key in ipairs({ "PALADIN", "WARRIOR", "HUNTER", "DRUID", "SHAMAN" }) do
+    for _, class_key in ipairs({ "PALADIN", "WARRIOR", "HUNTER", "DRUID", "SHAMAN", "ROGUE" }) do
         local real_hook = ST[class_key].on_bar_update
         if real_hook then
             ST[class_key].on_bar_update = function(self, hand)
@@ -821,7 +881,7 @@ local function set_target_auras(b, list)
 end
 
 --=========================================================================================
--- 1) Construction for all five classes (the real init arc)
+-- 1) Construction for all six classes (the real init arc)
 --=========================================================================================
 -- Hand sets mirror main.lua's class_hands. Per hand bars.lua creates exactly 4 frames
 -- (anchor, hiding anchor, bar frame, visuals frame), 3 textures (bar, gcd_bar, deadzone),
@@ -833,35 +893,45 @@ local BOOT_FRAMES = 2  -- UIParent + AceDB's frame
 local CLASSES = {
     { key = "PALADIN", hands = { "mainhand" },
       -- twist band (1 texture) + twist success text (1 fontstring) + hit-rate
-      -- badge (1 fontstring) + judgement marker line (1 line) + seal icons
+      -- badge (1 fontstring) + judgement marker line (1 line) + reseal
+      -- marker (1 texture, P1) + seal icons
       -- (2 icon textures, 2 timer texts, 1 container frame + 2 cooldown frames
       -- + 2 timer text frames) + JotC mini-bar (1 icon texture, 1 timer text,
       -- 1 container frame + 1 cooldown frame + 1 timer text frame) + CD icon
       -- row (7 icon textures, 1 container frame + 7 icon frames + 7 cooldown
       -- frames)
-      textures = 11, fontstrings = 5, lines = 1, extra_frames = 23 },
+      textures = 12, fontstrings = 5, lines = 1, extra_frames = 23 },
     { key = "WARRIOR", hands = { "mainhand", "offhand", "ranged" },
       -- shield block (3 texture) + slam (2 texture, 1 fontstring) + 5 debuffs
       -- (15 texture, 5 fontstring) + overpower (4 texture, 1 fontstring)
       -- + Rampage badge (1 fontstring) + rage-bank cue (1 texture,
-      -- 1 fontstring) + Battle Shout badge (1 fontstring)
-      textures = 25, fontstrings = 10, lines = 0, extra_frames = 0 },
+      -- 1 fontstring) + Battle Shout badge (1 fontstring) + desync spark
+      -- (1 texture, W1)
+      textures = 26, fontstrings = 10, lines = 0, extra_frames = 0 },
     { key = "HUNTER", hands = { "mainhand", "offhand", "ranged" },
       -- hunter_ui: cast bar (4 texture, 1 fontstring) + range helper (1 texture)
       -- + rapid fire (1 texture, 1 fontstring) + aspect icon (2 texture) + 4 frames
       -- + movement-safe cast zone (2 texture) + Bestial Wrath / Frenzy badges
-      -- (2 frames, 4 texture, 2 fontstring)
-      textures = 14, fontstrings = 4, lines = 0, extra_frames = 6 },
+      -- (2 frames, 4 texture, 2 fontstring) + H1 target warning (1 fontstring)
+      textures = 14, fontstrings = 5, lines = 0, extra_frames = 6 },
     { key = "DRUID", hands = { "mainhand" },
       -- energy column (2 texture) + GCD tick marker (1 texture) + Omen glow
       -- (1 texture) + form label (1 fontstring) + D5 shred countdown
-      -- (1 fontstring) + D6 maul badge (1 fontstring) + combo pips (5 texture,
+      -- (1 fontstring) + D6 maul badge (1 fontstring) + D1 TTD readout
+      -- (1 fontstring) + combo pips (5 texture,
       -- 1 frame) + 3 debuffs (9 texture, 3 fontstring)
-      textures = 18, fontstrings = 6, lines = 0, extra_frames = 1 },
+      textures = 18, fontstrings = 7, lines = 0, extra_frames = 1 },
     { key = "SHAMAN", hands = { "mainhand", "offhand" },
       -- mainhand: 3 marker textures + spark + windfury (2) + flame shock (3 texture, 1 fontstring)
       -- + 2 badge fontstrings + 4 shield rects = 13; offhand: the spark mirror = 1
       textures = 14, fontstrings = 3, lines = 0, extra_frames = 0 },
+    { key = "ROGUE", hands = { "mainhand", "offhand", "ranged" },
+      -- D3: mainhand only - tick spark + pooling wash + SS window band/text +
+      -- swap band/text + poison reminder (4 extra textures, 3 extra fontstrings);
+      -- the guide (nextaction_ui) and HUD suites are not loaded here so no frames
+      -- come from them, and the cold spell book resolves nothing (no rogue names
+      -- in the fixture client) without erroring.
+      textures = 4, fontstrings = 3, lines = 0, extra_frames = 0 },
 }
 
 local function check_hand_regions(b, hand)
@@ -882,8 +952,8 @@ local function check_hand_regions(b, hand)
         hand .. ": border width from the hand db")
     local vf = bar_frame.visuals_frame
     check(vf ~= nil, hand .. ": visuals frame created")
-    eq(vf.bar.texture, "Texture\\Minimalist", hand .. ": bar texture from LSM")
-    eq(vf.gcd_bar.texture, "Texture\\Minimalist", hand .. ": gcd bar texture from LSM")
+    eq(vf.bar.texture, "Texture\\Wglass", hand .. ": bar texture from LSM")
+    eq(vf.gcd_bar.texture, "Texture\\Wglass", hand .. ": gcd bar texture from LSM")
     check(vf.deadzone.texture ~= nil, hand .. ": deadzone texture set")
     check(vf.bar.texcoord == nil or type(vf.bar.texcoord) == "table", hand .. ": bar texture ready")
     check(type(vf.left_text.font) == "table", hand .. ": left text font applied")
@@ -995,6 +1065,14 @@ for i = 1, #CLASSES do
             check(oh_vf.weave_spark_offhand ~= nil, "SHAMAN: offhand spark mirror created")
             check(b.ST.weave_catalog.LB ~= nil, "SHAMAN: the weave catalogue resolved Lightning Bolt")
             eq(b.ST.weave_catalog.LB.cast_seconds, 2.5, "SHAMAN: the catalogue carries the client cast time")
+        elseif spec.key == "ROGUE" then
+            check(mh_vf.rogue_tick_spark ~= nil, "ROGUE: energy tick spark created")
+            check(mh_vf.rogue_pool_wash ~= nil, "ROGUE: pooling wash created")
+            check(mh_vf.rogue_ss_band ~= nil, "ROGUE: SS window band created")
+            check(mh_vf.rogue_ss_text ~= nil, "ROGUE: SS window text created")
+            check(mh_vf.rogue_swap_band ~= nil, "ROGUE: weapon-swap band created")
+            check(mh_vf.rogue_swap_text ~= nil, "ROGUE: weapon-swap text created")
+            check(mh_vf.rogue_poison_text ~= nil, "ROGUE: poison reminder created")
         end
 
         -- Text/geometry state after construction: the sizes come from the hand db.
@@ -1933,11 +2011,11 @@ do
         if spell == ui.wing_clip_token then return false end
         return false
     end
-    sb.check_interact = true
+    sb.target_yards = 7
     tick(b, "ranged")
     vertex_eq(ui.range_helper.tex.color_texture, { 0.98, 0.82, 0.18, 1 },
         "hunter range: sweet-spot state colour")
-    sb.check_interact = false
+    sb.target_yards = 20
     sb.is_spell_in_range = function(spell)
         return spell == ui.auto_shot_token
     end
@@ -1949,7 +2027,7 @@ do
     vertex_eq(ui.range_helper.tex.color_texture, { 0.50, 0.50, 0.50, 1 },
         "hunter range: out-of-range state colour")
     sb.is_spell_in_range = function() return nil end
-    sb.check_interact = nil
+    sb.target_yards = nil
     tick(b, "ranged")
     eq(ui.range_helper.shown, false, "hunter range: every probe unknown hides the strip")
     ST.has_attackable_target = false
@@ -2479,6 +2557,250 @@ do
     local fallback_era = build({ class = "PALADIN", project = false, interface = 11509 })
     eq(fallback_era.st.family, "ERA", "family: interface 11509 without a project id falls back to ERA")
     eq(fallback_era.st.is_mainline, false, "family: the fallback ERA is not mainline code")
+end
+
+--=========================================================================================
+-- 7) Output policy and error isolation
+--=========================================================================================
+-- Audit finding F12 (bench/deep_audit_2026-10-19.md:30) claimed bars.lua printed through
+-- the client's raw global print. The file itself is the source of truth: it used to alias
+-- print to st.utils.print_msg, so the message was already chat output - but the alias
+-- made the call site unreadable (and that ambiguity is what the finding tripped over).
+-- The policy that replaced it, pinned here:
+--   - no bare print call survives anywhere in bars.lua (source scan, comments included),
+--   - a refused design-mode element registration is reported through the chat frame and
+--     never touches the client's global print,
+--   - the pips row's design template degrades to "no cells" instead of indexing a nil
+--     table when the geometry is degenerate,
+--   - a throwing LibDataBroker feed is isolated by the bar's own per-tick guard instead
+--     of escaping the tick.
+do
+    -- The source scan: "st.utils.print_msg(" never contains "print(", so every hit here
+    -- is a bare call to the client's global print - live code or a commented-out debug
+    -- line alike.
+    local src_file = io.open(ROOT .. "bars.lua", "r")
+    local src = src_file and src_file:read("*a") or nil
+    if src_file then src_file:close() end
+    check(src ~= nil, "output policy: bars.lua is readable")
+    local bare = 0
+    if src then
+        for line in src:gmatch("[^\n]+") do
+            if line:find("print%(") then
+                bare = bare + 1
+            end
+        end
+    end
+    eq(bare, 0, "output policy: bars.lua calls no bare print (chat output is st.utils.print_msg)")
+
+    -- A design-mode registry that refuses the element: the module must report it through
+    -- the addon's chat path (DEFAULT_CHAT_FRAME), never through the client's global print.
+    local b = boot({ class = "PALADIN" })
+    local sb = b.sb
+    b.st.designmode = {
+        registry = { register = function() return nil, "duplicate element key 'x'" end },
+        register_template = function() end,
+    }
+    local parent = { CreateTexture = function() return {} end }
+    local before = #sb.prints
+    local pips = b.ST:new_pips(parent, { design = { key = "x" } })
+    check(pips ~= nil, "output policy: the pips widget is built even when the registration is refused")
+    eq(#sb.raw_prints, 0, "output policy: the client's global print is never called by bars.lua")
+    local reported = false
+    for i = before + 1, #sb.prints do
+        if sb.prints[i]:find("pips element not registered", 1, true)
+            and sb.prints[i]:find("duplicate element key", 1, true) then
+            reported = true
+        end
+    end
+    check(reported, "output policy: a refused design registration is reported through the chat frame")
+
+    -- Degenerate geometry: size 0 leaves row_boxes without cells. The template must
+    -- degrade to "no cells" (its documented contract) instead of indexing a nil table.
+    local g = boot({ class = "PALADIN" })
+    local tpl
+    g.st.designmode = {
+        registry = { register = function() return { key = "y" } end },
+        register_template = function(t) tpl = t end,
+    }
+    g.st.design = { row_boxes = function() return nil end }
+    local degenerate = g.ST:new_pips({ CreateTexture = function() return {} end },
+        { design = { key = "y" }, size = 0 })
+    check(degenerate ~= nil, "output policy: a degenerate pips row still builds")
+    check(tpl ~= nil, "output policy: the degenerate pips row still registers its template")
+    local ok_cells, cells = pcall(function() return tpl.get_cells() end)
+    check(ok_cells, "output policy: the degenerate pips template degrades instead of raising")
+    eq(cells, nil, "output policy: the degenerate pips template reports no cells")
+
+    -- A throwing broker feed must not escape the bar tick: the bar's own per-tick guard
+    -- isolates it and counts it at its own site.
+    local l = boot({ class = "PALADIN" })
+    l.st.ldb.update = function() error("broker boom") end
+    start_swing(l, "mainhand", 2.6, 2.6)
+    local ok_tick = pcall(tick, l, "mainhand")
+    check(ok_tick, "isolation: a throwing LibDataBroker feed does not escape the bar tick")
+    local errs = l.ST.bar_hook_errors
+    check(errs ~= nil and errs.by_site["ldb:update"] == 1,
+        "isolation: the throwing feed is counted at its own isolation site")
+end
+
+--=========================================================================================
+-- 8) F10: ONE shared guard (the isolation contract lives in guard.lua)
+--
+-- The contract (first throw prints once, every throw counts, quarantine after 25,
+-- degrade to the caller's own result) used to be copy-pasted into six modules with
+-- six quarantine constants, and the copies had already drifted. It now lives in one
+-- place. These pins hold that: the shared module owns the threshold, the once-only
+-- report and the counter table; every consumer keeps only its own wording and its
+-- own site keys.
+--=========================================================================================
+do
+    local function read_file(path)
+        local f = io.open(ROOT .. path, "r")
+        local text = f and f:read("*a") or nil
+        if f then f:close() end
+        return text
+    end
+    local guard_src = read_file("guard.lua")
+    check(guard_src ~= nil, "the shared guard module is readable")
+    check(guard_src:find("st.guard.QUARANTINE_THROWS = 25", 1, true) ~= nil,
+        "the shared guard owns the one quarantine threshold (25)")
+    check(guard_src:find("first_reported", 1, true) ~= nil,
+        "the shared guard owns the once-only report bookkeeping")
+    check(guard_src:find("bar_hook_errors", 1, true) ~= nil,
+        "the shared guard counts on the counter the /st diag reader expects")
+    check(guard_src:find("function st.guard.run", 1, true) ~= nil,
+        "the shared guard exposes the one run entry point")
+    for _, path in ipairs({ "bars.lua", "hud.lua", "nextaction_ui.lua",
+        "practice_ui.lua", "rotationtext.lua" }) do
+        local src = read_file(path)
+        check(src ~= nil, path .. ": the consumer module is readable")
+        check(src:find("QUARANTINE_THROWS = ", 1, true) == nil,
+            path .. ": no second quarantine threshold")
+        check(src:find("errors.by_site", 1, true) == nil,
+            path .. ": no second counter bookkeeping")
+        check(src:find("st.guard.", 1, true) ~= nil,
+            path .. ": the module delegates to the shared guard")
+    end
+    -- The wording stays with the call site (the shared module never hard-codes it).
+    local bars_src = read_file("bars.lua")
+    check(bars_src:find('st.guard.label("zone", "Bar update")', 1, true) ~= nil,
+        "bars: the bar wording stays at the call site")
+end
+
+--=========================================================================================
+-- 9) Statusbar texture: the operator's default, the LSM registration, and the
+--    nil-fetch degradation
+--
+-- The operator's texture (Media/StatusBar/Wglass.tga) is the DEFAULT status-bar
+-- texture for the addon's progress bars - the swing bar and the GCD underlay. It is
+-- registered in the "statusbar" registry, so it shows up in the existing texture
+-- dropdown (values = LSM:HashTable("statusbar")) with no new widget. A fetch that
+-- comes back nil must degrade to a shipped texture instead of leaving the bar
+-- textureless, and a dead registry must still leave the bar with a texture.
+--=========================================================================================
+do
+    local b = boot({ class = "PALADIN" })
+    local sb = b.sb
+
+    -- The media registration: the key the dropdown shows, in the statusbar registry,
+    -- pointing at the operator's file.
+    local wglass_registered = false
+    local minimalist_registered = false
+    for _, reg in ipairs(sb.lsm_registers) do
+        if reg.media == "statusbar" then
+            if reg.key == "Wglass"
+                and reg.path == "Interface\\Addons\\SwedgeTimer\\Media\\StatusBar\\Wglass.tga" then
+                wglass_registered = true
+            elseif reg.key == "Minimalist" then
+                minimalist_registered = true
+            end
+        end
+    end
+    check(wglass_registered,
+        "statusbar: the Wglass medium is registered in the statusbar registry with the operator's path")
+    check(minimalist_registered,
+        "statusbar: the Minimalist fallback key stays registered")
+
+    -- The shipped default: the progress bars take the operator's texture.
+    local db_mainhand = hand_db(b, "mainhand")
+    eq(db_mainhand.bar_texture_key, "Wglass", "statusbar: the swing bar's default is Wglass")
+    eq(db_mainhand.gcd_texture_key, "Wglass", "statusbar: the GCD underlay's default is Wglass")
+    -- The deadzone is a MARKER (a shaded latency region), not a progress bar: it keeps
+    -- the plain fill and does not follow the progress bars' texture default.
+    eq(db_mainhand.deadzone_texture_key, "Solid", "statusbar: the deadzone marker keeps Solid")
+    local vf = visuals(b, "mainhand")
+    eq(vf.bar.texture, "Texture\\Wglass", "statusbar: the swing bar renders the operator's texture")
+    eq(vf.gcd_bar.texture, "Texture\\Wglass", "statusbar: the GCD underlay renders the operator's texture")
+    eq(vf.deadzone.texture, "Texture\\Solid", "statusbar: the deadzone marker renders Solid")
+
+    -- Degradation 1: the requested key fetches nil -> the shipped fallback key.
+    local b2 = boot({ class = "PALADIN", lsm_missing_key = "Wglass" })
+    local vf2 = visuals(b2, "mainhand")
+    eq(vf2.bar.texture, "Texture\\Minimalist",
+        "statusbar: a nil fetch degrades the swing bar to the shipped Minimalist texture")
+    eq(vf2.gcd_bar.texture, "Texture\\Minimalist",
+        "statusbar: a nil fetch degrades the GCD underlay to the shipped Minimalist texture")
+    check(vf2.bar.texture ~= nil and vf2.gcd_bar.texture ~= nil,
+        "statusbar: a nil fetch never leaves a bar textureless")
+
+    -- Degradation 2: EVERY statusbar fetch comes back nil -> the client's white pixel.
+    local b3 = boot({ class = "PALADIN", lsm_missing_all = true })
+    local vf3 = visuals(b3, "mainhand")
+    eq(vf3.bar.texture, "Interface\\Buttons\\WHITE8X8",
+        "statusbar: a dead media registry still leaves the swing bar with the client's white pixel")
+    eq(vf3.gcd_bar.texture, "Interface\\Buttons\\WHITE8X8",
+        "statusbar: a dead media registry still leaves the GCD underlay textured")
+    check(vf3.deadzone.texture ~= nil,
+        "statusbar: a dead media registry still leaves the deadzone textured")
+    check(vf3.bar.texture ~= nil and vf3.gcd_bar.texture ~= nil,
+        "statusbar: a dead media registry never leaves a bar textureless")
+end
+
+--=========================================================================================
+-- 10) The font chain: a bar text never carries a nil font
+--
+-- The bar texts are written per frame, so every one of them must carry a font
+-- before its first SetText - a FontString with no font throws "Font not set" on a
+-- real client. The shared chain (utils.lua) resolves the LSM key and falls back
+-- through STANDARD_TEXT_FONT to the classic client font, so a key that no longer
+-- resolves (the font lives in another addon's LSM registration) degrades instead
+-- of handing SetFont a nil path.
+--=========================================================================================
+do
+    -- The normal path: the media font is the one that lands.
+    local b = boot({ class = "PALADIN" })
+    local vf = visuals(b, "mainhand")
+    check(vf.left_text:GetFont() ~= nil, "font: the left bar text carries a font")
+    check(vf.center_text:GetFont() ~= nil, "font: the center bar text carries a font")
+    check(vf.right_text:GetFont() ~= nil, "font: the right bar text carries a font")
+    eq(vf.left_text:GetFont(), "Fonts\\LSM.ttf", "font: the left bar text uses the media font")
+
+    -- The degradation path: the font key no longer resolves. The bar build must
+    -- not throw (the old path handed SetFont a nil) and the texts must still
+    -- carry a font that exists.
+    local ok, err = pcall(function()
+        local b2 = boot({ class = "PALADIN", lsm_missing_font = true })
+        local vf2 = visuals(b2, "mainhand")
+        check(vf2.left_text:GetFont() ~= nil,
+            "font: an unresolvable font key still leaves the left text with a font")
+        check(vf2.center_text:GetFont() ~= nil,
+            "font: an unresolvable font key still leaves the center text with a font")
+        check(vf2.right_text:GetFont() ~= nil,
+            "font: an unresolvable font key still leaves the right text with a font")
+        eq(vf2.left_text:GetFont(), "Fonts\\FRIZQT__.TTF",
+            "font: an unresolvable font key falls back to the standard client font")
+    end)
+    check(ok, "font: an unresolvable font key never throws out of the bar build ("
+        .. tostring(err) .. ")")
+
+    -- Source: bars.lua has no direct SetFont call - the shared chain owns every font.
+    local fh = assert(io.open(ROOT .. "bars.lua", "r"))
+    local src = fh:read("*a")
+    fh:close()
+    check(src:find(":SetFont(", 1, true) == nil,
+        "font: bars.lua has no direct SetFont call (the shared chain owns every font)")
+    check(src:find("st.utils.fetch_font_path", 1, true) ~= nil,
+        "font: bars.lua resolves the font key through the shared chain")
 end
 
 if failures == 0 then

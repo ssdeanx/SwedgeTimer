@@ -1,0 +1,73 @@
+Mutation-proof transcript — lane range-engine-tbc, 2026-10-21
+Brief: bench/briefs/brief_range-engine-tbc_2026-10-21.md
+Deliverable: bench/range_engine_tbc_2026-10-21.md
+
+Copy under test: /tmp/opencode/range-engine-mut2/tree
+  rsync -a --exclude Media --exclude docs --exclude .git /home/sam/SwedgeTimer/ <tree>/
+Runner: /tmp/opencode/range-engine-mut2/mutations.py (CRLF-aware apply, one mutation
+at a time, restore byte-for-byte from the working tree and cmp-verify after each case).
+Suite: lua5.1 tests/range_source_state.lua (148 checks before mutation).
+
+No working-tree file was mutated. No git was run.
+
+------------------------------------------------------------------------------
+python3 /tmp/opencode/range-engine-mut2/mutations.py
+------------------------------------------------------------------------------
+M1 KILLED (1) range_source_state.lua :: FAIL  range_source_state.lua: 21 of 148 checks failed
+M1   restored byte-identical
+M2 KILLED (1) range_source_state.lua :: FAIL  range_source_state.lua: 2 of 148 checks failed
+M2   restored byte-identical
+M3 KILLED (1) range_source_state.lua :: FAIL  range_source_state.lua: 2 of 148 checks failed
+M3   restored byte-identical
+M4 KILLED (1) range_source_state.lua :: FAIL  range_source_state.lua: 1 of 148 checks failed
+M4   restored byte-identical
+M5 KILLED (1) range_source_state.lua :: FAIL  range_source_state.lua: 7 of 148 checks failed
+M5   restored byte-identical
+M6 KILLED (1) range_source_state.lua :: FAIL  range_source_state.lua: 4 of 148 checks failed
+M6   restored byte-identical
+M7 KILLED (1) range_source_state.lua :: FAIL  range_source_state.lua: 2 of 148 checks failed
+M7   restored byte-identical
+M8 KILLED (1) range_source_state.lua :: FAIL  range_source_state.lua: 5 of 148 checks failed
+M8   restored byte-identical
+M9 KILLED (1) range_source_state.lua :: FAIL  range_source_state.lua: 3 of 148 checks failed
+M9   restored byte-identical
+---
+killed 9/9
+
+------------------------------------------------------------------------------
+Mutation definitions (as applied)
+------------------------------------------------------------------------------
+M1 main.lua:1805        'local yards = api.UnitDistance("target")' -> 'local yards = 20'
+M2 main.lua:1814        'yards <= RF_MELEE_RANGE' -> 'yards < RF_MELEE_RANGE'
+M3 main.lua:1816        drop 'and not in_melee' from in_ranged_range
+M4 hunter_ui.lua:894    'sweet = yards > RANGE_HELPER_MELEE_RANGE and yards <=
+                        RANGE_HELPER_SWEET_SPOT' -> 'sweet = true'
+M5 hunter_ui.lua:1533   replace the 'hunter_ui:range_helper' st.guard.run site with a
+                        direct ui.update_range_helper(self, db) call
+M6 main.lua:829-834     replace the guarded class post_init closure with a direct
+                        self[self.player_class].post_init(self)
+M7 main.lua:1801        insert 'if self.lrc_unavailable then return end' at the top of
+                        ST:update_range_state
+M8 hunter_ui.lua:891    insert CheckInteractDistance("target", 3) before the UnitDistance
+                        read in update_range_helper
+M9 LibRangeCheck-2.0.lua:632-638  remove the empty-list guard from getRange
+
+A first shell-draft run reported M6/M7/M9 as MUTATION-APPLY-FAILED because the draft's
+multi-line old strings used LF against CRLF files (main.lua and the library are CRLF).
+That draft mutated nothing for those cases; the Python runner above is the recorded run.
+
+------------------------------------------------------------------------------
+Post-run checks (working tree)
+------------------------------------------------------------------------------
+bash tests/run.sh
+  46 steps, 0 failed
+luacheck .
+  Total: 2 warnings / 0 errors in 88 files
+
+Per-suite counts:
+  tests/range_source_state.lua   PASS (148 checks)   [new]
+  tests/main_init_state.lua      PASS (952 checks)
+  tests/hunter_state.lua         PASS (1738 checks)
+  tests/bars_state.lua           PASS (907 checks)
+  tests/lrc_guard_state.lua      PASS (141 checks)
+  tests/secret_guard_state.lua   PASS (432 checks)   [rewritten by the compat lane]

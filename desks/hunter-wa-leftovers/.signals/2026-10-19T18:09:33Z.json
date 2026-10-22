@@ -1,0 +1,18 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T18:09:33Z",
+  "agent_name": "hunter-wa-leftovers",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "lib-first mapping (zero new probes) kept the lane in scope; mutation battery caught a weak pin before landing",
+    "what_was_hard": "wago Lua unextractable (JS shell, both fetchers); prog core landed-then-removed to respect the wiring gate",
+    "skill_gap": "none — extraction limits and dead-hook rule both handled by explicit filing"
+  },
+  "escalation": null
+}

@@ -51,6 +51,7 @@ end
 local ST = {
     PALADIN = {},
     player_class = "PALADIN",
+    active_class = "PALADIN",
     -- The addon master switches the gate reads.
     db = { profile = { enabled = true } },
 }
@@ -67,6 +68,12 @@ env.CreateFrame = function() return make_frame() end
 env.UIParent = {}
 env.InCombatLockdown = function() return lockdown end
 
+-- guard.lua owns the shared error-isolation contract (the TOCs load it right after
+-- utils.lua and before every consumer).
+local guard_chunk = assert(loadfile(ROOT .. "guard.lua"))
+setfenv(guard_chunk, env)
+guard_chunk("SwedgeTimer", st)
+
 local chunk = assert(loadfile(ROOT .. "rotationtext.lua"))
 setfenv(chunk, env)
 local ok, err = pcall(chunk, "SwedgeTimer", st)
@@ -79,7 +86,32 @@ local RT = st.rotation_text
 check(type(RT) == "table", "rotationtext.lua defines st.rotation_text")
 eq(created_frames, 1, "only the driver frame is created at file load")
 check(RT.frame == nil, "the label frame is NOT created at file load")
-eq(type(ST.PALADIN.get_rotation_key), "function", "rotationtext.lua defines the paladin provider")
+
+-- C5 (class-isolation 2026-10-21): the paladin provider is the PALADIN's own
+-- function in classes/paladin.lua. This suite extracts the marked block and
+-- loads the SHIPPED source into its sandbox (no copy of the body here).
+local rot_fh = assert(io.open(ROOT .. "rotationtext.lua", "r"))
+local rot_src = rot_fh:read("*a")
+rot_fh:close()
+check(rot_src:find("ST.PALADIN.get_rotation_key", 1, true) == nil,
+    "rotationtext.lua no longer defines the paladin provider (the class owns it)")
+local function paladin_block(open_marker, close_marker)
+    local fh = assert(io.open(ROOT .. "classes/paladin.lua", "r"))
+    local src = fh:read("*a")
+    fh:close()
+    local a = src:find(open_marker, 1, true)
+    local b = src:find(close_marker, 1, true)
+    assert(a and b and a < b, "classes/paladin.lua provider markers not found")
+    return src:sub(a + #open_marker, b - 1)
+end
+local pal_chunk = assert(loadstring(paladin_block(
+    "-- >>> rotationtext provider >>>", "-- <<< rotationtext provider <<<")))
+setfenv(pal_chunk, env)
+env.ST = ST
+env.st = st
+pal_chunk()
+eq(type(ST.PALADIN.get_rotation_key), "function",
+    "classes/paladin.lua owns the paladin provider")
 
 local entry_points = {
     "format_value", "anchor_point_for", "shift_align_offset", "should_show_state",
@@ -237,8 +269,15 @@ eq(noresolver_key, nil, "decide_update: no resolver -> nil key (renders as empty
 eq(RT.provider(ST) ~= nil, true, "provider: the paladin implements get_rotation_key")
 local saved_class = ST.player_class
 ST.player_class = "WARRIOR"
+ST.active_class = "WARRIOR"
 eq(RT.provider(ST), nil, "provider: a class without get_rotation_key has none")
+-- C7: the ACTIVE class wins over the class being PLAYED.
+ST.player_class = "WARRIOR"
+ST.active_class = "PALADIN"
+eq(RT.provider(ST) ~= nil, true,
+    "provider: the ACTIVE class wins over the playing class")
 ST.player_class = saved_class
+ST.active_class = saved_class
 
 st.nextaction = na_st.nextaction
 local live_self = {
@@ -405,7 +444,7 @@ do
 end
 
 --=========================================================================================
--- 8) Non-paladin rotation sources: hunter, warrior, druid, shaman
+-- 8) Non-paladin rotation sources: hunter, warrior, druid, shaman, rogue
 --=========================================================================================
 -- A richer sandbox than the minimal one above: the class modules need compat's
 -- wrappers (api.*), utils' lookup builder and their pure guide engines. Each
@@ -431,11 +470,14 @@ do
         [5221] = "Shred", [17364] = "Stormstrike", [8050] = "Flame Shock",
         [403] = "Lightning Bolt", [1535] = "Fire Nova Totem",
         [8042] = "Earth Shock", [8512] = "Windfury Totem",
+        [108] = "Sinister Strike", [102] = "Rupture", [109] = "Eviscerate",
+        [110] = "Envenom", [103] = "Expose Armor", [111] = "Shiv",
+        [106] = "Thistle Tea",
     }
     local C_CAST_TIMES = { [56641] = 1500, [2643] = 500 }
 
     local CST = {
-        PALADIN = {}, HUNTER = {}, WARRIOR = {}, DRUID = {}, SHAMAN = {},
+        PALADIN = {}, HUNTER = {}, WARRIOR = {}, DRUID = {}, SHAMAN = {}, ROGUE = {},
         player_class = "PALADIN",
         db = { profile = { enabled = true } },
         interfaces_are_initialised = true,
@@ -504,16 +546,24 @@ do
     cenv.UnitGUID = function() return "Player-1" end
     cenv.IsSpellInRange = function() return 1 end
 
-    local cmodules = { "compat.lua", "utils.lua", "hunter_window.lua", "weave.lua",
+    local cmodules = { "compat.lua", "utils.lua", "guard.lua", "hunter_window.lua", "weave.lua",
         "hunter_guide.lua", "warrior_guide.lua", "druid_guide.lua", "shaman_guide.lua",
+        "rogue_guide.lua",
         "classes/hunter.lua", "classes/warrior.lua", "classes/druid.lua",
-        "classes/shaman.lua", "rotationtext.lua" }
+        "classes/shaman.lua", "classes/rogue.lua", "rotationtext.lua" }
     for i = 1, #cmodules do
         local cchunk = assert(loadfile(ROOT .. cmodules[i]))
         setfenv(cchunk, cenv)
         local cok, cerr = pcall(cchunk, "SwedgeTimer", cst)
         check(cok, cmodules[i] .. " loads in the class sandbox" ..
             (cok and "" or (": " .. tostring(cerr))))
+        -- Operator order 2026-10-21: a wrapped class file registers its body as a
+        -- loader; the sandbox activates it exactly as main.lua does at init.
+        local class = cmodules[i]:match("classes/(%a+)%.lua")
+        if class and type(cst.class_loaders) == "table"
+            and type(cst.class_loaders[class:upper()]) == "function" then
+            cst.class_loaders[class:upper()]()
+        end
     end
     local RT2 = cst.rotation_text
     check(type(RT2) == "table", "the class sandbox exposes st.rotation_text")
@@ -539,19 +589,23 @@ do
         cclass_db = { class_enabled = true }
     end
 
-    -- Provider detection across the four new classes.
-    for _, class in ipairs({ "HUNTER", "WARRIOR", "DRUID", "SHAMAN" }) do
+    -- Provider detection across the five new classes.
+    for _, class in ipairs({ "HUNTER", "WARRIOR", "DRUID", "SHAMAN", "ROGUE" }) do
         CST.player_class = class
+CST.active_class = class
         check(RT2.provider(CST) ~= nil,
             "provider: " .. class .. " implements get_rotation_key")
     end
     CST.player_class = "MAGE"
+CST.active_class = "MAGE"
     eq(RT2.provider(CST), nil, "provider: a class without get_rotation_key has none")
     CST.player_class = "PALADIN"
+CST.active_class = "PALADIN"
 
     -- Hunter: idle, RIDE, then the Kill Command priority.
     do
         CST.player_class = "HUNTER"
+CST.active_class = "HUNTER"
         creset()
         eq(CST.HUNTER.get_rotation_key(CST), nil, "hunter rotation: idle -> nil")
         CST.raptor_strike_queued = true
@@ -574,6 +628,7 @@ do
     -- Warrior: the TBC reader-ready default, the Overpower precedence, RIDE.
     do
         CST.player_class = "WARRIOR"
+CST.active_class = "WARRIOR"
         creset()
         eq(CST.WARRIOR.get_rotation_key(CST), "Bloodthirst",
             "warrior rotation: the TBC reader-ready default is Bloodthirst")
@@ -594,6 +649,7 @@ do
     -- Druid: form-gated, bear Maul, TBC cat Rip.
     do
         CST.player_class = "DRUID"
+CST.active_class = "DRUID"
         creset()
         eq(CST.DRUID.get_rotation_key(CST), nil, "druid rotation: no form -> nil")
         CST.form_index = 1
@@ -617,6 +673,7 @@ do
     -- Shaman: Flame Shock default, Stormstrike when it is up, RIDE on a cast.
     do
         CST.player_class = "SHAMAN"
+CST.active_class = "SHAMAN"
         creset()
         eq(CST.SHAMAN.get_rotation_key(CST), "Flame Shock",
             "shaman rotation: a missing Flame Shock prompts Flame Shock")
@@ -637,7 +694,128 @@ do
         eq(CST.SHAMAN.get_rotation_key(CST), nil, "shaman rotation: missing engine -> nil")
         cst.shaman_guide = saved
     end
+
+    -- Rogue: unknown, POOL, then the named builder (the hunter shape: the action's
+    -- localized name from the guide's own slot descriptors, hold_text while
+    -- holding, nil when idle).
+    do
+        CST.player_class = "ROGUE"
+CST.active_class = "ROGUE"
+        creset()
+        eq(CST.ROGUE.get_rotation_key(CST), nil, "rogue rotation: unknown inputs -> nil")
+        cpower_by_type[3] = 50
+        cpower_by_type[4] = 0
+        eq(CST.ROGUE.get_rotation_key(CST), "POOL", "rogue rotation: pooling -> POOL")
+        cpower_by_type[3] = 90
+        -- The builder slot carries its resolved spell id (the client answered it),
+        -- so the label reads the localized name, not the action key.
+        for i = 1, #CST.ROGUE.guide.slots do
+            if CST.ROGUE.guide.slots[i].key == "builder" then
+                CST.ROGUE.guide.slots[i].spell_id = 108
+            end
+        end
+        eq(CST.ROGUE.get_rotation_key(CST), "Sinister Strike",
+            "rogue rotation: a spend names the localized builder")
+        eq(RT2.current_rotation(CST), "Sinister Strike",
+            "rogue rotation: the consumer reads the same label")
+        eq(RT2.format_value("Sinister Strike", "key", NAMES, DESCS), "Sinister Strike",
+            "rogue rotation: an unknown key renders as itself (no consumer change)")
+        local saved = cst.rogue_guide
+        cst.rogue_guide = nil
+        eq(CST.ROGUE.get_rotation_key(CST), nil, "rogue rotation: missing engine -> nil")
+        cst.rogue_guide = saved
+    end
     CST.player_class = "PALADIN"
+CST.active_class = "PALADIN"
+end
+
+--=========================================================================================
+-- N3: source isolation - a throwing get_rotation_key hides the label, never the driver.
+-- First throw prints once, every throw counts in ST.bar_hook_errors (the /st diag
+-- counter), the site quarantines after 25. Degrade hides, never stale.
+--=========================================================================================
+do
+    local fake_text = {}
+    function fake_text:SetText(t) self.text = t end
+    function fake_text:GetStringWidth() return 40 end
+    function fake_text:GetStringHeight() return 16 end
+    function fake_text:ClearAllPoints() end
+    function fake_text:SetPoint() end
+    function fake_text:SetJustifyH() end
+    function fake_text:SetShadowColor() end
+    function fake_text:SetShadowOffset() end
+    local fake_frame = { shown = true }
+    function fake_frame:IsShown() return self.shown end
+    function fake_frame:Hide() self.shown = false end
+    function fake_frame:Show() self.shown = true end
+    function fake_frame:SetSize() end
+    fake_frame.text = fake_text
+    local saved_frame, saved_key, saved_dirty = RT.frame, RT.current_key, RT.dirty
+    local saved_errors = ST.bar_hook_errors
+    ST.bar_hook_errors = nil
+    RT.frame = fake_frame
+    RT.current_key = nil
+    RT.dirty = true
+    local fake_self = {
+        PALADIN = ST.PALADIN,
+        player_class = "PALADIN",
+        active_class = "PALADIN",
+        db = { profile = { enabled = true } },
+        in_combat = false,
+        mainhand = { speed = 2.3 },
+    }
+    function fake_self:get_class_table()
+        return {
+            class_enabled = true, rotation_label_enabled = true,
+            rotation_label_locked = true, rotation_label_visibility_key = "always",
+            rotation_label_format = "key",
+        }
+    end
+    function fake_self:get_spell_gcd_duration() return 1.15 end
+    local real_key = ST.PALADIN.get_rotation_key
+    ST.PALADIN.get_rotation_key = function() error("N3 probe throw") end
+    local notices = {}
+    fake_self.Print = function(_, msg) notices[#notices + 1] = tostring(msg) end
+    local nok, nerr = pcall(RT.update_display, fake_self)
+    check(nok, "N3: a throwing source does not break the driver (" .. tostring(nerr) .. ")")
+    eq(fake_frame.shown, false, "N3: the label hides on a source throw, never stale")
+    eq(fake_self.bar_hook_errors.count, 1, "N3: the throw is counted")
+    eq(fake_self.bar_hook_errors.by_site["rotationtext:get_rotation_key"], 1, "N3: the counter names the source")
+    eq(#notices, 1, "N3: the first throw prints exactly one chat line")
+    for _ = 1, 3 do
+        fake_frame.shown = true
+        RT.update_display(fake_self)
+    end
+    eq(fake_self.bar_hook_errors.by_site["rotationtext:get_rotation_key"], 4, "N3: every throw keeps counting")
+    eq(#notices, 1, "N3: repeated throws do not spam chat")
+    for _ = 5, 25 do
+        fake_frame.shown = true
+        RT.update_display(fake_self)
+    end
+    eq(fake_self.bar_hook_errors.by_site["rotationtext:get_rotation_key"], 25, "N3: the site reaches the quarantine threshold")
+    eq(fake_self.bar_hook_errors.quarantined["rotationtext:get_rotation_key"], true, "N3: the site is quarantined for the session")
+    local counted = fake_self.bar_hook_errors.count
+    fake_frame.shown = true
+    RT.update_display(fake_self)
+    eq(fake_self.bar_hook_errors.count, counted, "N3: a quarantined source is not called again")
+    ST.PALADIN.get_rotation_key = real_key
+    ST.bar_hook_errors = saved_errors
+    RT.frame, RT.current_key, RT.dirty = saved_frame, saved_key, saved_dirty
+end
+
+--=========================================================================================
+-- 8) F10: the rotation label's source isolation is the shared guard (one implementation)
+--=========================================================================================
+do
+    local rt_src = read("rotationtext.lua")
+    check(rt_src:find("st.guard.run", 1, true) ~= nil,
+        "the rotation label isolates a throwing source through the shared guard")
+    check(rt_src:find("QUARANTINE_THROWS = ", 1, true) == nil,
+        "the rotation label keeps no second quarantine threshold")
+    check(rt_src:find("errors.by_site", 1, true) == nil,
+        "the rotation label keeps no second counter bookkeeping")
+    check(rt_src:find('st.guard.label("rotationtext", "Rotation text")', 1, true) ~= nil,
+        "the rotation wording stays at the call site")
 end
 
 if failures == 0 then

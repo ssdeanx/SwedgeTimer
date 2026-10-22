@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T05:29:00Z",
+  "run_id": "hunter-apl-2026-10-20",
+  "agent_name": "hunter-apl",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-fetching the six APL files and expanding every group inline (instead of trusting the gap analysis) caught four errors in the gap analysis's hunter section; naming every id on its own client page gave a client-confirmed name for each new row, including the WotLK rename to Aspect of the Dragonhawk.",
+    "what_was_hard": "The hunter needs two flags where the warrior needs one: `live` (the read exists) and `engine = false` (the frozen engine has no arm) - the Serpent and Viper rows have a read but no rule, the aspect rows have neither. The practice panel's fixed 74 px strip (four buttons per row) caps the visible vocabulary at eight actions, so the full thirteen-row Wrath spine cannot be shown without a practice_ui change that is out of this lane's scope.",
+    "skill_gap": "A parallel lane was editing classes/paladin.lua and practice_ui.lua at the same time; the mid-lane harness reds (a 200-locals compile error, a 60-upvalues error, two druid drill checks) were crossfire, not this lane's work - it took a second harness run to separate them."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

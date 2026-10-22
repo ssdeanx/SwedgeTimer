@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "checkpoint",
+  "timestamp": "2026-10-20T04:31:00Z",
+  "run_id": "warrior-hs-queue-2026-10-20",
+  "agent_name": "warrior-hs-queue",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "W-21's shape resolves the sweep's own contradiction (BS-9 said the row's width grows by the slots AND the mirrors are provider-hidden by default): the mirror GATE is the druid-Claw shape (== true, so nil = off) and the shipped `hud_show_sunder = true` is the options lane's documented \"the union of the family sets ships on\" decision, so the TBC row shows the Sunder icon exactly as every other family's row shows its own slots.",
+    "what_was_hard": "One consequence the operator may want to rule on: the TBC HUD row now carries one more visible icon than before (the Sunder mirror). Turning it off by default is a one-line change in config_presets.lua (the options lane's file) - the gate itself needs no change.",
+    "skill_gap": "None new; the visibility question is a decision point, not a defect."
+  },
+  "escalation": {
+    "reason": "One operator decision is open (not blocking, the tree is green): the TBC Sunder mirror is visible by default because config_presets.lua ships hud_show_sunder = true. The dispatch's 'no default-visible change' rule and that shipped default point different ways.",
+    "blocked_on": null,
+    "recommendation": "Either (a) accept the shipped default (the TBC row shows the Sunder mirror, like every other family's row shows its slots), or (b) let the options lane flip hud_show_sunder to false in config_presets.lua - one line, no gate change needed. Evidence: bench/warrior_hs_queue_2026-10-20.md section 4.3 and desks/warrior-hs-queue/journal.md."
+  }
+}

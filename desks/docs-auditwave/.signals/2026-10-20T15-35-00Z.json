@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T15:35:00Z",
+  "run_id": "docs-auditwave-2026-10-20",
+  "agent_name": "docs-auditwave",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the six lane artifacts together made the six findings and their citations obvious; verifying each documented number against the tree in-tree (the paladin's 17 rotation rows / 12 guide slots / 11 pre-pull rows / 14 HUD slots, the six classes' drill lists, the druid's two hold tables) caught two claims the earlier passes had already written wrong - the druid's 'states none' hold line and the paladin's two-row pre-pull table - and caught a third (the README's blanket pre-pull-drill claim) that no lane artifact had flagged. Correcting the superseded lines in place, with a pointer to the fix, kept the changelog internally consistent instead of leaving an earlier section false.",
+    "what_was_hard": "The deep audit's own findings artifact is not on disk as a standalone bench file; its six findings were reconstructed from the four lane artifacts that close them (each names its finding ID and cites its own evidence). Parallel lanes were writing classes/druid.lua and classes/rogue.lua while this pass ran, so the tree moved under the docs and the final state needs re-confirmation by the orchestrator.",
+    "skill_gap": "A docs pass that only adds a wave can silently leave the previous pass's now-false lines in place. Sweeping the earlier sections for claims the new build contradicts was worth more than adding the new section alone. Also: the central ledger row must carry the session id exactly as the dispatch returned it - inventing one would have put a false id in the permanent record, so the row was left for the orchestrator to fill."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

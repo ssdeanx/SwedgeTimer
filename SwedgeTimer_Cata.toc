@@ -1,6 +1,7 @@
 ## Interface: 40402
 ## Title: SwedgeTimer
 ## Notes: General purpose swing timer addon for all WoW clients.
+## IconTexture: SwedgeTimer_v2_transparent.tga
 ## Author: Swedge
 ## Version: "2.1.1"
 ## DefaultState: enabled
@@ -34,6 +35,7 @@ Libs\AceGUI-3.0-SharedMediaWidgets\widget.xml
 Libs\AceConfig-3.0\AceConfig-3.0.xml
 
 utils.lua
+guard.lua
 widgets.lua
 twist.lua
 weave.lua
@@ -49,6 +51,9 @@ design.lua
 hunter_window.lua
 hunter_ui.lua
 practice.lua
+practice_stats.lua
+practice_progress.lua
+practice_progress_ui.lua
 main.lua
 bars.lua
 ldb.lua

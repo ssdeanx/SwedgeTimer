@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T21:05:00Z",
+  "agent_name": "resolver-callers",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reusing the class-latch lane's verdict shape verbatim (absent latches the negative, unresolved latches nothing) made the migration a copy of a proven pattern instead of a new design. The hunter needed one extra piece the druid/warrior latch did not: a retry DRIVER, because its resolution feeds a per-frame gather. Two bounds (the per-table backoff inside the resolver and the driver's own due check) turned out to be complementary, and the mutation battery is what proved that - removing only one of them changes no probe count, so the battery had to remove both before the bound was observable. The pin set that caught the real gaps was the probe-count pins (the state-API call counter), not the query log: the gather's own unguarded cast-time read was polluting the query log and made the first attempt at the walk-count pins look like a failure.",
+    "what_was_hard": "The hunter's guide frame is built once from ST.HUNTER.guide.slots and never rebuilt, so the SoD slot-set swap cannot be retried without leaving the icons and the engine's prompts disagreeing. Deciding that swap once (while still resolving the SoD table through the cached resolver) was the only safe shape, and it is a deliberate departure from 'everything retries' that needed writing down. The other hard part was the fixture: modelling 'unresolved' needs a client that cannot answer, and the throwing client raises inside the hunter's own unguarded cast-time read - a restricted (secret) client was the model that let the per-frame path run at all.",
+    "skill_gap": "The first mutation battery reported 11/12 and the survivor was not a missing pin but a genuinely equivalent mutant (one of two redundant bounds removed). The honest move was to pin BOTH bounds separately and to state the equivalence in the bench artifact instead of quietly dropping the mutant; a battery that only reports kills hides the fact that a bound is unobservable on its own. Also: the class-latch note's 'twelve call sites' was wrong (ten calls over fifteen rank tables) - a count inherited from a note is a rumor until it is grepped."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

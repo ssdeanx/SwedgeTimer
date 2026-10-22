@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T20:05:00Z",
+  "run_id": "font-sweep-2026-10-20",
+  "agent_name": "font-sweep",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Auditing all 82 CreateFontString sites before touching anything kept the diff small: the defect class existed in exactly one file (hunter_ui.lua, 4 sites). The shared chain went into utils.lua - already in all 7 TOCs and loaded before every consumer - so no TOC edit was needed and no client could load a build with a missing font module.",
+    "what_was_hard": "The sandbox had to become SoD-faithful (SetText with no font throws) for the pins to be load-bearing, and a font-stripped mutant therefore aborts the suite with the client's exact error instead of a clean FAIL line; M5 was added to prove the source-order pin independently of the crash. bars_state's fontstring stub had to learn that a nil path latches nothing, or the bars degradation pin would have passed against the old buggy code.",
+    "skill_gap": "Reading a bench citation's line number is a claim, not a fact - the first draft of the bench file cited the pre-fix hunter_ui line numbers for the badge/label writes and was corrected by re-reading the file."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

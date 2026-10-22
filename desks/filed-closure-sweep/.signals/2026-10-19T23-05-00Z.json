@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T23:05:00Z",
+  "run_id": "phase6-filed-closure-sweep",
+  "agent_name": "filed-closure-sweep",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Treating the filed corpus as a claim-list and re-deriving each claim against three independent source classes (the shipped tree, the client source of five branches in /home/sam/wow-ui-source, and live sim/web sources) turned four 'no honest probe exists' filings into concrete build specs, and caught a swapped id pair in the corpus itself (TBC 26862 = Sinister Strike, 26864 = Hemorrhage).",
+    "what_was_hard": "Proving a NEGATIVE (that no source can exist) is expensive: the rage-regeneration and Chain-Lightning-enemy-count items each needed three sim/client fetches before the 'impossible to cite' conclusion was defensible. Counting rows accurately across five differently-shaped tables also took several passes.",
+    "skill_gap": "The GitHub contents API returns raw JSON through this harness, so a 'list only the names' prompt does not actually shrink the payload; the tree API and raw-file fetches are cheaper for path discovery."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

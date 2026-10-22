@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T03:16:21Z",
+  "run_id": "bs2-druid-wolfshead-2026-10-19",
+  "agent_name": "druid-wolfshead",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Pinning the gather against the REAL compat probe (not a stubbed api table) caught the one real trap in the spec: compat reads the client's INVSLOT_* range through rawget(_G, ...) at CALL time, so a fixture that only stubs the env globals answers 'unknown' forever. The mutation proofs then earned their keep - mutant B (a re-added TBC SHIFT hold) was killed by BOTH the behavioural pin and a static 'named in a comment, never in code' scan.",
+    "what_was_hard": "The spec's literal `api.is_item_equipped(8345) or nil` would have collapsed the proven FALSE into nil (false or nil is nil in Lua) - the operator's brief said keep the tri-state, so the spec text was not copied literally; that divergence is recorded in the bench artifact. Also kept an eye on a concurrent lane (hunter-serpent) writing classes/hunter.lua in the same tree, which made the whole-tree luacheck warning count flicker.",
+    "skill_gap": "Reading a spec's code-shaped instruction literally and shipping it without checking the three-value semantics of `and/or` - a habit worth breaking at the review step, not after the mutation proofs."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

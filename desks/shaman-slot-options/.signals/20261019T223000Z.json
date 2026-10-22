@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "checkpoint",
+  "timestamp": "2026-10-19T22:30:00Z",
+  "run_id": "shaman-slot-options-2026-10-19",
+  "agent_name": "shaman-slot-options",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The druid Claw mirror (hud_show_claw = false) was the exact precedent: same shared hud_rotation_widgets builder, same false default, same consumer shape. Scoping the descriptor pin to the ST.SHAMAN.HUD_SLOTS table (the guide slots carry the same slot keys) was what made mutation M1/M2 killable - the first, unscoped find passed on the guide's descriptor and the mutants survived.",
+    "what_was_hard": "The harness was red for reasons outside this lane, and the red moved three times under my feet: first the parallel F10 guard lane's st.guard being nil in five test sandboxes, then its in-flight classes/shaman.lua exceeding Lua 5.1's 200-local limit, then the HU-7 namespace-mirror removal leaving a stale pin in tests/shaman_guide_state.lua. Proving independence took a reverted-copy run on /tmp/opencode/sso-iso (identical failure with and without my three changes) plus watching the failing set move between harness runs while my files were untouched.",
+    "skill_gap": "Deciding whether a stale copy string ('No other icon glows') inside an existing widget counts as in-scope when the brief says 'two widgets only'. Resolved by fixing it and flagging it loudly for the orchestrator to revert, but the rule for that call is still unstated."
+  },
+  "escalation": {
+    "reason": "Crossfire blocker, not a disagreement: the one remaining harness failure is tests/shaman_guide_state.lua -> 'the class module is reachable from the addon namespace (got nil)' - the parallel lane removed the st.SHAMAN = ST.SHAMAN mirror from classes/shaman.lua (per the orchestrator's HU-7 ruling, ENGINE-OWNS-FIX) but that suite still pins the old mirror. Both files are other lanes'. This lane's deliverable (option_tables.lua, config_presets.lua, tests/options_load_state.lua) is verified green in isolation: the same /tmp/opencode/sso-iso copy of the repo fails identically with and without this lane's three changes.",
+    "blocked_on": "the shaman-drills / shaman-slots lane updating tests/shaman_guide_state.lua for the HU-7 mirror removal - no operator ruling needed, no disagreement to settle",
+    "recommendation": "This lane's own pins are green and can be validated as-is (options_load_state 3318 checks / 0 failed, luacheck 0/0 on its three files, 13/13 mutations killed, control green). Do not merge on a red harness until that suite is updated. Filed for the orchestrator: the two mirrors in ST.SHAMAN.HUD_TEMPLATES (a template pick writes the slot keys - beyond this brief), the hud_state.lua 'ships false' pin (that file is another lane's; this lane's section 23 carries the stricter equivalent), and the review of the one copy fix (the shaman glow description said 'No other icon glows', which the two new glowing mirrors made false)."
+  }
+}

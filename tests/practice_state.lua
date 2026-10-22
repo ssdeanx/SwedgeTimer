@@ -1367,12 +1367,27 @@ for _, name in ipairs({
     "energy_spend", "grade_powershift", "powershift_cycle", "weave_marker_fraction",
     "weave_safe_start_in", "grade_weave_cast", "energy_tick_marker",
     "grade_energy_spend", "grade_ss_after_swing",
+    -- The shared rotation-scenario + drill engine (the per-class lanes plug into it).
+    "practice_class_module", "practice_scenario_available", "practice_scenario_step",
+    "practice_drills", "practice_drill_by_key", "practice_drill_grade",
+    "practice_neutral_actions",
+    "new_rotation_run", "rotation_run_decide", "rotation_run_summary",
 }) do
     check(type(H[name]) == "function", "harness exposes " .. name)
 end
 
 -- harness: registry ---------------------------------------------------------------
-eq(#H.SCENARIO_ORDER, 8, "eight scenarios are registered")
+-- All EIGHT built-in drills stay registered: the class's session wrappers and their
+-- offline pins still resolve the old keys (backward compatibility, operator order
+-- 2026-10-19). What the ruling changed is the TRUTH and the routing:
+--   * three built-ins are SUPERSEDED by a class's own drill list (H.SUPERSEDED_DRILLS):
+--     druid_powershift -> druid_powershift_rework (the sim's trigger, not the
+--     addon's 20-energy rule), shaman_weave -> shaman_mw_weave (the same weave.lua
+--     maths, re-sourced) and warrior_execute -> warrior_execute_burn (the execute
+--     phase). One skill, one truth: the class list wins.
+--   * a superseded built-in's grading is DELEGATED to the class's drill, so the old
+--     truth never grades a player attempt.
+eq(#H.SCENARIO_ORDER, 8, "eight built-in drills are registered")
 local specs = H.scenarios_for_class(nil)
 eq(#specs, 8, "scenarios_for_class(nil) returns every scenario")
 eq(specs[1].key, "paladin_twist", "the paladin twist sim is consumer #1")
@@ -1382,17 +1397,32 @@ eq(paladin_specs[1].key, "paladin_twist", "paladin order: twist first")
 eq(paladin_specs[2].key, "paladin_aw_combo", "paladin order: AW combo second")
 eq(#H.scenarios_for_class("HUNTER"), 1, "one hunter shell")
 eq(H.scenarios_for_class("HUNTER")[1].key, "hunter_forced_move", "the hunter shell is H5")
+eq(H.get_scenario("hunter_forced_move").kind, "forced_move", "the hunter spec kind")
 eq(H.get_scenario("warrior_execute").kind, "execute_phase", "W6 spec kind")
 eq(H.get_scenario("druid_powershift").kind, "energy_loop", "D7 spec kind")
 eq(H.get_scenario("shaman_weave").kind, "weave_timing", "S7 spec kind")
-eq(H.get_scenario("paladin_aw_combo").kind, "combo_windows", "P5 spec kind")
-eq(H.get_scenario("paladin_twist").kind, "paladin_twist", "the paladin spec kind")
 local rogue_specs = H.scenarios_for_class("ROGUE")
 eq(#rogue_specs, 2, "two rogue scenarios")
 eq(rogue_specs[1].key, "rogue_energy_pool", "rogue order: energy pool first")
 eq(rogue_specs[2].key, "rogue_ss_window", "rogue order: SS window second")
 eq(H.get_scenario("rogue_energy_pool").kind, "energy_loop", "rogue energy spec kind")
 eq(H.get_scenario("rogue_ss_window").kind, "swing_window", "rogue SS spec kind")
+eq(H.get_scenario("paladin_aw_combo").kind, "combo_windows", "P5 spec kind")
+eq(H.get_scenario("paladin_twist").kind, "paladin_twist", "the paladin spec kind")
+-- The superseded built-ins still resolve (the class wrappers and their pins), and
+-- each names the class drill that owns the skill.
+eq(H.get_scenario("druid_powershift").class, "DRUID", "the superseded powershift drill still resolves")
+eq(H.get_scenario("shaman_weave").class, "SHAMAN", "the superseded weave drill still resolves")
+eq(H.get_scenario("warrior_execute").class, "WARRIOR", "the superseded execute drill still resolves")
+eq(H.SUPERSEDED_DRILLS.druid_powershift, "druid_powershift_rework",
+    "the powershift drill is superseded by the class's own shift rule")
+eq(H.SUPERSEDED_DRILLS.shaman_weave, "shaman_mw_weave",
+    "the weave drill is superseded by the class's own weave decision")
+eq(H.SUPERSEDED_DRILLS.warrior_execute, "warrior_execute_burn",
+    "the execute drill is superseded by the class's own execute phase")
+eq(H.SUPERSEDED_DRILLS.paladin_twist, nil, "the paladin twist drill is not superseded")
+eq(H.SUPERSEDED_DRILLS.hunter_forced_move, nil, "the hunter forced move is not superseded")
+eq(H.SUPERSEDED_DRILLS.rogue_energy_pool, nil, "the rogue energy pool is not superseded")
 eq(H.get_scenario("nope"), nil, "unknown scenario reads nil")
 local dup, dup_err = H.register_scenario({ key = "paladin_twist", title = "dup" })
 eq(dup, nil, "duplicate registration is rejected")
@@ -1401,6 +1431,43 @@ eq(H.register_scenario({ title = "no key" }), nil, "a keyless spec is rejected")
 eq(H.register_scenario({ key = "x", title = "bad kind", kind = "bogus" }), nil,
     "an unknown kind is rejected")
 eq(#H.SCENARIO_ORDER, 8, "rejected registrations do not enter the registry")
+
+-- harness: the scenario kinds ------------------------------------------------------
+-- The seven shipped kinds keep their meaning and the eight registered entries keep
+-- their kinds; the audit's taxonomy adds the rotation scenario kind and the four
+-- drill kinds (bench/class_features_drills_2026-10-19.md §4.1).
+for _, kind in ipairs({
+    "paladin_twist", "combo_windows", "forced_move", "execute_phase",
+    "energy_loop", "weave_timing", "swing_window",
+    "rotation_run", "rotation_order", "rotation_window", "transition", "situational",
+}) do
+    eq(H.SCENARIO_KINDS[kind], true, "the scenario kind is accepted: " .. kind)
+end
+local kind_count = 0
+for _ in pairs(H.SCENARIO_KINDS) do kind_count = kind_count + 1 end
+eq(kind_count, 12, "twelve scenario kinds are accepted")
+-- A new-kind spec registers; the eight shipped entries are untouched.
+local run_spec = H.register_scenario({
+    key = "test_rotation_run",
+    title = "Test rotation run",
+    class = "PALADIN",
+    kind = "rotation_run",
+})
+eq(type(run_spec), "table", "a rotation_run spec registers")
+eq(H.get_scenario("test_rotation_run").kind, "rotation_run", "the new spec keeps its kind")
+eq(#H.SCENARIO_ORDER, 9, "the new spec enters the registry")
+eq(H.scenarios_for_class("PALADIN")[3].key, "test_rotation_run", "paladin order: the new spec third")
+eq(#H.scenarios_for_class("HUNTER"), 1, "the new spec does not leak into another class")
+-- The registry is a live list: the test spec is removed again so the shipped
+-- counts stay exact for the rest of the suite.
+H.SCENARIOS["test_rotation_run"] = nil
+for i = #H.SCENARIO_ORDER, 1, -1 do
+    if H.SCENARIO_ORDER[i] == "test_rotation_run" then
+        table.remove(H.SCENARIO_ORDER, i)
+    end
+end
+eq(#H.SCENARIO_ORDER, 8, "the registry is back to the eight built-in drills")
+eq(H.get_scenario("test_rotation_run"), nil, "the removed spec is gone")
 
 -- harness: windows -------------------------------------------------------------------
 local win = H.build_windows({ count = 3, first_start = 10, duration = 2.5, gap = 5.5, label = "move" })
@@ -1632,6 +1699,8 @@ eq(H.grade_execute_entry(ex.state, 10), "D", "10% rage is D")
 eq(H.grade_execute_entry(ex.state, 0), "F", "empty rage is F")
 eq(H.grade_execute_entry(ex.state, nil), nil, "a missing rage reading grades nothing")
 eq(H.grade_execute_entry(ex.state, 120), "S", "over-target rage clamps to S")
+-- W6: the tick path carries the transition flags
+do
 local ex2 = H.new_session("warrior_execute", 0)
 H.begin_session(ex2, 0)
 local eout = {}
@@ -1643,6 +1712,7 @@ eq(eout.execute_phase_entered, false, "the entry flag does not repeat")
 ex2.state.hp_fraction = 0.5
 H.tick_session(ex2, 1.2, 0.05, eout)
 eq(eout.execute_phase_exited, true, "the tick carries the exit flag")
+end
 -- W6: the exact-time HP path feeds the tracker synchronously
 do
 local ex3 = H.new_session("warrior_execute", 0)
@@ -1794,6 +1864,7 @@ eq(H.grade_energy_spend(rog.state, 0.90, 0.05), "F", "energy: a measured tick cl
 eq(H.grade_energy_spend(rog.state, nil, 0), nil, "energy: an unmeasured start grades nothing")
 eq(H.energy_tick_marker({ tick_known = false }), nil, "an unknown tick has no marker")
 eq(H.energy_tick_marker({ tick_interval = 0 }), nil, "a broken tick interval has no marker")
+eq(H.grade_energy_spend({ tick_marker = 0 / 0 }, 0.5, 0), nil, "energy: a NaN tick marker grades nothing (never a guessed D)")
 eq(H.scenario_event(rog, 0.94, 0), "S", "energy event: a number key grades the tick fraction")
 eq(H.scenario_event(rog, { start = 0.96 }, 0), "F", "energy event: a table key past the marker clips")
 eq(H.scenario_event(rog, { start = 0.90, clip = 0.4 }, 0), "F", "energy event: a measured clip is F")
@@ -1829,6 +1900,7 @@ eq(H.grade_ss_after_swing(sstate, 0.09), "F", "SS: an early cast (before 0.1 s) 
 eq(H.grade_ss_after_swing(sstate, 0.21), "F", "SS: a late cast (after 0.2 s) is F")
 eq(H.grade_ss_after_swing(sstate, nil), nil, "SS: an unmeasured offset grades nothing")
 eq(H.grade_ss_after_swing({ swing_known = false }, 0.15), nil, "SS: an unknown swing grades nothing")
+eq(H.grade_ss_after_swing({ window_start = 0 / 0 }, 0.05), nil, "SS: a NaN window grades nothing (never a guessed B)")
 eq(H.scenario_event(ss_drill, 0.15, 0), "B", "SS event: a number key grades the offset")
 eq(H.scenario_event(ss_drill, 0.25, 0), "F", "SS event: a missed window is F")
 eq(H.scenario_event(ss_drill, "x", 0), nil, "SS event: a non-number key grades nothing")
@@ -1897,6 +1969,812 @@ eq(H.query(psess, "rotation", 3), pr.determine_rotation(direct), "the rotation q
 H.end_session(psess, 4)
 eq(psess.state.fight_active, false, "the harness finish ends the sim fight")
 eq(direct.fight_active, true, "the direct sim is untouched by the harness")
+
+--=========================================================================================
+-- H2: hunter post-fight shot analytics (pure stats over the shot log)
+--=========================================================================================
+do
+    -- An empty or missing log summarizes empty and hints the empty line.
+    do
+        local no_shots = pr.summarize_shots({}, nil)
+        eq(no_shots.total, 0, "H2: an empty log totals zero")
+        eq(no_shots.clipped, 0, "H2: an empty log clips zero")
+        eq(no_shots.clip_rate, 0, "H2: an empty log rates zero")
+        eq(no_shots.mean_latency, nil, "H2: an empty log has no mean latency")
+        local missing = pr.summarize_shots(nil, nil)
+        eq(missing.total, 0, "H2: a non-table log summarizes empty")
+        eq(pr.shot_hint(missing, nil), "No shots logged yet.", "H2: the empty hint")
+        eq(pr.shot_hint(nil, 0.5), "No shots logged yet.", "H2: a non-table summary hints empty")
+    end
+
+    -- Mixed samples: totals, clip rate and the mean over numeric latencies only.
+    do
+        local log = {
+            { clipped = false, latency = 0.1, at = 1 },
+            { clipped = true, latency = 0.2, at = 2 },
+            { clipped = true, latency = nil, at = 3 },
+            "not-a-sample",
+            { clipped = false, latency = 0.3, at = 4 },
+        }
+        local s = pr.summarize_shots(log, nil)
+        eq(s.total, 4, "H2: non-table entries are skipped")
+        eq(s.clipped, 2, "H2: clips count")
+        near(s.clip_rate, 0.5, "H2: the clip rate")
+        near(s.mean_latency, 0.2, "H2: the mean skips non-numeric latencies")
+        eq(pr.shot_buffer_fraction(0.2, 0.6), 0.2 / 0.6, "H2: the buffer fraction")
+        -- count caps the samples read.
+        local capped = pr.summarize_shots(log, 2)
+        eq(capped.total, 2, "H2: count caps the samples read")
+        eq(capped.clipped, 1, "H2: the capped clip count")
+    end
+
+    -- Buffer fraction nil-cases: never a fraction on a guess.
+    do
+        eq(pr.shot_buffer_fraction(nil, 0.6), nil, "H2: no mean means no fraction")
+        eq(pr.shot_buffer_fraction(0.1, nil), nil, "H2: no window means no fraction")
+        eq(pr.shot_buffer_fraction(0.1, 0), nil, "H2: a non-positive window means no fraction")
+        eq(pr.shot_buffer_fraction(-0.1, 0.6), nil, "H2: a negative mean means no fraction")
+        eq(pr.shot_buffer_fraction("x", 0.6), nil, "H2: a non-number mean means no fraction")
+    end
+
+    -- Hint branches: clean (singular/plural), advisory at the warn rate, tighten
+    -- below it, and the buffer clause only with both numbers.
+    do
+        eq(pr.SHOT_CLIP_WARN_RATE, 0.2, "H2: the warn rate is 20%")
+        local clean = pr.summarize_shots({ { clipped = false, latency = 0.1 } }, nil)
+        eq(pr.shot_hint(clean, nil), "Clean: no clips in 1 shot.",
+            "H2: the clean hint (singular, no buffer clause)")
+        local clean2 = pr.summarize_shots({
+            { clipped = false, latency = 0.1 }, { clipped = false, latency = 0.3 },
+        }, nil)
+        eq(pr.shot_hint(clean2, 0.6),
+            "Clean: no clips in 2 shots. Latency 200ms of a 600ms window (33% buffer used).",
+            "H2: the clean hint carries the buffer clause")
+        local warn = pr.summarize_shots({
+            { clipped = true }, { clipped = false }, { clipped = false },
+            { clipped = false }, { clipped = false },
+        }, nil)
+        near(warn.clip_rate, 0.2, "H2: 1 of 5 rates the warn threshold")
+        eq(pr.shot_hint(warn, nil),
+            "1 of 5 shots clipped (20%). Start each cast earlier or widen the cast window.",
+            "H2: the warn-rate hint advises the window")
+        local note = pr.summarize_shots({
+            { clipped = true, latency = 0.1 },
+            { clipped = false, latency = 0.1 }, { clipped = false, latency = 0.1 },
+            { clipped = false, latency = 0.1 }, { clipped = false, latency = 0.1 },
+            { clipped = false, latency = 0.1 }, { clipped = false, latency = 0.1 },
+            { clipped = false, latency = 0.1 }, { clipped = false, latency = 0.1 },
+            { clipped = false, latency = 0.1 },
+        }, nil)
+        eq(pr.shot_hint(note, 0.6),
+            "1 of 10 shots clipped (10%). Tighten the next cast start."
+            .. " Latency 100ms of a 600ms window (17% buffer used).",
+            "H2: below the warn rate the hint tightens the start")
+    end
+end
+
+--=========================================================================================
+-- Hunter prepull checklist (pure data + missing/readout helpers)
+--=========================================================================================
+do
+    local steps = pr.HUNTER_PREPULL_STEPS
+    check(type(steps) == "table", "prepull: the step table is defined")
+    eq(#steps, 3, "prepull: three generic steps")
+    eq(steps[1].key, "mark", "prepull: mark first")
+    eq(steps[2].key, "aspect", "prepull: aspect second")
+    eq(steps[3].key, "potion", "prepull: potion third")
+    local all = pr.hunter_prepull_missing({ mark = true, aspect = true, potion = true })
+    eq(#all, 0, "prepull: nothing missing when all done")
+    eq(pr.hunter_prepull_hint(all), "Ready.", "prepull: the ready readout")
+    local some = pr.hunter_prepull_missing({ mark = true })
+    eq(#some, 2, "prepull: two steps missing")
+    eq(some[1], "Hawk aspect", "prepull: order follows the checklist")
+    eq(some[2], "Haste potion", "prepull: order follows the checklist")
+    eq(pr.hunter_prepull_hint(some), "Prepull: Hawk aspect, Haste potion.",
+        "prepull: the missing readout")
+    local none = pr.hunter_prepull_missing(nil)
+    eq(#none, 3, "prepull: a missing map misses everything")
+    eq(pr.hunter_prepull_hint(nil), "Ready.", "prepull: a nil list reads ready")
+    local partial = pr.hunter_prepull_missing({ mark = false, aspect = true, potion = true })
+    eq(#partial, 1, "prepull: false never counts as done")
+    eq(partial[1], "Hunter's Mark", "prepull: the false entry is listed")
+end
+
+--=========================================================================================
+-- Hunter weave/move-cue checklist (pure data + missing/readout helpers)
+--=========================================================================================
+do
+    local steps = pr.HUNTER_WEAVE_STEPS
+    check(type(steps) == "table", "weave: the step table is defined")
+    eq(#steps, 3, "weave: three generic steps")
+    eq(steps[1].key, "trap", "weave: trap first")
+    eq(steps[2].key, "melee", "weave: melee second")
+    eq(steps[3].key, "move", "weave: move third")
+    local all = pr.hunter_weave_missing({ trap = true, melee = true, move = true })
+    eq(#all, 0, "weave: nothing missing when all done")
+    eq(pr.hunter_weave_hint(all), "Weave set.", "weave: the ready readout")
+    local some = pr.hunter_weave_missing({ trap = true })
+    eq(#some, 2, "weave: two steps missing")
+    eq(some[1], "Melee weave inside 5 yd", "weave: order follows the checklist")
+    eq(some[2], "Move on the swing gap", "weave: order follows the checklist")
+    eq(pr.hunter_weave_hint(some), "Weave: Melee weave inside 5 yd, Move on the swing gap.",
+        "weave: the missing readout")
+    local none = pr.hunter_weave_missing(nil)
+    eq(#none, 3, "weave: a missing map misses everything")
+    eq(pr.hunter_weave_hint(nil), "Weave set.", "weave: a nil list reads ready")
+    local partial = pr.hunter_weave_missing({ trap = false, melee = true, move = true })
+    eq(#partial, 1, "weave: false never counts as done")
+    eq(partial[1], "Trap down before the pull", "weave: the false entry is listed")
+end
+
+--=========================================================================================
+-- Combat resource pools (sim-resources lane)
+--=========================================================================================
+-- Two locals only (s, c): the 5.1 chunk caps at 200 locals and the suites
+-- above already spend most of them.
+do
+    local s, c
+    -- Rage constants (wowsims/classic sim/core/rage.go + bloodthirst.go).
+    eq(pr.RAGE_MAX, 100, "rage: max 100")
+    eq(pr.RAGE_DEALT_MULT, 7.5, "rage: dealt mult 7.5")
+    eq(pr.RAGE_TAKEN_MULT, 2.5, "rage: taken mult 2.5")
+    eq(pr.RAGE_BT_REFUND, 0.8, "rage: BT miss refund 0.8")
+    eq(pr.WARRIOR_RAGE_COSTS.bt, 30, "rage: BT costs 30")
+    eq(pr.WARRIOR_RAGE_COSTS.ww, 25, "rage: WW costs 25")
+    eq(pr.WARRIOR_RAGE_COSTS.slam, 15, "rage: Slam costs 15")
+    eq(pr.WARRIOR_RAGE_COSTS.op, 5, "rage: OP costs 5")
+
+    -- Conversion (sim GetRageConversion: 25 -> 82.25, 40 -> 140.5 tested).
+    eq(pr.rage_conversion(25), 82.25, "rage: conversion at 25")
+    eq(pr.rage_conversion(40), 140.5, "rage: conversion at 40")
+    c = pr.rage_conversion(60)
+    check(type(c) == "number" and c > 230.5 and c < 230.7, "rage: conversion at 60 near 230.6")
+    c = pr.rage_conversion(70)
+    check(type(c) == "number" and c > 274.6 and c < 274.8, "rage: conversion at 70 near 274.7")
+    eq(pr.rage_conversion(0), nil, "rage: conversion at 0 is nil")
+    eq(pr.rage_conversion(-5), nil, "rage: conversion at negative is nil")
+    eq(pr.rage_conversion(nil), nil, "rage: conversion of nil is nil")
+    eq(pr.rage_conversion("60"), nil, "rage: conversion of a string is nil")
+    eq(pr.rage_conversion(0 / 0), nil, "rage: conversion of NaN is nil")
+
+    -- White/taken gains (sim OnSpellHitDealt/Taken).
+    eq(pr.rage_white_gain(100, 50), 15, "rage: white 100dmg/50conv is 15")
+    eq(pr.rage_white_gain(100, 50, 2.5), 5, "rage: white honors an explicit mult")
+    eq(pr.rage_white_gain(100, 50, nil), 15, "rage: white nil mult reads the dealt default")
+    eq(pr.rage_white_gain(100, 50, 0), 15, "rage: white bad mult reads the dealt default")
+    eq(pr.rage_white_gain(nil, 50), nil, "rage: white nil damage is nil (miss)")
+    eq(pr.rage_white_gain(100, nil), nil, "rage: white nil conversion is nil")
+    eq(pr.rage_white_gain(100, 0), nil, "rage: white zero conversion is nil")
+    eq(pr.rage_white_gain(-5, 50), nil, "rage: white negative damage is nil")
+    eq(pr.rage_white_gain(0 / 0, 50), nil, "rage: white NaN damage is nil")
+    eq(pr.rage_taken_gain(100, 50), 5, "rage: taken 100dmg/50conv is 5")
+    eq(pr.rage_taken_gain(100, 50, 7.5), 15, "rage: taken honors an explicit mult")
+    eq(pr.rage_taken_gain(nil, 50), nil, "rage: taken nil damage is nil")
+    eq(pr.rage_taken_gain(100, nil), nil, "rage: taken nil conversion is nil")
+
+    -- Pool lifecycle.
+    s = pr.new_rage_state()
+    eq(s.rage, 0, "rage: a fresh pool starts empty")
+    eq(s.max, 100, "rage: a fresh pool caps at 100")
+    s = pr.new_rage_state({ rage = 50 })
+    eq(s.rage, 50, "rage: starting value kept")
+    eq(pr.new_rage_state({ rage = 150 }).rage, 100, "rage: starting value clamps at max")
+    eq(pr.new_rage_state({ rage = -5 }).rage, 0, "rage: negative start floors at 0")
+    eq(pr.new_rage_state({ rage = 0 / 0 }).rage, 0, "rage: NaN start reads empty")
+    s = pr.new_rage_state({ max = 200, rage = 30 })
+    eq(s.max, 200, "rage: explicit max kept")
+    eq(s.rage, 30, "rage: value under an explicit max kept")
+    eq(pr.new_rage_state({ max = -1 }).max, 100, "rage: bad max falls back to 100")
+
+    -- Gains cap; bad amounts bank nothing.
+    s = pr.new_rage_state({ rage = 50 })
+    eq(pr.rage_gain(s, 20), 70, "rage: gain banks")
+    eq(s.rage, 70, "rage: gain lands in the pool")
+    eq(pr.rage_gain(s, 999), 100, "rage: gain caps at max")
+    eq(pr.rage_gain(s, nil), nil, "rage: nil gain banks nothing")
+    eq(s.rage, 100, "rage: nil gain leaves the pool")
+    eq(pr.rage_gain(s, 0), nil, "rage: zero gain banks nothing")
+    eq(pr.rage_gain(s, -5), nil, "rage: negative gain banks nothing")
+    eq(pr.rage_gain(s, 0 / 0), nil, "rage: NaN gain banks nothing")
+    eq(pr.rage_gain(nil, 10), nil, "rage: gain on no pool is nil")
+    eq(pr.rage_gain(s, 30 * pr.RAGE_BT_REFUND), 100, "rage: the BT-miss refund banks through gain")
+
+    -- Spends fail closed.
+    s = pr.new_rage_state({ rage = 100 })
+    eq(pr.rage_spend(s, 30), true, "rage: BT spend fires")
+    eq(s.rage, 70, "rage: BT spend deducts")
+    eq(pr.rage_spend(s, 999), false, "rage: uncovered spend refuses")
+    eq(s.rage, 70, "rage: refused spend leaves the pool")
+    eq(pr.rage_spend(s, 0 / 0), false, "rage: NaN cost never spends")
+    eq(pr.rage_spend(s, -5), false, "rage: negative cost never spends")
+    eq(pr.rage_spend(s, 0), true, "rage: zero cost is a free no-op")
+    eq(s.rage, 70, "rage: zero cost deducts nothing")
+    eq(pr.rage_spend(nil, 30), false, "rage: spend on no pool is false")
+    eq(pr.rage_spend(s, nil), false, "rage: nil cost never spends")
+
+    -- Execute drains all.
+    eq(pr.rage_drain_all(s), 70, "rage: drain returns the pooled rage")
+    eq(s.rage, 0, "rage: drain zeroes the pool")
+    eq(pr.rage_drain_all(s), 0, "rage: drain on empty is 0")
+    eq(pr.rage_drain_all(nil), nil, "rage: drain on no pool is nil")
+
+    -- Affordability gate (pool twin of the live composite_rage_gate).
+    s = pr.new_rage_state({ rage = 70 })
+    eq(pr.rage_can_spend(s, 30, 20), true, "rage: 70 covers 30 + 20 reserve")
+    eq(pr.rage_can_spend(s, 30, 40), true, "rage: 70 covers exactly 30 + 40")
+    eq(pr.rage_can_spend(s, 30, 41), false, "rage: 70 cannot cover 30 + 41")
+    eq(pr.rage_can_spend(s, 30, nil), true, "rage: nil reserve counts as 0")
+    eq(pr.rage_can_spend(s, 30, 0 / 0), true, "rage: NaN reserve counts as 0")
+    eq(pr.rage_can_spend(s, 30, -5), true, "rage: negative reserve counts as 0")
+    eq(pr.rage_can_spend(s, nil, 0), false, "rage: unknown cost fails closed")
+    eq(pr.rage_can_spend(s, 0 / 0, 0), false, "rage: NaN cost fails closed")
+    eq(pr.rage_can_spend(nil, 30, 0), false, "rage: no pool fails closed")
+    eq(pr.rage_can_spend({}, 30, 0), false, "rage: unreadable pool fails closed")
+
+    -- Spend grades for the shared score pipeline.
+    eq(pr.rage_spend_grade(s, 30, 20), "S", "rage: covered spend grades S")
+    eq(pr.rage_spend_grade(s, 30, 41), "F", "rage: starving spend grades F")
+    eq(pr.rage_spend_grade(s, nil, 0), nil, "rage: unknown cost grades nothing")
+    eq(pr.rage_spend_grade(nil, 30, 0), nil, "rage: no pool grades nothing")
+    eq(pr.rage_spend_grade({}, 30, 0), nil, "rage: unreadable pool grades nothing")
+
+    -- Mana pool (mechanics only; costs/regen filed - see the header).
+    s = pr.new_mana_state()
+    eq(s.mana, 0, "mana: a fresh pool starts empty")
+    eq(s.max, nil, "mana: max is caller-fed (nil default)")
+    eq(pr.new_mana_state({ max = 5000 }).max, 5000, "mana: explicit max kept")
+    eq(pr.new_mana_state({ max = 100, mana = 150 }).mana, 100, "mana: start clamps at max")
+    eq(pr.mana_gain(s, 40), 40, "mana: uncapped gain banks")
+    s = pr.new_mana_state({ max = 100, mana = 90 })
+    eq(pr.mana_gain(s, 20), 100, "mana: gain caps when the max is known")
+    eq(pr.mana_gain(s, nil), nil, "mana: nil gain banks nothing")
+    eq(pr.mana_spend(s, 30), true, "mana: covered spend fires")
+    eq(s.mana, 70, "mana: spend deducts")
+    eq(pr.mana_spend(s, 999), false, "mana: uncovered spend refuses")
+    eq(s.mana, 70, "mana: refused spend leaves the pool")
+    eq(pr.mana_spend(s, nil), false, "mana: nil cost never spends")
+    eq(pr.mana_can_spend(s, 70), true, "mana: exact cover is affordable")
+    eq(pr.mana_can_spend(s, 71), false, "mana: one short is not")
+    eq(pr.mana_can_spend(nil, 10), false, "mana: no pool fails closed")
+
+    -- Focus pool (mechanics only; costs/regen filed - see the header).
+    s = pr.new_focus_state()
+    eq(s.focus, 0, "focus: a fresh pool starts empty")
+    eq(s.max, nil, "focus: max is caller-fed (nil default)")
+    eq(pr.new_focus_state({ max = 100, focus = 120 }).focus, 100, "focus: start clamps at max")
+    eq(pr.focus_gain(s, 25), 25, "focus: uncapped gain banks")
+    s = pr.new_focus_state({ max = 100, focus = 90 })
+    eq(pr.focus_gain(s, 20), 100, "focus: gain caps when the max is known")
+    eq(pr.focus_spend(s, 40), true, "focus: covered spend fires")
+    eq(s.focus, 60, "focus: spend deducts")
+    eq(pr.focus_spend(s, 999), false, "focus: uncovered spend refuses")
+    eq(pr.focus_spend(s, nil), false, "focus: nil cost never spends")
+    eq(pr.focus_can_spend(s, 60), true, "focus: exact cover is affordable")
+    eq(pr.focus_can_spend(s, 61), false, "focus: one short is not")
+end
+
+--=========================================================================================
+-- The shared rotation-scenario + drill engine (the per-class lanes plug into it)
+--=========================================================================================
+-- The contract the six class lanes code against (fixed by the orchestrator):
+--   ST.<CLASS>.practice_scenario_step(self, ctx)
+--       -> { action = "<spell key>", reason = "<text>" } | nil
+--   ST.<CLASS>.practice_drills
+--       = { { key = "<registry key>", label = "<label>",
+--            grade = function(self, ctx) -> "S".."F" | nil end }, ... }
+-- The engine looks them up by player_class; a class that provides neither degrades
+-- loudly (the UI prints the refusal) - never a silent paladin sim.
+--
+-- The block runs in its own function: the suite's chunk is already at Lua 5.1's
+-- 200-local limit, and a nested frame has its own budget.
+local function engine_tests()
+-- A fake class module: the engine only ever reads the two contract members.
+local fake = {}
+fake.practice_scenario_step = function(self, ctx)
+    fake.last_self = self
+    fake.last_ctx = ctx
+    if ctx and ctx.now and ctx.now >= 100 then
+        return nil
+    end
+    return { action = "cs", reason = "the seal is up" }
+end
+fake.practice_drills = {
+    { key = "fake_timing", label = "Fake timing", grade = function() return "A" end },
+    { key = "fake_window", label = "Fake window", grade = function() return nil end },
+    { key = "fake_broken", label = "Fake broken", grade = function() error("boom") end },
+}
+st.FAKE = fake
+
+eq(H.practice_class_module("FAKE"), fake, "the class module is found by its class key")
+eq(H.practice_class_module("NOPE"), nil, "an unknown class has no module")
+eq(H.practice_class_module(nil), nil, "a nil class key has no module")
+eq(H.practice_class_module(""), nil, "an empty class key has no module")
+
+eq(H.practice_scenario_available("FAKE"), true, "a class with a step function has a scenario")
+eq(H.practice_scenario_available("NOPE"), false, "a class without one has no scenario")
+eq(H.practice_scenario_available(nil), false, "a nil class has no scenario")
+-- A class module WITHOUT the step function has no scenario (the module is there,
+-- the contract member is not).
+st.NOSTEP = { practice_drills = {} }
+eq(H.practice_scenario_available("NOSTEP"), false,
+    "a class module without a step function has no scenario")
+st.NOSTEP = nil
+
+local answer = H.practice_scenario_step("FAKE", st, { now = 1 })
+eq(type(answer), "table", "the class's answer comes back")
+eq(answer.action, "cs", "the answer carries the action")
+eq(answer.reason, "the seal is up", "the answer carries the reason")
+eq(fake.last_self, st, "the step is called with the addon as self")
+eq(fake.last_ctx.now, 1, "the step receives the injected clock")
+eq(H.practice_scenario_step("FAKE", st, { now = 100 }), nil,
+    "a class that cannot decide answers nil (never a wrong action)")
+eq(H.practice_scenario_step("NOPE", st, { now = 1 }), nil,
+    "a class without a step function answers nil")
+eq(H.practice_scenario_step(nil, st, { now = 1 }), nil, "a nil class answers nil")
+
+-- A class whose step throws answers nil (the engine never propagates the throw).
+st.THROWER = {
+    practice_scenario_step = function() error("boom") end,
+}
+eq(H.practice_scenario_step("THROWER", st, { now = 1 }), nil, "a throwing step answers nil")
+-- A class whose step answers garbage answers nil.
+st.GARBAGE = {
+    practice_scenario_step = function() return { action = "" } end,
+}
+eq(H.practice_scenario_step("GARBAGE", st, { now = 1 }), nil, "an empty action answers nil")
+st.GARBAGE.practice_scenario_step = function() return "cs" end
+eq(H.practice_scenario_step("GARBAGE", st, { now = 1 }), nil, "a non-table answer answers nil")
+st.GARBAGE = nil
+st.THROWER = nil
+
+-- The drill list: only the entries that carry a key and a grader survive.
+local drills = H.practice_drills("FAKE")
+eq(type(drills), "table", "the class's drill list comes back")
+eq(#drills, 3, "every well-formed drill survives")
+eq(drills[1].key, "fake_timing", "the drill order is kept")
+eq(drills[1].label, "Fake timing", "the drill label is kept")
+eq(H.practice_drills("NOPE"), nil, "a class without drills has none")
+eq(H.practice_drills(nil), nil, "a nil class has no drills")
+st.NODRILLS = { practice_drills = { { label = "no key" }, { key = "no grade" } } }
+eq(H.practice_drills("NODRILLS"), nil, "a class with no gradeable drill has no drills")
+st.NODRILLS.practice_drills = {}
+eq(H.practice_drills("NODRILLS"), nil, "an empty drill list has no drills")
+st.NODRILLS = nil
+
+eq(H.practice_drill_by_key("FAKE", "fake_timing").key, "fake_timing", "a drill is found by key")
+eq(H.practice_drill_by_key("FAKE", "nope"), nil, "an unknown drill key reads nil")
+eq(H.practice_drill_by_key("FAKE", nil), nil, "a nil drill key reads nil")
+eq(H.practice_drill_grade("FAKE", "fake_timing", st, { now = 1 }), "A",
+    "the class's grader answers the grade")
+eq(H.practice_drill_grade("FAKE", "fake_window", st, { now = 1 }), nil,
+    "a grader that cannot judge answers nil (never a guessed grade)")
+eq(H.practice_drill_grade("FAKE", "fake_broken", st, { now = 1 }), nil,
+    "a throwing grader answers nil")
+eq(H.practice_drill_grade("FAKE", "nope", st, { now = 1 }), nil,
+    "an unknown drill answers nil")
+-- A grader that answers a letter outside the grade set is rejected.
+st.BADGRADE = {
+    practice_drills = { { key = "bad", label = "Bad", grade = function() return "Z" end } },
+}
+eq(H.practice_drill_grade("BADGRADE", "bad", st, { now = 1 }), nil,
+    "a grade outside the grade set is rejected")
+st.BADGRADE = nil
+
+-- The rotation run: the pure state machine.
+eq(H.ROTATION_RUN_STEPS, 10, "the run is ten decisions long")
+local run = H.new_rotation_run()
+eq(run.steps, 0, "a fresh run has no decisions")
+eq(run.max_steps, 10, "a fresh run has the default length")
+eq(run.finished, false, "a fresh run is not finished")
+eq(H.new_rotation_run({ max_steps = 3 }).max_steps, 3, "the length is caller-fed")
+eq(H.new_rotation_run({ max_steps = 0 }).max_steps, 10, "a zero length falls back")
+eq(H.new_rotation_run({ max_steps = "x" }).max_steps, 10, "a non-number length falls back")
+
+local rd1 = H.rotation_run_decide(run, "cs", "cs")
+eq(rd1.outcome, "correct", "a matching cast is correct")
+eq(rd1.expected, "cs", "the decision records the expectation")
+eq(rd1.actual, "cs", "the decision records the cast")
+eq(run.correct, 1, "the run counts the correct decision")
+local rd2 = H.rotation_run_decide(run, "cs", "judge")
+eq(rd2.outcome, "out_of_order", "a different cast is out of order")
+eq(run.mispicks, 1, "the run counts the mis-pick")
+local rd3 = H.rotation_run_decide(run, "cs", nil)
+eq(rd3.outcome, "miss", "no cast is a miss")
+eq(run.misses, 1, "the run counts the miss")
+local rd4 = H.rotation_run_decide(run, nil, "cs")
+eq(rd4.outcome, "unknown", "no expectation is unknown")
+eq(rd4.expected, nil, "an unknown decision records no expectation")
+eq(run.unknown, 1, "the run counts the unknown decision")
+eq(run.steps, 4, "every decision counts as a step")
+eq(run.finished, false, "the run is not finished yet")
+
+-- The outcome grades: a correct decision is a hit, a wrong or missing one a miss.
+eq(H.ROTATION_OUTCOME_GRADES.correct, "S", "a correct decision grades S")
+eq(H.ROTATION_OUTCOME_GRADES.out_of_order, "F", "an out-of-order decision grades F")
+eq(H.ROTATION_OUTCOME_GRADES.miss, "F", "a miss grades F")
+eq(H.ROTATION_OUTCOME_GRADES.unknown, nil, "an unknown decision grades nothing")
+for _, outcome in ipairs({ "correct", "out_of_order", "miss", "unknown" }) do
+    eq(H.ROTATION_OUTCOMES[outcome], true, "the outcome class exists: " .. outcome)
+end
+
+-- The summary and the run bands.
+local summary = H.rotation_run_summary(run)
+eq(summary.steps, 4, "the summary counts the steps")
+eq(summary.correct, 1, "the summary counts the correct decisions")
+eq(summary.mispicks, 1, "the summary counts the mis-picks")
+eq(summary.misses, 1, "the summary counts the misses")
+eq(summary.unknown, 1, "the summary counts the unknown decisions")
+eq(summary.grade, "B", "two mis-picks (one out of order, one miss) grade B")
+eq(summary.finished, false, "the summary reports the unfinished run")
+
+-- The band edges: 0 mis-picks S, 1 A, 2 B, 3 C, 4-5 D, 6+ F.
+eq(H.grade_band(0, H.ROTATION_RUN_BANDS), "S", "0 mis-picks grades S")
+eq(H.grade_band(1, H.ROTATION_RUN_BANDS), "A", "1 mis-pick grades A")
+eq(H.grade_band(2, H.ROTATION_RUN_BANDS), "B", "2 mis-picks grade B")
+eq(H.grade_band(3, H.ROTATION_RUN_BANDS), "C", "3 mis-picks grade C")
+eq(H.grade_band(4, H.ROTATION_RUN_BANDS), "D", "4 mis-picks grade D")
+eq(H.grade_band(5, H.ROTATION_RUN_BANDS), "D", "5 mis-picks grade D")
+eq(H.grade_band(6, H.ROTATION_RUN_BANDS), "F", "6 mis-picks grade F")
+
+-- A run with nothing gradeable reads UNKNOWN, never a perfect S.
+local blind = H.new_rotation_run()
+H.rotation_run_decide(blind, nil, "cs")
+H.rotation_run_decide(blind, nil, nil)
+local blind_summary = H.rotation_run_summary(blind)
+eq(blind_summary.grade, nil, "a run with no gradeable decision has no grade")
+eq(blind_summary.unknown, 2, "the blind run counts its unknown decisions")
+
+-- The run ends after its length; a further decision is refused.
+local short = H.new_rotation_run({ max_steps = 2 })
+H.rotation_run_decide(short, "cs", "cs")
+H.rotation_run_decide(short, "cs", "cs")
+eq(short.finished, true, "the run finishes after its last decision")
+eq(H.rotation_run_decide(short, "cs", "cs"), nil, "a finished run takes no further decision")
+eq(H.rotation_run_summary(short).finished, true, "the summary reports the finished run")
+eq(H.rotation_run_decide(nil, "cs", "cs"), nil, "a nil run takes no decision")
+eq(H.rotation_run_summary(nil), nil, "a nil run has no summary")
+
+-- Determinism: the same answers give the same run.
+local det_a = H.new_rotation_run()
+local det_b = H.new_rotation_run()
+for i = 1, 4 do
+    H.rotation_run_decide(det_a, "cs", i == 2 and "judge" or "cs")
+    H.rotation_run_decide(det_b, "cs", i == 2 and "judge" or "cs")
+end
+eq(H.rotation_run_summary(det_a).grade, H.rotation_run_summary(det_b).grade,
+    "determinism: identical answer sequences give identical grades")
+eq(H.rotation_run_summary(det_a).correct, H.rotation_run_summary(det_b).correct,
+    "determinism: identical answer sequences give identical counts")
+
+st.FAKE = nil
+end
+
+--=========================================================================================
+-- The superseded built-in drill: the class's own drill is the single source of truth
+--=========================================================================================
+-- A built-in drill that a class's drill list supersedes grades THROUGH that class
+-- drill: the old truth (the addon's 20-energy rule, the plain weave fit) never
+-- grades a player attempt. The delegation is best effort - without the class drill
+-- the built-in model stands in (a flavour that ships no class drill at all).
+do
+local fake_addon = {}
+fake_addon.DRUID = {
+    practice_drills = {
+        { key = "druid_powershift_rework", label = "The shift rule",
+          grade = function(self, ctx)
+              fake_addon.graded = ctx
+              return "S"
+          end },
+    },
+}
+env.LibStub = function()
+    return { GetAddon = function() return fake_addon end }
+end
+local ds_delegate = H.new_session("druid_powershift", 0)
+H.begin_session(ds_delegate, 0)
+H.tick_session(ds_delegate, 0, 0.05, {})
+H.tick_session(ds_delegate, 1, 0.05, {})
+eq(H.scenario_event(ds_delegate, "shift", 1), "S",
+    "the superseded drill grades through the class's own drill")
+check(type(fake_addon.graded) == "table", "the class's drill received a context")
+eq(fake_addon.graded.now, 1, "the context carries the injected clock")
+eq(fake_addon.graded.last_action, "shift", "the context carries the action")
+eq(fake_addon.graded.energy, 10, "the context carries the shell's own state")
+-- A flavour without the class drill: the built-in model stands in (never a throw).
+env.LibStub = function()
+    return { GetAddon = function() return {} end }
+end
+local ds_fallback = H.new_session("druid_powershift", 0)
+H.begin_session(ds_fallback, 0)
+H.tick_session(ds_fallback, 0, 0.05, {})
+H.tick_session(ds_fallback, 1, 0.05, {})
+eq(H.scenario_event(ds_fallback, "shift", 1), "S",
+    "without the class drill the built-in model grades the shift")
+env.LibStub = nil
+end
+
+engine_tests()
+
+--=========================================================================================
+-- HU-8: a hold is a DECISION, unknown is not
+--=========================================================================================
+-- The operator ruling (hands-up HU-8, resolved 2026-10-19): a class that decides to
+-- hold says so explicitly. The engine then grades the step as a hold:
+--   * casting any action during it is an ILLEGAL CAST (F - an attempt that costs
+--     the streak), and
+--   * doing nothing during it is CORRECT - recorded, but worth nothing: no
+--     attempt, so a player cannot farm points by idling through a hold.
+-- A nil step with NO hold statement stays UNKNOWN: no attempt, never a wrong
+-- grade. The class-side statements are a separate lane; the ENGINE half is here.
+--
+-- The block runs in its own function: the suite's chunk is already at Lua 5.1's
+-- 200-local limit, and a nested frame has its own budget.
+local function hold_tests()
+-- The class answers a hold: { action = nil, hold = true, reason = "..." }.
+st.HOLDER = {
+    practice_scenario_step = function()
+        return { action = nil, hold = true, reason = "pool the resource first" }
+    end,
+}
+local hold_answer = H.practice_scenario_step("HOLDER", st, { now = 1 })
+eq(type(hold_answer), "table", "a hold statement comes back as an answer")
+eq(hold_answer.hold, true, "the answer carries the hold flag")
+eq(hold_answer.action, nil, "a hold statement names no action")
+eq(hold_answer.reason, "pool the resource first", "the hold carries the class's reason")
+
+-- A step that names NEITHER an action nor a hold is the "cannot decide" case: it
+-- stays UNKNOWN (nil), exactly as before the ruling.
+st.NOHOLD = {
+    practice_scenario_step = function() return { reason = "no idea" } end,
+}
+eq(H.practice_scenario_step("NOHOLD", st, { now = 1 }), nil,
+    "a step with neither an action nor a hold stays unknown")
+-- A hold flag that is not exactly true is not a hold statement.
+st.FALSEHOLD = {
+    practice_scenario_step = function() return { action = nil, hold = "yes" } end,
+}
+eq(H.practice_scenario_step("FALSEHOLD", st, { now = 1 }), nil,
+    "a non-boolean hold flag is not a hold statement")
+-- A step that names an action is an ACTION: the hold flag is ignored (a class
+-- that means to hold must not name an action).
+st.BOTH = {
+    practice_scenario_step = function() return { action = "cs", hold = true } end,
+}
+local both_answer = H.practice_scenario_step("BOTH", st, { now = 1 })
+eq(both_answer.action, "cs", "a named action wins over the hold flag")
+eq(both_answer.hold, nil, "an action is not a hold")
+
+-- The outcome classes and the grade map.
+eq(H.ROTATION_OUTCOMES.hold_ok, true, "the correct-hold outcome exists")
+eq(H.ROTATION_OUTCOMES.illegal_cast, true, "the illegal-cast outcome exists")
+eq(H.ROTATION_OUTCOME_GRADES.illegal_cast, "F", "an illegal cast grades F")
+eq(H.ROTATION_OUTCOME_GRADES.hold_ok, nil,
+    "a correct hold grades nothing (no attempt, no points)")
+eq(H.ROTATION_OUTCOME_GRADES.unknown, nil, "an unknown decision grades nothing")
+
+-- The run: a hold step.
+local run = H.new_rotation_run()
+local held = H.rotation_run_decide(run, nil, nil, true)
+eq(held.outcome, "hold_ok", "nothing cast during a hold is a correct hold")
+eq(held.hold, true, "the decision records that the step was a hold")
+eq(run.holds, 1, "the run counts the correct hold")
+eq(run.correct, 1, "the correct hold counts as a correct decision")
+eq(run.mispicks, 0, "the correct hold is not a mis-pick")
+eq(run.unknown, 0, "the correct hold is not an unknown")
+-- A cast during the hold is the illegal cast: an attempt, and it counts against
+-- the run's band.
+local cast = H.rotation_run_decide(run, nil, "cs", true)
+eq(cast.outcome, "illegal_cast", "a cast during a hold is an illegal cast")
+eq(cast.actual, "cs", "the illegal cast records the cast")
+eq(run.illegal_casts, 1, "the run counts the illegal cast")
+eq(run.mispicks, 1, "the illegal cast counts against the run's band")
+eq(run.holds, 1, "the correct hold is still counted")
+-- A hold step with an expectation is still a hold (the class stated it).
+local both_hold = H.rotation_run_decide(run, "cs", nil, true)
+eq(both_hold.outcome, "hold_ok", "a hold wins over the expectation")
+
+-- A nil step with NO hold statement is still UNKNOWN: no attempt, never wrong.
+local unknown_run = H.new_rotation_run()
+local unknown = H.rotation_run_decide(unknown_run, nil, "cs")
+eq(unknown.outcome, "unknown", "a nil step with no hold statement stays unknown")
+eq(unknown_run.unknown, 1, "the run counts the unknown decision")
+eq(unknown_run.mispicks, 0, "an unknown decision is never a mis-pick")
+eq(H.ROTATION_OUTCOME_GRADES[unknown.outcome], nil,
+    "an unknown decision records no attempt")
+
+-- The summary carries the hold counters.
+local summary = H.rotation_run_summary(run)
+eq(summary.holds, 2, "the summary counts the correct holds")
+eq(summary.illegal_casts, 1, "the summary counts the illegal casts")
+eq(summary.mispicks, 1, "the summary counts the mis-picks")
+eq(summary.grade, "A", "one mis-pick grades A (the illegal cast counts)")
+
+-- Determinism: the same answers give the same run (the engine reads no clock
+-- and invents no randomness).
+local det_a, det_b = H.new_rotation_run(), H.new_rotation_run()
+for _ = 1, 4 do
+    H.rotation_run_decide(det_a, nil, nil, true)
+    H.rotation_run_decide(det_b, nil, nil, true)
+end
+eq(H.rotation_run_summary(det_a).grade, H.rotation_run_summary(det_b).grade,
+    "determinism: identical hold sequences give identical grades")
+eq(H.rotation_run_summary(det_a).holds, H.rotation_run_summary(det_b).holds,
+    "determinism: identical hold sequences give identical counts")
+
+st.HOLDER = nil
+st.NOHOLD = nil
+st.FALSEHOLD = nil
+st.BOTH = nil
+end
+
+hold_tests()
+
+--=========================================================================================
+-- The NEUTRAL action: a legitimate action the rotation did not ask for
+--=========================================================================================
+-- The operator order (2026-10-20): the practice panel offers the class's whole
+-- ability list, so a player can press a common spell (a heal, a shield, food, a
+-- potion, a movement ability) that the rotation never asks for. Grading that
+-- press as a mis-pick (F) cost the streak and decayed the band for something the
+-- player did RIGHT. So the engine grows a NEUTRAL outcome: no attempt, no points,
+-- no mis-pick - the run counts it and the summary shows it.
+--
+-- The class seam (the accessor's contract, for the class lane):
+--   ST.<CLASS>.practice_neutral_actions = { heal = true, ... }        (flat)
+--   ST.<CLASS>.practice_neutral_actions = { ERA = { ... }, TBC = { ... } }  (per family)
+-- A class that publishes NOTHING keeps today's behaviour: every non-rotation press
+-- is a mis-pick.
+--
+-- The block runs in its own function: the suite's chunk is already at Lua 5.1's
+-- 200-local limit, and a nested frame has its own budget.
+local function neutral_tests()
+-- The class publishes a flat set: the accessor answers that set.
+st.NEUTRAL = {
+    practice_neutral_actions = { heal = true, shield = true },
+}
+local flat = H.practice_neutral_actions("NEUTRAL")
+eq(type(flat), "table", "a published neutral set comes back as a table")
+eq(type(flat) == "table" and flat.heal, true, "the published heal key is in the set")
+eq(type(flat) == "table" and flat.shield, true, "the published shield key is in the set")
+eq(type(flat) == "table" and flat.food, nil, "an unpublished key is not in the set")
+eq(type(H.practice_neutral_actions(st.NEUTRAL)) == "table"
+    and H.practice_neutral_actions(st.NEUTRAL).heal, true,
+    "the accessor takes the class module as well as the class key")
+flat = flat or {}
+flat.food = true
+eq(st.NEUTRAL.practice_neutral_actions.food, nil,
+    "the accessor hands out a copy, never the published table")
+
+-- A class that publishes NOTHING: the accessor answers nil (unknown-hides).
+st.NEUTRALNONE = {}
+eq(H.practice_neutral_actions("NEUTRALNONE"), nil,
+    "a class with no published set answers nil")
+-- A malformed publish: not a table, empty, or no true value - all nil.
+st.NEUTRALBAD = { practice_neutral_actions = "heal" }
+eq(H.practice_neutral_actions("NEUTRALBAD"), nil, "a non-table publish answers nil")
+st.NEUTRALEMPTY = { practice_neutral_actions = {} }
+eq(H.practice_neutral_actions("NEUTRALEMPTY"), nil, "an empty publish answers nil")
+st.NEUTRALFALSE = { practice_neutral_actions = { heal = "yes" } }
+eq(H.practice_neutral_actions("NEUTRALFALSE"), nil,
+    "a publish with no true value answers nil")
+eq(H.practice_neutral_actions("NOCLASSATALL"), nil, "an unknown class answers nil")
+
+-- A family-scoped publish: the set of the CURRENT family, and nil for a family
+-- the class published no bucket for (the engine never guesses a set).
+st.NEUTRALFAMILY = {
+    practice_neutral_actions = {
+        ERA = { heal = true },
+        TBC = { heal = true, food = true },
+    },
+}
+st.family = "TBC"
+local family_set = H.practice_neutral_actions("NEUTRALFAMILY")
+eq(type(family_set), "table", "a family-scoped publish resolves for the current family")
+eq(type(family_set) == "table" and family_set.food, true,
+    "the current family's key is in the set")
+eq(type(family_set) == "table" and family_set.shield, nil,
+    "another family's key is not in the set")
+st.family = "WRATH"
+eq(H.practice_neutral_actions("NEUTRALFAMILY"), nil,
+    "a family with no published bucket answers nil")
+st.family = nil
+eq(H.practice_neutral_actions("NEUTRALFAMILY"), nil,
+    "a family-scoped publish with no family answers nil")
+
+-- The engine: a neutral press is a NEUTRAL step - no attempt, no points, and NOT
+-- a mis-pick.
+local neutral = H.practice_neutral_actions("NEUTRAL")
+local run = H.new_rotation_run()
+local n1 = H.rotation_run_decide(run, "cs", "heal", false, neutral)
+eq(n1.outcome, "neutral", "a neutral action is a neutral step")
+eq(n1.actual, "heal", "the decision records the cast")
+eq(n1.expected, "cs", "the decision records the expectation")
+eq(n1.neutral, true, "the decision records that the step was neutral")
+eq(H.ROTATION_OUTCOMES.neutral, true, "the neutral outcome class exists")
+eq(H.ROTATION_OUTCOME_GRADES.neutral, nil,
+    "a neutral step grades nothing (no attempt, no points)")
+eq(run.neutral, 1, "the run counts the neutral step")
+eq(run.mispicks, 0, "a neutral step is not a mis-pick")
+eq(run.correct, 0, "a neutral step is not a correct decision")
+eq(run.unknown, 0, "a neutral step is not an unknown")
+eq(run.misses, 0, "a neutral step is not a miss")
+eq(run.steps, 1, "a neutral step is still a step of the run")
+eq(run.finished, false, "the run is not finished by a neutral step")
+
+-- The rotation action is unaffected: the same set published, the wanted action
+-- still grades correct.
+local n2 = H.rotation_run_decide(run, "cs", "cs", false, neutral)
+eq(n2.outcome, "correct", "the rotation action still grades correct")
+eq(run.correct, 1, "the run counts the correct decision")
+eq(run.neutral, 1, "the neutral tally is untouched by the correct step")
+eq(run.mispicks, 0, "the correct step is not a mis-pick")
+
+-- An action that is neither the rotation action nor neutral: a mis-pick (F).
+local n3 = H.rotation_run_decide(run, "cs", "food", false, neutral)
+eq(n3.outcome, "out_of_order", "an action that is neither rotation nor neutral is a mis-pick")
+eq(H.ROTATION_OUTCOME_GRADES.out_of_order, "F", "a mis-pick grades F")
+eq(run.mispicks, 1, "the run counts the mis-pick")
+eq(run.neutral, 1, "the mis-pick is not a neutral step")
+
+-- A class that publishes no set: every non-rotation press stays a mis-pick.
+local plain = H.new_rotation_run()
+local plain_decision = H.rotation_run_decide(plain, "cs", "heal", false,
+    H.practice_neutral_actions("NOCLASSATALL"))
+eq(plain_decision.outcome, "out_of_order",
+    "without a published set a neutral action is still a mis-pick")
+eq(H.ROTATION_OUTCOME_GRADES[plain_decision.outcome], "F", "and it grades F")
+eq(plain.mispicks, 1, "the run counts the mis-pick")
+eq(plain.neutral, 0, "the run counts no neutral step")
+
+-- A hold wins over the neutral set (HU-8): the class stated "cast nothing" and
+-- the prompt says so - a neutral press must not make the illegal cast free.
+local hold_run = H.new_rotation_run()
+local hold_decision = H.rotation_run_decide(hold_run, nil, "heal", true, neutral)
+eq(hold_decision.outcome, "illegal_cast",
+    "a cast during a hold is an illegal cast, neutral or not")
+eq(hold_run.mispicks, 1, "the illegal cast counts against the band")
+eq(hold_run.neutral, 0, "the illegal cast is not a neutral step")
+eq(H.ROTATION_OUTCOME_GRADES.illegal_cast, "F", "the illegal cast grades F")
+
+-- The summary carries the neutral count.
+local summary = H.rotation_run_summary(run)
+eq(summary.neutral, 1, "the summary counts the neutral steps")
+eq(summary.mispicks, 1, "the summary counts the mis-picks")
+eq(summary.correct, 1, "the summary counts the correct steps")
+eq(summary.grade, "A", "one mis-pick grades A (the neutral step is not one)")
+
+-- A run of nothing but neutral steps has nothing gradeable: it reads UNKNOWN,
+-- never a perfect S.
+local only_neutral = H.new_rotation_run()
+for _ = 1, 3 do
+    H.rotation_run_decide(only_neutral, "cs", "heal", false, neutral)
+end
+local neutral_summary = H.rotation_run_summary(only_neutral)
+eq(neutral_summary.grade, nil, "a run with no gradeable step has no grade")
+eq(neutral_summary.neutral, 3, "the summary counts the three neutral steps")
+eq(neutral_summary.correct, 0, "a neutral step is never a correct decision")
+
+-- Determinism: the same answers give the same run (the engine reads no clock
+-- and invents no randomness).
+local det_a, det_b = H.new_rotation_run(), H.new_rotation_run()
+for _ = 1, 4 do
+    H.rotation_run_decide(det_a, "cs", "heal", false, neutral)
+    H.rotation_run_decide(det_b, "cs", "heal", false, neutral)
+end
+eq(H.rotation_run_summary(det_a).neutral, H.rotation_run_summary(det_b).neutral,
+    "determinism: identical neutral sequences give identical counts")
+eq(H.rotation_run_summary(det_a).grade, H.rotation_run_summary(det_b).grade,
+    "determinism: identical neutral sequences give identical grades")
+
+st.NEUTRAL = nil
+st.NEUTRALNONE = nil
+st.NEUTRALBAD = nil
+st.NEUTRALEMPTY = nil
+st.NEUTRALFALSE = nil
+st.NEUTRALFAMILY = nil
+end
+
+neutral_tests()
 
 if failures == 0 then
     print("PASS  practice_state.lua (" .. tostring(checks) .. " checks)")

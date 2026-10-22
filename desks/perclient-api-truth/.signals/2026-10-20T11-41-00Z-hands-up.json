@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T11:41:00Z",
+  "run_id": "perclient-api-truth-2026-10-20",
+  "agent_name": "perclient-api-truth",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Re-verifying the brief's own findings against the source before acting on them. Two of the three findings were real (L-2, L-4) and were closed with per-branch citations; the third (L-3) was based on a false premise and was refuted with citations rather than 'corrected'.",
+    "what_was_hard": "Knowing when a brief's instruction is itself wrong and saying so with evidence instead of compliance. The brief said the bench file's citation was wrong; the citation was exactly right.",
+    "skill_gap": "A dispatch brief is input, not authority - but saying 'your instruction is wrong' needs the same citation discipline as any other claim."
+  },
+  "escalation": {
+    "reason": "HU-17 (row added to hands-up.md): the L-3 instruction was NOT followed as written, because following it would have replaced a verified-true bench citation with a false one. Evidence: classic_era SpellBookDocumentation.lua:82 = 'Name = \"IsSpellKnown\",' (the bench file's cited line, exact) and loadDeprecationFallbacks present in 33 files on classic_era / 40 on live (the bench file's ':4-6', exact).",
+    "blocked_on": null,
+    "recommendation": "Operator ruling requested: (1) confirm the L-3 deviation (the bench claim kept and re-cut with per-branch evidence + a dated correction note in bench/compat_m3_contract_2026-10-20.md §5.1); (2) the re-audit's report file is still not on disk (HU-16), so its L-3 finding cannot be withdrawn at source by anyone else."
+  }
+}

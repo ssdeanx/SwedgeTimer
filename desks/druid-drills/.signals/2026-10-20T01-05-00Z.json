@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T01-05:00Z",
+  "run_id": "druid-drills-2026-10-19",
+  "agent_name": "druid-drills",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the engine before writing the class side: practice.lua's contract block and practice_ui.lua's scenario_context/drill_list_press showed the real ctx shape (resources + stripped cooldown names, last_action nil on a drill press), which forced the drills to be moment judges and the class to gather its own state. Mutation proofs on /tmp/opencode copies caught the two dead helpers (the wiring check counts a qualified call inside the owning module) and proved every band is pinned.",
+    "what_was_hard": "The audit's drill bands were written for a press-the-player-action model, but the engine's drill press carries no action, so the bands had to be re-mapped to moment judgements (documented in bench/druid_drills_2026-10-19.md section 3). The Omen-ICD probe has no client-side source and rests on an UNCONFIRMED assumption (the ICD and the proc buff share one window).",
+    "skill_gap": "Reconciling an audit spec written against a hypothetical harness with the harness that actually exists: the ctx contract should have been read from practice.lua/practice_ui.lua first, before designing the drills."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

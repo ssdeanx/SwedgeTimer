@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T23:50:50Z",
+  "run_id": "f4-family-spell-id-2026-10-19",
+  "agent_name": "compat-f4",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The cross-client truth pass the audit owed settled the design: C_Spell.GetSpellInfo takes a spell id on every branch (SpellDocumentation.lua:190-197, identical on era/anniversary/titan/forever/live) and reads the spell DATABASE, not the player's book, so the TBC name path resolves a rank without depending on a cold book. Building the name path as primary with the id form as a documented fallback works under both the operator's in-game rule and the client source, so neither reading can regress.",
+    "what_was_hard": "The operator's TBC-name rule and the client source disagree about GetSpellInfo specifically (Blizzard's own ObjectAPI accessor calls the global with an id). Resolving that contradiction honestly meant implementing defensively in both directions rather than picking a side, and saying so in the report instead of quietly picking one. The class-file latches (druid.lua:94, warrior.lua:369) that turn a nil into a permanent false are out of scope, so the poison-free guarantee had to be achieved inside compat.",
+    "skill_gap": "Proving a code path is load-bearing needs a pin that dies when that path is removed. The first draft of the resolver had a redundant branch (client names the id -> confirmed) that no pin could kill; it was removed rather than left as unprovable insurance, and the id-form fallback became killable instead."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -321,6 +321,24 @@ st.weave.WINDFURY_ICD_SECONDS = 3
 st.weave.WINDFURY_TINT_RED_ABOVE = 2.0
 st.weave.WINDFURY_TINT_ORANGE_ABOVE = 0.5
 
+-- Era/SoD ICD window (audit 2026-10-19 §5): the SoD sim models a 1.5 s Windfury
+-- Weapon ICD (sod/sim/shaman/windfury_weapon.go:68), not the 3 s TBC value the
+-- classic sims share. The family window below carries that split; the tint buckets
+-- above stay absolute (a 1.5 s window simply never reaches red - orange still means
+-- "waiting", green still means "ready").
+st.weave.WINDFURY_ICD_SECONDS_ERA = 1.5
+
+-- Pure: the Windfury Weapon ICD window for a client family: 1.5 s on ERA (Era-base
+-- and SoD share the token; the classic-line sims model 1.5 s), 3 s everywhere else
+-- (TBC sim + reference). Unknown/nil families read 3 (never shrink a window on a
+-- guess).
+function st.weave.get_windfury_icd_seconds(family)
+    if family == "ERA" then
+        return st.weave.WINDFURY_ICD_SECONDS_ERA
+    end
+    return st.weave.WINDFURY_ICD_SECONDS
+end
+
 -- Windfury Weapon proc ceiling: max 20 procs/min (the 3 s ICD is shared across
 -- hands, so dual wielding cannot circumvent it; Windfury Totem has NO ICD -
 -- docs/research/tbc_minmax.md). SLOWEST-WEAPON NOTE (documented, not modelled):
@@ -413,10 +431,15 @@ st.weave.SHIELD_FALLBACK_CHARGES = 3
 -- Pure: seconds left on the windfury internal cooldown, measured from the last mainhand
 -- swing stamp. A missing/non-positive stamp returns nil (nothing to show); a stamp in
 -- the future or an elapsed cooldown floors at the full window / 0 (reference
--- SuperSwingTimer_ClassMods.lua:3836-3838). Delegates to the generic ICD read with the
--- registry's windfury window, so every ICD shares one implementation.
-function st.weave.get_windfury_icd_remaining(last_swing_time, now)
-    return st.weave.get_icd_remaining(last_swing_time, st.weave.ICD_SECONDS.windfury, now)
+-- SuperSwingTimer_ClassMods.lua:3836-3838). The optional window overrides the
+-- registry's 3 s (the Era/SoD 1.5 s family window); a missing/non-number window
+-- reads the registry value, so two-arg callers keep the exact TBC behaviour.
+function st.weave.get_windfury_icd_remaining(last_swing_time, now, icd_seconds)
+    local window = icd_seconds
+    if type(window) ~= "number" or window <= 0 then
+        window = st.weave.ICD_SECONDS.windfury
+    end
+    return st.weave.get_icd_remaining(last_swing_time, window, now)
 end
 
 -- Pure: windfury ICD tint bucket for a remaining countdown: "red" | "orange" | "green".
@@ -592,6 +615,76 @@ function st.weave.get_totem_twist_remaining(last_twist_time, now)
     local remaining = st.weave.TOTEM_TWIST_PERIOD_SECONDS - since_drop
     if remaining < 0 then remaining = 0 end
     return remaining
+end
+
+-- Totem-twist mana pause (audit 2026-10-19 TBC §: the TBC sim pauses the ~10 s
+-- twist alternation at low mana - 10% by default, configurable 5/10/20/30 in the
+-- sim - and sustains max-rank twisting through the pause instead of
+-- downranking). The threshold below is the sim default; the configurability has
+-- no addon surface yet (filed follow-up: a TBC twist mana-pause option).
+-- CONFLICT note: the pause replaces the downrank note (the WF-rank-1 advice at
+-- the twist-model header above and the imbue ranks in classes/shaman.lua) - the
+-- sim twists max rank (25587) and pauses instead; the downrank-vs-maxrank choice
+-- is the orchestrator's call (filed with the buff-keyed re-drop follow-up).
+-- UNWIRED groundwork: no caller reads this yet (the gather wiring is filed - it
+-- must stay dormant until the orchestrator authorises the visible flip), so
+-- there is no default-visible change; unknown mana never pauses.
+st.weave.TWIST_MANA_PAUSE_THRESHOLD_TBC = 0.10
+
+-- Pure: should the twist pause for mana? True only while a readable mana
+-- fraction sits at or below the threshold; unknown/non-number mana never
+-- pauses (no pause on a guess); NaN compares false, so it never pauses.
+function st.weave.should_pause_twist_for_mana(mana_fraction, threshold)
+    if type(mana_fraction) ~= "number" or type(threshold) ~= "number" then
+        return false
+    end
+    return mana_fraction <= threshold
+end
+
+-- Pure: the twist mana-pause threshold for a client family: the TBC sim
+-- default on TBC, nil everywhere else (no pause - Wrath never twists, and no
+-- other family has a sim-backed pause). Plug-in point for the rule-7 pause
+-- feed (filed: the gather feeds twist_remaining only, so a nil threshold
+-- keeps the old prompt); unknown/nil families read nil (never pause on a
+-- guess). The engine inlines the same boundary through its own input (the
+-- strict sandbox forbids it from calling back into st.weave), so this stays
+-- the single source for the future feed.
+function st.weave.get_twist_mana_threshold(family)
+    if family == "TBC" then
+        return st.weave.TWIST_MANA_PAUSE_THRESHOLD_TBC
+    end
+    return nil
+end
+
+-- Fire Elemental Totem uptime guard (audit 2026-10-19 TBC §: the TBC sim suppresses
+-- Fire Nova while the Fire Elemental holds the fire slot). The totem itself lasts
+-- FIRE_ELEMENTAL_DURATION_SECONDS once dropped; the guide suppresses Nova while the
+-- window runs. Duration UNCONFIRMED (needs in-game confirmation on 2.5.6): a wrong
+-- length only over/under-suppresses Nova, never prompts wrong. A missing stamp
+-- never suppresses (no prompt change on a guess).
+st.weave.FIRE_ELEMENTAL_DURATION_SECONDS = 120
+
+-- Pure: seconds of Fire Elemental uptime left, or nil when no drop is known. Same
+-- floored/clock-skew shape as get_magma_remaining: a future stamp reads the full
+-- duration, an elapsed window floors at 0 (expired - no longer suppressing).
+function st.weave.get_fireele_remaining(last_drop_time, now)
+    if type(last_drop_time) ~= "number" or last_drop_time <= 0 then return nil end
+    local since_drop = (now or 0) - last_drop_time
+    if since_drop < 0 then since_drop = 0 end
+    local remaining = st.weave.FIRE_ELEMENTAL_DURATION_SECONDS - since_drop
+    if remaining < 0 then remaining = 0 end
+    return remaining
+end
+
+-- Fire Elemental snapshot lineup (audit 2026-10-19 TBC §: the TBC sim drops
+-- Fire Elemental only lined up - Wrath of Air up AND a trinket stacked - plus a
+-- weapon swap that is not portable under combat lockdown, so the portable half
+-- is the lineup cue, not the swap). UNWIRED groundwork: no caller reads this
+-- yet (the WoA/trinket feeds and the HUD/options cue are filed follow-ups), so
+-- there is no default-visible change; unknown (nil) never lines up.
+-- Pure: is the lineup ready? Strict booleans - both legs must read true.
+function st.weave.is_fireele_lineup_ready(woa_active, trinket_stacked)
+    return woa_active == true and trinket_stacked == true
 end
 
 -- Magma Totem maintain (Wrath Enhancement #7, docs/research/rotations_wrath.md):

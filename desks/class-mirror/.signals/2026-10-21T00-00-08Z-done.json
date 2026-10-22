@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-21T00:00:08Z",
+  "run_id": "class-mirror-2026-10-20",
+  "agent_name": "class-mirror",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "All four build items landed and are proven: the two namespace mirrors are gone (classes/rogue.lua, classes/hunter.lua), the engine still finds all six class modules from the AceAddon table with no alias, and two independent guards now fail the build on a reintroduced mirror. The guard was proven non-vacuous on /tmp/opencode copies (1 mirror -> 4 failures; 3 mirrors incl. a central one in main.lua -> 9 failures), and the repo tree is green: 43 steps / 0 failed, luacheck 2 warnings / 0 errors.",
+    "what_was_hard": "The brief's stated mechanism (the addon namespace is protected, so a file-scope namespace write crashes the client) does not survive the evidence: the tree's own house idiom is 326 file-scope namespace writes across 30 root modules, and Blizzard's own addons do the same in the reference client source. A literal reading of the brief's blanket rule would have failed the tree on 326 legitimate writes, so the rule was split into 7a (a class module must not write to the namespace at file scope) and 7b (no class table on the namespace at any scope), with the bootstrap writes counted, floor-pinned and reported. The file-scope detector also had to be exact: it tracks function depth separately from block depth and was cross-checked against luac5.1's own main-chunk line set over every addon file (zero missed, zero invented namespace assignments).",
+    "skill_gap": "Proving a client-crash mechanism from source alone is not possible here: the tree and the reference client source both show that a file-scope namespace write is legal, so the crash cause stays UNCONFIRMED offline. The missing evidence is the client's own error line above the LUA_WARNING (the .../classes/rogue.lua:<line>: <message> pair) or an in-client re-test after this change."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

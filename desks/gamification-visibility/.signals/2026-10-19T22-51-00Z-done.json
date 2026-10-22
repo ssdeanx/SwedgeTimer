@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:51:00Z",
+  "run_id": "gamification-visibility-2026-10-19",
+  "agent_name": "gamification-visibility",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "One production change (config_presets.lua) with the operator order recorded in the code as the gate, and 129 behavioural checks that pin the default, the AceDB merge for all ten class tokens, the toggle round-trip and the notice gate.",
+    "what_was_hard": "Verifying the notices ride the same toggle needed the real practice_ui.lua loaded in a light sandbox - it loads cleanly with a stub guard + LSM, which was not obvious from the file's 7304 lines.",
+    "skill_gap": "Reading the harness output during a parallel write (a transient third luacheck warning in tests/smoke.lua from the compat-f4 lane) required checking file mtimes before attributing the warning to my own change."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

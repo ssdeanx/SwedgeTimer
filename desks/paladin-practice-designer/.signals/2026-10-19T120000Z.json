@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T12:00:00Z",
+  "agent_name": "paladin-practice-designer",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "archive-as-spec: TBC/Forever cmp + sim_cast_buff mechanics gave exact restore semantics; /tmp behavioral probe caught a real queue-persist bug pre-land",
+    "what_was_hard": "concurrent sibling edits to shared files (hunter routing landed mid-lane); out-of-scope count pins gating harness green",
+    "skill_gap": "none new"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": "orchestrator reconcile: designmode_state count pins 9->11/10->12 for the two new paladin descriptors",
+    "recommendation": "mechanical pin update; zero behavior risk (get_frame pcall-guarded, nil-safe)"
+  }
+}

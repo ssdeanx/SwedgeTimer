@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T05:18:40Z",
+  "run_id": "warrior-apl-2026-10-20",
+  "agent_name": "warrior-apl",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-fetching the seven warrior APL files and expanding every group inline gave the real priority indices and the pre-pull offsets the gap analysis did not carry (the TBC pre-pull, the SoD pre-pull, the WotLK arms pre-pull). The sims' own spell data (spell_data_auto_gen.go, per-ability .go files, proto/warrior.proto) pinned every id's NAME, which is what the TBC name path needs. Fetching the files rather than trusting the summary is what caught the 12292 split (Death Wish on TBC, Sweeping Strikes on Forever).",
+    "what_was_hard": "The gap analysis contradicts itself on the racials (section 1.3 lists blood_fury as a missing line, section 1.4 says the racials group is correctly absent). Resolving that needed a judgement call - the Era APL's [7] is a top-level spell row, the TBC/Forever appearances are the sim's pop-everything group - and both sides of the decision are written into the line's source and the bench file rather than being resolved silently. The `live` field also has three plausible meanings in the tree; the house meaning (the shaman table's: the engine can prompt the key) was chosen because it is what the 'a line that no engine action can produce must not prompt' rule needs, and the choice is documented in the table's header.",
+    "skill_gap": "The bench file's section 1.3 missing-line table is a list of CANDIDATES, not a verdict - it mixes lines whose APL row is a real spell row with lines whose row sits inside a sim-harness group, and it omits at least one line (the SoD Gladiator Stance) that the same file's APL listing carries. A future gap analysis should separate 'the APL has this row' from 'the row is a rotation decision' before it is used as a build spec."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

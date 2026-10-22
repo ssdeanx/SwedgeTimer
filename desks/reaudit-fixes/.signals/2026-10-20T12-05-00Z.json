@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T12:05:00Z",
+  "run_id": "reaudit-fixes-2026-10-20",
+  "agent_name": "reaudit-fixes",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-verifying each finding against the live source before editing caught the real shape of M-3: the brief's first option ('charge the bonus against the drill's cap') would have zeroed the bonus on exactly the session it exists for and broken three existing pins in the owning suite. The share-of-awarded-XP option satisfied both of the brief's pins AND kept every existing pin green. The M-1 fix needed the test sandbox to load the REAL guard.lua (it had stubbed it out), which turned the pin from a text match into a live contract check.",
+    "what_was_hard": "The re-audit's own report file is not on disk - the findings came from the dispatch brief and each had to be re-verified against the source. M-3's balance constant is constrained by pins outside the stated scope, so the number is a house-rule artefact, not a free choice. The scope list named tests/practice_state.lua (the practice.lua sim suite) where the M-3 pins actually belong in tests/practice_progress_state.lua.",
+    "skill_gap": "Naming the OWNING suite for a pin when the dispatch's enumerated scope list is off by one file - the rule ('the suites that own their pins') and the enumeration can disagree, and the enumeration was the wrong one here."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

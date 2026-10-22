@@ -1,0 +1,14 @@
+# rogue-h6 — Journal
+
+## 2026-10-19 — Desk opened
+- **Purpose:** Build rogue H6 (TBC 15s EA minimum + wait-HOLD + Forever finisher suppression) + wire SoD Envenom rule. From bench/open_rules_2026-10-19.md H6 BUILD verdict + bench/sod_detect_2026-10-19.md ERA+known-spell mechanism.
+- **Scope:** ONLY rogue_guide.lua, classes/rogue.lua, tests/rogue_state.lua, tests/rogue_guide_state.lua. No option tables/config, no new toggles (rides existing ea_duty), no guide_contract/smoke/run.sh/TOCs/docs/version.
+- **Next step:** read all 4 scoped files in full, then implement H6 + SoD wiring nil-safe, then harness + luacheck + mutations on /tmp/opencode copies.
+
+## 2026-10-19 — H6 + SoD latch shipped [signal:done]
+- **Worked on:** re-fetched both sim APLs raw (tbc-new swords, forever default) and confirmed the verdict quotes + two details the verdict under-specifies: (a) the TBC wait action requires SnD-Above-Minimum (>=10s non-Shiv; short/missing SnD releases into an immediate Expose, and the sim group sits above the SnD entry); (b) Forever Maintain Expose casts at 5CP only, so below 5CP the low bar runs the suppression (builders/AR/Tea/BF live).
+- **DeviATION from verdict letter (sim-driven, documented):** verdict item 3 says "keep rule 1 (expose)" while suppressing 1b/4/5 — but ungated rule 1 fires on every lockout input, making the guards unreachable dead code. Gated rule 1 on Forever to 5CP (sim Should-Cast-Check, exact); below 5CP the lockout engages. No default-visible change (duty-gated). TBC rule 1 untouched (1a works with it as-is; the broader TBC EA-and-SnD-safe gating of Rupture/Shiv entries is real in the sim but out of the verdict's build shape — filed follow-up, not built).
+- **Built (rogue_guide.lua):** EA_MINIMUM_BY_FAMILY {TBC=15}, EA_WAIT_SND_MINIMUM=10, EA_LOCKOUT_FAMILIES {FOREVER}; ea_wait_verdict -> expose/wait/nil (5CP + in-window EA + SnD-cover/pool logic, unreadable-SnD hides via snd_usable, missing-SnD releases); ea_lockout_active (FOREVER+duty+low); evaluate rule 1a (release above 1b) + wait-hold (suppresses 1b/2/3/4/5, AR/BF/Tea live, POOL at rule 7) + SOD map (ERA+sod_envenom).
+- **Built (classes/rogue.lua):** ROGUE_SOD_ENVENOM_RUNE_ID 399963 (UNCONFIRMED, fails safe), frozen post_init latch rogue_is_sod (ERA + is_spell_known strict), gather inputs.sod_envenom (true-or-nil). Zero new db keys.
+- **Current state:** guide suite 433->531, state suite 385->401, full harness 37/0, luacheck 2/0 floor held, endings preserved (CRLF addon / LF tests). 14/14 mutations kill on /tmp/opencode copies (min/cover/boundaries/CP/pool/lockout/rule-1-gate/sod-map/hold-guards + latch-gate/id/nil-vs-false/lockout-row), copies removed.
+- **Next step:** orchestrator validation. Owed in-client: SoD rune id 399963 confirmation (Era-base no-false-positive); stock db bands are 65/85 while the sim pools at 71 (engine default 71 applies only when keys nil — observation, not built); TBC safe-gate follow-up noted above.

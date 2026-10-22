@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T15:38:22Z",
+  "run_id": "drill-pick-contract-2026-10-20",
+  "agent_name": "drill-pick-contract",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Pinning the CONTRACT instead of a stub paid off immediately: loading the six class modules into the practice-UI sandbox (the class's own pure guide first, then the class module - no extra stubs needed) made the REAL graders drivable, so the alias readers that are file-local (practice_action, practice_pressed, the warrior's and the druid's inline reads) became reachable through the class's own exported drill grader. Reusing the ctx the drill-list path really delivered, and stripping only the pick aliases, kept the ctx the class's own - the alias stayed the only variable, and the negative half (the same grader answers nil without the alias) made the positive half attributable.",
+    "what_was_hard": "The class-side readers cannot be called directly, so the ctx had to come from the real drill-list path - and a hand-built ctx does not survive the class's decision machinery (the hunter's practice_decision reads ctx.last_action to model the cast, so stripping the aliases changes the verdict). The filed production finding was the hard part: the alias block only fills an EMPTY alias (practice_ui.lua:5280-5284), so a class that publishes its own pick alias shadows the drill-list pick. That is reachable TODAY for the hunter (classes/hunter.lua:4177-4188 publishes ctx.pick = the live cast; the hunter's reader reads ctx.pick FIRST), and the hunter's own comment ('the engine's drill press carries no action') predates the F2 fix that gave the drill press an action. I could not edit practice_ui.lua or the class files (three sibling lanes own them), so the change is filed with the exact spec instead.",
+    "skill_gap": "I assumed for a long while that the 'shipped behaviour is currently correct' in the brief meant no production change was needed, and only found the shadowing by accident while probing what a class-published ctx.action would do. The lesson: when a brief says the behaviour is correct, PROVE the interaction it names (a class publishing its own alias) instead of taking it on trust - the brief's own risk sentence was the spec of the hole."
+  },
+  "escalation": {
+    "reason": "F-1 (MEDIUM, bench/drill_pick_contract_2026-10-20.md §3): the alias block in practice_ui.lua:5280-5284 only fills an alias the class's ctx left EMPTY, so a class that publishes its own pick alias SHADOWS the drill-list pick. Reachable today for the hunter: classes/hunter.lua:4177-4188 publishes ctx.pick = the shot that is casting right now and the hunter's reader (classes/hunter.lua:3776-3794) reads ctx.pick FIRST, so a drill-list press made while a Steady Shot is casting is graded against the live cast, not the player's press (measured: the press of 'aimed' graded F with ctx.pick = 'steady'). The rogue's and the shaman's readers read ctx.action FIRST, so the same hole opens for them the moment a class publishes ctx.action (measured on the rogue: a press of the CORRECT action grades A - one mis-pick banked). The shipped behaviour for the other five classes is correct today.",
+    "blocked_on": "The operator's ruling on the pick's ownership in the drill-list path: does the drill-list press's pick win outright over a class-published alias (the class's own pick is then scoped to the scenario path), or does the class's own pick keep priority in the drill list too (the hunter's live cast)? The lane may not edit practice_ui.lua or the class files.",
+    "recommendation": "Rule: the drill-list press IS the pick (the player's press wins); the class's own published pick (the hunter's live cast) stays the pick on the SCENARIO path only. Spec, for the practice_ui.lua owner: in drill_list_grade (practice_ui.lua:5280-5284) set ctx.pick / ctx.pressed / ctx.action to the drill-list pick unconditionally, OR give scenario_context an option that suppresses the class's pick alias and pass it only from the drill-list path. The class-side readers (rogue_guide.lua:2132, shaman_guide.lua:1163, classes/hunter.lua:3776) must NOT change. A pin must land with the fix: a drill-list press made while the class's ctx publishes its own pick alias grades the PLAYER's press. The hunter lane and the practice_ui owner should land it together; §27 as it stands does not pin it (the hunter's fixture has no live cast)."
+  }
+}

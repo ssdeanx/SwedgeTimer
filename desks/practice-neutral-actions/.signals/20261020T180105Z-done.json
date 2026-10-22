@@ -1,0 +1,35 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T18:01:05Z",
+  "run_id": "practice-neutral-actions-2026-10-20",
+  "agent_name": "practice-neutral-actions",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The mechanism is small and closed: one accessor (H.practice_neutral_actions), one new outcome ('neutral') with NO grade entry (so no attempt, no points, no streak, no XP), one run tally, one UI branch that shows NEUTRAL, and the count in the two summary surfaces. No class publishes a set yet, so the shipped behaviour is byte-for-byte the old one.",
+    "what_was_hard": "practice_ui.lua sits at 199 of Lua 5.1's 200 file-scope locals, so every new state had to ride the ui table (ui.scenario_neutral). The two test suites were also at the local limit, so the new engine pins went into their own nested frame.",
+    "skill_gap": "The mutation proofs needed guarding (type(x) == 'table' and x.key) so a broken accessor reports clean FAILs instead of crashing the suite on an index of nil."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "artifacts": [
+    "bench/practice_neutral_actions_2026-10-20.md",
+    "desks/practice-neutral-actions/journal.md"
+  ],
+  "verification": {
+    "harness": "41 steps, 0 failed",
+    "luacheck": "2 warnings / 0 errors (both pre-existing, KEEP-ruled); the 4 touched files are 0/0",
+    "practice_ui_file_scope_locals": "199 (unchanged - the 200th is a load failure)",
+    "line_endings": "CRLF kept in practice.lua / practice_ui.lua; LF in the two test files",
+    "checks_added": "tests/practice_state.lua +54 (neutral_tests), tests/practice_ui_state.lua +31 (22m/22n/22o)",
+    "mutation_proofs": "3/3 killed on /tmp/opencode copies: neutral = \"F\" in the grade map; the accessor ignoring the published set; the UI dropping ui.scenario_neutral"
+  }
+}

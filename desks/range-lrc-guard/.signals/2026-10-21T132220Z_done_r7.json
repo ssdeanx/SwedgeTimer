@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-21T13:22:20Z",
+  "run_id": "range-lrc-guard-2026-10-21-r7",
+  "agent_name": "range-lrc-guard",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Keying the spell-list guard on the presence of the MODERN range API (C_Spell.IsSpellInRange, documented and called on all five branches) instead of the unverifiable legacy binary global makes the ladder uniform everywhere without calling any range API: one probe, one added condition, and the item/spell checkers are provably never built on any shipped family.",
+    "what_was_hard": "The ancient-client path had to stay real: the legacy test profile was rebuilt with no C_Item AND no C_Spell plus the legacy _G.GetSpellInfo multi-return, and the spell checker's range had to avoid the item table's ranges (33) for the dedupe to keep it, so the test actually proves the legacy spell path is still built and called.",
+    "skill_gap": "Whether any client range API is blocked remains undecidable offline; both the item block proof and any future spell-path decision need the operator's in-client probe, which is stated as an open follow-up with the exact command."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Deploy both landings to Classic Era and confirm in-client: no ADDON_ACTION_BLOCKED, range string 0 - 8 / 8 - 28 / 28 - N/A on all five families. R3/FU-1 probe still owed; accepted coarsening 8-yd melee / 28-yd ranged everywhere."
+  }
+}

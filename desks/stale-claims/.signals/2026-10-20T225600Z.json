@@ -1,0 +1,33 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T22:56:00Z",
+  "run_id": "stale-claims-guard-2026-10-20",
+  "agent_name": "stale-claims",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 3
+  },
+  "patterns": {
+    "what_worked": "A repo-wide grep for the false phrase (three spellings) found the sixth site in a file the brief had put on the do-not-touch list - a per-file reading of the brief's five named sites would have missed it and the sweep would have reported 'all clear'.",
+    "what_was_hard": "The brief's done-criterion ('no site carries the false claim') and its scope ('DO NOT touch classes/warrior.lua') cannot both hold: the last false claim lives in classes/warrior.lua. The lane resolved it the only way it could - edit what is in scope, file what is not, and say so plainly rather than widening the scope silently.",
+    "skill_gap": "A brief that lists the remaining sites can still be incomplete. The sweep (grep the phrase tree-wide) is cheap and should be part of the lane, not an optional extra."
+  },
+  "escalation": {
+    "reason": "ONE false claim survives in the tree and it is in a file this lane was explicitly forbidden to touch. The brief's done-criterion cannot be met inside the brief's scope - the orchestrator has to rule on the last step.",
+    "blocked_on": "classes/warrior.lua:4899 - the FOR THE RECORD note (classes/warrior.lua:4892-4902) still reads 'so the ladder is NOT extended with it and the NAME-first resolution finds the client's own rank), the'. It is the SAME false claim the previous lane cleared in the hunter, the druid and the rogue (bench/stale_claims_2026-10-20.md §2) and the SAME one this lane cleared in those three - the previous lane corrected the warrior's THE IDS bullet (classes/warrior.lua:5034) and its resolver note (classes/warrior.lua:5138) but missed this note.",
+    "recommendation": "Dispatch a one-line follow-up: apply this lane's wording to classes/warrior.lua:4892-4902 (the id table is the citation and the fallback - the client's own rank only where that id still exists on it; the NAME-first leg finds the client's own rank only where the client ANSWERS the name, and whether the classic-line global takes a name at all is UNCONFIRMED in-client, bench/final_gate_audit_2026-10-20.md §6 C1) and add the matching source-shape pin to tests/warrior_state.lua (which already reads that file for the house stale phrase). It is the ONLY remaining instance in the six classes: the four classes that publish NO Cata/Mists bucket are the warrior, the rogue, the hunter and the druid - exactly the four that carry the note; the paladin and the shaman publish for every family and carry none. NOT BLOCKING for this lane: its own scope is complete and green."
+  },
+  "artifacts": [
+    "bench/stale_claims_guard_2026-10-20.md",
+    "desks/stale-claims/journal.md"
+  ],
+  "files_changed": [],
+  "verification": {
+    "sweep": "grep -rn --include='*.lua' --include='*.md' -e 'every client family answers its own rank art' -e 'NAME-first resolution finds the client' -e 'each answer their own rank art' . --exclude-dir=docs --exclude-dir=Libs --exclude-dir=bench --exclude-dir=desks --exclude-dir=.git -> the only hit outside the new pins is classes/warrior.lua:4899",
+    "harness": "43 steps, 0 failed",
+    "luacheck": "2 warnings / 0 errors in 85 files (the standing floor)"
+  }
+}

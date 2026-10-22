@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-21T13:53:49Z",
+  "run_id": "ses_ea1775d2affe0oL1dUYK72EUHg",
+  "agent_name": "design-mode-ux",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The orchestrator's facts file (bench/design_mode_client_facts_2026-10-21.md) + the vendored AceGUI/AceConfig lines and the classic_era FrameXML CloseSpecialWindows source settled the mechanism for all three reports before any edit; splitting each overlay into a mouse-transparent visual above the options panel and an input button below it resolves the R1-vs-R2 tension deterministically instead of guessing at hit-testing.",
+    "what_was_hard": "R1 (panel keeps its mouse) and R2 (overlays visible over the panel) are contradictory for a single frame where they overlap - resolved with two sibling frames per overlay on pinned strata; two first-attempt mutations exposed suite harness flaws (a 3-arg check() and a guides finder keyed on mouse==false), fixed before the final 16/16 battery.",
+    "skill_gap": "none material; in-client rendering remains unverifiable offline and is reported as such"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Operator in-client confirmation owed for R1/R2 plus the two Esc probes listed in bench/design_mode_ux_2026-10-21.md UNCONFIRMED section 1 and 3."
+  }
+}

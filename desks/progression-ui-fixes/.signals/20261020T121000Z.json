@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T12:10:00Z",
+  "run_id": "progression-ui-fixes-2026-10-20",
+  "agent_name": "progression-ui-fixes",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The findings named exact files and lines, so every fix was a tight diff in four files (practice_ui.lua, practice_progress_ui.lua, main.lua's logout handler, tests/practice_progress_ui_state.lua). The mutation proofs on /tmp/opencode copies turned three assertions into evidence: a 'cap swallow unreported' mutant, a 'flush reports success while writing nothing' mutant and a 'streak not displayed' mutant each die on a pin.",
+    "what_was_hard": "tests/practice_ui_state.lua belongs to a sibling lane, so the H-2 / M-1 / L-2 pins had to be FILED and then proved on a copy of the tree (the copy carries the fixes plus the filed pins). Two of my first pin drafts were wrong against the real sandbox: the notice is not the LAST print (the session notice comes after it) and the calendar day comes from sb.day, not from the clock - both were caught by running the copy, not by reading the code.",
+    "skill_gap": "The grade-points seed bug (points = 0 made the pure module's own grade table unreachable) sat in the detection path for three audits without being seen. A fallback guarded by 'type(x) ~= number' must not seed with a number."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

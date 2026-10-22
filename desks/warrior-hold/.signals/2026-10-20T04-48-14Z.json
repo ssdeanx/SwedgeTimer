@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T04:48:14Z",
+  "run_id": "warrior-hold-2026-10-20",
+  "agent_name": "warrior-hold",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The other four classes' landed shape was the template: read the guide's own verdict, never re-decide it. The engine's accessor (practice.lua:3450) settled the CANCEL question without guesswork - the brief's own tiebreaker ('a step that names an action stays an action') plus the class's own invariant that the practice pick and the live pick can never disagree.",
+    "what_was_hard": "The scope list named two sunder-default pin files; the harness proved a third (tests/hud_templates_state.lua), so the scope needed a one-line widening. And the CANCEL verdict is the one hold that names an action, so 'the three holds are stated' is two as holds and one as an action - documented with the guide's own pin rather than papered over.",
+    "skill_gap": "A pin cannot be trusted to be the only pin of its kind: three suites pinned the same default. A rule that says 'update the pin' needs to say 'update every pin of that default', or the lane finds the red by running the harness."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Validate. If the operator rules that the guide's CANCEL verdict must be a HOLD statement (the brief's 'three holds' read that way), the change is one line in classes/warrior.lua:3926 and the section 37 pin grows a CANCEL case - but it would contradict the live guide's lit Execute icon, so it needs the operator's word. See bench/warrior_hold_statements_2026-10-20.md section 3."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T15:30:00Z",
+  "agent_name": "shaman-searing-clock",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "fight stamp + searing reader/mapping with 39 new pins; 4/4 mutations kill on /tmp copies",
+    "what_was_hard": "full harness 37/38 from parallel warrior-lane crossfire; proven out-of-scope via module-load exclusion + mtime",
+    "skill_gap": "main.lua stamp has no in-repo killer pin (main_init_state out of scope); covered by /tmp-only TMP check"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator validates; FE display/swap stays filed for HUD/options lane"
+  }
+}

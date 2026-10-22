@@ -73,7 +73,7 @@
 -- ability fired); when a queued ability fires, its cast() flags are merged into the same
 -- out table.
 --=========================================================================================
-local _, st = ...
+local addon_name, st = ...
 
 st.practice = st.practice or {}
 
@@ -1492,6 +1492,15 @@ end
 st.practice.harness = st.practice.harness or {}
 local H = st.practice.harness
 
+-- The scenario kinds the registry accepts. The seven shipped kinds keep their
+-- meaning (the eight registered entries are unchanged); the five new kinds are the
+-- per-class audit's taxonomy (bench/class_features_drills_2026-10-19.md §4.1):
+--   rotation_run   the rotation SCENARIO - the class's actual wowsims rotation,
+--                  run end to end and graded on the cast sequence
+--   rotation_order the priority-order DRILL
+--   rotation_window the cooldown / rotation-window DRILL
+--   transition     the opener / transition DRILL
+--   situational    the situational-decision DRILL
 H.SCENARIO_KINDS = {
     paladin_twist = true,
     combo_windows = true,
@@ -1500,6 +1509,11 @@ H.SCENARIO_KINDS = {
     energy_loop = true,
     weave_timing = true,
     swing_window = true,
+    rotation_run = true,
+    rotation_order = true,
+    rotation_window = true,
+    transition = true,
+    situational = true,
 }
 
 H.SCENARIOS = H.SCENARIOS or {}
@@ -2211,6 +2225,17 @@ function H.grade_execute_entry(state, rage, opts)
     return H.grade_band(1 - fraction, H.EXECUTE_ENTRY_BANDS)
 end
 
+-- SUPERSEDED (operator ruling, 2026-10-19): the class's own drill list owns the
+-- execute-phase skill ("warrior_execute_burn" - the transition into the execute
+-- phase: the rage dump and the repeated Execute presses below the threshold).
+-- One skill, one truth, and the class list wins.
+--
+-- The built-in spec STAYS registered: the class's session wrappers and their
+-- offline pins still resolve the old key (backward compatibility). What changed:
+--   * the engine routes the warrior to its own drill list (the built-in drill is
+--     not the session any more), and
+--   * the built-in drill's grading is delegated to the class's drill below, so the
+--     old truth never grades a player attempt.
 H.register_scenario({
     key = "warrior_execute",
     title = "Execute-phase drill",
@@ -2269,6 +2294,10 @@ H.register_scenario({
 -- refund is a sim constant (Furor-5/5 model) because the D1 talent/helm probe is BLOCKED
 -- (UNCONFIRMED - bench/verify_bank.md section 3) - the shell renders its sim honestly
 -- and never reads in-client talents.
+--
+-- The energy mechanics below (H.new_energy_state, H.energy_update, H.grade_powershift,
+-- H.powershift_cycle) STAY: they are the harness's shared energy primitives (the
+-- rogue's baseline energy drill reads them).
 H.POWERSHIFT_DEFAULTS = {
     energy_max = 100,
     regen_per_second = 10,
@@ -2360,12 +2389,24 @@ function H.powershift_cycle(state, now)
     return grade, energy
 end
 
+-- SUPERSEDED (operator ruling, 2026-10-19): the class's own drill list owns the
+-- shift rule ("druid_powershift_rework" - the SIM's trigger: the TBC fixed line
+-- below 10 energy, the classic/sod cost trigger). The built-in drill's old truth
+-- was the addon's own 20-energy rule, which the sims do not use: one skill, two
+-- truths. One skill, one truth - the class list wins.
+--
+-- The built-in spec STAYS registered (the class's session wrappers and their
+-- offline pins still resolve the old key - backward compatibility). What changed:
+--   * the engine routes the druid to its own drill list (the built-in drill is not
+--     the session any more), and
+--   * the built-in drill's grading is DELEGATED to the class's drill below, so the
+--     20-energy rule never grades a player attempt.
 H.register_scenario({
     key = "druid_powershift",
     title = "Powershift-loop drill",
     class = "DRUID",
     kind = "energy_loop",
-    description = "Powershift cadence: shift inside the 20-energy rule, refund is a fixed sim value.",
+    description = "Powershift cadence: the shift rule as the sims read it (the class's own drill).",
     new_state = function(now, opts)
         return H.new_energy_state(opts)
     end,
@@ -2374,11 +2415,17 @@ H.register_scenario({
         -- session ended must not grant phantom regen across the gap.
         session.state.last_update_at = nil
     end,
-    -- Exact-time path: the caller reports each powershift and the shell grades the
-    -- energy at the shift, grants the fixed refund and counts it (powershift_cycle).
+    -- Exact-time path: the caller reports each powershift and the shell grades it.
+    -- The grade comes from the CLASS's own drill (the class list is the single
+    -- source of the shift rule); the shell's own model is the last-resort fallback
+    -- for a flavour that ships no class drill at all.
     event = function(session, now, key)
         if key ~= "shift" then
             return nil
+        end
+        local delegated = H.delegate_drill_grade("druid_powershift", session.state, now, key)
+        if delegated ~= nil then
+            return delegated
         end
         local grade = H.powershift_cycle(session.state, now)
         return grade
@@ -2451,6 +2498,14 @@ function H.grade_weave_cast(state, cast_start_fraction, clip_amount)
     return H.grade_band(margin, H.WEAVE_MARGIN_BANDS), marker
 end
 
+-- SUPERSEDED (operator ruling, 2026-10-19): the class's own drill list owns the
+-- weave decision ("shaman_mw_weave" - the same weave.lua maths, re-sourced with
+-- the Maelstrom-stack condition). One skill, one truth - the class list wins.
+--
+-- The built-in spec STAYS registered (the class's session wrappers and their
+-- offline pins still resolve the old key - backward compatibility). The engine
+-- routes the shaman to its own drill list (the built-in drill is not the session
+-- any more) and the built-in drill's grading is delegated to the class's drill.
 H.register_scenario({
     key = "shaman_weave",
     title = "Weave-timing drill",
@@ -2469,6 +2524,9 @@ H.register_scenario({
     -- Exact-time path: the caller reports each cast start and the shell grades it
     -- through weave.lua's marker/clip model. A number key is the swing fraction with no
     -- measured clip; a table key carries { start = <fraction>, clip = <amount> }.
+    -- The grade comes from the CLASS's own drill (the class list is the single
+    -- source of the weave rule); the shell's own model is the last-resort fallback
+    -- for a flavour that ships no class drill at all.
     event = function(session, now, key)
         local state = session.state
         local start_fraction, clip_amount
@@ -2478,6 +2536,11 @@ H.register_scenario({
             start_fraction, clip_amount = key.start, key.clip
         else
             return nil
+        end
+        local delegated = H.delegate_drill_grade("shaman_weave", state, now, key,
+            { start = start_fraction, clip = clip_amount })
+        if delegated ~= nil then
+            return delegated
         end
         local grade = H.grade_weave_cast(state, start_fraction, clip_amount)
         return grade
@@ -2507,14 +2570,17 @@ function H.energy_tick_marker(state)
         return nil
     end
     if type(state.tick_marker) == "number" then
+        if state.tick_marker ~= state.tick_marker then
+            return nil
+        end
         return state.tick_marker
     end
     local interval = state.tick_interval
-    if type(interval) ~= "number" or interval <= 0 then
+    if type(interval) ~= "number" or interval ~= interval or interval <= 0 then
         return nil
     end
     local latency = state.latency or 0
-    if type(latency) ~= "number" or latency < 0 then
+    if type(latency) ~= "number" or latency ~= latency or latency < 0 then
         return nil
     end
     local marker = 1 - (latency / interval)
@@ -2532,7 +2598,7 @@ function H.grade_energy_spend(state, start_fraction, clip_amount)
     if marker == nil then
         return nil
     end
-    if type(start_fraction) ~= "number" then
+    if type(start_fraction) ~= "number" or start_fraction ~= start_fraction then
         return nil, marker
     end
     if type(clip_amount) == "number" and clip_amount > 0 then
@@ -2606,15 +2672,22 @@ function H.grade_ss_after_swing(state, offset)
     if type(state) ~= "table" or state.swing_known == false then
         return nil
     end
-    if type(offset) ~= "number" then
+    if type(offset) ~= "number" or offset ~= offset then
         return nil
     end
     local window_start = state.window_start or H.ROGUE_SS_DEFAULTS.window_start
     local window_end = state.window_end or H.ROGUE_SS_DEFAULTS.window_end
+    if type(window_start) ~= "number" or window_start ~= window_start
+        or type(window_end) ~= "number" or window_end ~= window_end then
+        return nil
+    end
     if offset < window_start or offset > window_end then
         return "F"
     end
     local ideal = state.ideal or H.ROGUE_SS_DEFAULTS.ideal
+    if type(ideal) ~= "number" or ideal ~= ideal then
+        return nil
+    end
     local delta = offset - ideal
     if delta < 0 then
         delta = -delta
@@ -2657,3 +2730,1090 @@ H.register_scenario({
         end,
     },
 })
+
+--=========================================================================================
+-- Hunter post-fight shot analytics (H2)
+--=========================================================================================
+-- Pure stats math over the hunter shot log (classes/hunter.lua record_shot_sample):
+-- samples are plain tables { clipped = bool, latency = seconds|nil, at = seconds }.
+-- WoW-free by design (the twist.lua / weave.lua discipline): no globals, no clock
+-- reads, every number arrives as an argument. The presentation (the practice-report
+-- screen) lives in practice_ui.lua.
+--
+-- HST proves the demand (bench/competitor_gaps_2026-10-19.md §1.9: clip counter +
+-- "optimization hint after a fight" + "how much latency buffer you are using").
+
+-- The hint turns advisory once this fraction of the logged shots clipped.
+st.practice.SHOT_CLIP_WARN_RATE = 0.2
+
+-- Summarize a shot log: totals, clip rate and the mean observed latency. count caps
+-- the samples read (nil or invalid = the whole array). A non-table log summarizes
+-- empty; non-table entries are skipped; samples without a numeric latency simply do
+-- not feed the mean. An empty summary scores zeros with a nil mean, never a guess.
+function st.practice.summarize_shots(samples, count)
+    local summary = { total = 0, clipped = 0, clip_rate = 0, mean_latency = nil }
+    if type(samples) ~= "table" then
+        return summary
+    end
+    local n = #samples
+    if type(count) == "number" and count >= 0 then
+        n = math.min(math.floor(count), n)
+    end
+    local latency_sum, latency_n = 0, 0
+    for i = 1, n do
+        local sample = samples[i]
+        if type(sample) == "table" then
+            summary.total = summary.total + 1
+            if sample.clipped == true then
+                summary.clipped = summary.clipped + 1
+            end
+            if type(sample.latency) == "number" then
+                latency_sum = latency_sum + sample.latency
+                latency_n = latency_n + 1
+            end
+        end
+    end
+    if summary.total > 0 then
+        summary.clip_rate = summary.clipped / summary.total
+    end
+    if latency_n > 0 then
+        summary.mean_latency = latency_sum / latency_n
+    end
+    return summary
+end
+
+-- Fraction of a cast window eaten by latency (the "how much latency buffer you are
+-- using" readout): mean_latency / cast_window. Nil unless the mean is a non-negative
+-- number and the window is a positive number.
+function st.practice.shot_buffer_fraction(mean_latency, cast_window)
+    if type(mean_latency) ~= "number" or type(cast_window) ~= "number"
+        or cast_window <= 0 or mean_latency < 0 then
+        return nil
+    end
+    return mean_latency / cast_window
+end
+
+-- One-line optimization hint for a shot summary (the "optimization hint after a
+-- fight"). Pure and total: every branch is pinned in tests/practice_state.lua.
+-- cast_window is the seconds width of the live cast window (the hunter_window
+-- cast_window of the observed latency); nil omits the buffer clause, never guesses it.
+function st.practice.shot_hint(summary, cast_window)
+    if type(summary) ~= "table" or (summary.total or 0) <= 0 then
+        return "No shots logged yet."
+    end
+    local total = summary.total
+    local clipped = summary.clipped or 0
+    local shots_word = (total == 1) and "shot" or "shots"
+    local text
+    if clipped <= 0 then
+        text = string.format("Clean: no clips in %d %s.", total, shots_word)
+    else
+        local rate = (summary.clip_rate or 0) * 100
+        local tail
+        if rate >= st.practice.SHOT_CLIP_WARN_RATE * 100 then
+            tail = "Start each cast earlier or widen the cast window."
+        else
+            tail = "Tighten the next cast start."
+        end
+        text = string.format("%d of %d %s clipped (%d%%). %s",
+            clipped, total, shots_word, math.floor(rate + 0.5), tail)
+    end
+    local mean = summary.mean_latency
+    if type(mean) == "number" and type(cast_window) == "number" and cast_window > 0 then
+        local frac = st.practice.shot_buffer_fraction(mean, cast_window)
+        if frac ~= nil then
+            text = text .. string.format(" Latency %dms of a %dms window (%d%% buffer used).",
+                math.floor(mean * 1000 + 0.5), math.floor(cast_window * 1000 + 0.5),
+                math.floor(frac * 100 + 0.5))
+        end
+    end
+    return text
+end
+
+--=========================================================================================
+-- Hunter prepull checklist (hunter_open §2)
+--=========================================================================================
+-- One-shot APL prepulls are the wrong shape for the per-tick guide engine (no
+-- pull-timer input exists on the classic clients), so they live here as pure
+-- checklist data for the report layer: the generic union of the three
+-- SIM-CONFIRMED prepull sets (TBC Hawk 27044 -20s; SoD Falcon/Aimed/Blood-Fury/
+-- Hawk spread; Forever Mark 14325 -22s + Hawk 25296 -20s). Trap/move tech lives
+-- in HUNTER_WEAVE_STEPS below (the melee-weave/move-cue checklist). WoW-free by
+-- design (the twist.lua / weave.lua discipline): every state arrives as an
+-- argument, and the presentation lives in practice_ui.lua.
+st.practice.HUNTER_PREPULL_STEPS = {
+    { key = "mark", label = "Hunter's Mark" },
+    { key = "aspect", label = "Hawk aspect" },
+    { key = "potion", label = "Haste potion" },
+}
+
+-- Missing steps for a `have` map (key -> true when done), in checklist order.
+-- A non-table `have` misses everything; a nil/false entry is missing (unknown
+-- never counts as done). Returns an array of step labels (empty = ready).
+function st.practice.hunter_prepull_missing(have)
+    local missing = {}
+    for i = 1, #st.practice.HUNTER_PREPULL_STEPS do
+        local step = st.practice.HUNTER_PREPULL_STEPS[i]
+        if type(have) ~= "table" or have[step.key] ~= true then
+            missing[#missing + 1] = step.label
+        end
+    end
+    return missing
+end
+
+-- One-line readiness readout for a missing list: "Ready." when nothing is
+-- missing, else the missing labels joined. Pure and total.
+function st.practice.hunter_prepull_hint(missing)
+    if type(missing) ~= "table" or #missing == 0 then
+        return "Ready."
+    end
+    return "Prepull: " .. table.concat(missing, ", ") .. "."
+end
+
+--=========================================================================================
+-- Hunter weave/move-cue checklist (hunter_open §1 + rotation audit §§TBC/SoD/Wrath)
+--=========================================================================================
+-- The melee-weave/move tech the stateless per-tick engine cannot express (no
+-- slot left in any full set, no move/wait input): TBC APL Melee weave=true
+-- with Wait-at-melee 400ms and the min(0.5s, 25% swing) buffer; SoD p7
+-- 12yd<->5yd moves on autoTimeToNext/gcdTimeToReady; Wrath pre-trap + the
+-- 2000ms trap-weave window (presets.ts timeToTrapWeaveMs); SoD Raptor melee
+-- fills from the 8yd minimum range. All SIM-CONFIRMED via the fetched sim
+-- APLs (bench/hunter_open_2026-10-19.md, bench/hunter_rotation_audit_2026-10-19.md).
+-- Pure checklist data for the report layer, the prepull union's sibling:
+-- WoW-free by design (the twist.lua / weave.lua discipline), every state
+-- arrives as an argument, and the presentation lives in practice_ui.lua.
+st.practice.HUNTER_WEAVE_STEPS = {
+    { key = "trap", label = "Trap down before the pull" },
+    { key = "melee", label = "Melee weave inside 5 yd" },
+    { key = "move", label = "Move on the swing gap" },
+}
+
+-- Missing steps for a `have` map (key -> true when done), in checklist order.
+-- A non-table `have` misses everything; a nil/false entry is missing (unknown
+-- never counts as done). Returns an array of step labels (empty = set).
+function st.practice.hunter_weave_missing(have)
+    local missing = {}
+    for i = 1, #st.practice.HUNTER_WEAVE_STEPS do
+        local step = st.practice.HUNTER_WEAVE_STEPS[i]
+        if type(have) ~= "table" or have[step.key] ~= true then
+            missing[#missing + 1] = step.label
+        end
+    end
+    return missing
+end
+
+-- One-line readiness readout for a missing list: "Weave set." when nothing is
+-- missing, else the missing labels joined. Pure and total.
+function st.practice.hunter_weave_hint(missing)
+    if type(missing) ~= "table" or #missing == 0 then
+        return "Weave set."
+    end
+    return "Weave: " .. table.concat(missing, ", ") .. "."
+end
+
+--=========================================================================================
+-- Combat resource pools (sim-resources lane)
+--=========================================================================================
+-- Pure resource math for the practice drills: generation follows the sim's rules,
+-- costs follow the sim's numbers, timing rides the caller's clock (gains apply on
+-- the caller's swing/tick events). WoW-free by design (the twist.lua / weave.lua
+-- discipline): every number arrives as an argument or a cited constant below.
+--
+-- Rage (warrior, FIRST per operator order). Generation, cap and costs are
+-- SIM-CONFIRMED from wowsims/classic (fetched 2026-10-19):
+--   * sim/core/rage.go: MaxRage = 100.0; white (MH/OH auto only) generation is
+--     damage * 7.5 / rageConversion; damage-taken generation is
+--     damage * 2.5 / conversion; misses generate nothing; dodges/parries use
+--     the pre-outcome damage; Bloodthirst refunds 0.8 of its cost on a miss.
+--   * sim/core/rage.go GetRageConversion: level 25 -> 82.25 and level 40 ->
+--     140.5 (both tested); below 45 a linear fit; otherwise the quadratic base
+--     formula (target-adjusted in game per the Kalgan post, so the sim value is
+--     the base). The sim's <45 branch squares with Go's ^ (xor) operator; the
+--     pool below uses the true square the formula intends (the level-60+ path
+--     every drill uses is unaffected either way).
+--   * sim/warrior/bloodthirst.go: BT 23894, cost 30, CD 6 s.
+--     sim/warrior/whirlwind.go: WW 1680, cost 25, CD 10 s.
+--     sim/warrior/slam.go: Slam 11605, cost 15 (plus the swing reset).
+--     sim/warrior/overpower.go: OP rage 5, 5 s proc window.
+--     sim/warrior/execute.go (TBC/SoD): Execute drains ALL rage.
+--     (Costs banked in bench/warrior_rotation_audit_2026-10-19.md.)
+-- Heroic Strike / Cleave costs are rank-variable and NOT tabled here: the live
+-- read is classes/warrior.lua rage_cost_of (GetSpellPowerCost on the client's
+-- own ranks) - the drill feeds the cost as an argument, never a guessed table.
+--
+-- Mana: only the pool mechanics live here (cap, fail-closed spend). Fixed costs
+-- and regen are NOT modelled: costs are rank-dependent per client (live via
+-- GetSpellPowerCost; paladin seams classes/paladin.lua get_guide_mana_pct +
+-- twist_mana_threshold) and regen is spirit/gear/buff-dependent under the 5 s
+-- rule - no offline source in tree. FILED, not faked.
+-- Focus (hunter, Cata+ only): only the pool mechanics live here. Costs and
+-- regen (Steady-gen and friends) need cata-sim numbers not in tree, and the
+-- hunter drill grades forced-move windows with no costed casts. FILED, not
+-- faked.
+-- Energy: already modelled (H.POWERSHIFT_DEFAULTS + H.ROGUE_ENERGY_DEFAULTS) -
+-- untouched.
+--=========================================================================================
+
+-- Rage constants (wowsims/classic sim/core/rage.go + bloodthirst.go above).
+st.practice.RAGE_MAX = 100
+st.practice.RAGE_DEALT_MULT = 7.5
+st.practice.RAGE_TAKEN_MULT = 2.5
+st.practice.RAGE_BT_REFUND = 0.8
+
+-- Fixed warrior ability costs (bench/warrior_rotation_audit_2026-10-19.md; the
+-- sim spell files behind each number). Execute has no fixed cost (drains all);
+-- HS/Cleave are caller-fed (rank-variable, see the header).
+st.practice.WARRIOR_RAGE_COSTS = { bt = 30, ww = 25, slam = 15, op = 5 }
+
+-- Rage conversion value for an attacker level (sim GetRageConversion). Nil on a
+-- non-positive or unreadable level (never a conversion on a guess).
+function st.practice.rage_conversion(level)
+    if type(level) ~= "number" or level ~= level or level <= 0 then
+        return nil
+    end
+    if level == 25 then
+        return 82.25
+    end
+    if level == 40 then
+        return 140.5
+    end
+    if level < 45 then
+        return 0.0215 * level * level + 2.66 * level + 0.89
+    end
+    return 0.0091107836 * level * level + 3.225598133 * level + 4.2652911
+end
+
+-- Rage from one landed white swing (sim OnSpellHitDealt): damage * mult /
+-- conversion. The caller passes the pre-outcome damage for dodges/parries and
+-- nil for a miss (misses generate nothing - unknown-hides, never zero-filled
+-- by the pool). mult defaults to RAGE_DEALT_MULT.
+function st.practice.rage_white_gain(damage, conversion, mult)
+    if type(damage) ~= "number" or damage ~= damage or damage <= 0 then
+        return nil
+    end
+    if type(conversion) ~= "number" or conversion ~= conversion or conversion <= 0 then
+        return nil
+    end
+    local m = mult
+    if type(m) ~= "number" or m ~= m or m <= 0 then
+        m = st.practice.RAGE_DEALT_MULT
+    end
+    return damage * m / conversion
+end
+
+-- Rage from damage taken (sim OnSpellHitTaken): damage * mult / conversion
+-- with the TAKEN default. Same nil discipline as the white path.
+function st.practice.rage_taken_gain(damage, conversion, mult)
+    if type(damage) ~= "number" or damage ~= damage or damage <= 0 then
+        return nil
+    end
+    if type(conversion) ~= "number" or conversion ~= conversion or conversion <= 0 then
+        return nil
+    end
+    local m = mult
+    if type(m) ~= "number" or m ~= m or m <= 0 then
+        m = st.practice.RAGE_TAKEN_MULT
+    end
+    return damage * m / conversion
+end
+
+-- Fresh rage pool (sim rageBar currentRage/MaxRage). max defaults to RAGE_MAX;
+-- a starting value clamps into [0, max]. Unknown options read as empty.
+function st.practice.new_rage_state(opts)
+    opts = opts or {}
+    local max = opts.max
+    if type(max) ~= "number" or max ~= max or max <= 0 then
+        max = st.practice.RAGE_MAX
+    end
+    local rage = opts.rage
+    if type(rage) ~= "number" or rage ~= rage then
+        rage = 0
+    end
+    if rage < 0 then
+        rage = 0
+    end
+    if rage > max then
+        rage = max
+    end
+    return { rage = rage, max = max }
+end
+
+-- Bank a rage gain, capped at the pool max (sim AddRage). Non-positive or
+-- unreadable amounts bank nothing and read nil (never a guess).
+function st.practice.rage_gain(state, amount)
+    if type(state) ~= "table" then
+        return nil
+    end
+    if type(amount) ~= "number" or amount ~= amount or amount <= 0 then
+        return nil
+    end
+    local rage = (state.rage or 0) + amount
+    local max = state.max or st.practice.RAGE_MAX
+    if rage > max then
+        rage = max
+    end
+    state.rage = rage
+    return rage
+end
+
+-- Spend rage for one ability (sim SpendRage, fail-closed): true and deducted
+-- when the pool covers the cost, false and untouched otherwise. Unknown,
+-- NaN or negative costs never spend (never a guess); a zero cost is a free
+-- no-op. Unlike the live rotation gate (which degrades to ALLOW on unknown
+-- reads so prompting continues), the pool must not spend what it cannot see.
+function st.practice.rage_spend(state, cost)
+    if type(state) ~= "table" then
+        return false
+    end
+    if type(cost) ~= "number" or cost ~= cost or cost < 0 then
+        return false
+    end
+    if cost == 0 then
+        return true
+    end
+    local rage = state.rage or 0
+    if rage ~= rage or rage < cost then
+        return false
+    end
+    state.rage = rage - cost
+    return true
+end
+
+-- Execute: drain the whole pool (sim execute.go drains ALL rage). Returns the
+-- rage consumed (0 on an empty or unreadable pool), never nil on a table.
+function st.practice.rage_drain_all(state)
+    if type(state) ~= "table" then
+        return nil
+    end
+    local drained = state.rage or 0
+    if type(drained) ~= "number" or drained ~= drained or drained < 0 then
+        drained = 0
+    end
+    state.rage = 0
+    return drained
+end
+
+-- Affordability over the pool (sim-pool twin of ST.WARRIOR.composite_rage_gate
+-- in classes/warrior.lua): true when the pool covers cost + reserve. The live
+-- gate degrades to ALLOW on unknown reads; the pool fails closed instead (an
+-- unreadable pool or cost is not spendable). A nil/NaN reserve counts as 0.
+function st.practice.rage_can_spend(state, cost, reserve)
+    local rage = type(state) == "table" and state.rage or nil
+    if type(rage) ~= "number" or rage ~= rage then
+        return false
+    end
+    if type(cost) ~= "number" or cost ~= cost or cost < 0 then
+        return false
+    end
+    local reserved = reserve
+    if type(reserved) ~= "number" or reserved ~= reserved or reserved < 0 then
+        reserved = 0
+    end
+    return rage >= cost + reserved
+end
+
+-- Drill-spend grade for the shared score pipeline: S when the pool covers
+-- cost + reserve (the spend leaves the core intact), F when it would starve
+-- it. Nil when the inputs cannot be judged (never a grade on a guess).
+function st.practice.rage_spend_grade(state, cost, reserve)
+    if type(state) ~= "table" then
+        return nil
+    end
+    if type(cost) ~= "number" or cost ~= cost or cost < 0 then
+        return nil
+    end
+    if type(state.rage) ~= "number" or state.rage ~= state.rage then
+        return nil
+    end
+    if st.practice.rage_can_spend(state, cost, reserve) then
+        return "S"
+    end
+    return "F"
+end
+
+-- Fresh mana pool. max is caller-fed (level/gear/buff-dependent, no offline
+-- source): nil means an uncapped pool that still spends fail-closed.
+function st.practice.new_mana_state(opts)
+    opts = opts or {}
+    local max = opts.max
+    if type(max) ~= "number" or max ~= max or max <= 0 then
+        max = nil
+    end
+    local mana = opts.mana
+    if type(mana) ~= "number" or mana ~= mana then
+        mana = 0
+    end
+    if mana < 0 then
+        mana = 0
+    end
+    if max and mana > max then
+        mana = max
+    end
+    return { mana = mana, max = max }
+end
+
+-- Bank mana, capped only when the max is known. Same nil discipline as rage.
+function st.practice.mana_gain(state, amount)
+    if type(state) ~= "table" then
+        return nil
+    end
+    if type(amount) ~= "number" or amount ~= amount or amount <= 0 then
+        return nil
+    end
+    local mana = (state.mana or 0) + amount
+    if type(state.max) == "number" and mana > state.max then
+        mana = state.max
+    end
+    state.mana = mana
+    return mana
+end
+
+-- Spend mana, fail-closed (mirrors rage_spend; the live cost feed is owed -
+-- see the header).
+function st.practice.mana_spend(state, cost)
+    if type(state) ~= "table" then
+        return false
+    end
+    if type(cost) ~= "number" or cost ~= cost or cost < 0 then
+        return false
+    end
+    if cost == 0 then
+        return true
+    end
+    local mana = state.mana or 0
+    if mana ~= mana or mana < cost then
+        return false
+    end
+    state.mana = mana - cost
+    return true
+end
+
+-- Mana affordability (same gate shape as rage_can_spend; unknown fails closed).
+function st.practice.mana_can_spend(state, cost)
+    local mana = type(state) == "table" and state.mana or nil
+    if type(mana) ~= "number" or mana ~= mana then
+        return false
+    end
+    if type(cost) ~= "number" or cost ~= cost or cost < 0 then
+        return false
+    end
+    return mana >= cost
+end
+
+-- Fresh focus pool (hunter, Cata+ only). max is caller-fed like mana: the
+-- client cap with no offline source in tree. Costs/regen are filed (header).
+function st.practice.new_focus_state(opts)
+    opts = opts or {}
+    local max = opts.max
+    if type(max) ~= "number" or max ~= max or max <= 0 then
+        max = nil
+    end
+    local focus = opts.focus
+    if type(focus) ~= "number" or focus ~= focus then
+        focus = 0
+    end
+    if focus < 0 then
+        focus = 0
+    end
+    if max and focus > max then
+        focus = max
+    end
+    return { focus = focus, max = max }
+end
+
+-- Bank focus, capped only when the max is known.
+function st.practice.focus_gain(state, amount)
+    if type(state) ~= "table" then
+        return nil
+    end
+    if type(amount) ~= "number" or amount ~= amount or amount <= 0 then
+        return nil
+    end
+    local focus = (state.focus or 0) + amount
+    if type(state.max) == "number" and focus > state.max then
+        focus = state.max
+    end
+    state.focus = focus
+    return focus
+end
+
+-- Spend focus, fail-closed (mirrors rage_spend).
+function st.practice.focus_spend(state, cost)
+    if type(state) ~= "table" then
+        return false
+    end
+    if type(cost) ~= "number" or cost ~= cost or cost < 0 then
+        return false
+    end
+    if cost == 0 then
+        return true
+    end
+    local focus = state.focus or 0
+    if focus ~= focus or focus < cost then
+        return false
+    end
+    state.focus = focus - cost
+    return true
+end
+
+-- Focus affordability (same gate shape as mana_can_spend).
+function st.practice.focus_can_spend(state, cost)
+    local focus = type(state) == "table" and state.focus or nil
+    if type(focus) ~= "number" or focus ~= focus then
+        return false
+    end
+    if type(cost) ~= "number" or cost ~= cost or cost < 0 then
+        return false
+    end
+    return focus >= cost
+end
+
+--=========================================================================================
+-- Rotation scenario + drill contract (the shared engine the per-class lanes plug into)
+--=========================================================================================
+-- The operator taxonomy (2026-10-19, bench/class_features_drills_2026-10-19.md §1):
+--   SCENARIO = run the class's actual wowsims rotation end to end and grade the
+--               sequence the player cast. It is the primary practice mode.
+--   DRILL    = a focused single-skill trainer (twist timing, weave fit, powershift,
+--               forced-move, execute phase). A class may own several.
+--
+-- The class contract (fixed by the orchestrator; the six per-class lanes code
+-- against exactly this - do not change it):
+--
+--   ST.<CLASS>.practice_scenario_step(self, ctx)
+--     -> { action = "<spell key>", reason = "<text>" } | nil
+--     -> { action = nil, hold = true, reason = "<text>" }   -- an explicit HOLD
+--     ctx = { now, last_action, resources, cooldowns }
+--     `self` is the addon (ST) - exactly like ST.<CLASS>.gather_guide_inputs(self, out).
+--     nil means "cannot decide": the engine grades that step UNKNOWN. It never
+--     records a wrong action and never invents an expectation.
+--
+--     The HOLD statement (operator ruling HU-8, hands-up 2026-10-19: a hold is a
+--     DECISION, unknown is not). A class that decides to hold says so explicitly
+--     (`action = nil, hold = true`); the engine then grades the step as a hold:
+--     casting any action during it is an ILLEGAL CAST (F), doing nothing during
+--     it is CORRECT - recorded, but never worth points (a player could otherwise
+--     farm them by idling, so a correct hold records no attempt at all). A nil
+--     step with NO hold statement stays UNKNOWN: no attempt, never a wrong grade.
+--     A step that names an action is an action - the hold flag is ignored, so a
+--     class that means to hold must not name an action.
+--
+--   ST.<CLASS>.practice_drills
+--     = { { key = "<registry key>", label = "<label>",
+--          grade = function(self, ctx) -> "S"|"A"|"B"|"C"|"D"|"F"|nil end }, ... }
+--     A nil grade means "not judgeable": the engine shows UNKNOWN and records no
+--     attempt (a grade is never guessed).
+--
+--   ST.<CLASS>.practice_neutral_actions
+--     = { heal = true, shield = true }                  -- the same set everywhere
+--     = { ERA = { heal = true }, TBC = { heal = true } } -- per family
+--     The NEUTRAL action set: the action keys that are legitimate but NOT
+--     rotation actions (a heal, a shield, food, a potion, a movement ability).
+--     The panel offers the class's whole ability list, so a player can press an
+--     action the rotation never asks for; that press is NOT a mis-pick. The step
+--     is NEUTRAL: no attempt is recorded (no points, no streak, no XP) and the
+--     run counts it in its neutral tally.
+--     A class that publishes NOTHING leaves every non-rotation press a mis-pick,
+--     exactly as before - the engine never guesses a neutral set.
+--
+-- Everything below is PURE: no clock read, no randomness, no WoW API. The caller
+-- injects `now` and the class's answers; this module owns the comparison, the
+-- outcome classes and the grade.
+--=========================================================================================
+
+-- The addon object (the AceAddon table): the CLASS MODULES live there
+-- (ST.PALADIN, ST.WARRIOR, ...), not on this module's namespace table. The
+-- lookup is guarded on purpose: the offline sandbox (and any flavour without
+-- the addon object) has no LibStub, and the namespace table is the fallback -
+-- never the first place looked at.
+local function addon_object()
+    if type(LibStub) ~= "function" then
+        return nil
+    end
+    local ok, ace = pcall(LibStub, "AceAddon-3.0")
+    if not ok or type(ace) ~= "table" or type(ace.GetAddon) ~= "function" then
+        return nil
+    end
+    local ok_get, addon = pcall(ace.GetAddon, ace, addon_name)
+    if not ok_get or type(addon) ~= "table" then
+        return nil
+    end
+    return addon
+end
+
+-- The built-in drills a class's OWN drill list supersedes (operator ruling,
+-- 2026-10-19: one skill, one truth - the class list wins). The built-in spec
+-- stays registered so the class's session wrappers and their offline pins still
+-- resolve the old key; what the ruling changes is:
+--   * the engine routes the class to its own drill list instead of the built-in
+--     drill (the built-in drill is not the session any more), and
+--   * the built-in drill's grading is DELEGATED to the class's drill, so the old
+--     truth never grades a player attempt.
+--
+-- The mapping is per built-in key and names the class's drill that owns the
+-- skill. A built-in drill with no entry here is still the class's own drill
+-- (the class's list does not cover its skill) and keeps its grading.
+H.SUPERSEDED_DRILLS = {
+    druid_powershift = "druid_powershift_rework",
+    shaman_weave = "shaman_mw_weave",
+    warrior_execute = "warrior_execute_burn",
+}
+
+-- The context a delegated built-in drill hands its class's drill: the shell's own
+-- state (flat - the class graders read the flat names first), the clock and the
+-- action, with the numeric state fields also published as the resources view.
+function H.drill_context(state, now, last_action, extra)
+    local ctx = { now = now, last_action = last_action }
+    local resources = {}
+    if type(state) == "table" then
+        for key, value in pairs(state) do
+            if ctx[key] == nil then
+                ctx[key] = value
+            end
+            if type(value) == "number" then
+                resources[key] = value
+            end
+        end
+    end
+    if type(extra) == "table" then
+        for key, value in pairs(extra) do
+            ctx[key] = value
+        end
+    end
+    if next(resources) ~= nil then
+        ctx.resources = resources
+    end
+    return ctx
+end
+
+-- Grade through the class's own drill when a built-in drill is superseded by it.
+-- Returns nil when there is no such class drill (the caller keeps its own
+-- model), and nil when the class's grader cannot judge (never a guessed grade).
+function H.delegate_drill_grade(scenario_key, state, now, last_action, extra)
+    local drill_key = H.SUPERSEDED_DRILLS[scenario_key]
+    if type(drill_key) ~= "string" or drill_key == "" then
+        return nil
+    end
+    local spec = H.SCENARIOS[scenario_key]
+    local class_key = spec and spec.class or nil
+    local module = H.practice_class_module(class_key)
+    if not module then
+        return nil
+    end
+    local addon = addon_object()
+    if not addon then
+        return nil
+    end
+    local ctx = H.drill_context(state, now, last_action, extra)
+    return H.practice_drill_grade(module, drill_key, addon, ctx)
+end
+
+-- The class module that owns the practice contract. The argument is the class
+-- module itself or a class key.
+--
+-- A class key is resolved from the ADDON OBJECT (the AceAddon table) FIRST:
+-- that is where the class tables live, so the engine finds a class's
+-- practice_scenario_step / practice_drills without any per-class alias. The
+-- namespace table (this module's own table) is the fallback only, and the
+-- lookup is nil-safe per class: an unknown class answers nil, never a throw and
+-- never another class's module.
+function H.practice_class_module(class_or_module)
+    if type(class_or_module) == "table" then
+        return class_or_module
+    end
+    if type(class_or_module) ~= "string" or class_or_module == "" then
+        return nil
+    end
+    local addon = addon_object()
+    if addon then
+        local module = addon[class_or_module]
+        if type(module) == "table" then
+            return module
+        end
+    end
+    local module = st[class_or_module]
+    if type(module) ~= "table" then
+        return nil
+    end
+    return module
+end
+
+-- Does the class provide a rotation scenario? (the class lane owns the answer)
+function H.practice_scenario_available(class_key)
+    local module = H.practice_class_module(class_key)
+    if not module then
+        return false
+    end
+    return type(module.practice_scenario_step) == "function"
+end
+
+-- Ask the class what it wants cast next.
+--   -> { action = "<key>", reason = "<text>" } | nil
+--   -> { action = nil, hold = true, reason = "<text>" }   -- an explicit HOLD
+-- nil covers every "cannot decide" case: no class module, no step function, a
+-- throwing step, a non-table answer, an empty action, a step that names neither
+-- an action nor a hold. The engine treats them all the same way - the step is
+-- UNKNOWN, never a wrong action.
+--
+-- The hold statement (HU-8) is the one answer that is NOT "cannot decide": a
+-- class that holds has DECIDED, so the step is a hold - the player casting
+-- during it is wrong and the player doing nothing is right.
+function H.practice_scenario_step(class_key, self, ctx)
+    local module = H.practice_class_module(class_key)
+    if not module or type(module.practice_scenario_step) ~= "function" then
+        return nil
+    end
+    local ok, result = pcall(module.practice_scenario_step, self, ctx)
+    if not ok or type(result) ~= "table" then
+        return nil
+    end
+    local action = result.action
+    local reason = result.reason
+    if type(reason) ~= "string" then
+        reason = nil
+    end
+    if type(action) ~= "string" or action == "" then
+        -- No action: the only non-unknown answer left is an explicit hold.
+        if result.hold == true then
+            return { action = nil, hold = true, reason = reason }
+        end
+        return nil
+    end
+    -- An action was named: this is a decision to cast, whatever the hold flag says.
+    return { action = action, reason = reason }
+end
+
+-- The class's drill list: the entries that carry a key and a grade function. A
+-- malformed entry (no key, no grader) is dropped - unknown-hides: the panel never
+-- offers a button that cannot be graded.
+function H.practice_drills(class_key)
+    local module = H.practice_class_module(class_key)
+    if not module then
+        return nil
+    end
+    local list = module.practice_drills
+    if type(list) ~= "table" then
+        return nil
+    end
+    local out = {}
+    for i = 1, #list do
+        local entry = list[i]
+        if type(entry) == "table" and type(entry.key) == "string" and entry.key ~= ""
+            and type(entry.grade) == "function" then
+            out[#out + 1] = {
+                key = entry.key,
+                label = (type(entry.label) == "string" and entry.label ~= "") and entry.label or entry.key,
+                grade = entry.grade,
+            }
+        end
+    end
+    if #out == 0 then
+        return nil
+    end
+    return out
+end
+
+-- One drill of a class by its registry key, or nil.
+function H.practice_drill_by_key(class_key, drill_key)
+    if type(drill_key) ~= "string" or drill_key == "" then
+        return nil
+    end
+    local drills = H.practice_drills(class_key)
+    if not drills then
+        return nil
+    end
+    for i = 1, #drills do
+        if drills[i].key == drill_key then
+            return drills[i]
+        end
+    end
+    return nil
+end
+
+-- Grade one drill attempt. A nil grade means "not judgeable" (the engine shows
+-- UNKNOWN); a throwing grader is the same - it never invents a grade.
+function H.practice_drill_grade(class_key, drill_key, self, ctx)
+    local drill = H.practice_drill_by_key(class_key, drill_key)
+    if not drill then
+        return nil
+    end
+    local ok, grade = pcall(drill.grade, self, ctx)
+    if not ok or type(grade) ~= "string" then
+        return nil
+    end
+    if not st.practice.GRADE_POINTS[grade] then
+        return nil
+    end
+    return grade
+end
+
+-- The class's NEUTRAL action set: the action keys that are legitimate but NOT
+-- rotation actions (a heal, a shield, food, a potion, a movement ability).
+--
+-- The published shape is the class's own statement:
+--   { heal = true, shield = true }                   -- the same set everywhere
+--   { ERA = { heal = true }, TBC = { heal = true } } -- per family
+--
+-- A family-scoped publish (a table-valued entry) is resolved for the CURRENT
+-- family (st.family). A family the class published no bucket for answers nil:
+-- the engine never guesses a set for a client the class did not describe.
+--
+-- The returned set is a fresh table of `key = true` entries (the published table
+-- is never handed out), and nil means "this class published no neutral set" -
+-- unknown-hides: the caller then grades every non-rotation press as it did
+-- before, a mis-pick.
+--
+-- The argument is a class key OR the class module itself (the same shape
+-- H.practice_class_module accepts).
+function H.practice_neutral_actions(class_key)
+    local module = H.practice_class_module(class_key)
+    if not module then
+        return nil
+    end
+    local published = module.practice_neutral_actions
+    if type(published) ~= "table" then
+        return nil
+    end
+    local source = published
+    -- A table-valued entry means the publish is family-scoped.
+    local family_scoped = false
+    for _, value in pairs(published) do
+        if type(value) == "table" then
+            family_scoped = true
+            break
+        end
+    end
+    if family_scoped then
+        local family = st.family
+        if type(family) ~= "string" or family == "" then
+            return nil
+        end
+        source = published[family]
+        if type(source) ~= "table" then
+            return nil
+        end
+    end
+    local out = {}
+    for key, value in pairs(source) do
+        if type(key) == "string" and key ~= "" and value == true then
+            out[key] = true
+        end
+    end
+    if next(out) == nil then
+        return nil
+    end
+    return out
+end
+
+-- The CANONICAL key of an action key: the class's own alias table maps every
+-- spelling the engine, the practice sim or the guide may report onto the
+-- canonical key (the paladin's "consecration" -> "cons"; the sim's own
+-- "consec" -> "cons"). A class with a single key space publishes no table, and
+-- the normaliser is then the identity.
+--
+-- WHY IT EXISTS: the panel offers every action under its canonical key and the
+-- grader compares canonical keys, so a press is graded by the SPELL it
+-- represents and not by the spelling that reached the engine. Without it the
+-- paladin's icon button ("consecration") and the rotation's own key ("cons")
+-- were two different actions, and pressing the spell the prompt named graded
+-- OUT OF ORDER - an F, a broken streak and no XP.
+--
+-- The argument is a class key OR the class module itself (the same shape
+-- H.practice_class_module accepts). A key that is not a string, a class that
+-- publishes no normaliser and a normaliser that answers nothing all answer the
+-- key UNCHANGED - the identity is the one safe fallback.
+function H.practice_canonical_key(class_key, key)
+    if type(key) ~= "string" or key == "" then
+        return key
+    end
+    local module = H.practice_class_module(class_key)
+    if type(module) ~= "table" then
+        return key
+    end
+    local normaliser = module.practice_canonical_key
+    if type(normaliser) ~= "function" then
+        return key
+    end
+    local ok, canonical = pcall(normaliser, key)
+    if not ok or type(canonical) ~= "string" or canonical == "" then
+        return key
+    end
+    return canonical
+end
+
+-- The run length: [DESIGN] ten GCD chains, so every class's scenario produces the
+-- same number of decisions (the audit's per-class bands are written for it).
+H.ROTATION_RUN_STEPS = 10
+
+-- The run grade bands on the mis-pick count. A miss counts as a mis-pick: the
+-- rotation wanted an action and the player did not cast it. [DESIGN] - addon
+-- policy, not a sim number (the audit's UNCONFIRMED ledger U-15).
+H.ROTATION_RUN_BANDS = {
+    { max = 0, grade = "S" },
+    { max = 1, grade = "A" },
+    { max = 2, grade = "B" },
+    { max = 3, grade = "C" },
+    { max = 5, grade = "D" },
+    { grade = "F" },
+}
+
+-- The outcome classes of one decision.
+H.ROTATION_OUTCOMES = {
+    correct = true,      -- the cast matched the expected action
+    out_of_order = true, -- a different action was cast
+    miss = true,         -- nothing was cast before the step closed
+    unknown = true,      -- the class could not decide: nothing to compare
+    hold_ok = true,      -- nothing was cast during an explicit hold: correct
+    illegal_cast = true, -- an action was cast during an explicit hold: wrong
+    neutral = true,      -- a neutral action was cast: legitimate, not asked for
+}
+
+-- The attempt grade each outcome feeds to the scoring model: a correct decision
+-- is a perfect hit (S), a wrong or missing one is a miss (F, zero points). An
+-- unknown decision records NO attempt at all.
+--
+-- A CORRECT HOLD has no entry here, and that absence IS the rule (HU-8): the
+-- hold was the right thing to do, so the step counts as correct in the run, but
+-- it must never feed the scoring model - a player could otherwise farm points by
+-- idling. A NEUTRAL action has no entry here for the same reason: the player did
+-- nothing wrong, so the step records no attempt and awards no points (and it is
+-- not a mis-pick either). This map is the single gate for "an attempt happened":
+-- an outcome without a grade records no attempt and awards no points.
+H.ROTATION_OUTCOME_GRADES = {
+    correct = "S",
+    out_of_order = "F",
+    miss = "F",
+    illegal_cast = "F",
+}
+
+-- A fresh rotation run.
+function H.new_rotation_run(opts)
+    opts = opts or {}
+    local max_steps = opts.max_steps
+    if type(max_steps) ~= "number" or max_steps ~= max_steps or max_steps < 1 then
+        max_steps = H.ROTATION_RUN_STEPS
+    end
+    max_steps = math.floor(max_steps)
+    return {
+        max_steps = max_steps,
+        steps = 0,
+        decisions = {},
+        correct = 0,
+        mispicks = 0,
+        misses = 0,
+        unknown = 0,
+        holds = 0,
+        illegal_casts = 0,
+        neutral = 0,
+        finished = false,
+    }
+end
+
+-- Close one decision.
+--   expected = the action the class wanted (nil = the class could not decide)
+--   actual   = the action the player cast (nil = nothing was cast)
+--   hold     = true when the class stated an explicit HOLD for this step (HU-8)
+--   neutral  = the class's neutral action set (nil = the class published none):
+--              an action in that set is legitimate but was not asked for, so the
+--              step is NEUTRAL - no attempt, no points, no mis-pick.
+-- Returns the decision record, or nil when the run is already finished.
+function H.rotation_run_decide(run, expected, actual, hold, neutral)
+    if type(run) ~= "table" or run.finished == true then
+        return nil
+    end
+    local has_expected = type(expected) == "string" and expected ~= ""
+    local has_actual = type(actual) == "string" and actual ~= ""
+    local is_hold = hold == true
+    local is_neutral = has_actual and type(neutral) == "table" and neutral[actual] == true
+    local outcome
+    if is_hold then
+        -- A hold is a DECISION (HU-8): casting during it is wrong (F), doing
+        -- nothing during it is right (and worth nothing - the grade map has no
+        -- entry for a correct hold, so no attempt is recorded).
+        --
+        -- The hold wins over the neutral set: the class stated "cast nothing",
+        -- the prompt says so, and a player who casts anyway is doing the thing
+        -- the rotation forbade. Letting a neutral press skip the illegal cast
+        -- would make the grading free (spam a heal through every hold).
+        if has_actual then
+            outcome = "illegal_cast"
+        else
+            outcome = "hold_ok"
+        end
+    elseif has_expected and has_actual and actual == expected then
+        -- The rotation action itself: unaffected by the neutral set (a class
+        -- that published a rotation action as neutral still gets its hit).
+        outcome = "correct"
+    elseif is_neutral then
+        -- A legitimate action the rotation did not ask for: no attempt, no
+        -- points, no streak - and NOT a mis-pick either.
+        outcome = "neutral"
+    elseif not has_expected then
+        outcome = "unknown"
+    elseif not has_actual then
+        outcome = "miss"
+    else
+        outcome = "out_of_order"
+    end
+    run.steps = (run.steps or 0) + 1
+    local decision = {
+        index = run.steps,
+        outcome = outcome,
+        expected = has_expected and expected or nil,
+        actual = has_actual and actual or nil,
+        hold = is_hold or nil,
+        neutral = is_neutral or nil,
+    }
+    run.decisions[run.steps] = decision
+    if outcome == "correct" then
+        run.correct = (run.correct or 0) + 1
+    elseif outcome == "hold_ok" then
+        -- A correct hold is a correct decision, and it is counted as one - but it
+        -- is not a graded attempt (no points, no streak, no mastery tick).
+        run.correct = (run.correct or 0) + 1
+        run.holds = (run.holds or 0) + 1
+    elseif outcome == "neutral" then
+        -- A neutral action is neither a hit nor a mis-pick: it is counted in its
+        -- own tally (the summary shows it) and it feeds the scoring model not at
+        -- all (the grade map has no entry for it).
+        run.neutral = (run.neutral or 0) + 1
+    elseif outcome == "out_of_order" then
+        run.mispicks = (run.mispicks or 0) + 1
+    elseif outcome == "illegal_cast" then
+        -- An illegal cast is a mis-pick: it counts against the run's band.
+        run.mispicks = (run.mispicks or 0) + 1
+        run.illegal_casts = (run.illegal_casts or 0) + 1
+    elseif outcome == "miss" then
+        run.misses = (run.misses or 0) + 1
+    else
+        run.unknown = (run.unknown or 0) + 1
+    end
+    if run.steps >= run.max_steps then
+        run.finished = true
+    end
+    return decision
+end
+
+-- The run's summary. `grade` is nil when nothing in the run was gradeable (every
+-- step unknown): the run reads UNKNOWN, never a perfect S.
+function H.rotation_run_summary(run)
+    if type(run) ~= "table" then
+        return nil
+    end
+    local mispicks = (run.mispicks or 0) + (run.misses or 0)
+    local graded = (run.correct or 0) + mispicks
+    return {
+        steps = run.steps or 0,
+        max_steps = run.max_steps or H.ROTATION_RUN_STEPS,
+        correct = run.correct or 0,
+        mispicks = run.mispicks or 0,
+        misses = run.misses or 0,
+        unknown = run.unknown or 0,
+        holds = run.holds or 0,
+        illegal_casts = run.illegal_casts or 0,
+        neutral = run.neutral or 0,
+        grade = (graded > 0) and H.grade_band(mispicks, H.ROTATION_RUN_BANDS) or nil,
+        finished = run.finished == true,
+    }
+end

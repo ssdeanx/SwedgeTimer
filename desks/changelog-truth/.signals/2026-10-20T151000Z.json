@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T15:10:00Z",
+  "run_id": "changelog-truth-2026-10-20",
+  "agent_name": "changelog-truth",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-reading every claim in the code instead of trusting the audit paid off three times: the audit's line numbers had drifted (so symbols were cited), the bench files had moved on since the audit (the hunter's HUD slot counts are Era base 6 / Era-SoD 7 / TBC 9 / WotLK 9 / Forever 7 / Cata 9 / Mists 8 / Retail 9 - the bench file said Mists 9), and the four neutral sets are larger than the class lane's first list because the common-abilities lane extended them. The changelog quotes the shipped tables, not the bench snapshots.",
+    "what_was_hard": "F6 is only closable in the docs, not in the code: the tree's pre-pull table labels the SoD 20920 row 'Seal of Command' while the 'sob' rotation row's source comment calls the same id 'Seal of Martyrdom'. Choosing one silently would have been papering over a tree-internal disagreement, so the changelog follows the pre-pull table and names the disagreement.",
+    "skill_gap": "Keeping 'append, do not rewrite history' and 'correct the false claim' in the same file needs a rule of thumb: a claim that is simply WRONG is corrected in place; a claim that is CORRECT but superseded is reworded as a dated history note (F14); a dated per-wave figure that only the bench knows (F17) is dropped rather than guessed at."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

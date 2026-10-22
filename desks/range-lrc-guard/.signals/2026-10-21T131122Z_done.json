@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-21T13:11:22Z",
+  "run_id": "range-lrc-guard-2026-10-21",
+  "agent_name": "range-lrc-guard",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the lib's list-construction order first showed the root cause precisely: items are added before spells, so an equal-range item checker wins the slot the addon reads (GetHarmMaxChecker(30)); with the legacy spell API dead everywhere, the whole list was unusable or blocked. Guards at the two list entry points plus the init item minRangeCheck close both paths, and the pre-existing empty-list interact fallback needed no change.",
+    "what_was_hard": "Two tempting extra guards (an 'or not spellRangeAvailable' on the interact fallback and a spell-based minRangeCheck guard) turned out unreachable given the other guards; the mutation proofs exposed that, so both were removed rather than shipped untested. The pre-existing IsSpellInRange bite also needed the R2 mutation folded into its setup because R2 is what makes that dead list unreachable.",
+    "skill_gap": "Client-side API presence/blocking cannot be decided offline; the R3 probe stays owed to the operator (exact /run command is in the bench report section 3)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Deploy the changed lib to the Classic Era client and confirm in-client: no ADDON_ACTION_BLOCKED, range string shows 0 - 8 / 8 - 28 / 28 - N/A. R3 stays deferred pending the C_Spell.IsSpellInRange probe."
+  }
+}

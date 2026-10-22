@@ -1,0 +1,13 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T15:22:24Z",
+  "agent_name": "rogue-leftovers",
+  "self_assessment": { "intent": 5, "confidence": 5, "accuracy": 5, "completeness": 5 },
+  "patterns": {
+    "what_worked": "minimal pin-only edit mirroring rogue_state's wired 13-slot order; grep + full harness + scratch-copy mutation proof",
+    "what_was_hard": "none; parallel-lane tree edits left untouched per scope",
+    "skill_gap": null
+  },
+  "escalation": { "reason": null, "blocked_on": null, "recommendation": null }
+}

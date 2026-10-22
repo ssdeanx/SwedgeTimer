@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T19:19:08Z",
+  "agent_name": "warrior-rotfix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "S/R/D/W rules on pure helpers + per-family slots; family gating in gather kept all out-of-scope suites green; 8/8 mutations killed",
+    "what_was_hard": "TBC HUD frozen by out-of-scope suite forced guide-only deferral; SoD filler precedence required cooling fixtures in D pins",
+    "skill_gap": "none - Forever Rend toggle and TBC HUD mirror belong to sibling lanes"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator validation + in-client checklist per journal"
+  }
+}

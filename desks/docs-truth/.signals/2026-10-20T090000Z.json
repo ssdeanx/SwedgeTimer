@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T09:00:00Z",
+  "run_id": "apl-utility-docs-truth-2026-10-20",
+  "agent_name": "docs-truth",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The bench corpus was the whole evidence base and every claim was re-verified in the tree before it was written down: the per-class drill lists and their labels (classes/*.lua), the practice-mode note's count source (H.practice_drills, which excludes the paladin's twist drill - so the note reads 3, not 4), the six pre-pull tables and their offsets, the HU-8 hold statements per class (the warrior's CANCEL is an ACTION that names the Execute, not a hold - caught before it reached the docs), and the two-flag convention on every utility row. The tree was re-run after the edits: 41 steps, 0 failed; luacheck 2/0 in 83 files, unchanged, which also proves no .lua was touched.",
+    "what_was_hard": "The dispatch named a file that does not exist (bench/live_test_script_2026-10-20.md) while the tree carries the 2026-10-19 script. The parenthetical rule ('if so, extend that one instead; never leave two scripts') resolves it, but it means the operator script keeps its old date - the header now carries two extension notes so a reader knows it describes the current build. Second hard part: the older CHANGELOG section said '23 per-class drills, three or four per class' and the live script's P8-6 said the queue drill was 'NOT SHIPPED' - both are now false, so they had to be corrected in place rather than left for the new section to contradict.",
+    "skill_gap": "The first pass wrote 'the warrior HS/Cleave queue drill never landed' from the tree state instead of from a lane report, and the lane had in fact landed later the same day. A docs lane that reads only the tree can date a feature wrongly: the desk journals and the bench artifacts (not the tree) are the record of what landed when. The second pass started from the bench artifacts and used the tree only to verify."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

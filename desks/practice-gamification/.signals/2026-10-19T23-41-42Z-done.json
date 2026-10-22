@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T23:41:42Z",
+  "run_id": "practice-gamification-foundation-2026-10-19",
+  "agent_name": "practice-gamification",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Spec-first: every constant traced to the design spec or the live scoring model (GRADE_POINTS / SCORE_WINDOW), no invented numbers. One owner per number across the two modules (progress owns xp/level/mastery/streaks/unlocks, stats owns the aggregates/history/snapshot) so nothing can drift. The mutation run (51 mutants, one per rule) found four real holes in my own pins (scope isolation, the no-drill-touch rule, the export sanitiser, the reserved drill bucket) and the achievement thresholds had no threshold pins at all - all were fixed and re-killed to 51/51.",
+    "what_was_hard": "Two guards were wrong on the first pass (scope_of indexed a non-table progress; a nil drill_id would have written to t[nil]) and two of my own test expectations were wrong (the daily cap interacts with the completion bonus; the recent-grade window is oldest-first). The cross-lane reds cost time: diag_state and main_init_state went red mid-lane from another writer's in-flight edits to diag.lua / main.lua / bars.lua - neither suite even loads the practice modules - and another lane overwrote my mutation script in the shared /tmp/opencode (moved to a unique name).",
+    "skill_gap": "Writing the test expectations from the spec rather than from my implementation would have avoided the two wrong expectations (the daily cap and the window order) - the spec already said both."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

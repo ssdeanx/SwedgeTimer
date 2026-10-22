@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T15:10:00Z",
+  "agent_name": "options-wire",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Live-consumer-first wiring: every widget cites its provider lines, false defaults preserve hidden, pins assert widget+default+consumer together.",
+    "what_was_hard": "HUD-slot true-default convention vs ==true-gate no-visible-change rule conflicted; resolved per audit R-M1 (ship false, template turns on).",
+    "skill_gap": "hud_templates exemption lives out of scope so harness stays 36/38 until orchestrator reconciles it."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Reconcile owns hud_templates_state §2 exemption removal + hunter_state crossfire; no further offline work owed by this lane."
+  }
+}

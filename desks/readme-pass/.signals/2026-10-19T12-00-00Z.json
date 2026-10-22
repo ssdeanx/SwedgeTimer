@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T12:00:00Z",
+  "agent_name": "readme-pass",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "searxng carried research after firecrawl_search known-broken; wiki + classic_era FrameXML gave exact IconTexture syntax and placement; edit tool preserved CRLF",
+    "what_was_hard": "CurseForge flavor docs are thin; stayed conservative (plain markdown, no badges/HTML/images)",
+    "skill_gap": "none"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

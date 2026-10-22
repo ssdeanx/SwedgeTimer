@@ -7,11 +7,17 @@
 -- in-client. This module turns the login moment and /st diag into evidence.
 --
 -- Hard rules (enforced by tests/diag_state.lua):
---   * PRINT-ONLY. Nothing here writes any state: no frames are created, no SavedVariables
---     are written (the profile tables are only read), no events are registered, no class
---     logic is called, and no library interface is modified.
+--   * PRINT-ONLY. Nothing here writes SavedVariables: no frames are created, no
+--     SavedVariables are written (the profile tables are only read), no events are
+--     registered, no class logic is called, and no library interface is modified.
+--     Two in-memory writers exist with the same split as before: the tick counter
+--     wrapper writes diag.tick_sites and the chained error handler writes
+--     diag.error_ring; the report itself only reads. The one chat touch is the
+--     output path: when the global print is gone (F3), the report falls back to
+--     the addon's own chat printer (st.utils.print_msg) and announces it once.
 --   * It NEVER throws. The public body and every probe are pcall-wrapped, every read is
 --     nil-safe, and a value that cannot be read renders as "?" instead of erroring.
+--     Unknown spell ids render as UNRESOLVED.
 --   * Output is capped to diag.MAX_LINES lines per report.
 --
 -- The login report (st.diag.report(self), called once at the end of init_libs) is one
@@ -34,28 +40,82 @@
 --                                    OnUpdate counting wrapper installed through
 --                                    wrap_onupdate; the report reads and stays print-only)
 --   self.db.profile.diag_tick_counters  the enable gate wrap_onupdate reads (nil = off)
+--   st.api.GetSpellInfo / is_spell_known  the wanted-id resolution (DATA-only list
+--                                    WANTED_IDS cites bench/ids_research_2026-10-19.md)
+--   diag.error_ring                  the chained-error ring (written ONLY by the
+--                                    seterrorhandler chain; the report prints newest last)
+--   diag._error_handler_installed    whether that chain is installed right now:
+--                                    main.lua installs it in init_libs and removes it
+--                                    again on PLAYER_LOGOUT, so the report can tell
+--                                    "nothing threw" from "nothing was watched"
 --=========================================================================================
 local _, st = ...
 
 st.diag = st.diag or {}
 local diag = st.diag
 
--- Hard output cap. The verbose report is 5 lines today, so this is headroom for a broken
--- field, never a truncation the owner should see.
-diag.MAX_LINES = 6
+-- Hard output cap. The verbose report is the 5 base lines plus the ids section (one
+-- line per wanted id, truncated with a +N count line when the cap binds) plus the
+-- error ring (newest last, same cap rule), so this stays headroom, never a silent cut.
+diag.MAX_LINES = 85
+-- Bounded in-memory error ring (no SavedVariables writes; the report reads, the
+-- chained handler writes - same split as diag.tick_sites).
+diag.ERROR_MAX = 8
 
 local PREFIX = "SwedgeTimer diag:"
 
 -- The classes that ship a guide provider. Guide enablement is the per-class
 -- nextaction_enabled setting - exactly what nextaction_ui.should_show reads.
-local PROVIDER_CLASSES = { "PALADIN", "WARRIOR", "DRUID", "SHAMAN", "HUNTER" }
+local PROVIDER_CLASSES = { "PALADIN", "WARRIOR", "DRUID", "SHAMAN", "HUNTER", "ROGUE" }
+
+-- Wanted spell ids, DATA-only. Source: bench/ids_research_2026-10-19.md section 3
+-- still-UNCONFIRMED (U1-U17) plus the per-class rank/aura ids referenced there.
+-- Unknown/unresolvable prints as UNRESOLVED (never errors, never writes).
+local WANTED_IDS = {
+    -- U1 Forever rank tables + triggers
+    1310785, 1310786, 1293525, 1293526, 1293527, 1293248, 1312639,
+    -- U3 Victory Rush / Victorious
+    34428, 32216,
+    -- U9 Forever bonus kit
+    14287, 25295, 14325, 25296, 14266, 14268, 1317257, 469145, 3045, 5384, 2643, 20904, 14271, 20572,
+    -- U10 rogue per-client (Wrath / TBC / Forever / Era / SoD)
+    57993, 51662, 26889, 58426, 57934, 51690, 48668,
+    26864, 26863, 34413, 26862, 5938, 32645, 26867, 26865,
+    11281, 1241584, 16511, 11294, 6774, 11275, 11300, 13750, 7676, 13877, 14177, 1310703,
+    31016, 425096, 1856,
+    -- U11 paladin (JotC)
+    21183,
+    -- U12 shaman (Stormstrike + SoD runes)
+    17364, 440580, 408490, 408507, 425339, 408498, 408505, 425336,
+    -- U13 warrior ranks
+    11605, 25286, 20569,
+    -- U14 druid (Berserk WotLK)
+    50334,
+    -- U17 Explosive Shot R3
+    60052,
+}
+
+-- In-memory error ring (never SavedVariables, never chat). The report reads it;
+-- the chained error handler below is the only writer.
+diag.error_ring = diag.error_ring or {}
+diag._prev_error_handler = diag._prev_error_handler
+diag._error_handler_installed = diag._error_handler_installed or false
+-- F3: one-time notice that the report left the global print and went to the chat.
+diag._print_fallback_announced = diag._print_fallback_announced or false
 
 --=========================================================================================
 -- Emission (never throws)
 --=========================================================================================
 -- diag.sink is the test hook (tests/diag_state.lua captures lines through it); production
--- prints to the chat frame. Both paths are pcall-wrapped: a protected, broken or absent
--- printer must degrade to silence, never to an error.
+-- prints through the global print. Every path is pcall-wrapped: a protected, broken or
+-- absent printer must degrade, never to an error.
+--
+-- F3 (deep audit 2026-10-19): the bare global print was the report's ONLY output path.
+-- A client (or another addon) that removes or shadows it made the pcall fail and the
+-- whole report vanish silently - a diagnostic that disappears is worse than one that
+-- is wrong. The fallback is the addon's own printer (st.utils.print_msg, which writes
+-- to the chat frame), and the switch is announced once, so a report that changed
+-- channel is never mistaken for a report that never ran.
 local function print_line(text)
     local sink = diag.sink
     if type(sink) == "function" then
@@ -63,7 +123,24 @@ local function print_line(text)
             return
         end
     end
-    pcall(print, text)
+    local printer = rawget(_G, "print")
+    if type(printer) == "function" then
+        if pcall(printer, text) then
+            return
+        end
+    end
+    -- The global print is absent or broken: fall back to the addon's chat printer.
+    local utils = rawget(st, "utils")
+    local print_msg = utils and rawget(utils, "print_msg")
+    if type(print_msg) ~= "function" then
+        -- No fallback available either: degrade to silence (never to an error).
+        return
+    end
+    if not diag._print_fallback_announced then
+        diag._print_fallback_announced = true
+        pcall(print_msg, PREFIX .. " the global print is unavailable; the report goes to the chat frame")
+    end
+    pcall(print_msg, text)
 end
 
 --=========================================================================================
@@ -381,10 +458,226 @@ local function secrets_line()
 end
 
 --=========================================================================================
+-- Wanted-id resolution (verbose only; print-only, never writes)
+--=========================================================================================
+-- One line per wanted id through st.api.GetSpellInfo (the cross-client spell probe in
+-- compat.lua): name/icon/cast/known where the client answers, UNRESOLVED otherwise.
+-- known comes from st.api.is_spell_known where present, "?" where the probe is
+-- absent or throws. Every read is pcall-guarded; a missing api degrades every id to
+-- UNRESOLVED instead of erroring.
+local function ids_one(id, get_info, is_known_fn)
+    if type(id) ~= "number" then
+        return PREFIX .. " ids ?=UNRESOLVED"
+    end
+    if type(get_info) ~= "function" then
+        return PREFIX .. " ids " .. tostring(id) .. "=UNRESOLVED"
+    end
+    local ok, name, _, icon, cast = pcall(get_info, id)
+    if not ok or type(name) ~= "string" then
+        return PREFIX .. " ids " .. tostring(id) .. "=UNRESOLVED"
+    end
+    local known_txt = "?"
+    if type(is_known_fn) == "function" then
+        local ok_known, known = pcall(is_known_fn, id)
+        if ok_known and type(known) == "boolean" then
+            known_txt = known and "true" or "false"
+        end
+    end
+    local icon_txt = "?"
+    if type(icon) == "string" or type(icon) == "number" then
+        icon_txt = tostring(icon)
+    end
+    local cast_txt = "?"
+    if type(cast) == "number" then
+        cast_txt = tostring(cast)
+    end
+    return PREFIX .. " ids " .. tostring(id) .. " name=" .. name
+        .. " icon=" .. icon_txt .. " cast=" .. cast_txt .. " known=" .. known_txt
+end
+
+local function ids_lines()
+    if type(WANTED_IDS) ~= "table" then
+        return {}
+    end
+    local get_info
+    local is_known_fn
+    if type(st.api) == "table" then
+        get_info = st.api.GetSpellInfo
+        is_known_fn = st.api.is_spell_known
+    end
+    local out = {}
+    for i = 1, #WANTED_IDS do
+        local ok, line = pcall(ids_one, WANTED_IDS[i], get_info, is_known_fn)
+        if ok and type(line) == "string" then
+            out[#out + 1] = line
+        else
+            out[#out + 1] = PREFIX .. " ids ?=UNRESOLVED"
+        end
+    end
+    return out
+end
+
+--=========================================================================================
+-- In-game error ring (verbose only; in-memory, never SavedVariables)
+--=========================================================================================
+-- seterrorhandler chaining: install keeps + calls the previous handler, the chained
+-- handler records into diag.error_ring (bounded by diag.ERROR_MAX, oldest evicted,
+-- newest last) and never throws. Uninstall restores the previous handler. The report
+-- reads the ring; only the handler writes it.
+function diag.record_error(msg)
+    pcall(function()
+        if type(diag.error_ring) ~= "table" then
+            diag.error_ring = {}
+        end
+        local text
+        if type(msg) == "string" then
+            text = msg
+        else
+            local ok_str, as_str = pcall(tostring, msg)
+            text = (ok_str and type(as_str) == "string") and as_str or "?"
+        end
+        local ok_flat, flat = pcall(string.gsub, text, "[\r\n]+", " ")
+        if ok_flat and type(flat) == "string" then
+            text = flat
+        end
+        if #text > 200 then
+            text = string.sub(text, 1, 200)
+        end
+        if type(diag.ERROR_MAX) ~= "number" or diag.ERROR_MAX < 1 then
+            diag.ERROR_MAX = 8
+        end
+        diag.error_ring[#diag.error_ring + 1] = text
+        while #diag.error_ring > diag.ERROR_MAX do
+            table.remove(diag.error_ring, 1)
+        end
+    end)
+end
+
+function diag.install_error_handler()
+    local ok, installed = pcall(function()
+        local set_h = rawget(_G, "seterrorhandler")
+        local get_h = rawget(_G, "geterrorhandler")
+        if type(set_h) ~= "function" then
+            return false
+        end
+        if diag._error_handler_installed == true then
+            return true
+        end
+        local prev
+        if type(get_h) == "function" then
+            local ok_get, cur = pcall(get_h)
+            if ok_get and type(cur) == "function" then
+                prev = cur
+            end
+        end
+        diag._prev_error_handler = prev
+        local function chained(msg)
+            pcall(function()
+                diag.record_error(msg)
+            end)
+            if type(prev) == "function" then
+                pcall(prev, msg)
+            end
+        end
+        diag._chained_handler = chained
+        local ok_set = pcall(set_h, chained)
+        if ok_set then
+            diag._error_handler_installed = true
+            return true
+        end
+        return false
+    end)
+    if ok and installed == true then
+        return true
+    end
+    return false
+end
+
+function diag.uninstall_error_handler()
+    local ok, restored = pcall(function()
+        if diag._error_handler_installed ~= true then
+            return false
+        end
+        local set_h = rawget(_G, "seterrorhandler")
+        if type(set_h) ~= "function" then
+            diag._error_handler_installed = false
+            return false
+        end
+        local prev = diag._prev_error_handler
+        if type(prev) == "function" then
+            pcall(set_h, prev)
+        end
+        diag._error_handler_installed = false
+        diag._prev_error_handler = nil
+        diag._chained_handler = nil
+        return true
+    end)
+    if ok and restored == true then
+        return true
+    end
+    return false
+end
+
+local function error_lines()
+    local ring = read(diag, "error_ring")
+    if type(ring) ~= "table" or #ring == 0 then
+        -- F1 (deep audit 2026-10-19): an empty ring means two different things and
+        -- the report must say which one it is. With the chained handler installed,
+        -- "none" means nothing threw; without it, nothing could have been observed
+        -- at all - a false negative that reads exactly like a clean session.
+        if read(diag, "_error_handler_installed") == true then
+            return { PREFIX .. " errors none (handler installed, nothing thrown)" }
+        end
+        return { PREFIX .. " errors not observed (no error handler installed)" }
+    end
+    local out = {}
+    for i = 1, #ring do
+        local msg = ring[i]
+        if type(msg) ~= "string" then
+            msg = "?"
+        end
+        out[#out + 1] = PREFIX .. " errors [" .. tostring(i) .. "]=" .. msg
+    end
+    return out
+end
+
+-- Append a section inside the outer cap: fits whole, otherwise fits what remains
+-- and closes with an explicit +N count line (never a silent cut).
+local function append_section(out, section_lines, cap, label)
+    if type(out) ~= "table" or type(section_lines) ~= "table" or #section_lines == 0 then
+        return
+    end
+    if type(cap) ~= "number" then
+        return
+    end
+    local remaining = cap - #out
+    if remaining <= 0 then
+        return
+    end
+    if #section_lines <= remaining then
+        for i = 1, #section_lines do
+            out[#out + 1] = section_lines[i]
+        end
+        return
+    end
+    if remaining == 1 then
+        out[#out + 1] = PREFIX .. " " .. label .. " +" .. tostring(#section_lines) .. " more (cap " .. tostring(cap) .. ")"
+        return
+    end
+    for i = 1, remaining - 1 do
+        out[#out + 1] = section_lines[i]
+    end
+    out[#out + 1] = PREFIX .. " " .. label .. " +" .. tostring(#section_lines - (remaining - 1)) .. " more (cap " .. tostring(cap) .. ")"
+end
+
+--=========================================================================================
 -- Public entry point
 --=========================================================================================
 -- st.diag.report(self, verbose): print the report. Never throws, never writes. Each line
 -- is built under its own pcall, so one unreadable field can only cost its own line.
+-- Verbose adds flags/modules/ticks/secrets plus the ids section (wanted-id resolution)
+-- plus the error ring (newest last); both sections respect MAX_LINES with an explicit
+-- +N count line when the cap binds. Login (non-verbose) stays one line.
 function diag.report(self, verbose)
     local ok, lines = pcall(function()
         local out = {}
@@ -399,6 +692,20 @@ function diag.report(self, verbose)
             out[#out + 1] = ticks_ok and ticks or (PREFIX .. " ticks unavailable")
             local secrets_ok, secrets = pcall(secrets_line)
             out[#out + 1] = secrets_ok and secrets or (PREFIX .. " secrets unavailable")
+            local cap_inner = tonumber(diag.MAX_LINES) or 85
+            local ids_ok, ids = pcall(ids_lines)
+            if ids_ok and type(ids) == "table" then
+                local ok_app = pcall(append_section, out, ids, cap_inner, "ids")
+                if not ok_app then
+                    out[#out + 1] = PREFIX .. " ids unavailable"
+                end
+            else
+                out[#out + 1] = PREFIX .. " ids unavailable"
+            end
+            local err_ok, errs = pcall(error_lines)
+            if err_ok and type(errs) == "table" then
+                pcall(append_section, out, errs, cap_inner, "errors")
+            end
         end
         return out
     end)
@@ -406,7 +713,7 @@ function diag.report(self, verbose)
         print_line(PREFIX .. " report failed (see the Lua error log)")
         return
     end
-    local cap = tonumber(diag.MAX_LINES) or 6
+    local cap = tonumber(diag.MAX_LINES) or 85
     for i = 1, #lines do
         if i > cap then
             break

@@ -792,6 +792,48 @@ eq(r.action, "sob", "wrath: remaining == GCD reads as ready")
 r = fev({ cs_remaining = 6, judge_remaining = 6, ds_remaining = 999 })
 eq(r.filler_kind, "consecration", "wrath: DS 999 means unknown (withheld)")
 
+-- The WotLK APL's UTILITY BAND (bench/paladin_apl_utility_build_2026-10-20.md
+-- §2): Hand of Reckoning (the APL's i=1) and Hammer of Wrath (i=2) ride above
+-- the damage rows. The reads are the frozen inputs hor_remaining /
+-- how_wrath_remaining; nil = unknown = withheld (unknown-hides), and the
+-- Hammer of Wrath row is an execute-phase cast (the sim's own
+-- ExtraCastCondition: sim.IsExecutePhase20()).
+r = fev({ hor_remaining = 0 })
+eq(r.action, "hor", "wrath band: a ready Hand of Reckoning wins the order")
+eq(r.judge_call, false, "wrath band: the Hand of Reckoning win carries no judgement cue")
+eq(r.hold, false, "wrath band: the Hand of Reckoning win needs no hold")
+
+r = fev({ hor_remaining = 30 })
+eq(r.action, "cs", "wrath band: Hand of Reckoning on cooldown leaves the damage order")
+
+r = fev({ hor_remaining = 30, how_wrath_remaining = 0, target_health_pct = 10 })
+eq(r.action, "how_wrath", "wrath band: the WotLK Hammer of Wrath wins in the execute phase")
+
+r = fev({ hor_remaining = 30, how_wrath_remaining = 0, target_health_pct = 90 })
+eq(r.action, "cs", "wrath band: the WotLK Hammer of Wrath waits for the execute phase")
+
+-- An unknown target health: the field is CLEARED after construction (a nil
+-- override does not exist in a table literal, so the constructor keeps its
+-- default - the case needs the field really absent).
+local band_no_hp = finputs({ hor_remaining = 30, how_wrath_remaining = 0 })
+band_no_hp.target_health_pct = nil
+for k in pairs(out) do out[k] = nil end
+r = na.evaluate_fcfs(band_no_hp, out)
+eq(r.action, "cs", "wrath band: an unknown target health withholds the WotLK Hammer of Wrath")
+
+r = fev({ hor_remaining = 30, how_wrath_remaining = 999, target_health_pct = 10 })
+eq(r.action, "cs", "wrath band: the 999 sentinel withholds the WotLK Hammer of Wrath")
+
+local band_unknown = finputs({ hor_remaining = 0 })
+band_unknown.hor_remaining = nil
+for k in pairs(out) do out[k] = nil end
+r = na.evaluate_fcfs(band_unknown, out)
+eq(r.action, "cs", "wrath band: an unknown Hand of Reckoning read withholds the row")
+
+r = fev({ fcfs_mode = "sod", hor_remaining = 0, how_wrath_remaining = 0,
+    target_health_pct = 10 })
+eq(r.filler_kind, "exorcism", "wrath band: the utility band never fires outside the wrath order")
+
 local nonil = finputs({ cs_remaining = 6, judge_remaining = 6 })
 nonil.ds_remaining = nil
 for k in pairs(out) do out[k] = nil end
@@ -1014,7 +1056,7 @@ eq(r.judge_call, false, "forever=false keeps the archived fit gate")
 r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
     target_count = 1, forever = true })
 eq(r.action, "twist", "forever: single-target keeps the twist action")
-eq(r.filler_kind, "consecration", "forever: single-target keeps Consecration (beta Ret ST)")
+eq(r.filler_kind, "exorcism", "forever: Exorcism is the generic filler (no creature gate, sim shape)")
 
 r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
     mana_pct = 50, forever = true, target_health_pct = 19, how_remaining = 0 })
@@ -1023,13 +1065,13 @@ eq(r.filler_kind, "how", "forever: HoW below 20% with HoW ready (beta Ret ST)")
 
 r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
     mana_pct = 50, forever = true, target_health_pct = 20, how_remaining = 0 })
-eq(r.filler_kind, "consecration", "forever: 20% is not below the execute window")
+eq(r.filler_kind, "exorcism", "forever: 20% is not below the execute window (generic filler stands)")
 
 local nohow_fw = inp({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
     mana_pct = 50, forever = true, target_health_pct = 19 })
 nohow_fw.how_remaining = nil
 r = fresh(nohow_fw)
-eq(r.filler_kind, "consecration", "forever: unknown HoW cooldown never cues HoW")
+eq(r.filler_kind, "exorcism", "forever: unknown HoW cooldown never cues HoW (generic filler stands)")
 
 r = ev({ seal = "soc", swing_remaining = 0.3, cs_remaining = 6, forever = true })
 eq(r.action, "twist", "forever: in-twist + soc still twists now")
@@ -1039,6 +1081,580 @@ r = ev({ seal = "sob", swing_remaining = 1.0, gcd_remaining = 0.5, cs_remaining 
     melee_count = 3, forever = true })
 eq(r.action, "soc", "forever: the twist-seal ride still reseals Command")
 eq(r.riding, true, "forever: the ride overlay survives (SoR in the twist position)")
+
+-- TBC pull-phase CS hold ("Delay Major CDs" 11 s) ------------------------------
+r = ev({ cs_remaining = 2.0, cs_hold_remaining = 11 })
+eq(r.action, "soc", "pull hold: the CS override stays suppressed while the hold runs")
+eq(r.hold, false, "pull hold: no CS hold either (plain reseal tick)")
+r = ev({ cs_remaining = 2.0, cs_hold_remaining = 0 })
+eq(r.action, "cs", "pull hold: an expired hold (0) keeps the archived override")
+r = ev({ cs_remaining = 2.0, cs_hold_remaining = -1 })
+eq(r.action, "cs", "pull hold: a negative hold keeps the archived override")
+r = ev({ cs_remaining = 2.0 })
+eq(r.action, "cs", "pull hold: an absent hold keeps the archived override")
+
+-- TBC reseal age guard (no reseal within 0.5 s of the last auto) --------------
+-- Geometry: blood up, full swing, GCD free => the immediate reseal arm
+-- (action soc, no hold, no ride). A fresh auto degrades it to the ride arm.
+r = ev({ seal = "sob" })
+eq(r.action, "soc", "reseal guard: blood up reseals by default")
+eq(r.riding, false, "reseal guard: the default arm never rides")
+r = ev({ seal = "sob", auto_age_seconds = 0.1,
+    reseal_auto_guard_seconds = 0.5 })
+eq(r.action, "soc", "reseal guard: a fresh auto still reseals Command ...")
+eq(r.hold, true, "reseal guard: ... but holds (the ride arm)")
+eq(r.riding, true, "reseal guard: a fresh auto rides the blood swing")
+r = ev({ seal = "sob", auto_age_seconds = 0.5,
+    reseal_auto_guard_seconds = 0.5 })
+eq(r.riding, false, "reseal guard: the boundary clears (strict <)")
+r = ev({ seal = "sob", auto_age_seconds = 0.1 })
+eq(r.riding, false, "reseal guard: an age without a guard keeps the reseal")
+r = ev({ seal = "sob", reseal_auto_guard_seconds = 0.5 })
+eq(r.riding, false, "reseal guard: a guard without an age keeps the reseal")
+
+-- Mana-sustain governor plug-in (unset = off = archived) ----------------------
+r = ev({ seal = "sob", mana_pct = 5, twist_mana_threshold = 30 })
+eq(r.riding, true, "mana governor: below the threshold the swing rides")
+eq(r.action, "soc", "mana governor: the ride still names the reseal")
+r = ev({ seal = "sob", mana_pct = 50, twist_mana_threshold = 30 })
+eq(r.riding, false, "mana governor: above the threshold the reseal stands")
+r = ev({ seal = "sob", mana_pct = 0 })
+eq(r.riding, false, "mana governor: unset means OOM still reseals (archived)")
+
+-- Instant-cast HoW cues regardless of target health ----------------------------
+r = ev({ seal = "soc", melee_count = 3, forever = true,
+    target_health_pct = 100, how_remaining = 0, how_cast_seconds = 0 })
+eq(r.filler_kind, "how", "how instant: an instant HoW cues at full health")
+r = ev({ seal = "soc", melee_count = 3, forever = true,
+    target_health_pct = 100, how_remaining = 0 })
+eq(r.filler_kind, "exorcism", "how instant: unknown cast time keeps the hp rule")
+r = ev({ seal = "soc", melee_count = 3, era = true,
+    target_health_pct = 100, how_remaining = 0, how_cast_seconds = 0 })
+eq(r.filler_kind, "how", "how instant: the shared execute branch reads it on Era too")
+
+-- Forever post-auto HoW window (within 0.2 s of the last auto) ----------------
+r = ev({ seal = "soc", melee_count = 3, forever = true,
+    target_health_pct = 100, how_remaining = 0, auto_age_seconds = 0.1 })
+eq(r.filler_kind, "how", "how recency: a fresh auto cues HoW at full health")
+r = ev({ seal = "soc", melee_count = 3, forever = true,
+    target_health_pct = 100, how_remaining = 0, auto_age_seconds = 0.5 })
+eq(r.filler_kind, "exorcism", "how recency: a stale auto keeps the hp rule")
+r = ev({ seal = "soc", melee_count = 3,
+    target_health_pct = 100, how_remaining = 0, auto_age_seconds = 0.1 })
+eq(r.filler_kind, "consecration", "how recency: non-Forever ignores the auto age")
+
+-- FCFS SoD execute burn (below 10% fight remaining, no hp read) ---------------
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, cons_remaining = 8,
+    target_health_pct = 100, how_remaining = 0, fight_remaining_pct = 5 })
+eq(r.filler_kind, "how", "sod: the execute burn cues HoW at full health")
+eq(r.hold, false, "sod: the execute winner needs no hold")
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, cons_remaining = 8,
+    target_health_pct = 100, how_remaining = 0, fight_remaining_pct = 50 })
+eq(r.hold, true, "sod: 50% remaining keeps the hp rule (waits on Exorcism)")
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, cons_remaining = 8,
+    target_health_pct = 100, how_remaining = 0, fight_remaining_pct = 10 })
+eq(r.hold, true, "sod: the boundary stays out (strict <)")
+r = fev({ fcfs_mode = "sod", exo_remaining = 6, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, cons_remaining = 8,
+    target_health_pct = 19, how_remaining = 0 })
+eq(r.filler_kind, "how", "sod: the hp execute needs no fight data")
+
+-- Follow-up advisories: stopattack / prepull / rank-1 / hard-wait -----------
+-- Stopattack discipline (classic IsUsingJudgementStopAttack + SoD
+-- StopAttack/StartAttack): a twist-now or a judge cued while the swing sits
+-- inside the window collides with the auto.
+r = ev({ seal = "soc", swing_remaining = 0.3, gcd_remaining = 0 })
+eq(r.action, "twist", "stopattack: the in-window cue is still a twist")
+eq(r.stopattack, true, "stopattack: twist-now inside the window advises stopattack")
+r = ev({ seal = "soc" })
+eq(r.stopattack, false, "stopattack: a far swing advises nothing")
+r = ev({ seal = "sob", swing_remaining = 0.3, judge_remaining = 0 })
+eq(r.judge_call, true, "stopattack: the in-window judge still cues")
+eq(r.stopattack, true, "stopattack: judge inside the window advises stopattack")
+r = ev({ seal = "sob", swing_remaining = 3.0, judge_remaining = 0 })
+eq(r.judge_call, true, "stopattack: the early judge still cues")
+eq(r.stopattack, false, "stopattack: a judge outside the window advises nothing")
+
+-- Prepull guidance (classic APL -1.5 s): open while the pull is that close
+-- and no seal is up; the countdown source itself is filed.
+r = ev({ time_to_pull_seconds = 1.0 })
+eq(r.prepull_ready, true, "prepull: 1.0 s out with no seal is ready")
+r = ev({ time_to_pull_seconds = 1.5 })
+eq(r.prepull_ready, true, "prepull: the boundary stays in")
+r = ev({ time_to_pull_seconds = 5.0 })
+eq(r.prepull_ready, false, "prepull: 5 s out is not ready")
+r = ev({ time_to_pull_seconds = -1.0 })
+eq(r.prepull_ready, false, "prepull: a passed pull is not ready")
+r = ev({ time_to_pull_seconds = 0/0 })
+eq(r.prepull_ready, false, "prepull: NaN is unknown, never ready")
+r = ev({ time_to_pull_seconds = 1.0, seal = "soc" })
+eq(r.prepull_ready, false, "prepull: a seal up is not ready")
+r = ev({})
+eq(r.prepull_ready, false, "prepull: an unknown countdown reads not ready")
+
+-- Rank-1 advice (min/max consensus; sim APLs cast rank 1).
+r = ev({ soc_rank1_known = true })
+eq(r.rank1_advice, true, "rank-1: a known book rank 1 reads as advice")
+r = ev({})
+eq(r.rank1_advice, false, "rank-1: an unknown book advises nothing")
+
+-- strictSequence hard-wait (SoD twist APLs): a held twist waits the swing
+-- out instead of filling.
+r = ev({ seal = "sob", swing_remaining = 0.5, strict_sequence = true })
+eq(r.hold, true, "hard-wait: the blood ride still holds")
+eq(r.hard_wait, true, "hard-wait: a held twist on a strict build waits")
+r = ev({ seal = "sob", swing_remaining = 0.5 })
+eq(r.hard_wait, false, "hard-wait: archived builds never hard-wait")
+r = ev({ strict_sequence = true })
+eq(r.hard_wait, false, "hard-wait: no hold, no hard wait")
+
+-- Advisory contract: five booleans on every tick; all inert on Retail.
+r = ev({})
+check(type(r.stopattack) == "boolean" and type(r.prepull_ready) == "boolean"
+    and type(r.seal_maintenance) == "boolean" and type(r.rank1_advice) == "boolean"
+    and type(r.hard_wait) == "boolean",
+    "advisories: every tick carries the five flags as booleans")
+eq(r.seal_maintenance, false, "advisories: the twist tree never maintains")
+do
+    local saved_followup_family = st.family
+    st.family = "RETAIL"
+    local rr = ev({})
+    eq(rr.stopattack, false, "retail: inert, no stopattack")
+    eq(rr.prepull_ready, false, "retail: inert, no prepull")
+    eq(rr.seal_maintenance, false, "retail: inert, no maintenance")
+    eq(rr.rank1_advice, false, "retail: inert, no rank advice")
+    eq(rr.hard_wait, false, "retail: inert, no hard wait")
+    st.family = saved_followup_family
+end
+eq(na.PREPULL_SEAL_LEAD_SECONDS, 1.5, "PREPULL_SEAL_LEAD_SECONDS == 1.5")
+eq(na.SEAL_MAINTAIN_RESEAL_SECONDS, 1, "SEAL_MAINTAIN_RESEAL_SECONDS == 1")
+
+-- FCFS SoD seal maintenance (p8-exodin APL: Judge above the damage order) ---
+r = fev({ fcfs_mode = "sod", exo_remaining = 0, cs_remaining = 0,
+    ds_remaining = 8, judge_remaining = 0, cons_remaining = 8,
+    seal_remaining_seconds = 0.5 })
+eq(r.judge_call, true, "sod maintenance: an expiring seal judges first")
+eq(r.filler_kind, nil, "sod maintenance: the damage order yields to Judge")
+eq(r.seal_maintenance, true, "sod maintenance: the reseal advisory stands")
+r = fev({ fcfs_mode = "sod", exo_remaining = 0, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 6, cons_remaining = 8,
+    seal_remaining_seconds = 0.5 })
+eq(r.filler_kind, "exorcism", "sod maintenance: a Judge on cooldown keeps the order")
+eq(r.seal_maintenance, true, "sod maintenance: the advisory stands without Judge")
+r = fev({ fcfs_mode = "sod", exo_remaining = 0, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 0, cons_remaining = 8,
+    seal_remaining_seconds = 5.0 })
+eq(r.filler_kind, "exorcism", "sod maintenance: a fresh seal keeps the order")
+eq(r.seal_maintenance, false, "sod maintenance: a fresh seal maintains nothing")
+r = fev({ fcfs_mode = "sod", exo_remaining = 0, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 0, cons_remaining = 8,
+    seal_remaining_seconds = 1.0 })
+eq(r.filler_kind, "exorcism", "sod maintenance: the boundary stays out (strict <)")
+eq(r.seal_maintenance, false, "sod maintenance: the boundary maintains nothing")
+r = fev({ fcfs_mode = "sod", exo_remaining = 0, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 0, cons_remaining = 8 })
+eq(r.filler_kind, "exorcism", "sod maintenance: unknown seal keeps the order")
+eq(r.seal_maintenance, false, "sod maintenance: unknown seal maintains nothing")
+r = fev({ fcfs_mode = "sod", exo_remaining = 0, cs_remaining = 6,
+    ds_remaining = 8, judge_remaining = 0, cons_remaining = 8,
+    seal_remaining_seconds = 0/0 })
+eq(r.filler_kind, "exorcism", "sod maintenance: NaN seal keeps the order")
+eq(r.seal_maintenance, false, "sod maintenance: NaN seal maintains nothing")
+r = fev({ fcfs_mode = "wrath", cs_remaining = 0, seal_remaining_seconds = 0.5 })
+eq(r.action, "cs", "sod maintenance: Wrath keeps the archived order")
+eq(r.seal_maintenance, false, "sod maintenance: Wrath maintains nothing")
+r = fev_nomode({ seal_remaining_seconds = 0.5 })
+eq(r.seal_maintenance, false, "sod maintenance: no mode maintains nothing")
+r = fev({ fcfs_mode = "sod" })
+eq(r.rank1_advice, false, "sod: FCFS never advises rank 1")
+eq(r.stopattack, false, "sod: FCFS never advises stopattack")
+eq(r.prepull_ready, false, "sod: FCFS never advises prepull")
+eq(r.hard_wait, false, "sod: FCFS never hard-waits")
+
+-- SoD-variant constants (bench/sod_paladin_variants_2026-10-19.md §3-§6) ---
+eq(na.SOD_STACK_SEAL_RESEAL_SECONDS, 1, "sod variants: stack reseal is 1 s")
+eq(na.SOD_SHOCK_SEAL_RESEAL_SECONDS, 1.5, "sod variants: shock seal is 1.5 s")
+eq(na.SOD_WRATH_RESEAL_SECONDS, 0.5, "sod variants: wrath reseal is 0.5 s")
+eq(na.SOD_WRATH_CONS_FALLBACK_SECONDS, 1.5, "sod variants: wrath cons gap is 1.5 s")
+eq(na.SOD_TEMPLAR_WAIT_SECONDS, 1, "sod variants: templar wait is 1 s")
+
+-- Seal-stacking (p8-stack APL, §3): DS > CS > Exo > HW > Cons > Judge ------
+-- DS stack-gated (3 stacks; OR set-unknown mirrors the twist GAP).
+r = fev({ fcfs_mode = "sod_stack", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_dual_seal_active = true })
+eq(r.action, "sob", "stack: 3 stacks prompts DS first")
+r = fev({ fcfs_mode = "sod_stack", holy_power_stacks = 2,
+    holy_power_set_known = true, sod_dual_seal_active = true,
+    ds_remaining = 0, cs_remaining = 0 })
+eq(r.action, "cs", "stack: 2 stacks withholds DS (CS wins)")
+r = fev({ fcfs_mode = "sod_stack", holy_power_set_known = false,
+    sod_dual_seal_active = true, ds_remaining = 0, cs_remaining = 6 })
+eq(r.action, "sob", "stack: set-unknown prompts DS without stacks")
+do
+    local t = finputs({ fcfs_mode = "sod_stack", holy_power_set_known = true,
+        sod_dual_seal_active = true, ds_remaining = 0, cs_remaining = 6,
+        exo_remaining = 6, cons_remaining = 8, judge_remaining = 6,
+        hw_remaining = 8, how_remaining = 8, mana_pct = 100 })
+    t.holy_power_stacks = nil
+    for k in pairs(out) do out[k] = nil end
+    r = na.evaluate_fcfs(t, out)
+    eq(r.action, "cs", "stack: unknown stacks + known set withholds DS (waits on CS)")
+    eq(r.hold, true, "stack: the withheld tick holds")
+    eq(r.judge_call, false, "stack: unknown stacks keeps Judge quiet here")
+end
+-- Judge dual-only (last APL line): both seals or nothing.
+r = fev({ fcfs_mode = "sod_stack", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_dual_seal_active = true,
+    ds_remaining = 6, cs_remaining = 6, exo_remaining = 6, hw_remaining = 8,
+    cons_remaining = 8, judge_remaining = 0 })
+eq(r.judge_call, true, "stack: dual seals cue Judge")
+r = fev({ fcfs_mode = "sod_stack", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_dual_seal_active = false,
+    ds_remaining = 6, cs_remaining = 6, exo_remaining = 6, hw_remaining = 8,
+    cons_remaining = 8, judge_remaining = 0 })
+eq(r.judge_call, false, "stack: single seal withholds Judge")
+eq(r.hold, true, "stack: withheld Judge waits on the soonest known")
+-- HW Undead + Naxx-6pc gate (r2 10318 line).
+r = fev({ fcfs_mode = "sod_stack", holy_power_stacks = 0,
+    holy_power_set_known = false, sod_dual_seal_active = false,
+    ds_remaining = 6, cs_remaining = 6, exo_remaining = 6, cons_remaining = 8,
+    judge_remaining = 6, hw_remaining = 0, creature_type = "Undead",
+    sod_naxx_known = true })
+eq(r.filler_kind, "how", "stack: Undead + Naxx prompts Holy Wrath")
+r = fev({ fcfs_mode = "sod_stack", holy_power_stacks = 0,
+    holy_power_set_known = false, sod_dual_seal_active = false,
+    ds_remaining = 6, cs_remaining = 6, exo_remaining = 6, cons_remaining = 8,
+    judge_remaining = 6, hw_remaining = 0, creature_type = "Undead",
+    sod_naxx_known = false })
+eq(r.hold, true, "stack: without Naxx Holy Wrath withholds (waits)")
+-- Dual 1 s maintenance: either timer inside the line maintains WITHOUT
+-- elevating Judge (unlike Exodin); unknown maintains nothing.
+r = fev({ fcfs_mode = "sod_stack", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_dual_seal_active = true,
+    ds_remaining = 6, cs_remaining = 0, exo_remaining = 6, cons_remaining = 8,
+    judge_remaining = 0, soc_remaining_seconds = 0.5,
+    som_remaining_seconds = 5.0 })
+eq(r.seal_maintenance, true, "stack: SoC inside 1 s maintains")
+eq(r.judge_call, false, "stack: maintenance never elevates Judge (dual gate owns it)")
+eq(r.action, "cs", "stack: the damage winner stands through maintenance")
+r = fev({ fcfs_mode = "sod_stack", soc_remaining_seconds = 5.0,
+    som_remaining_seconds = 5.0 })
+eq(r.seal_maintenance, false, "stack: fresh seals maintain nothing")
+r = fev({ fcfs_mode = "sod_stack" })
+eq(r.seal_maintenance, false, "stack: unknown timers maintain nothing")
+
+-- Shockadin (p8-shockadin APLs, §4-§5): Exo > AM > HS > CS -------------------
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3,
+    exo_remaining = 0, am_remaining = 6, hs_remaining = 6, cs_remaining = 6,
+    am_rune_known = true, sod_libram_known = true })
+eq(r.filler_kind, "exorcism", "shock: Exo core wins when ready")
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3,
+    exo_remaining = 6, am_remaining = 0, hs_remaining = 6, cs_remaining = 6,
+    am_rune_known = true, sod_libram_known = true })
+eq(r.filler_kind, "aura_mastery", "shock: Libram-gated AM wins after Exo")
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3,
+    exo_remaining = 6, am_remaining = 6, hs_remaining = 0, cs_remaining = 6,
+    am_rune_known = true, sod_libram_known = true })
+eq(r.filler_kind, "holy_shock", "shock: HS at 3 stacks wins after AM")
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3,
+    exo_remaining = 6, am_remaining = 6, hs_remaining = 6, cs_remaining = 0 })
+eq(r.action, "cs", "shock: CS closes the order")
+-- Stack gates: HS/AM withhold below 3 stacks and when unknown.
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 2,
+    exo_remaining = 6, am_remaining = 0, hs_remaining = 0, cs_remaining = 0,
+    am_rune_known = true, sod_libram_known = true })
+eq(r.action, "cs", "shock: 2 stacks withholds HS/AM (CS wins)")
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3,
+    exo_remaining = 6, am_remaining = 0, hs_remaining = 6, cs_remaining = 6,
+    am_rune_known = true, sod_libram_known = false })
+eq(r.filler_kind, "exorcism", "shock: without the Libram AM withholds (waits on Exo)")
+eq(r.hold, true, "shock: withheld AM waits on the soonest known")
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3,
+    exo_remaining = 6, am_remaining = 0, hs_remaining = 6, cs_remaining = 6,
+    am_rune_known = false, sod_libram_known = true })
+eq(r.hold, true, "shock: without the rune AM withholds")
+-- No Cons line in the shock APLs.
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3,
+    exo_remaining = 6, am_remaining = 6, hs_remaining = 6, cs_remaining = 6,
+    am_rune_known = true, sod_libram_known = true })
+eq(r.hold, true, "shock: all on CD waits (never Cons)")
+eq(r.filler_kind, "exorcism", "shock: the wait falls back to Exo, never Cons")
+-- Sunlight/Templar maintenance elevates AM/HS above a ready Exo.
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3,
+    exo_remaining = 0, am_remaining = 0, hs_remaining = 6, cs_remaining = 6,
+    am_rune_known = true, sod_libram_known = true,
+    sunlight_remaining = 1.0 })
+eq(r.filler_kind, "aura_mastery", "shock: Sunlight expiring elevates AM above Exo")
+eq(r.seal_maintenance, true, "shock: the maintenance advisory stands")
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3,
+    exo_remaining = 0, am_remaining = 6, hs_remaining = 0, cs_remaining = 6,
+    am_rune_known = true, sod_libram_known = true,
+    templar_stack_remaining = 1.0 })
+eq(r.filler_kind, "holy_shock", "shock: Templar-stack expiring elevates HS")
+r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 2,
+    exo_remaining = 0, am_remaining = 0, hs_remaining = 0, cs_remaining = 6,
+    am_rune_known = true, sod_libram_known = true,
+    templar_stack_remaining = 1.0 })
+eq(r.filler_kind, "exorcism", "shock: Templar maintenance needs 3 stacks")
+
+-- Wrath-like (p8-wrath APL, §6): DS > CS > Exo > Judge > Cons ----------------
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_t2_known = true,
+    ds_remaining = 0, cs_remaining = 6 })
+eq(r.action, "sob", "wrath-like: DS at 3 stacks wins first")
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 2,
+    holy_power_set_known = true, sod_t2_known = true,
+    ds_remaining = 0, cs_remaining = 0, exo_remaining = 6 })
+eq(r.action, "cs", "wrath-like: 2 stacks withholds DS (CS wins)")
+-- Judge T2-2pc gate (467518).
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_t2_known = true,
+    ds_remaining = 6, cs_remaining = 6, exo_remaining = 6, judge_remaining = 0,
+    cons_remaining = 8 })
+eq(r.judge_call, true, "wrath-like: T2-known cues Judge")
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_t2_known = false,
+    ds_remaining = 6, cs_remaining = 6, exo_remaining = 6, judge_remaining = 0,
+    cons_remaining = 8 })
+eq(r.judge_call, false, "wrath-like: without T2 Judge withholds")
+-- Cons fallback: ONLY when DS/CS/Exo all >1.5 s out (or stacks <3).
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_t2_known = true,
+    ds_remaining = 2.0, cs_remaining = 2.0, exo_remaining = 2.0,
+    judge_remaining = 6, cons_remaining = 0 })
+eq(r.filler_kind, "consecration", "wrath-like: all >1.5 s out prompts Cons")
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_t2_known = true,
+    ds_remaining = 2.0, cs_remaining = 0.5, exo_remaining = 2.0,
+    judge_remaining = 6, cons_remaining = 0 })
+eq(r.action, "cs", "wrath-like: CS inside 1.5 s keeps Cons back")
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 2,
+    holy_power_set_known = true, sod_t2_known = true,
+    ds_remaining = 0.5, cs_remaining = 0.5, exo_remaining = 0.5,
+    judge_remaining = 6, cons_remaining = 0 })
+eq(r.filler_kind, "consecration", "wrath-like: stacks <3 prompts Cons")
+-- Templar wait: <=1 s at 3 stacks holds on DS.
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 3,
+    holy_power_set_known = true, sod_t2_known = true,
+    ds_remaining = 5.0, cs_remaining = 0, exo_remaining = 0,
+    judge_remaining = 6, cons_remaining = 8,
+    templar_wrath_remaining = 0.5 })
+eq(r.action, "sob", "wrath-like: Templar expiring waits on DS")
+eq(r.hold, true, "wrath-like: the wait holds")
+eq(r.seal_maintenance, true, "wrath-like: the wait raises the advisory")
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 2,
+    holy_power_set_known = true, sod_t2_known = true,
+    ds_remaining = 5.0, cs_remaining = 0, exo_remaining = 6,
+    templar_wrath_remaining = 0.5 })
+eq(r.action, "cs", "wrath-like: the wait needs 3 stacks")
+-- DS ungated fallback (second DS line): nothing else eligible, DS ready.
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 0,
+    holy_power_set_known = false, sod_t2_known = false,
+    ds_remaining = 0, cs_remaining = 999, exo_remaining = 999,
+    judge_remaining = 999, cons_remaining = 999 })
+eq(r.action, "sob", "wrath-like: the fallback prompts DS without stacks")
+-- Fallback with the stack gate engaged: stacks known below 3 with the set
+-- known withholds DS in the order, but the fallback still prompts it when
+-- nothing else is eligible (second DS line, no stack gate).
+r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 1,
+    holy_power_set_known = true, sod_t2_known = false,
+    ds_remaining = 0, cs_remaining = 999, exo_remaining = 999,
+    judge_remaining = 999, cons_remaining = 999 })
+eq(r.action, "sob", "wrath-like: the fallback prompts DS under the stack gate")
+eq(r.hold, false, "wrath-like: the ready fallback needs no hold")
+-- No HoW/HW lines in the wrath-like APL.
+r = fev({ fcfs_mode = "sod_wrath", hw_remaining = 0, how_remaining = 0,
+    ds_remaining = 6, cs_remaining = 6, exo_remaining = 6, judge_remaining = 6,
+    cons_remaining = 8, sod_t2_known = true, holy_power_stacks = 3,
+    holy_power_set_known = true })
+eq(r.action, "sob", "wrath-like: HW/HoW never prompt (waits on DS)")
+eq(r.hold, true, "wrath-like: the fallback holds")
+eq(r.filler_kind, nil, "wrath-like: the fallback suggests no filler")
+
+-- Existing modes bit-identical: new gates do not leak into them ------------
+r = fev({ fcfs_mode = "sod", ds_remaining = 0, holy_power_stacks = 0,
+    holy_power_set_known = true })
+eq(r.filler_kind, "exorcism", "sod Exodin: DS stays ungated (filed gap, no leak)")
+r = fev({ fcfs_mode = "wrath", cs_remaining = 6, judge_remaining = 0,
+    sod_t2_known = false })
+eq(r.judge_call, true, "wrath: Judge stays ungated (no T2 leak)")
+r = fev({ fcfs_mode = "wrath", cs_remaining = 6, judge_remaining = 6,
+    ds_remaining = 8, cons_remaining = 8, exo_remaining = 8, hw_remaining = 0,
+    creature_type = "Undead", sod_naxx_known = false })
+eq(r.filler_kind, "how", "wrath: Holy Wrath stays Naxx-free (no leak)")
+-- Retail stays inert in the new modes.
+do
+    local saved_newmode_family = st.family
+    st.family = "RETAIL"
+    r = fev({ fcfs_mode = "sod_stack", sod_dual_seal_active = true })
+    eq(r.action, nil, "retail: stack prompts nothing")
+    eq(r.judge_call, false, "retail: stack never cues judgement")
+    r = fev({ fcfs_mode = "sod_shock", holy_power_stacks = 3 })
+    eq(r.filler_kind, nil, "retail: shock suggests no filler")
+    r = fev({ fcfs_mode = "sod_wrath", holy_power_stacks = 3 })
+    eq(r.action, nil, "retail: wrath-like prompts nothing")
+    st.family = saved_newmode_family
+end
+
+-- The published FCFS order tables (the practice contract reads them) ------
+eq(type(na.FCFS_ORDERS), "table", "FCFS_ORDERS table exists")
+local fcfs_order_count = 0
+for _ in pairs(na.FCFS_ORDERS) do fcfs_order_count = fcfs_order_count + 1 end
+eq(fcfs_order_count, 5, "FCFS_ORDERS carries the five orders")
+-- The Wrath order carries the WotLK APL's UTILITY BAND at the front (the APL
+-- layer, bench/paladin_apl_utility_build_2026-10-20.md §2): Hand of
+-- Reckoning (the APL's i=1) and Hammer of Wrath (i=2) ride above the damage
+-- rows, and the shipped damage rows keep their relative order below them.
+eq(na.FCFS_ORDERS.wrath[1], "hor", "FCFS_ORDERS.wrath starts with Hand of Reckoning (the APL's i=1)")
+eq(na.FCFS_ORDERS.wrath[2], "how_wrath", "FCFS_ORDERS.wrath puts Hammer of Wrath second (the APL's i=2)")
+eq(na.FCFS_ORDERS.wrath[3], "cs", "FCFS_ORDERS.wrath puts Crusader Strike third")
+eq(na.FCFS_ORDERS.wrath[4], "judge", "FCFS_ORDERS.wrath puts Judgement fourth")
+eq(na.FCFS_ORDERS.wrath[5], "ds", "FCFS_ORDERS.wrath puts Divine Storm fifth")
+eq(na.FCFS_ORDERS.wrath[6], "cons", "FCFS_ORDERS.wrath puts Consecration sixth")
+eq(na.FCFS_ORDERS.wrath[7], "exo", "FCFS_ORDERS.wrath puts Exorcism seventh")
+eq(na.FCFS_ORDERS.wrath[8], "hw", "FCFS_ORDERS.wrath ends with Holy Wrath")
+eq(na.FCFS_ORDERS.sod[1], "exo", "FCFS_ORDERS.sod starts with Exorcism")
+eq(na.FCFS_ORDERS.sod[2], "cs", "FCFS_ORDERS.sod puts Crusader Strike second")
+eq(na.FCFS_ORDERS.sod[3], "ds", "FCFS_ORDERS.sod puts Divine Storm third")
+eq(na.FCFS_ORDERS.sod[4], "judge", "FCFS_ORDERS.sod puts Judgement fourth")
+eq(na.FCFS_ORDERS.sod[5], "cons", "FCFS_ORDERS.sod puts Consecration fifth")
+eq(na.FCFS_ORDERS.sod[6], "how", "FCFS_ORDERS.sod ends with Hammer of Wrath")
+eq(na.FCFS_ORDERS.sod_stack[1], "ds", "FCFS_ORDERS.sod_stack starts with Divine Storm")
+eq(na.FCFS_ORDERS.sod_stack[6], "judge", "FCFS_ORDERS.sod_stack ends with Judgement")
+eq(na.FCFS_ORDERS.sod_shock[1], "exo", "FCFS_ORDERS.sod_shock starts with Exorcism")
+eq(na.FCFS_ORDERS.sod_shock[2], "am", "FCFS_ORDERS.sod_shock puts Aura Mastery second")
+eq(na.FCFS_ORDERS.sod_shock[3], "hs", "FCFS_ORDERS.sod_shock puts Holy Shock third")
+eq(na.FCFS_ORDERS.sod_shock[4], "cs", "FCFS_ORDERS.sod_shock ends with Crusader Strike")
+eq(na.FCFS_ORDERS.sod_wrath[1], "ds", "FCFS_ORDERS.sod_wrath starts with Divine Storm")
+eq(na.FCFS_ORDERS.sod_wrath[5], "cons", "FCFS_ORDERS.sod_wrath ends with Consecration")
+-- fcfs_order: the accessor for one mode (nil for an unknown mode).
+eq(na.fcfs_order("sod"), na.FCFS_ORDERS.sod, "fcfs_order returns the table")
+eq(na.fcfs_order("sod_stack"), na.FCFS_ORDERS.sod_stack, "fcfs_order returns the stack table")
+eq(na.fcfs_order("nope"), nil, "fcfs_order: an unknown mode answers nil")
+eq(na.fcfs_order(nil), nil, "fcfs_order: no mode answers nil")
+eq(na.fcfs_order(42), nil, "fcfs_order: a non-string answers nil")
+-- The published tables are the engine's own (the same table identity, so a
+-- caller cannot drift from the engine by reading a copy).
+local fev_mode = na.FCFS_ORDERS.sod
+eq(fev_mode, na.FCFS_ORDERS["sod"], "FCFS_ORDERS.sod is one shared table")
+
+--=========================================================================================
+-- The display half's FontStrings (nextaction_ui.lua): every one carries a font
+-- BEFORE its first SetText
+--
+-- The SoD client throws "FontString:SetText(): Font not set" when a FontString
+-- receives text before any SetFont. The display half used a literal font file
+-- ("Fonts\2002.TTF" for the rotation pattern, "Fonts\FRIZQT__.TTF" for the
+-- captions): a client that does not ship that file leaves the FontString fontless
+-- (blank text today, the same latent failure tomorrow). Every site now goes
+-- through the shared chain (utils.lua apply_font: the caller's path ->
+-- STANDARD_TEXT_FONT -> the classic client font, every step pcall-guarded and
+-- never throwing), so the font that renders is unchanged where the file exists
+-- and a font that exists is always left.
+--
+-- The scan below is per site and expression-matched: a font applied to a
+-- same-named variable in another function cannot satisfy a site.
+--=========================================================================================
+do
+    local function read(path)
+        local f = assert(io.open(ROOT .. path, "r"))
+        local text = f:read("*a")
+        f:close()
+        return (text:gsub("\r\n", "\n"))
+    end
+
+    local src = read("nextaction_ui.lua")
+    local lines = {}
+    for line in (src .. "\n"):gmatch("([^\n]*)\n") do lines[#lines + 1] = line end
+
+    -- find_call: the first line in [from, to] where <expr><suffix> appears as a
+    -- whole token (a longer path may not end with the same name).
+    local function find_call(from, to, expr, suffix)
+        for j = from, to do
+            local s = 1
+            while true do
+                local at = lines[j]:find(expr, s, true)
+                if not at then break end
+                local before = at > 1 and lines[j]:sub(at - 1, at - 1) or " "
+                if not before:match("[%w_.]") then
+                    if lines[j]:sub(at + #expr, at + #expr + #suffix - 1) == suffix then
+                        return j
+                    end
+                end
+                s = at + 1
+            end
+        end
+        return nil
+    end
+
+    -- find_helper: the first line in [from, to] where the shared chain takes the
+    -- expression as its FontString argument.
+    local function find_helper(from, to, expr)
+        local names = { "apply_font(", "apply_result_font(" }
+        for j = from, to do
+            for _, name in ipairs(names) do
+                local s = 1
+                while true do
+                    local at = lines[j]:find(name, s, true)
+                    if not at then break end
+                    local arg = at + #name
+                    if lines[j]:sub(arg, arg + #expr - 1) == expr then
+                        local after = lines[j]:sub(arg + #expr, arg + #expr)
+                        if after:match("[%s,)]") then
+                            return j
+                        end
+                    end
+                    s = at + 1
+                end
+            end
+        end
+        return nil
+    end
+
+    local sites, fontless, late = 0, 0, 0
+    for i = 1, #lines do
+        local expr = lines[i]:match("local%s+([%w_]+)%s*=%s*[%w_%.]+:CreateFontString%(")
+        if not expr then
+            expr = lines[i]:match("([%w_%.]+)%s*=%s*[%w_%.]+:CreateFontString%(")
+        end
+        if expr then
+            sites = sites + 1
+            local last = math.min(i + 40, #lines)
+            local font_at = find_call(i + 1, last, expr, ":SetFont(")
+            local font_obj_at = find_call(i + 1, last, expr, ":SetFontObject(")
+            local helper_at = find_helper(i + 1, last, expr)
+            if font_obj_at and (not font_at or font_obj_at < font_at) then font_at = font_obj_at end
+            if helper_at and (not font_at or helper_at < font_at) then font_at = helper_at end
+            local text_at = find_call(i + 1, last, expr, ":SetText(")
+            if not font_at then
+                fontless = fontless + 1
+                check(false, "font: " .. expr .. " (line " .. i .. ") is never fonted")
+            elseif text_at and font_at > text_at then
+                late = late + 1
+                check(false, "font: " .. expr .. " (line " .. i .. ") is fonted after its first SetText")
+            end
+        end
+    end
+    eq(sites, 4, "font: the display half creates four FontStrings")
+    eq(fontless, 0, "font: every FontString in the display half carries a font")
+    eq(late, 0, "font: every FontString in the display half is fonted before its first SetText")
+
+    -- The rotation pattern keeps the file it rendered with ("Fonts\2002.TTF" first),
+    -- and the shared chain is what carries it - a client without that file falls
+    -- back to a font that exists.
+    local rot_font = src:find('st.utils.apply_font(frame.rotation_text, "Fonts\\\\2002.TTF", 12, "OUTLINE")', 1, true)
+    check(rot_font ~= nil, "font: the rotation pattern goes through the shared chain with its own file first")
+    local rot_text = src:find("frame.rotation_text:SetText(", 1, true)
+    check(rot_font ~= nil and rot_text ~= nil and rot_font < rot_text,
+        "font: the rotation pattern is fonted before its first SetText")
+
+    -- No direct SetFont survives: every font goes through the shared chain.
+    check(src:find(":SetFont(", 1, true) == nil,
+        "font: no direct SetFont call survives in nextaction_ui.lua")
+end
 
 if failures == 0 then
     print("PASS  nextaction_state.lua (" .. tostring(checks) .. " checks)")

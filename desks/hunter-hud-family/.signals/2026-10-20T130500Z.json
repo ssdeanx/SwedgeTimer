@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T13:05:00Z",
+  "run_id": "hunter-hud-family-2026-10-20",
+  "agent_name": "hunter-hud-family",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The client's own spell data (the wowsims repos' generated tables) plus wowhead's per-version pages settled every per-family spell id WITHOUT guessing - including two ids the filed residual had wrong (the Forever client has the Bestial Wrath, the Rapid Fire, the Raptor Strike and the Aimed Shot; it lacks only the Steady Shot and the Kill Command). The per-family table plus one unified re-point loop made the guide and the HUD share a single owner, so the agreement pin is structural rather than a coincidence.",
+    "what_was_hard": "A sim's generated spell table is not proof of ABSENCE (the TBC table also omits Rapid Fire and the Bestial Wrath, which the TBC client does have) - the absence claims needed a second, independent source (wowhead's version page) before a slot was dropped. The shared hud_state fixture also had to grow a per-family spell option, because one shared spell table cannot model seven clients' rank ladders.",
+    "skill_gap": "Proving a slot is ABSENT needs two independent sources, not one; and a mutant that survives may be an equivalent mutant rather than a missing pin - both need to be said out loud in the report instead of being quietly dropped."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

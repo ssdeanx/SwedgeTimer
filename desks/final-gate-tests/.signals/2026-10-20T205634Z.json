@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T20:56:34Z",
+  "run_id": "final-gate-tests-2026-10-20",
+  "agent_name": "final-gate-tests",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the real class modules first (the guide slot sets, the offer gate, the six neutral publishes) and probing the sandbox in a /tmp copy before writing a line: the per-class family choice and the client's-own-id property came out of that probe, not out of guesswork. Four mutation families proved each pin kills its own mutant, and the guide-leg mutant is caught by nothing else in the tree.",
+    "what_was_hard": "The warrior's own guide vocabulary IS its rotation vocabulary on Era and TBC, so the '(a) a guide-slot key that is not a rotation action' pin cannot hold there - the pin needed the Forever family for that class, and the spec table now carries the family per class. The CHANGELOG clause also sat next to two more counts ('Four of the six classes publish one today', 'each of the four classes publishes a practice-panel ability list') that would have left the file still lying; both had to move with it.",
+    "skill_gap": "A pin whose premise can be vacuous for one class is easy to write and easy to miss - the per-class probe (does this class have a non-rotation guide key on this family?) is what caught it before it shipped a green but meaningless assertion."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T03:59:00Z",
+  "run_id": "closure-triad-2026-10-19",
+  "agent_name": "closure-triad",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The boundary was raised with the exact line, the exact old value and the exact new value, and with both rulings costed (keep the re-cut, or revert the fallback and re-open the filed gap). The tree stayed green in the meantime - 41 steps / 0 failed, luacheck 2/0, 5/5 mutations killed.",
+    "what_was_hard": "The dispatch said 'ONLY these' seven files, and the honest minimum to keep the harness green was an eighth. Deciding to touch it (and to say so loudly) rather than to leave a red tree or to skip the fix.",
+    "skill_gap": "A dispatch that names a behaviour change should list the pins that assert the OLD behaviour of that change; the file list alone cannot be trusted to cover the assertions."
+  },
+  "escalation": {
+    "reason": "The dispatch's file list excludes tests/shaman_guide_state.lua, but that file's pin (lines 1758-1761) asserted the gather's own 3 s Flame Shock fallback and cited classes/shaman.lua:3264 - the exact line the dispatch ordered changed. Leaving it makes the harness red, so the lane made the minimum mechanical re-cut (expected value 3 -> 0 and its message; no other pin touched).",
+    "blocked_on": "The operator's ruling on row HU-11 in hands-up.md: (a) keep the re-cut (recommended), or (b) revert the gather fallback to 3 and keep the old pin.",
+    "recommendation": "Keep the re-cut: the shipped default is 0 (the sim-exact expiry-only value, pinned in options_load_state.lua's SIM block), so a gather fallback of 3 is the stale half of the filed gap. Nothing else in that file was touched."
+  }
+}

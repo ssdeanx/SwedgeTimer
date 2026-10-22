@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:48:12Z",
+  "agent_name": "guide-hud-behaviour",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "6 stale default pins flipped to on-by-default with owner-order reasons; every pin still asserts exact behavior; 6/6 mutations kill on /tmp/opencode copies",
+    "what_was_hard": "working tree carries large parallel-lane diffs; verified own hunks are touched-lines only via targeted diff",
+    "skill_gap": "none for this lane"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "follow-up: hud_state non-paladin HUD slot source pins missing (tests/hud_state.lua:1188-1198 paladin-only); practice_ui_state shaman drill-key drift is sibling-owned"
+  }
+}

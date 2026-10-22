@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T04:58:00Z",
+  "run_id": "paladin-apl-2026-10-20",
+  "agent_name": "paladin-apl",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-fetching all ten paladin APLs and expanding every group inline found FOUR errors in the corpus's paladin section plus a dead row: 20216 is DIVINE FAVOR, not Devotion Aura (the Forever client's own ladder spells it Divine Favor; the 1.15 client's own tables put 20216 in the Holy skill line, and the corpus's proposed scan_player_aura read was the wrong shape for a spell cast); 53408 is JUDGEMENT OF WISDOM, not Judgement of Light (wowsims/wotlk sim/paladin/judgement.go:22 vs :64 - the ids are name-swapped against the corpus); 20375 is SEAL OF COMMAND on the Era client, not Seal of the Crusader (the 1.15 client's own skill-line tables and the classic sim's Seal of Command table); 10301 is RETRIBUTION AURA, not Redemption (the Forever client's own retribution_aura.go cites wowhead forever/spell=10301); and the SoD's 'Purity 16322' is a DEAD ROW (16322 is absent from the 1.15 client's spell tables and the client's own pages name it Juju Flurry). The brief's own example list (the Blessings, Avenging Wrath, Rallying Cry of the Dragonslayer) names rows that NO fetched paladin APL carries - the APLs' utility layer is smaller than the list. Five rows landed with cited ids, family gates and both HU-13 flags; two are armed in the frozen engine (Hand of Reckoning 67485 and the WotLK Hammer of Wrath 48806 - the latter with the sim's own execute-phase gate), they ride the Wrath FCFS order and light two new guide slots (the contract's count pin re-cut, ten to twelve); the pre-pull table grew from two rows to eleven (HU-12); 14/14 mutations killed, harness 41/0, luacheck floor held.",
+    "what_was_hard": "Three of the five rows could not be armed honestly and were filed with the exact read they wait for: Judgement of Wisdom shares the WotLK 10 s judgement cooldown with the shipped Judgement of Light row (one cdTimer for both - sim wowsims/wotlk sim/paladin/judgement.go:38), so an arm would REPLACE the shipped judgement cue; Holy Strike has no cooldown of its own on the Forever client (the client's own sim registers it without a CD), so a 'ready' arm would fire on every GCD and displace the twist cue; and Divine Favor's APL condition needs a buff-down read that separates 'absent' from 'unreadable' (api.scan_player_aura answers nil for both), so an arm on the cooldown alone could ask for a buff that is up - the one thing the brief forbids. classes/paladin.lua sits at Lua 5.1's 200-local ceiling, so the new ids are ST.PALADIN table fields, not locals. The two mutations that first survived were real pin gaps, not script bugs: a nil override does not exist in a Lua table literal (the unknown-target-health case needed the field cleared after construction), and the family gate is unobservable while the spell-book gate still withholds the read (the pin now counts the BOOK queries - the Era client must not even ask about 67485/48806).",
+    "skill_gap": "The corpus's per-class sections track ROW presence but not per-FAMILY presence and not the read's semantics: it called 20216 a Devotion Aura (an aura to maintain) when the APL casts it as a spell, it proposed an aura scan for a cooldown, and it listed a SoD row whose id the client does not have. Those three shapes - a spell that looks like an aura, an aura that is really a cooldown, and a row that is dead on the client - are where the next gaps will hide, and only the client-facing spell tables catch them (the wowsims repos agree with each other; the 1.15 client's own tables are the tie-breaker)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

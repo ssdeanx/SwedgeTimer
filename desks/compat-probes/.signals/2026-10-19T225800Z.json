@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:58:00Z",
+  "run_id": "bs1-compat-probes",
+  "agent_name": "compat-probes",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The spec's own template made the build mechanical: copying api.scan_player_aura's loop shape and reusing its 40-row cap kept the generalisation provably identical, and driving the wrapper's real secret guard (issecretvalue) in the pin proved the degrade instead of simulating it. The client-source mirror answered the INVSLOT_* and GetInventoryItemID citations read-only, so no id or slot number was asserted from memory.",
+    "what_was_hard": "api.GetInventoryItemID returns nil for three different things (global absent / restricted reading / empty slot), so 'the read is readable' is not directly observable through the mandated read path. Resolved conservatively: one non-nil slot read is the evidence, all-nil answers nil (unknown), never false. Also had to chase a luacheck warning the new pin block introduced (an overwritten 'stacks') to hold the 2-warning floor.",
+    "skill_gap": "Tri-state probes need the caller contract spelled out in the code, not just in the bench file: a downstream lane that writes 'probe() or nil' silently loses the false branch. The BS-2 spec line carries exactly that hazard and is flagged in the bench file for the orchestrator."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

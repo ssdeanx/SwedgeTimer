@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T04:10:00Z",
+  "run_id": "rogue-apl-reads-2026-10-20",
+  "agent_name": "rogue-apl-reads",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the CLIENT's own spell table (the sims' generated client database) instead of the APL's variable names settled two rows the brief had inherited wrong: 54758 is 'Hyperspeed Acceleration' - the Engineering belt enchant's effect - and 'Hypersharp Weapon' does not exist in the WotLK client at all; 1259812 is the Gnome RACIAL 'Eureka!'. The Forever Vanish's 'missing' read turned out to exist (api.GetSpellPowerCost returns one entry per power type, and the client's own ActionButton code picks the energy entry exactly that way), so the APL's comparison could be wired literally.",
+    "what_was_hard": "The brief's premise for the WotLK row ('a permanent enchant reads ready forever') was wrong, so the honest answer was not the brief's suggested one: the line still cannot be evaluated (an item effect's availability has no read), so it stays filed with an exact reason and its never-firing arm removed. Separating that from the flag flip the brief offered needed the HU-13 wording, not a preference.",
+    "skill_gap": "A citation inside a class file can break another suite: the options suite scans db.<key> in the class source, so a path like assets/database/db.json became a fake option key. Citations to files whose names start with 'db.' belong outside the class source or need a different spelling."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

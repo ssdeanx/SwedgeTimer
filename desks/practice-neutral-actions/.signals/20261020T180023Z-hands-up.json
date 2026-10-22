@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T18:00:23Z",
+  "run_id": "practice-neutral-actions-2026-10-20",
+  "agent_name": "practice-neutral-actions",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The HU-8 hold contract was the exact pattern for the neutral outcome: the ABSENCE of an entry in H.ROTATION_OUTCOME_GRADES is the rule (no attempt, no points), so the neutral step needed no new scoring path at all. The neutral set travels as a fifth argument into the pure decide function, so the engine stays pure and the class seam stays a single accessor.",
+    "what_was_hard": "The precedence between an explicit HOLD and the neutral set is genuinely ambiguous in the order: the task text reads 'when the actual action is in the class's neutral set, the step is neutral', which would let a heal dodge the illegal cast during a hold. I ruled hold-wins (HU-8 is an operator ruling; letting a neutral press through would make the grading free) and pinned it, but the orchestrator may want the other reading.",
+    "skill_gap": "Checking Lua 5.1's 200-local limit needed an empirical probe (luac -l reports the TOTAL locvars, the limit is on the ACTIVE ones): the two test suites were already at the edge and only a nested frame had room."
+  },
+  "escalation": {
+    "reason": "One precedence call is the operator's to confirm: a cast during an explicit HOLD stays an ILLEGAL CAST (F) even when the action is in the class's neutral set. I chose hold-wins so a neutral press cannot make the grading free (spam a heal through every hold); the literal task wording could be read the other way (neutral-wins). Pinned by 'a cast during a hold is an illegal cast, neutral or not'.",
+    "blocked_on": "nothing - the lane shipped with hold-wins and the decision is reversible in one branch of H.rotation_run_decide if the operator rules the other way",
+    "recommendation": "Confirm hold-wins (my choice) or rule neutral-wins. Under neutral-wins the illegal_cast branch must still punish a NON-neutral cast during a hold, and the run must keep counting the neutral presses, so the change is local to the decide function and its pins."
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "20261019T143631Z",
+  "agent_name": "hud-guide-gaps",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "in-tree verification against file:line anchors; class_matrix + rotfix journals as prior corpus, no re-derivation",
+    "what_was_hard": "none — harness green, all four systems wired, remaining gaps all need out-of-scope files",
+    "skill_gap": "none"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "files_changed": [],
+  "bench_artifact": "bench/perclass_hud_guide_verify_2026-10-19.md",
+  "verified": ["37/0 harness on untouched tree", "luacheck 2/0", "6x4 systems wired with anchors", "D1 closed documented / D2 by design / D3-D4 present", "out-of-scope follow-ups filed with owning file + reason"],
+  "validation_owner": "orchestrator"
+}

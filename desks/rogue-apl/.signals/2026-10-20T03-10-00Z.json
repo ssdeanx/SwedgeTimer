@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T03:10:00Z",
+  "run_id": "rogue-apl-2026-10-20",
+  "agent_name": "rogue-apl",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-fetching the six rogue APLs and the sims' own spell data instead of trusting the gap analysis paid off twice over: it refuted nine of the gap's rows (1857 is Vanish rank 2, 14183 is Premeditation, 1241584 is Mutilate rank 4, 26867 is Rupture, 51662 is Hunger for Blood, 1310703 is Venom, 14278 is Ghostly Strike, and the Era/TBC APLs carry no Vanish row at all) and it turned the Forever APL's sim variables into CONSTANTS, which is what made the Forever rows client-evaluable instead of filed.",
+    "what_was_hard": "The engine's shipped rule order (upkeep first, the builder last) is not the literal APL order, so a fully APL-literal arm order would have re-cut a documented contract; the lane placed the new arms inside the house convention and filed the three remaining divergences instead. The practice panel's button strip is a shared file (out of scope), so the growing vocabulary could only be bounded, not capped.",
+    "skill_gap": "Writing engine arms that are APL-literal but whose READS do not exist yet needed a clear line between 'the arm exists and hides' and 'the arm is absent' - the HU-13 two-flag convention carries that, but it only works if every filed row names the exact read it waits for."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T06:07:14Z",
+  "run_id": "shaman-apl-2026-10-20",
+  "agent_name": "shaman-apl",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-fetching the five enhancement APLs and expanding every group inline (instead of trusting the gap analysis) found FIVE errors in the gap file's shaman section - including the brief's own premise: there is no 'Nature's Wrath' line, because the Era APL's i=4 row casts 17364 and 17364 is Stormstrike (classic sim/shaman/stormstrike.go:20, the tree's own WEAVE_STORMSTRIKE_SPELL_ID, bench/verify_bank.md CONFIRMED); no fetched wowsims shaman sim has a Nature's Wrath ability at all. The other four: 29228 is Flame Shock r6 (not the Flametongue Weapon), the WotLK 49231 is Earth Shock (49236 is the WotLK Frost Shock), the bench's Rockbiter id 10497 is Mana Spring r4, and the shipped twist id 8512 is the Windfury Totem rank-1 fallback. Building the four lines that DO exist (Bloodlust 2825, Strength of Earth 10442/25528/25361, Mana Spring 25570, Frost Shock 25464) with their engine arms (rules 3b/8a/8d/13b), the pre-pull table (HU-12) and the HU-13 two flags on every row - including the honest flip the convention forces: chainlightning is live = false, engine = true, with the missing enemy-count read named in `needs`.",
+    "what_was_hard": "classes/shaman.lua sits at Lua 5.1's 200-local ceiling (199 top-level locals), so the new ids, names and four guide slots had to be ST.SHAMAN table fields rather than locals - the same trick the CoE slot already used. The Strength of Earth upkeep needed a read that exists today: the client's EARTH totem slot clock (api.GetTotemInfo, the water clock's shape and tri-state), not the APL's buff-clock condition - a slot-empty read cannot see the buff, which is a documented precision limit in the same class as the Era air-totem precedent. The TBC Frost Shock is the APL's ALTERNATIVE 'Filler Shock' choice, so its arm answers only when the choice is stated (a frozen input the live gather never feeds - the APL's Earth Shock default stands) and rules 14/17 stay silent in that case. The hunter and warrior lanes were editing classes/hunter.lua, classes/warrior.lua and classes/druid.lua in the same tree during the session (classes/warrior.lua was mid-edit with Lua 5.1's 'more than 200 local variables' error), so the full-harness run showed their steps red - none of them in this lane's scope.",
+    "skill_gap": "The brief's premise was taken from the gap analysis and repeated as fact ('no Strength of Earth / Nature's Wrath / Frost Shock lines'). Only re-fetching the APL files caught it; a lane that trusted the bench file would have shipped a second line on the Stormstrike id and taught the wrong priority. The filed-but-unbuilt item (the Lightning Shield maintain on SoD and Forever - a per-family gap in a SHIPPED line) also shows the gap analysis tracks per-ROW presence but not per-FAMILY presence, which is where the next gaps will hide."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

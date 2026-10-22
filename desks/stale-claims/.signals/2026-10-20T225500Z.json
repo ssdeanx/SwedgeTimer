@@ -1,0 +1,45 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T22:55:00Z",
+  "run_id": "stale-claims-guard-2026-10-20",
+  "agent_name": "stale-claims",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reusing the house wording the previous lane landed (paladin/warrior/shaman) verbatim, so all six classes now carry ONE form of the truth. The pins match on PROSE (the line-leading comment marker dropped, the lines joined, the whitespace collapsed) rather than on raw source lines, because the claim is wrapped across three source lines in each class file - a flat substring search would never have seen it. practice_ui.lua uses a COUNT (>= 2) instead of a presence, so a note that drops back to the old wording loses its own copy and the count falls. The no-behaviour-change claim was PROVEN, not asserted: the pre-edit and post-edit luac5.1 -l -l listings of all four source files are byte-identical once the source line numbers and the heap addresses (both of which a comment edit necessarily shifts) are normalised.",
+    "what_was_hard": "The brief named five sites and said the guard should cover six classes, but the false claim also survives at classes/warrior.lua:4899 - the same FOR THE RECORD note the previous lane corrected in the other three classes and missed in the warrior. That file is on the do-not-touch list, so it could only be filed, not fixed.",
+    "skill_gap": "The brief's done-criterion ('no site carries the false claim') cannot be met inside the brief's own scope - a scope conflict had to be reported rather than resolved. Lesson for the next lane: when a brief names the remaining sites, sweep the whole tree for the phrase anyway (a repo-wide grep for 'NAME-first resolution' found the sixth site in four minutes) and file what falls outside the scope."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Validate this lane (harness + luacheck owner). One follow-up is owed: classes/warrior.lua:4899 still carries the same false claim and is on this lane's do-not-touch list - the fix is this lane's wording plus one more check in tests/warrior_state.lua (which already reads that file). See the separate escalation/hands-up signal."
+  },
+  "artifacts": [
+    "bench/stale_claims_guard_2026-10-20.md",
+    "desks/stale-claims/journal.md"
+  ],
+  "files_changed": [
+    "classes/hunter.lua",
+    "classes/druid.lua",
+    "classes/rogue.lua",
+    "practice_ui.lua",
+    "tests/hunter_state.lua",
+    "tests/druid_state.lua",
+    "tests/rogue_state.lua",
+    "tests/practice_ui_state.lua"
+  ],
+  "verification": {
+    "harness": "43 steps, 0 failed (bash tests/run.sh)",
+    "luacheck": "2 warnings / 0 errors in 85 files (the standing floor, both pre-existing: compat.lua:36, main.lua:81)",
+    "mutation_proofs": "6 kills / 0 escapes on /tmp/opencode/stale_claims_guard_mut - M1/M2/M3 the stale phrase back in hunter/druid/rogue (2 of N checks, exit 1), M4 the shaman drill note back (3 of 2459, exit 1), M5 the rogue drill note back (2 of 2459, exit 1), M6 the house stale phrase dropped into the hunter (1 of 1708, exit 1); the control run on the unmutated copy is green",
+    "behaviour": "unchanged - PROVEN by the luac5.1 -l -l listing of the pre-edit and the post-edit file being byte-identical (line numbers and heap addresses normalised) for all four source files; every changed line was also checked to be a comment",
+    "line_endings": "CRLF kept: classes/hunter.lua 5366 CRLF / 0 lone LF, classes/druid.lua 4643/0, classes/rogue.lua 3699/0, practice_ui.lua 8087/0; the four test files are LF with their EOF bytes unchanged",
+    "local_ceiling": "practice_ui.lua still at 199 file-scope locals (luac5.1 -l -l) - the pins live in the test suites and the source change is comment-only"
+  }
+}

@@ -3,6 +3,8 @@
 --=========================================================================================
 local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
+st.class_loaders = st.class_loaders or {}
+st.class_loaders["PALADIN"] = function()
 local LCG = LibStub("LibCustomGlow-1.0")
 local LSM = LibStub("LibSharedMedia-3.0")
 -- Cross-client API wrappers (see compat.lua).
@@ -57,6 +59,13 @@ local function get_tracked_aura_duration(unit, spell_id, spell_name)
     return duration
 end
 
+-- The counter of failed LibClassicDurations registrations (BS-8 item 1): a
+-- failure used to be invisible, because the pcall result was dropped. The
+-- shared engine's runtime-diag line reads this number (main.lua's
+-- print_runtime_diag); the class side only counts, so the counter is correct
+-- and harmless even before that reader exists.
+ST.PALADIN.lcd_register_errors = ST.PALADIN.lcd_register_errors or 0
+
 --=========================================================================================
 -- Spell data
 --=========================================================================================
@@ -79,8 +88,11 @@ local sow_ids = get_tab({
 local sor_ids = get_tab({
     21084, 20154, 20287, 20288, 20289, 20290, 20291, 20292, 20293, 27155
 })
--- Seal of Righteousness on Forever (Twist of Light twist seal): UNCONFIRMED.
--- The beta guides name the seal but publish no spell id, so this table is
+-- Seal of Righteousness on Forever (Twist of Light twist seal): UNCONFIRMED,
+-- and still deliberately EMPTY - no source names an id for THIS spell (the
+-- Echo ids below are a different spell, and the discipline that resolves them
+-- by name does not apply to a rank that has no id at all). The beta guides
+-- name the seal but publish no spell id, so this table is
 -- deliberately EMPTY until GetSpellInfo confirms an id in-client (the hunter
 -- Summon Hawk / Sniper Shot discipline: an empty table resolves nothing, so
 -- the latch below stays inert rather than guessing). The classic sor_ids
@@ -89,12 +101,44 @@ local sor_ids = get_tab({
 -- Plug-in point: add the confirmed Forever rank id(s) here.
 local sor_forever_ids = get_tab({
 })
+-- Twist of Light Echo auras (Forever): the ids are WEB-CONFIRMED but
+-- CLIENT-UNCONFIRMED (bench/ids_research_2026-10-19.md §2 - wowhead's own
+-- redirect slugs: 1311703 Echo of Command, 1311704 Echo of Righteousness).
+-- Standing: web-confirmed, client-unconfirmed, name-resolved. The ids are
+-- NOT trusted to identify a spell on this client, so the discipline below
+-- resolves the NAME first (through the class's own name-resolution path) and
+-- lets the id only confirm it: a wrong id can then never latch the wrong
+-- aura, and the seal inputs keep their archived values. The 1.60.x client has
+-- not been asked yet (the operator's session owns that check), so an id the
+-- client does not name leaves the latch unknown rather than guessing.
+local echo_command_ids = get_tab({
+    1311703,
+})
+local echo_twist_ids = get_tab({
+    1311704,
+})
+-- Holy Strike (Forever): the same discipline - WEB-CONFIRMED 10333,
+-- CLIENT-UNCONFIRMED (bench/ids_research_2026-10-19.md §2: "Holy Strike
+-- (50% + 97-121 Holy)"). It is a spell, not an aura, so the resolved id is
+-- asked about in the spell book. The frozen ten guide slots have no Holy
+-- Strike slot, so the probe is a plug-in point (nextaction.lua's Forever
+-- block documents it) and nothing prompts yet.
+local holy_strike_ids = get_tab({
+    10333,
+})
 local soj_ids = get_tab({
     20164, 31895
 })
 -- Seal of Blood / Seal of the Martyr
 local sob_ids = get_tab({
-    31892, 348700
+    31892, 348700,
+    -- 407798 Seal of Martyrdom aura (bench/sod_paladin_variants_2026-10-19.md
+    -- §0/§3, p8-stack APL prepull SoM; warcraftdb title "Seal of Martyrdom";
+    -- APL-cited, in-client UNCONFIRMED). 348700 above is the Martyr rune probe
+    -- the SoD detector already uses; 407798 is the seal aura the stack
+    -- maintenance times. Era-only in practice (no Era-base spell carries it),
+    -- so no other family changes.
+    407798,
 })
 -- Seal of the Crusader
 local sotc_ids = get_tab({
@@ -109,16 +153,139 @@ local sotc_ids = get_tab({
 -- offline harness loads it first too).
 local ERA_TWIST_SEAL_ID = 21084
 local is_era_family = st.family == "ERA"
+local is_tbc_family = st.family == "TBC"
 local twist_seal_icon_id = is_era_family and ERA_TWIST_SEAL_ID or 31892
+
+-- Name-vs-id rule (operator 2026-10-19; bench/lessons.md): TBC Anniversary
+-- resolves by NAME, never bare id; every other family (Classic Era included)
+-- resolves by id. Branch on st.family, never a version string. Names resolve
+-- once per id through the client's own GetSpellInfo and are cached (a rank's
+-- name never changes); cold spell data retries on the next call. Queries go
+-- through compat's api.get_spell_query (inline family branch as fallback so
+-- the module never depends on load order); a nil name falls back to the id so
+-- a cold book degrades to today's behavior instead of a nil query.
+local tbc_spell_names = {}
+
+local function resolve_spell_name(spell_id)
+    if type(spell_id) ~= "number" then
+        return nil
+    end
+    local cached = tbc_spell_names[spell_id]
+    if cached ~= nil then
+        return cached
+    end
+    local name = api.GetSpellInfo(spell_id)
+    if type(name) == "string" then
+        tbc_spell_names[spell_id] = name
+    end
+    return name
+end
+
+local function spell_query(spell_id)
+    if st.family ~= "TBC" then
+        return spell_id
+    end
+    local name = resolve_spell_name(spell_id)
+    if type(api.get_spell_query) == "function" then
+        return api.get_spell_query(name, spell_id) or spell_id
+    end
+    return name or spell_id
+end
+
+-- Known-spell probe through the family-correct query (the rogue
+-- api.is_spell_known(rogue_query(...)) discipline): the English name on TBC,
+-- the numeric id elsewhere; a cold TBC book probes the id fallback, never nil.
+local function is_spell_known_query(spell_id)
+    return api.is_spell_known(spell_query(spell_id)) == true
+end
+
+--=========================================================================================
+-- The Forever id discipline: the NAME is the key, the id only confirms it
+--=========================================================================================
+-- A spell id that only a web page confirms (the tables above) cannot be
+-- trusted to identify a spell on this client: latch the wrong aura and the
+-- guide prompts the wrong thing. The discipline inverts that trust.
+--
+--   confirmed_forever_id(ids, expected_name)
+--     The confirmed id whose OWN client-resolved name is the expected name.
+--     The client's answer comes from the class's existing name-resolution path
+--     (resolve_spell_name: api.GetSpellInfo on the id - the same path the TBC
+--     name boxes and the Bloodlust labels use), so an id is only trusted when
+--     the client itself agrees that it IS that spell.
+--
+--     nil when the client cannot name the id yet (a cold book, or a client
+--     that answers names only) and nil when the id is WRONG (the client
+--     answers a different spell's name). A wrong id therefore leaves every
+--     state UNKNOWN - never a wrong prompt. The operator's in-client check
+--     (the 1.60.x GetSpellInfo) is what turns a web-confirmed id into a
+--     client-confirmed one.
+--
+-- The anchors are the web-confirmed English names (wowhead's redirect slugs).
+-- They are compared verbatim, so a non-English client stays unknown until its
+-- localized names are added here (unknown-hides, never wrong).
+local ECHO_COMMAND_NAME = "Echo of Command"
+local ECHO_TWIST_NAME = "Echo of Righteousness"
+local HOLY_STRIKE_NAME = "Holy Strike"
+
+local function confirmed_forever_id(ids, expected_name)
+    for id in pairs(ids) do
+        if resolve_spell_name(id) == expected_name then
+            return id
+        end
+    end
+    return nil
+end
+
+-- Aura-rank match: the numeric id everywhere (Era's only path; TBC's cold
+-- fallback, so smoke.lua's id-only TBC profile keeps passing), plus the
+-- localized name on the TBC family. `box` caches the id table's localized
+-- names (nil until the first answer; cold spell data retries on the next
+-- scan, so a cold book reads as id-only, never as a wrong match).
+local function aura_matches(ids, box, spell_id, name)
+    if type(spell_id) == "number" and ids[spell_id] then
+        return true
+    end
+    if st.family == "TBC" and type(name) == "string" then
+        local set = box.set
+        if set == nil then
+            set = {}
+            local any = false
+            for id in pairs(ids) do
+                local resolved = resolve_spell_name(id)
+                if resolved ~= nil then
+                    set[resolved] = true
+                    any = true
+                end
+            end
+            if any then
+                box.set = set
+            else
+                return false
+            end
+        end
+        return set[name] == true
+    end
+    return false
+end
+
+-- Localized-name boxes for the TBC aura matches below (one box per rank
+-- table, so each set resolves independently).
+local seal_name_boxes = {
+    soc = {}, sov = {}, sol = {}, sow = {},
+    sor = {}, soj = {}, sob = {}, sotc = {},
+}
+local jotc_name_box = {}
 
 -- Forever family flag + guide twist-seal id (WoW Forever / Camelot 1.60.x):
 -- Twist of Light alternates Seal of Command / Seal of Righteousness after
 -- auto attacks and Judgement no longer consumes seals
--- (docs/research/forever_beta.md — all UNCONFIRMED beta information with no
--- confirmed spell ids, so Twist of Light and Holy Strike are NOT probed and
--- can never prompt). The guide's twist-seal slot and twist overlay show
--- Righteousness on Forever (same slot, same key, Era texture); the standalone
--- seal icons above stay Era-only (their Forever mapping is unverified).
+-- (docs/research/forever_beta.md — beta information whose spell ids are now
+-- WEB-CONFIRMED but still CLIENT-UNCONFIRMED: the Echo auras and Holy
+-- Strike are resolved by NAME through the discipline above, so they can
+-- never prompt on a wrong id). The guide's twist-seal slot and twist overlay
+-- show Righteousness on Forever (same slot, same key, Era texture); the
+-- standalone seal icons above stay Era-only (their Forever mapping is
+-- unverified).
 local is_forever_family = st.family == "FOREVER"
 local guide_twist_seal_id = (is_era_family or is_forever_family) and ERA_TWIST_SEAL_ID or 31892
 
@@ -155,6 +322,15 @@ function ST.PALADIN.post_init(self)
     self.twist_glow_until = 0
     self.twist_extra_attacks_pending = 0
     self.twist_active_seals_count = 0
+    -- Last Command-proc stamp (PPM/ICD attempt discipline: a swing inside the
+    -- ICD arms no attempt) and last-auto stamp (swing-recency inputs), both
+    -- combat-scoped (reset on combat exit); nil until the first landing.
+    self.twist_last_proc_at = nil
+    self.guide_last_auto_at = nil
+    -- Pull-phase clock (TBC CS hold): combat-start stamp plus the transition
+    -- latch that arms it; both combat-scoped like the guide latch below.
+    self.guide_combat_start_at = nil
+    self.guide_was_in_combat = false
 
     -- Twist hit-rate counters: per-session by default (reset on every load);
     -- with the persistence option the counters are restored from (and mirrored
@@ -183,6 +359,12 @@ function ST.PALADIN.post_init(self)
     self.jotc_full = nil
     self.jotc_scan_at = nil
 
+    -- Holy Strike (Forever): unknown until the client proves the id (the
+    -- discipline above) and the spell book answers. The scan below fills it
+    -- in; the field exists from the start so a caller never reads a stale
+    -- value from a previous session.
+    self.holy_strike_known = nil
+
     -- Parse auras after the state above so the seal count sticks.
     self.PALADIN.on_aura_change(self)
 
@@ -208,21 +390,37 @@ function ST.PALADIN.post_init(self)
     -- never registered itself (see the header block). pcall keeps a library-side failure
     -- from breaking post_init: the guide then keeps using its hardcoded seal duration.
     if lcd_aura_duration and type(LCD.Register) == "function" then
-        pcall(LCD.Register, LCD, addon_name)
-    end
-
-    -- Twist Practice: builds its own UIParent frames and the pure-engine bridge;
-    -- guarded so a flavor without the practice files stays inert.
-    if st.practice_ui then
-        st.practice_ui.init(self)
+        -- A failed registration was invisible: the pcall result was dropped, so the
+        -- guide silently fell back to its hardcoded seal length. Count the
+        -- failure (ST.PALADIN.lcd_register_errors) so the shared engine's
+        -- runtime-diag line can show it - the reader is main.lua's
+        -- print_runtime_diag, which the engine lane owns. The count is the
+        -- half that belongs here; a healthy registration counts nothing.
+        local registered = pcall(LCD.Register, LCD, addon_name)
+        if not registered then
+            ST.PALADIN.lcd_register_errors = (ST.PALADIN.lcd_register_errors or 0) + 1
+        end
     end
 
     -- Cooldown HUD: builds its own UIParent frames (out of combat, deferred and
     -- retried via the per-frame hook under lockdown) from this class's HUD_SLOTS and
     -- the provider below; guarded so a flavor without hud.lua stays inert. Other
     -- classes would call st.hud.init(self) from their own post_init the same way.
+    -- Runs before the practice init below: the shared post_init order is guide,
+    -- HUD, practice in all six class modules (deep-audit F9).
     if st.hud then
         st.hud.init(self)
+    end
+
+    -- Twist Practice: builds its own UIParent frames and the pure-engine bridge;
+    -- guarded so a flavor without the practice files stays inert.
+    if st.practice_ui and type(st.practice_ui.init) == "function" then
+        -- The practice panel's action vocabulary: the class's own guide slots plus
+        -- the common abilities (a heal, a shield, food). The guide frame above
+        -- already built its icons from the display vocabulary, so this widens the
+        -- PANEL's strip, not the frame (the shaman's apply_family_slots precedent).
+        ST.PALADIN.apply_practice_panel_actions()
+        st.practice_ui.init(self)
     end
 end
 
@@ -299,57 +497,156 @@ function ST.PALADIN.parse_seals(self)
     self.soc_duration = nil
     self.sob_duration = nil
     self.sor_duration = nil
+    -- SoD variant aura latches (bench/sod_paladin_variants_2026-10-19.md §7;
+    -- all APL-cited, in-client UNCONFIRMED). ERA-gated + rune/item-gated in the
+    -- gather (never client-version per lessons); nil elsewhere so every other
+    -- family keeps the archived behaviour bit-identically. Reset with the
+    -- seals for the same stale-value reason.
+    self.has_sunlight = nil
+    self.sunlight_expires = nil
+    self.has_templar_stack = nil
+    self.templar_stack_expires = nil
+    self.has_templar_wrath = nil
+    self.templar_wrath_expires = nil
+    self.holy_power_stacks = nil
+    self.has_hp_set = nil
+    self.has_sod_t2 = nil
+    self.has_sod_naxx = nil
+    self.has_sod_libram = nil
+    -- Twist of Light Echo latches (Forever seal maintenance): the state stays
+    -- UNKNOWN (nil) until the client itself proves the id - its own answer
+    -- for the confirmed id is the expected name (the discipline above). Only
+    -- a proven id lets an absent aura read as down (false); a wrong or
+    -- unproven id leaves the state unknown, so the seal inputs keep their
+    -- archived values and the guide never prompts a wrong reseal.
+    local echo_command_id = confirmed_forever_id(echo_command_ids, ECHO_COMMAND_NAME)
+    local echo_twist_id = confirmed_forever_id(echo_twist_ids, ECHO_TWIST_NAME)
+    if echo_command_id ~= nil then
+        self.has_echo_command = false
+    else
+        self.has_echo_command = nil
+    end
+    if echo_twist_id ~= nil then
+        self.has_echo_twist = false
+    else
+        self.has_echo_twist = nil
+    end
+    -- Holy Strike (Forever): the same discipline, but a spell rather than an
+    -- aura - the proven id is asked about in the spell book. nil (unknown)
+    -- until the client proves the id; then the book's own answer.
+    local holy_strike_id = confirmed_forever_id(holy_strike_ids, HOLY_STRIKE_NAME)
+    if holy_strike_id ~= nil then
+        self.holy_strike_known = api.is_spell_known(spell_query(holy_strike_id)) == true
+    else
+        self.holy_strike_known = nil
+    end
 
     -- Iterate all player auras (1..40, no early break: a secret entry degrades to
     -- absent in the wrapper, and breaking there would hide every seal above a
     -- restricted row; nil is simply no match at this index).
     local i = 1
     while i <= 40 do
-        local name, _, _, _, _, expiration_time, _, _, _, spell_id = api.UnitAura("player", i)
+        local name, _, aura_count, _, _, expiration_time, _, _, _, spell_id = api.UnitAura("player", i)
         if name ~= nil then
             -- Seals
-            if soc_ids[spell_id] ~= nil then
+            if aura_matches(soc_ids, seal_name_boxes.soc, spell_id, name) then
                 self.has_soc = true
                 self.soc_expires = expiration_time
                 -- The library keys its records by the rank that was cast, which is the aura
                 -- id right here (the same reason soc_ids carries every rank).
                 self.soc_duration = get_tracked_aura_duration("player", spell_id, name)
             end
-            if sov_ids[spell_id] ~= nil then
+            if aura_matches(sov_ids, seal_name_boxes.sov, spell_id, name) then
                 self.has_sov = true
             end
-            if sol_ids[spell_id] ~= nil then
+            if aura_matches(sol_ids, seal_name_boxes.sol, spell_id, name) then
                 self.has_sol = true
             end
-            if sow_ids[spell_id] ~= nil then
+            if aura_matches(sow_ids, seal_name_boxes.sow, spell_id, name) then
                 self.has_sow = true
             end
             -- Forever's own Righteousness ranks (empty until confirmed, see above)
             -- latch the same flag, so a new Forever id degrades to silent rather
             -- than latching the wrong seal. Gated on the family so every other
             -- family ignores the table entirely.
-            if sor_ids[spell_id] ~= nil
+            if aura_matches(sor_ids, seal_name_boxes.sor, spell_id, name)
                 or (is_forever_family and sor_forever_ids[spell_id] ~= nil) then
                 self.has_sor = true
                 self.sor_expires = expiration_time
                 -- Same rank-keyed lookup as Command above (sor_ids carries every rank).
                 self.sor_duration = get_tracked_aura_duration("player", spell_id, name)
             end
-            if soj_ids[spell_id] ~= nil then
+            if aura_matches(soj_ids, seal_name_boxes.soj, spell_id, name) then
                 self.has_soj = true
             end
-            if sob_ids[spell_id] ~= nil then
+            if aura_matches(sob_ids, seal_name_boxes.sob, spell_id, name) then
                 self.has_sob = true
                 self.sob_expires = expiration_time
                 self.sob_duration = get_tracked_aura_duration("player", spell_id, name)
             end
-            if sotc_ids[spell_id] ~= nil then
+            if aura_matches(sotc_ids, seal_name_boxes.sotc, spell_id, name) then
                 self.has_sotc = true
+            end
+
+            -- Forever Echo maintenance (the discipline above): the NAME is the
+            -- key - the aura must carry the name the client gives the proven
+            -- id. The id alone never latches anything, so a wrong id cannot
+            -- produce a wrong prompt. Latches only; never degrades another
+            -- seal.
+            if echo_command_id ~= nil and spell_id == echo_command_id
+                and name == ECHO_COMMAND_NAME then
+                self.has_echo_command = true
+            end
+            if echo_twist_id ~= nil and spell_id == echo_twist_id
+                and name == ECHO_TWIST_NAME then
+                self.has_echo_twist = true
             end
 
             -- Art of War
             if spell_id == aow_id then
                 self.has_aow = true
+            end
+
+            -- SoD variant auras (ERA-gated: no Era-base spell carries these
+            -- ids, so no other family changes; APL-cited, in-client
+            -- UNCONFIRMED per the bench file).
+            if is_era_family then
+                -- Sunlight maintenance aura (1239543, shockadin §4).
+                if spell_id == 1239543 then
+                    self.has_sunlight = true
+                    self.sunlight_expires = expiration_time
+                end
+                -- Templar-stack maintenance aura (1240574, shockadin §4).
+                if spell_id == 1240574 then
+                    self.has_templar_stack = true
+                    self.templar_stack_expires = expiration_time
+                end
+                -- Templar wait aura (1226464, wrath-like §6).
+                if spell_id == 1226464 then
+                    self.has_templar_wrath = true
+                    self.templar_wrath_expires = expiration_time
+                end
+                -- Holy Power stacks (1226461, count 1-3) + set aura (1226460).
+                if spell_id == 1226461 then
+                    if type(aura_count) == "number" and aura_count == aura_count then
+                        self.holy_power_stacks = aura_count
+                    end
+                end
+                if spell_id == 1226460 then
+                    self.has_hp_set = true
+                end
+                -- S03 T2 Ret 2P Bonus (467518, wrath Judge gate, §6).
+                if spell_id == 467518 then
+                    self.has_sod_t2 = true
+                end
+                -- Naxx Ret 6P Bonus (1219193, stack HW gate, §3).
+                if spell_id == 1219193 then
+                    self.has_sod_naxx = true
+                end
+                -- Libram of Sanctity (1214298, shock AM gate, §4).
+                if spell_id == 1214298 then
+                    self.has_sod_libram = true
+                end
             end
         end
 
@@ -382,12 +679,19 @@ end
 -- enable is its own option, nil = off (the option pass lands the key); the key,
 -- the colour, the parameters and the 0.4 s length are constants so the pulse
 -- coexists with the AoW glow and the twist-success glow on the same frame.
-local AOW_EXO_PULSE_KEY = "AowExoOverlap"
-local AOW_EXO_PULSE_SECONDS = 0.4
-local AOW_EXO_PULSE_COLOR = {255, 215, 0, 0.9}
-local AOW_EXO_PULSE_LINES = 8
-local AOW_EXO_PULSE_FREQUENCY = 0.25
-local AOW_EXO_PULSE_THICKNESS = 2
+-- The pulse's own parameters ride the module table, not file-scope locals: this
+-- module sits at the Lua 5.1 ceiling for file-scope locals (200), so a new
+-- constant here would be a LOAD FAILURE on every client. The class's own
+-- precedent: APL_UTILITY, practice_action_meta, practice_apl_rows and
+-- practice_prepull_rows all ride ST.PALADIN for the same reason.
+ST.PALADIN.aow_pulse = {
+    key = "AowExoOverlap",
+    seconds = 0.4,
+    color = {255, 215, 0, 0.9},
+    lines = 8,
+    frequency = 0.25,
+    thickness = 2,
+}
 
 -- Twist hit-rate badge: a small summary line under the mainhand bar. Option
 -- nil = off; the badge font size and its offset below the bar are constants.
@@ -403,15 +707,15 @@ function ST.PALADIN.aow_exo_pulse_start(self)
         return
     end
     LCG.PixelGlow_Start(frame,
-        {self:convert_color(AOW_EXO_PULSE_COLOR)},
-        AOW_EXO_PULSE_LINES,
-        AOW_EXO_PULSE_FREQUENCY,
+        {self:convert_color(ST.PALADIN.aow_pulse.color)},
+        ST.PALADIN.aow_pulse.lines,
+        ST.PALADIN.aow_pulse.frequency,
         nil,
-        AOW_EXO_PULSE_THICKNESS,
+        ST.PALADIN.aow_pulse.thickness,
         0,
         0,
         false,
-        AOW_EXO_PULSE_KEY
+        ST.PALADIN.aow_pulse.key
     )
 end
 
@@ -420,7 +724,7 @@ function ST.PALADIN.aow_exo_pulse_stop(self)
     if not frame then
         return
     end
-    LCG.PixelGlow_Stop(frame, AOW_EXO_PULSE_KEY)
+    LCG.PixelGlow_Stop(frame, ST.PALADIN.aow_pulse.key)
 end
 
 function ST.PALADIN.glow_start(self)
@@ -472,7 +776,7 @@ function ST.PALADIN.process_aow(self)
     if overlap and self.aow_exo_prev ~= true
         and db.aow_exo_pulse_enabled == true and not st.is_retail then
         self.PALADIN.aow_exo_pulse_start(self)
-        self.aow_exo_pulse_until = api.get_time() + AOW_EXO_PULSE_SECONDS
+        self.aow_exo_pulse_until = api.get_time() + ST.PALADIN.aow_pulse.seconds
     end
     self.aow_exo_prev = overlap == true
     if glow_on then
@@ -615,7 +919,13 @@ function ST.PALADIN.on_combat_log_unfiltered(self, _, timestamp, event, hide_cas
         local n = self.PALADIN.parse_seals(self)
         -- Archive parity: the attempt arms on n_active_seals == 2 alone. The extra
         -- seal-discipline gate wrongly disarmed Blood+Crusader windows.
-        local attempt = st.twist.detect_twist_attempt(false, true, n)
+        -- PPM/ICD attempt discipline (both sims: 7 PPM, 1 s ICD, white hits
+        -- only): a swing landing inside the ICD after a proc cannot proc, so
+        -- it arms no attempt and scores nothing. A nil stamp (no proc yet)
+        -- keeps the archived behaviour.
+        local icd_clear = st.twist.is_proc_icd_clear(
+            api.get_time(), self.twist_last_proc_at)
+        local attempt = icd_clear and st.twist.detect_twist_attempt(false, true, n)
         if attempt then
             self.twist_attempt_pending = true
             self.twist_sound_played = false
@@ -768,11 +1078,18 @@ local function play_twist_sound(db, key, fallback_key)
 end
 
 -- Fallback colours used whenever a db key is missing (or malformed), so the visuals
--- are safe to run even before the options lane lands the matching keys.
-local TWIST_MARKER_COLOR = {255, 255, 255, 0.35}
-local TWIST_TWISTING_COLOR = {179, 26, 153, 1.0}
-local TWIST_CANT_COLOR = {212, 212, 3, 1.0}
-local TWIST_SUCCESS_COLOR = {90, 255, 90, 1.0}
+-- are safe to run even before the options lane lands the matching keys. They ride the
+-- module table: this module sits at the Lua 5.1 file-scope-local ceiling (see
+-- ST.PALADIN.aow_pulse above), so a new constant here would be a load failure.
+ST.PALADIN.twist_colors = {
+    marker = {255, 255, 255, 0.35},
+    twisting = {179, 26, 153, 1.0},
+    cant = {212, 212, 3, 1.0},
+    success = {90, 255, 90, 1.0},
+    -- The fallback glow colour (the archive's {0.0, 1.0, 0.0, 0.8} converted up), used
+    -- whenever the db key is missing or malformed.
+    glow = {0, 255, 0, 0.8},
+}
 
 -- Returns db[key] when it looks like a colour table, otherwise the fallback.
 local function twist_color(db, key, fallback)
@@ -782,10 +1099,6 @@ local function twist_color(db, key, fallback)
     end
     return fallback
 end
-
--- Fallback glow colour (the archive's {0.0, 1.0, 0.0, 0.8} converted up), used
--- whenever the db key is missing or malformed.
-local TWIST_GLOW_COLOR = {0, 255, 0, 0.8}
 
 -- Explicit unknown-state band values (M4/M5). The band's normal vocabulary is
 -- "no twist now" (hidden) vs the window; a dead swing feed and a genuinely
@@ -823,6 +1136,14 @@ local JUDGEMENT_SPELL_ID = 20271
 local JUDGEMENT_MARKER_COLOR = {230, 230, 3, 1.0}
 local JUDGEMENT_MARKER_WIDTH = 2
 
+-- Reseal marker (SST 3.1.0 "reseal marker for twist seals", P1): a 2 px line at
+-- the swing position where the running GCD clears (the pure fraction in
+-- twist.lua). Only the enable is an option (reseal_marker_enabled, nil = off -
+-- the options pass owns the widget); colour/width are constants. SST in-client
+-- behavior UNCONFIRMED; the marker math is offline-testable.
+local RESEAL_MARKER_COLOR = {255, 255, 255, 0.55}
+local RESEAL_MARKER_WIDTH = 2
+
 -- Standalone seal icons (archive bar.lua:826-910): the two twist seals get one slot
 -- each, Command first. The swipe length falls back to the archived 30 s seal
 -- duration where LibClassicDurations tracks nothing. Only the enable is an option
@@ -849,10 +1170,12 @@ local SEAL_LIVE = {
 -- attempt glow coexist with the Art of War glow on the same bar frame; the line
 -- count, frequency and thickness are the archive's Pixel parameters. Only the
 -- enable, colour and duration are options.
-local TWIST_GLOW_KEY = "TwistSuccess"
-local TWIST_GLOW_LINES = 8
-local TWIST_GLOW_FREQUENCY = 0.25
-local TWIST_GLOW_THICKNESS = 2
+ST.PALADIN.twist_glow = {
+    key = "TwistSuccess",
+    lines = 8,
+    frequency = 0.25,
+    thickness = 2,
+}
 
 function ST.PALADIN.update_judgement_marker(self, hand)
     -- Judgement timing line (archive bar.lua:1750-1786): drawn at the swing
@@ -876,7 +1199,7 @@ function ST.PALADIN.update_judgement_marker(self, hand)
         and not d.is_full
         and (self.has_sob or self.has_sor or self.has_sov or self.has_soj) then
         local swing_remaining = math.max(0, d.ends_at - now)
-        local start_time, duration = api.GetSpellCooldown(JUDGEMENT_SPELL_ID)
+        local start_time, duration = api.GetSpellCooldown(spell_query(JUDGEMENT_SPELL_ID))
         if duration and duration > 1.51 then
             local cd_remaining = start_time + duration - now
             if cd_remaining > 0 and cd_remaining < swing_remaining then
@@ -896,6 +1219,167 @@ function ST.PALADIN.update_judgement_marker(self, hand)
     marker:SetStartPoint("TOPLEFT", offset, 0)
     marker:SetEndPoint("TOPLEFT", offset, h * -1)
     marker:Show()
+end
+
+function ST.PALADIN.update_reseal_marker(self, hand)
+    -- Reseal marker (P1, SST 3.1.0 shape): drawn at the swing position where the
+    -- running GCD clears (the pure GCD-clear fraction in twist.lua), so the
+    -- player sees when a reseal press becomes possible relative to the twist
+    -- window the band draws. Shown only while its own option is on
+    -- (reseal_marker_enabled == true, nil = off), the twist system itself is on,
+    -- a twist-capable seal is up and the swing record is usable - the same
+    -- availability the band gates on, minus the band's own marker toggle. The
+    -- Retail stand-in never swings, so the marker stays hidden there like the
+    -- band; a GCD clearing outside this swing hides it (unknown-hides).
+    local vf = self:get_visuals_frame(hand)
+    local marker = vf and vf.reseal_marker
+    if not marker then
+        return
+    end
+    local now = api.get_time()
+    local db = self:get_class_table()
+    local d = self[hand]
+    local fraction
+    if db.reseal_marker_enabled == true and db.twist_enabled ~= false
+        and not st.is_retail
+        and st.twist.is_twist_seal_active(self.has_soc, self.has_sor)
+        and d and type(d.speed) == "number" and d.speed > 0
+        and d.ends_at and d.start and not d.is_full then
+        local gcd = self.gcd
+        local gcd_remaining = (gcd and gcd.expires
+            and math.max(0, gcd.expires - now)) or 0
+        fraction = st.twist.get_reseal_marker_fraction(
+            d.speed, math.max(0, d.ends_at - now), gcd_remaining)
+    end
+    if fraction == nil then
+        if marker:IsShown() then
+            marker:Hide()
+        end
+        return
+    end
+    local w, h = self:get_bar_visuals_width_and_height(hand)
+    marker:SetWidth(RESEAL_MARKER_WIDTH)
+    marker:SetHeight(h)
+    marker:ClearAllPoints()
+    marker:SetPoint("TOPLEFT", vf, "TOPLEFT", fraction * w, 0)
+    marker:Show()
+end
+
+-- Design mode counts as active while the designer runs (the options button and
+-- the /st design command both route through st.designmode.toggle; the module is
+-- absent on flavors without the file, so the probe is nil-safe). Bar children
+-- force-show through this so their overlays can grab them; gameplay visibility
+-- is untouched (the gate is only ever true inside an active design session, and
+-- the archive previews elements the same way so they can be placed live).
+local function designing()
+    return st.designmode and type(st.designmode.is_active) == "function"
+        and st.designmode.is_active() == true
+end
+
+-- Seal-icon detach (designmode "Seal icons" element): attached (nil) keeps the
+-- archive anchor right of the bar; a design-mode drag stores detached centre
+-- offsets and re-anchors to UIParent. No option widget: the db keys are
+-- design-flow-only (drag writes, double-click reset clears), exactly like the
+-- practice panel offsets.
+function ST.PALADIN.apply_seal_icons_anchor(self)
+    local vf = self:get_visuals_frame("mainhand")
+    local set = vf and vf.seal_icons
+    local frame = set and set.frame
+    if not frame then
+        return
+    end
+    local db = self:get_class_table()
+    if db.seal_icons_detached == true
+        and type(db.seal_icons_x) == "number"
+        and type(db.seal_icons_y) == "number" then
+        local s = frame:GetScale() or 1
+        if s <= 0 then
+            s = 1
+        end
+        frame:ClearAllPoints()
+        frame:SetPoint("CENTER", UIParent, "CENTER", db.seal_icons_x / s, db.seal_icons_y / s)
+        return
+    end
+    local bar_frame = self.mainhand.anchor_frame and self:get_bar_frame("mainhand")
+    if not bar_frame then
+        return
+    end
+    frame:ClearAllPoints()
+    frame:SetPoint("LEFT", bar_frame, "RIGHT", SEAL_ICON_GAP, 0)
+end
+
+function ST.PALADIN.save_seal_icons_position(self, x, y)
+    local vf = self:get_visuals_frame("mainhand")
+    if not (vf and vf.seal_icons and vf.seal_icons.frame) then
+        return
+    end
+    local db = self:get_class_table()
+    db.seal_icons_detached = true
+    db.seal_icons_x = math.floor(x + 0.5)
+    db.seal_icons_y = math.floor(y + 0.5)
+    self.PALADIN.apply_seal_icons_anchor(self)
+end
+
+function ST.PALADIN.reset_seal_icons_position(self)
+    local vf = self:get_visuals_frame("mainhand")
+    if not (vf and vf.seal_icons and vf.seal_icons.frame) then
+        return
+    end
+    local db = self:get_class_table()
+    db.seal_icons_detached = nil
+    db.seal_icons_x = nil
+    db.seal_icons_y = nil
+    self.PALADIN.apply_seal_icons_anchor(self)
+end
+
+-- Twist success-text detach (designmode "Successful twist text" element): same
+-- detach shape as the seal icons above (attached = centred above the bar,
+-- drag = UIParent offsets, reset = re-attach). The widget is a font string,
+-- which supports the same ClearAllPoints/SetPoint anchoring.
+function ST.PALADIN.apply_twist_text_anchor(self)
+    local vf = self:get_visuals_frame("mainhand")
+    local text = vf and vf.twist_text
+    if not text then
+        return
+    end
+    local db = self:get_class_table()
+    if db.twist_text_detached == true
+        and type(db.twist_text_x) == "number"
+        and type(db.twist_text_y) == "number" then
+        local s = text:GetScale() or 1
+        if s <= 0 then
+            s = 1
+        end
+        text:ClearAllPoints()
+        text:SetPoint("CENTER", UIParent, "CENTER", db.twist_text_x / s, db.twist_text_y / s)
+        return
+    end
+    text:ClearAllPoints()
+    text:SetPoint("BOTTOM", vf, "TOP", 0, 6)
+end
+
+function ST.PALADIN.save_twist_text_position(self, x, y)
+    local vf = self:get_visuals_frame("mainhand")
+    if not (vf and vf.twist_text) then
+        return
+    end
+    local db = self:get_class_table()
+    db.twist_text_detached = true
+    db.twist_text_x = math.floor(x + 0.5)
+    db.twist_text_y = math.floor(y + 0.5)
+    self.PALADIN.apply_twist_text_anchor(self)
+end
+
+function ST.PALADIN.reset_twist_text_position(self)
+    local vf = self:get_visuals_frame("mainhand")
+    if not (vf and vf.twist_text) then
+        return
+    end
+    local db = self:get_class_table()
+    db.twist_text_detached = nil
+    db.twist_text_x = nil
+    db.twist_text_y = nil
+    self.PALADIN.apply_twist_text_anchor(self)
 end
 
 function ST.PALADIN.update_seal_icons(self, hand)
@@ -1016,6 +1500,14 @@ function ST.PALADIN.update_seal_icons(self, hand)
     elseif set.frame:IsShown() then
         set.frame:Hide()
     end
+    if not any_shown and designing() and enabled then
+        -- Design mode previews an empty-but-visible row so the overlay can
+        -- grab it; the slots stay hidden (no seals tracked). Gameplay hiding
+        -- is untouched (designing() is false outside design).
+        if not set.frame:IsShown() then
+            set.frame:Show()
+        end
+    end
 end
 
 function ST.PALADIN.twist_glow_start(self)
@@ -1028,15 +1520,15 @@ function ST.PALADIN.twist_glow_start(self)
     end
     local db = self:get_class_table()
     LCG.PixelGlow_Start(frame,
-        {self:convert_color(twist_color(db, "twist_success_glow_color", TWIST_GLOW_COLOR))},
-        TWIST_GLOW_LINES,
-        TWIST_GLOW_FREQUENCY,
+        {self:convert_color(twist_color(db, "twist_success_glow_color", ST.PALADIN.twist_colors.glow))},
+        ST.PALADIN.twist_glow.lines,
+        ST.PALADIN.twist_glow.frequency,
         nil,
-        TWIST_GLOW_THICKNESS,
+        ST.PALADIN.twist_glow.thickness,
         0,
         0,
         false,
-        TWIST_GLOW_KEY
+        ST.PALADIN.twist_glow.key
     )
 end
 
@@ -1045,7 +1537,7 @@ function ST.PALADIN.twist_glow_stop(self)
     if not frame then
         return
     end
-    LCG.PixelGlow_Stop(frame, TWIST_GLOW_KEY)
+    LCG.PixelGlow_Stop(frame, ST.PALADIN.twist_glow.key)
 end
 
 -- Bloodlust / Heroism twist-window override (bench/verify_bank.md P3): the
@@ -1065,7 +1557,19 @@ local function get_twist_lust_remaining(self, now)
     end
     self.twist_lust_at = now
     self.twist_lust_remaining = nil
-    local remaining, _ = api.scan_player_aura(function(spell_id)
+    -- Name-vs-id rule: TBC matches the localized Bloodlust/Heroism names (the
+    -- ids CONFIRMED in bench/verify_bank.md §2; the English literals cover a
+    -- cold book, exactly like the warrior shout scans), every other family
+    -- matches the numeric ids only.
+    local lust_a, lust_b
+    if st.family == "TBC" then
+        lust_a = resolve_spell_name(2825) or "Bloodlust"
+        lust_b = resolve_spell_name(32182) or "Heroism"
+    end
+    local remaining, _ = api.scan_player_aura(function(spell_id, name)
+        if st.family == "TBC" then
+            return name == lust_a or name == lust_b
+        end
         return spell_id == 2825 or spell_id == 32182
     end)
     if type(remaining) == "number" and remaining > 0 then
@@ -1082,6 +1586,30 @@ local function get_twist_lust_remaining(self, now)
     return self.twist_lust_remaining
 end
 
+-- Forward declaration: the Divine Storm rune resolver lives with the other
+-- rank resolvers further below; the window helper above needs it at call
+-- time (Lua resolves the file-local at definition, so the later
+-- `resolve_ds_spell_id = function(now)` assigns this same local).
+local resolve_ds_spell_id
+
+-- SoD detection (rune spells only, never version strings: SoD runs on the ERA
+-- family client): a book carrying a SoD paladin rune runs the APLs that twist
+-- inside 200 ms. Shared by the window helper (bar band) and the guide gather
+-- (landmarks) so both narrow together. cs_known/ds_id are the caller's own
+-- reads; the Martyr probe is the third rune leg.
+local function is_sod_client(cs_known, ds_id)
+    if not is_era_family then
+        return false
+    end
+    if cs_known == true then
+        return true
+    end
+    if ds_id ~= nil then
+        return true
+    end
+    return is_spell_known_query(348700)
+end
+
 function ST.PALADIN.get_twist_window_time_before_swing(self)
     -- Twist window duration (seconds before the swing lands): the 400 ms baseline
     -- plus the configured padding, per the archived build's helper. The lag used
@@ -1093,6 +1621,15 @@ function ST.PALADIN.get_twist_window_time_before_swing(self)
     local lag_ms = raw_ms * (db.lag_multiplier or 1.4) + (db.lag_offset or 15)
     local window = st.twist.get_window_seconds(
         db.twist_padding_mode, lag_ms, db.twist_window_padding_ms)
+    -- SoD twist builds twist inside 200 ms, not 400 ms (all SoD twist APLs):
+    -- the baseline narrows on rune detection while the user's padding rides
+    -- on top unchanged. Resolved here (not latched) so the band and the guide
+    -- landmarks the gather feeds from this same helper narrow together.
+    local na = st.nextaction
+    local sod_cs_known = na and na.CS_SPELL_ID
+        and is_spell_known_query(na.CS_SPELL_ID) or false
+    window = st.twist.narrow_window_for_sod(window,
+        is_sod_client(sod_cs_known, resolve_ds_spell_id(api.get_time())))
     -- Lust override (nil = off): narrows the window through the pure engine
     -- helper. The helper is nil-guarded so a build without nextaction.lua
     -- (none shipped, but the archived loaders) degrades to the base window.
@@ -1137,6 +1674,7 @@ function ST.PALADIN.setup_twist_visuals(self)
     text:SetFont(font_path, db.twist_success_text_size or 24, "OUTLINE")
     text:Hide()
     vf.twist_text = text
+    self.PALADIN.apply_twist_text_anchor(self)
 
     -- Hit-rate badge (below the bar, own line so it never overlaps the
     -- success text above the bar): text built here, shown by the per-frame
@@ -1158,6 +1696,16 @@ function ST.PALADIN.setup_twist_visuals(self)
     judge:SetColorTexture(self:convert_color(JUDGEMENT_MARKER_COLOR))
     judge:Hide()
     vf.judgement_marker = judge
+
+    -- Reseal marker line (P1): a full-height line drawn at the swing position
+    -- where the running GCD clears, like the judgement marker above.
+    -- Positioned per frame by update_reseal_marker below.
+    local reseal = vf:CreateTexture(nil, "OVERLAY")
+    reseal:SetDrawLayer("OVERLAY", -1)
+    reseal:SetColorTexture(self:convert_color(RESEAL_MARKER_COLOR))
+    reseal:SetWidth(RESEAL_MARKER_WIDTH)
+    reseal:Hide()
+    vf.reseal_marker = reseal
 
     -- Standalone seal icons (archive bar.lua:826-910): one slot per twist seal with
     -- a cooldown swipe and a timer text, attached right of the mainhand bar.
@@ -1226,6 +1774,7 @@ function ST.PALADIN.setup_seal_icons(self)
         set.slots[i] = slot
     end
     vf.seal_icons = set
+    self.PALADIN.apply_seal_icons_anchor(self)
 end
 
 function ST.PALADIN.on_bar_update(self, hand)
@@ -1264,6 +1813,8 @@ function ST.PALADIN.on_bar_update(self, hand)
     -- changes up between the HUD driver's ticks (the row itself ticks on its own
     -- driver frame, so this is cheap). Deliberately not gated on st.is_mainline: the
     -- Forever client must show the HUD, and the Retail stand-in simply never swings.
+    -- Runs after the guide tick above: the shared per-frame order is guide then
+    -- HUD in all six class modules (deep-audit F8).
     if st.hud then
         st.hud.on_bar_update(self, hand)
     end
@@ -1284,6 +1835,7 @@ function ST.PALADIN.on_bar_update(self, hand)
         -- The judgement line and seal icons share the band's Retail gate (their
         -- updaters hide them through the same st.is_retail rule).
         self.PALADIN.update_judgement_marker(self, hand)
+        self.PALADIN.update_reseal_marker(self, hand)
         self.PALADIN.update_seal_icons(self, hand)
         -- The mini-bars (JotC uptime, CD icons) share the same Retail gate.
         if vf.jotc_bar and vf.jotc_bar.frame:IsShown() then
@@ -1334,6 +1886,23 @@ function ST.PALADIN.on_bar_update(self, hand)
             and now < success_until then
             text:SetAlpha(math.min(1, (success_until - now) / 0.3))
             text:Show()
+        elseif designing()
+            and db.twist_enabled ~= false
+            and db.twist_feedback_enabled ~= false
+            and db.twist_success_text_enabled ~= false then
+            -- Design mode previews the success placement with the same literal
+            -- the real proc paints, so the hide branch below clears it like any
+            -- other text. Wins over the unknown-state text so the element being
+            -- positioned is the success message, not the "..." state.
+            if text.text_value ~= "Successful TWIST!" then
+                text.text_value = "Successful TWIST!"
+                text:SetText("Successful TWIST!")
+                text:SetTextColor(
+                    self:convert_color(twist_color(db, "twist_success_text_color", ST.PALADIN.twist_colors.success))
+                )
+            end
+            text:SetAlpha(1)
+            text:Show()
         elseif state_text then
             set_twist_state_text(text, state_text)
         elseif text:IsShown() then
@@ -1345,10 +1914,11 @@ function ST.PALADIN.on_bar_update(self, hand)
         end
     end
 
-    -- Judgement marker, seal icons and glow expiry run on every mainhand tick,
-    -- independent of the twist-band gates below: a Blood-only swing still times
-    -- Judgement and still shows its seals.
+    -- Judgement marker, reseal marker, seal icons and glow expiry run on every
+    -- mainhand tick, independent of the twist-band gates below: a Blood-only
+    -- swing still times Judgement and still shows its seals.
     self.PALADIN.update_judgement_marker(self, hand)
+    self.PALADIN.update_reseal_marker(self, hand)
     self.PALADIN.update_seal_icons(self, hand)
     if (self.twist_glow_until or 0) > 0
         and (db.twist_success_glow_enabled == false or now >= self.twist_glow_until) then
@@ -1421,7 +1991,7 @@ function ST.PALADIN.on_bar_update(self, hand)
         local w, h = self:get_bar_visuals_width_and_height(hand)
         band:SetWidth(max(1, w))
         band:SetHeight(h)
-        band:SetVertexColor(self:convert_color(TWIST_MARKER_COLOR, TWIST_STATE_BAND_ALPHA))
+        band:SetVertexColor(self:convert_color(ST.PALADIN.twist_colors.marker, TWIST_STATE_BAND_ALPHA))
         band:Show()
         return
     end
@@ -1464,23 +2034,23 @@ function ST.PALADIN.on_bar_update(self, hand)
     if db.twist_feedback_enabled ~= false
         and db.twist_success_text_enabled ~= false
         and (self.twist_success_until or 0) > now then
-        color = twist_color(db, "twist_success_text_color", TWIST_SUCCESS_COLOR)
+        color = twist_color(db, "twist_success_text_color", ST.PALADIN.twist_colors.success)
         alpha = 0.55
     elseif impossible then
-        color = twist_color(db, "twist_color_cant", TWIST_CANT_COLOR)
+        color = twist_color(db, "twist_color_cant", ST.PALADIN.twist_colors.cant)
         alpha = 0.5
     elseif db.twist_feedback_enabled ~= false
         and (self.twist_attempt_until or 0) > now then
-        color = twist_color(db, "twist_color_twisting", TWIST_TWISTING_COLOR)
+        color = twist_color(db, "twist_color_twisting", ST.PALADIN.twist_colors.twisting)
         alpha = 0.55
     elseif (self.twist_active_seals_count or 0) >= 2 then
-        color = twist_color(db, "twist_color_twisting", TWIST_TWISTING_COLOR)
+        color = twist_color(db, "twist_color_twisting", ST.PALADIN.twist_colors.twisting)
         alpha = 0.35 + 0.15 * math.sin(now * 8)
     elseif remaining <= window then
-        color = twist_color(db, "twist_marker_color", TWIST_MARKER_COLOR)
+        color = twist_color(db, "twist_marker_color", ST.PALADIN.twist_colors.marker)
         alpha = 0.30
     else
-        color = twist_color(db, "twist_marker_color", TWIST_MARKER_COLOR)
+        color = twist_color(db, "twist_marker_color", ST.PALADIN.twist_colors.marker)
         alpha = 0.15
     end
     band:SetVertexColor(self:convert_color(color, alpha))
@@ -1520,7 +2090,9 @@ end
 function ST.PALADIN.on_successful_twist(self)
     -- Called when a Command proc confirms a successful twist.
     -- Twist hit-rate: successes count like the attempts, ahead of the feedback
-    -- gates (they only own the visuals/sounds, never the truth).
+    -- gates (they only own the visuals/sounds, never the truth). The proc
+    -- stamp arms the ICD attempt discipline for the next swings.
+    self.twist_last_proc_at = api.get_time()
     self.twist_score_successes = (self.twist_score_successes or 0) + 1
     if self:get_class_table().twist_score_persist == true then
         local score_db = self:get_class_table()
@@ -1539,7 +2111,7 @@ function ST.PALADIN.on_successful_twist(self)
         text.text_value = "Successful TWIST!"
         text:SetText("Successful TWIST!")
         text:SetTextColor(
-            self:convert_color(twist_color(db, "twist_success_text_color", TWIST_SUCCESS_COLOR))
+            self:convert_color(twist_color(db, "twist_success_text_color", ST.PALADIN.twist_colors.success))
         )
         text:SetAlpha(1)
         text:Show()
@@ -1551,6 +2123,13 @@ function ST.PALADIN.on_combat_exit(self)
     -- next fight (they would suppress its first twist attempts).
     self.twist_extra_attacks_pending = 0
     self.twist_attempt_pending = false
+    -- Combat-scoped recency stamps: an ICD/proc stamp or auto stamp must not
+    -- leak into the next fight (they would suppress or mistime its first
+    -- reseals), and the pull-phase clock restarts with the fight.
+    self.twist_last_proc_at = nil
+    self.guide_last_auto_at = nil
+    self.guide_combat_start_at = nil
+    self.guide_was_in_combat = false
     -- Combat-scoped twist-glow state: a glow started on the killing swing must not
     -- leak its stop into the next fight's first attempt. The stop touches bar
     -- visuals, so it carries the init guard (wiring_check check 3); the state
@@ -1605,14 +2184,35 @@ end
 -- client's Crusader Strike spell-book answer), target_health_pct (target hp
 -- percent, nil when unknown) and how_remaining (Hammer of Wrath cooldown
 -- remaining, nil when unknown); this gather fills them (the Era/Forever ones
--- only on their family, nil elsewhere).
--- FCFS inputs (Wrath FCFS + SoD Exodin; nil on every other family, which the
--- archived tree ignores as unknown names): fcfs_mode ("wrath" | "sod"),
+-- only on their family, nil elsewhere). Sim-sourced recency (nil when the
+-- caller cannot time it = archived): cs_hold_remaining (pull-phase CS hold
+-- left, TBC only), auto_age_seconds (seconds since the last real auto),
+-- reseal_auto_guard_seconds (TBC reseal age guard, TBC only).
+-- Still filed (nil = archived, no source in scope): fight_remaining_pct
+-- (encounter timer), time_to_pull_seconds (pull timer), seal_remaining_seconds
+-- (per-SoD-build seal source; the Exodin maintained seal's role mapping is
+-- UNCONFIRMED, so the SoC aura is not guessed here — the SoD-variant stack
+-- timers below (soc/som_remaining_seconds, SoC 20920r5 + SoM 407798 per the
+-- p8-stack APL) and the shock/wrath seal-maintenance role (p8 primary
+-- UNCONFIRMED: SoR per P5/P7 predecessors vs SoM per P7 2H) are the filed
+-- follow-ups, not this tick). Live since the follow-ups lane:
+-- how_cast_seconds (cast-time probe), twist_mana_threshold (db key, nil =
+-- off), soc_rank1_known (spell-book read), strict_sequence (SoD rune gate).
+-- FCFS inputs (Wrath FCFS + SoD Exodin + three SoD-native variants; nil on
+-- every other family, which the archived tree ignores as unknown names):
+-- fcfs_mode ("wrath" | "sod" | "sod_stack" | "sod_shock" | "sod_wrath"),
 -- ds_remaining (Divine Storm cooldown, nil while unresolved/unknown),
 -- cons_remaining / exo_remaining (the filler mirror's agreed cooldowns),
--- hw_remaining (Wrath Holy Wrath cooldown, nil elsewhere) and has_aow (live Art
--- of War flag, gating the Wrath Exorcism). The FCFS engine (evaluate_fcfs)
--- consumes them; the provider dispatch selects the engine by fcfs_mode.
+-- hw_remaining (Wrath Holy Wrath cooldown, nil elsewhere), has_aow (live Art
+-- of War flag, gating the Wrath Exorcism), hs_remaining / am_remaining
+-- (shockadin Holy Shock / Aura Mastery, ERA-gated, nil elsewhere),
+-- holy_power_stacks (1226461) + holy_power_set_known (1226460),
+-- sunlight_remaining (1239543) + templar_stack_remaining (1240574, shock) +
+-- templar_wrath_remaining (1226464, wrath-like), sod_t2_known (467518),
+-- sod_naxx_known (1219193), sod_libram_known (1214298), am_rune_known
+-- (407624), soc/som_remaining_seconds (stack dual timers) +
+-- sod_dual_seal_active. The FCFS engine (evaluate_fcfs) consumes them; the
+-- provider dispatch selects the engine by fcfs_mode.
 -- cs_duration / judge_duration are display-only and are ignored by the engine: the full
 -- length (seconds) of the last real CS / Judgement cooldown the client reported, or nil
 -- when none has been seen. nextaction_ui.lua uses them for its cooldown swipes, falling
@@ -1671,7 +2271,8 @@ local function get_guide_jotc_remaining(self, now)
             local name, _, _, _, _, expiration, _, _, _, spell_id =
                 api.UnitAura("target", i, "HARMFUL")
             if name ~= nil then
-                if spell_id and jotc_ids[spell_id] and expiration and expiration > 0 then
+                if aura_matches(jotc_ids, jotc_name_box, spell_id, name)
+                    and expiration and expiration > 0 then
                     local remaining = expiration - now
                     if best == nil or remaining < best then
                         best = remaining
@@ -1700,7 +2301,9 @@ end
 -- aura-based and knows nothing about spell cooldowns.
 local function get_guide_cooldown_remaining(self, spell, latch_key, duration_key)
     local now = api.get_time()
-    local start_time, duration = api.GetSpellCooldown(spell)
+    -- Name-vs-id rule: the query is the localized name on TBC, the numeric id
+    -- elsewhere (filler names pass through untouched on both).
+    local start_time, duration = api.GetSpellCooldown(spell_query(spell))
     if not start_time or not duration or duration == 0 then
         return 0
     end
@@ -1790,7 +2393,7 @@ local function resolve_how_spell_id(now)
     end
     how_retry_at = now + HOW_RESOLVE_RETRY_S
     for i = 1, #how_ids do
-        if api.is_spell_known(how_ids[i]) then
+        if is_spell_known_query(how_ids[i]) then
             how_spell_id = how_ids[i]
             return how_spell_id
         end
@@ -1809,6 +2412,35 @@ local function get_guide_how_remaining(self, now)
     return get_guide_cooldown_remaining(self, known_id)
 end
 
+-- Hammer of Wrath cast time (seconds) for the engine's instant-cast cue, or
+-- nil while the spell is unknown on this client. compat's GetSpellInfo (see
+-- compat.lua GetSpellInfo: the classic global, else C_Spell, else the 1.5 s
+-- fallback) normalizes castTime to milliseconds on every family (the shaman
+-- catalogue and the hunter Steady probe read the same 4th return), so ms/1000
+-- is the seconds domain the engine compares. 0 is a real answer (instant);
+-- nil is unknown = archived hp-only rule. Cached per resolved id (a rank's
+-- cast time never changes); an unresolvable read retries next tick instead of
+-- latching unknown. No compat change was needed: the probe already exists.
+local how_cast_id, how_cast_seconds, how_cast_ready = nil, nil, false
+
+local function get_guide_how_cast_seconds(now)
+    local known_id = resolve_how_spell_id(now)
+    if not known_id then
+        how_cast_id, how_cast_ready = nil, false
+        return nil
+    end
+    if how_cast_ready and how_cast_id == known_id then
+        return how_cast_seconds
+    end
+    local name, _, _, cast_ms = api.GetSpellInfo(known_id)
+    if name == nil or type(cast_ms) ~= "number"
+        or cast_ms ~= cast_ms or cast_ms < 0 then
+        return nil
+    end
+    how_cast_id, how_cast_seconds, how_cast_ready = known_id, cast_ms / 1000, true
+    return how_cast_seconds
+end
+
 -- Divine Storm ranks for the FCFS branches (Wrath FCFS #3, SoD Exodin #3):
 -- 53385 is the Wrath rank-1 id; the SoD rune reuses it when the book says so
 -- (confirm both in-client). Same resolve-once/retry discipline as HoW above; nil
@@ -1818,7 +2450,7 @@ local ds_spell_id = nil
 local ds_retry_at = 0
 local DS_RESOLVE_RETRY_S = 5
 
-local function resolve_ds_spell_id(now)
+resolve_ds_spell_id = function(now)
     if ds_spell_id then
         return ds_spell_id
     end
@@ -1827,7 +2459,7 @@ local function resolve_ds_spell_id(now)
     end
     ds_retry_at = now + DS_RESOLVE_RETRY_S
     for i = 1, #ds_ids do
-        if api.is_spell_known(ds_ids[i]) then
+        if is_spell_known_query(ds_ids[i]) then
             ds_spell_id = ds_ids[i]
             return ds_spell_id
         end
@@ -1851,13 +2483,46 @@ local function resolve_hw_spell_id(now)
     end
     hw_retry_at = now + DS_RESOLVE_RETRY_S
     for i = 1, #hw_ids do
-        if api.is_spell_known(hw_ids[i]) then
+        if is_spell_known_query(hw_ids[i]) then
             hw_spell_id = hw_ids[i]
             return hw_spell_id
         end
     end
     return nil
 end
+
+-- Holy Shock ranks for the shockadin branch (bench/sod_paladin_variants_2026-10-19.md
+-- §4; 20930r3 max rank per sim/paladin/holy_shock.go, 30 s CD, 6 s with the
+-- Infusion of Light waist rune — Infusion spell id NOT in the bench file, so the
+-- 6 s shape is FILED, the 30 s fallback reads from the client cooldown).
+-- Max rank first; same resolve-once/retry discipline; nil while unresolved,
+-- which withholds HS in the engine (never a wrong prompt). ERA-gated in the
+-- gather (shockadin is SoD-only).
+local hs_ids = { 20930, 20929, 20473 }
+local hs_spell_id = nil
+local hs_retry_at = 0
+
+local function resolve_hs_spell_id(now)
+    if hs_spell_id then
+        return hs_spell_id
+    end
+    if now < hs_retry_at then
+        return nil
+    end
+    hs_retry_at = now + DS_RESOLVE_RETRY_S
+    for i = 1, #hs_ids do
+        if is_spell_known_query(hs_ids[i]) then
+            hs_spell_id = hs_ids[i]
+            return hs_spell_id
+        end
+    end
+    return nil
+end
+
+-- Shockadin Aura Mastery id (407624 legs rune per sim/paladin/aura_mastery.go;
+-- Sanctified holy-multiplier, Libram-of-Sanctity-gated; APL-cited, in-client
+-- UNCONFIRMED). Single id: known = rune known (no rank table).
+local AM_SPELL_ID = 407624
 
 --=========================================================================================
 -- Judgement of the Crusader mini-bar + paladin cooldown icon group
@@ -1943,7 +2608,7 @@ local function resolve_cd_racial(now)
         return nil
     end
     for i = 1, #CD_RACIAL_CANDIDATES do
-        if api.is_spell_known(CD_RACIAL_CANDIDATES[i]) then
+        if is_spell_known_query(CD_RACIAL_CANDIDATES[i]) then
             cd_racial_spell_id = CD_RACIAL_CANDIDATES[i]
             return cd_racial_spell_id
         end
@@ -2005,7 +2670,7 @@ local function pulse_jotc_scan(self, now)
         local name, _, _, _, _, expiration, _, _, _, spell_id =
             api.UnitAura("target", i, "HARMFUL")
         if name ~= nil then
-            if spell_id and jotc_ids[spell_id]
+            if aura_matches(jotc_ids, jotc_name_box, spell_id, name)
                 and type(expiration) == "number" and expiration > 0 then
                 self.jotc_tracked = true
                 self.jotc_id = spell_id
@@ -2027,11 +2692,14 @@ function ST.PALADIN.note_swing_landed(self)
     -- discipline (procedural extra attacks are not weapon strikes), ahead of
     -- the twist-attempt gates, so a swing that also arms an attempt still
     -- refreshes the debuff. No-op when nothing is tracked.
+    -- Auto-age stamp (untouched by the JotC gates below): the guide's
+    -- swing-recency inputs read this; combat-scoped, reset on combat exit.
+    local now = api.get_time()
+    self.guide_last_auto_at = now
     if self.jotc_tracked ~= true or self.jotc_id ~= JOTC_MAX_RANK_ID
         or type(self.jotc_expires) ~= "number" then
         return
     end
-    local now = api.get_time()
     if now >= self.jotc_expires then
         return
     end
@@ -2198,7 +2866,7 @@ end
 local function cd_slot_remaining(slot, spell_id, now)
     if slot.scan_at == nil or (now - slot.scan_at) >= CD_RESCAN_INTERVAL then
         slot.scan_at = now
-        local start_time, duration = api.GetSpellCooldown(spell_id)
+        local start_time, duration = api.GetSpellCooldown(spell_query(spell_id))
         if start_time and type(duration) == "number" and duration > 1.51 then
             slot.cd_expires = start_time + duration
             slot.cd_full = duration
@@ -2462,6 +3130,25 @@ function ST.PALADIN.resolve_guide_icons()
     end
 end
 
+-- The rotation order the running client plays: the FCFS mode the live gather
+-- decided on, or the twist tree when there is none (the twist tree's order id
+-- is "twist"). One source, so the practice rotation slice and the practice
+-- decision can never name different orders.
+--
+-- The practice-side state and helpers live on the MODULE TABLE, not in file
+-- locals: classes/paladin.lua already sits at the Lua 5.1 ceiling of 200 locals
+-- per function (the main chunk IS one function), so a new file-local would not
+-- load at all. The names are internal helpers of this section.
+ST.PALADIN.practice_running_order = nil
+
+-- The order id of one FCFS mode (nil = the twist tree).
+function ST.PALADIN.practice_order_for_mode(mode)
+    if type(mode) == "string" and mode ~= "" then
+        return mode
+    end
+    return "twist"
+end
+
 function ST.PALADIN.gather_guide_inputs(self, out)
     local na = st.nextaction
     local now = api.get_time()
@@ -2508,11 +3195,32 @@ function ST.PALADIN.gather_guide_inputs(self, out)
         if (inputs.era or inputs.forever) and self.has_sor then
             twist_seal_up = true
         end
-        inputs.seal = na.get_seal_state(self.has_soc, twist_seal_up,
+        local soc_up = self.has_soc
+        if inputs.forever then
+            -- Echo-aura maintenance (Twist of Light recasts a seal whose Echo
+            -- is inactive): an explicitly inactive Echo degrades that seal to
+            -- down, so the tree recasts it. nil (untracked, including the
+            -- empty-tables present) keeps the archived aura value.
+            if self.has_echo_command == false then
+                soc_up = false
+            end
+            if self.has_echo_twist == false then
+                twist_seal_up = false
+            end
+        end
+        inputs.seal = na.get_seal_state(soc_up, twist_seal_up,
             self.soc_expires and (self.soc_expires - now))
     else
         inputs.seal = "none"
     end
+
+    -- Holy Strike (Forever): the class resolves the id by NAME (the discipline
+    -- above) and asks the spell book about it; nil = unknown (the client has
+    -- not confirmed the id yet), true/false = the book's own answer. The
+    -- engine does not read it yet - the frozen ten guide slots have no Holy
+    -- Strike slot and a slot-budget ruling is owed before one is added - so
+    -- this is a plug-in point, not a behaviour change.
+    inputs.holy_strike_known = self.holy_strike_known
 
     -- Display-only seal swipe fields for the guide frame (its cooldown_key slot
     -- swipes read <key>_expires / <key>_duration from these inputs; the engine
@@ -2536,7 +3244,7 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     -- the 999 sentinel). The swipe LENGTHs ride along in cs_duration /
     -- judge_duration (display-only; see the input-contract comment above) and are read
     -- after the calls, so they describe the cooldown this same tick reported.
-    local cs_known = na and na.CS_SPELL_ID and api.is_spell_known(na.CS_SPELL_ID) or false
+    local cs_known = na and na.CS_SPELL_ID and is_spell_known_query(na.CS_SPELL_ID) or false
     inputs.cs_known = cs_known
     if na and na.CS_SPELL_ID then
         if cs_known then
@@ -2557,6 +3265,67 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     -- its own constant.
     inputs.cs_duration = self.guide_cs_duration
     inputs.judge_duration = self.guide_judge_duration
+    inputs.hs_duration = self.guide_hs_duration
+
+    -- Pull-phase clock (TBC sim "Delay Major CDs" 11 s): the combat-start latch
+    -- below clocks the fight; inside the hold the engine suppresses the CS
+    -- override. nil everywhere else (non-TBC, stale clock) = archived.
+    if self.in_combat == true then
+        if self.guide_was_in_combat ~= true then
+            self.guide_combat_start_at = now
+        end
+    else
+        self.guide_combat_start_at = nil
+    end
+    self.guide_was_in_combat = self.in_combat == true
+    inputs.cs_hold_remaining = nil
+    if is_tbc_family and na and na.TBC_PULL_CS_HOLD_SECONDS
+        and type(self.guide_combat_start_at) == "number" then
+        local hold_left = na.TBC_PULL_CS_HOLD_SECONDS
+            - (now - self.guide_combat_start_at)
+        if hold_left > 0 then
+            inputs.cs_hold_remaining = hold_left
+        end
+    end
+
+    -- Swing recency (TBC reseal guard + Forever HoW window): seconds since the
+    -- last real auto landed (the CLEU swing stamp; nil until the first one).
+    -- Practice-safe: the sim owns no CLEU stamp, so practice ticks read
+    -- unknown = archived. The guard itself arms on TBC only (the sim-sourced
+    -- family); the age rides everywhere the stamp exists.
+    inputs.auto_age_seconds = nil
+    if type(self.guide_last_auto_at) == "number"
+        and not (st.practice_ui and st.practice_ui.is_active()) then
+        inputs.auto_age_seconds = math.max(0, now - self.guide_last_auto_at)
+    end
+    inputs.reseal_auto_guard_seconds = nil
+    if is_tbc_family and na and na.TBC_RESEAL_AUTO_GUARD_SECONDS then
+        inputs.reseal_auto_guard_seconds = na.TBC_RESEAL_AUTO_GUARD_SECONDS
+    end
+    -- Filed inputs (no source in scope yet; nil = archived until those lanes
+    -- land): fight_remaining_pct needs a boss-HP / encounter-timer source,
+    -- time_to_pull_seconds needs a pull timer (main.lua), seal_remaining_seconds
+    -- needs a per-SoD-build seal source (provider map + guide slot +
+    -- nextaction_ui; the Exodin maintained seal's role mapping is UNCONFIRMED,
+    -- so the SoC aura is not guessed here).
+    inputs.fight_remaining_pct = nil
+    inputs.time_to_pull_seconds = nil
+    inputs.seal_remaining_seconds = nil
+    -- Mana-sustain governor groundwork (sim/audit: twisting ooms in 1-2 min
+    -- without support): the engine plug reads inputs.twist_mana_threshold
+    -- (nil = off = archived). The value, widget and default belong to the
+    -- options lane; this only forwards a set key. Filed need: options widget
+    -- + default for db.twist_mana_threshold_pct (percent, nil = off).
+    local mana_cap = db.twist_mana_threshold_pct
+    if type(mana_cap) ~= "number" or mana_cap ~= mana_cap then
+        mana_cap = nil
+    end
+    inputs.twist_mana_threshold = mana_cap
+    -- SoC Rank-1 reader (min/max consensus; sim APLs cast rank 1): rank-1 id
+    -- 20375 in the book. Verified live: api.is_spell_known rank probes gate
+    -- CS/DS/HoW the same way. The advice slot + option are filed.
+    inputs.soc_rank1_known = na and na.SOC_ID
+        and is_spell_known_query(na.SOC_ID) or false
 
     -- Filler availability. The engine consumes one cooldown value: the remaining
     -- time of the filler it would pick. That pick is mirrored here from the data the
@@ -2606,8 +3375,9 @@ function ST.PALADIN.gather_guide_inputs(self, out)
         inputs.filler_remaining = consecration_remaining
     end
 
-    -- FCFS inputs (Wrath FCFS + SoD Exodin; nil on every other family, which the
-    -- archived tree ignores as unknown names, so it runs bit-identically there).
+    -- FCFS inputs (Wrath FCFS + SoD Exodin + three SoD-native variants; nil on
+    -- every other family, which the archived tree ignores as unknown names, so
+    -- it runs bit-identically there).
     -- cons/exo reuse the filler mirror's agreed cooldowns above (no second client
     -- query); DS/Holy Wrath resolve here (nil while the book is cold or the spell
     -- unknown, which withholds them); has_aow is the live Art of War flag that
@@ -2620,13 +3390,112 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     inputs.ds_remaining = ds_id and get_guide_cooldown_remaining(self, ds_id) or nil
     local hw_id = is_wrath_family and resolve_hw_spell_id(now) or nil
     inputs.hw_remaining = hw_id and get_guide_cooldown_remaining(self, hw_id) or nil
+    -- The WotLK APL's UTILITY BAND (bench/paladin_apl_utility_build_2026-10-20.md
+    -- §2): Hand of Reckoning (the APL's i=1) and Hammer of Wrath (i=2). Both
+    -- ask the client's own spell book first - a build without the talent (or
+    -- without the spell) answers "unknown" and is never prompted (the
+    -- unknown-hides rule). The cooldown read is api.GetSpellCooldown through
+    -- the class's own helper (the TBC-name rule never applies here: the band
+    -- is Wrath-only).
+    if is_wrath_family then
+        local hor_id = ST.PALADIN.APL_UTILITY.hor.id
+        local howw_id = ST.PALADIN.APL_UTILITY.how_wrath.id
+        inputs.hor_remaining = is_spell_known_query(hor_id)
+            and get_guide_cooldown_remaining(self, hor_id) or nil
+        inputs.how_wrath_remaining = is_spell_known_query(howw_id)
+            and get_guide_cooldown_remaining(self, howw_id) or nil
+    else
+        inputs.hor_remaining = nil
+        inputs.how_wrath_remaining = nil
+    end
     local fcfs_family = is_wrath_family or is_era_family
     inputs.cons_remaining = fcfs_family and consecration_remaining or nil
     inputs.exo_remaining = fcfs_family and exorcism_remaining or nil
     inputs.has_aow = self.has_aow == true
-    local is_sod = is_era_family
-        and (cs_known or ds_id ~= nil or api.is_spell_known(348700))
-    inputs.fcfs_mode = is_wrath_family and "wrath" or (is_sod and "sod") or nil
+    local is_sod = is_sod_client(cs_known, ds_id)
+    -- SoD-native variant inputs (bench/sod_paladin_variants_2026-10-19.md §7;
+    -- all APL-cited, in-client UNCONFIRMED). ERA-gated + rune/item-gated
+    -- (never client-version): nil on every other family, and nil while the
+    -- book/auras are cold, which withholds the variant gates (unknown-hides).
+    -- Holy Shock ranks (20473/20929/20930): max-first resolve, ERA-gated.
+    local hs_id = is_era_family and resolve_hs_spell_id(now) or nil
+    inputs.hs_remaining = hs_id and get_guide_cooldown_remaining(self, hs_id,
+        "guide_hs_expires", "guide_hs_duration") or nil
+    -- Aura Mastery (407624): rune-known + live cooldown, ERA-gated.
+    local am_known = is_era_family and is_spell_known_query(AM_SPELL_ID)
+    inputs.am_rune_known = am_known
+    inputs.am_remaining = (is_era_family and am_known)
+        and get_guide_cooldown_remaining(self, AM_SPELL_ID) or nil
+    -- Holy-Power stacks (1226461 count) + set-known (1226460 presence).
+    local hp = self.holy_power_stacks
+    if type(hp) ~= "number" or hp ~= hp then
+        hp = nil
+    end
+    inputs.holy_power_stacks = is_era_family and hp or nil
+    inputs.holy_power_set_known = is_era_family and self.has_hp_set == true
+    -- Sunlight (1239543) / Templar-stack (1240574, shock) / Templar-wrath
+    -- (1226464, wrath-like) remaining seconds.
+    local function rem(expires)
+        if type(expires) == "number" and expires > now then
+            return expires - now
+        end
+        return nil
+    end
+    inputs.sunlight_remaining = is_era_family and rem(self.sunlight_expires) or nil
+    inputs.templar_stack_remaining = is_era_family and rem(self.templar_stack_expires) or nil
+    inputs.templar_wrath_remaining = is_era_family and rem(self.templar_wrath_expires) or nil
+    -- Set/item gates: S03 T2 Ret 2P (467518, wrath Judge), Naxx Ret 6P
+    -- (1219193, stack HW), Libram of Sanctity (1214298, shock AM).
+    inputs.sod_t2_known = is_era_family and self.has_sod_t2 == true
+    inputs.sod_naxx_known = is_era_family and self.has_sod_naxx == true
+    inputs.sod_libram_known = is_era_family and self.has_sod_libram == true
+    -- Stack dual-seal timers (SoC 20920r5 via soc_expires + SoM 407798 via
+    -- sob_expires, bench §3; ERA-gated, nil elsewhere/while cold).
+    inputs.soc_remaining_seconds = is_era_family and rem(self.soc_expires) or nil
+    inputs.som_remaining_seconds = is_era_family and rem(self.sob_expires) or nil
+    inputs.sod_dual_seal_active = is_era_family
+        and self.has_soc == true and self.has_sob == true
+    -- Variant selection (SoD-native, most-distinctive signal first; nil-safe,
+    -- no default-visible change: without the new signals this reads "sod",
+    -- the shipped Exodin):
+    --   shockadin: Holy Shock known (spellpower caster, §4-§5);
+    --   wrath-like: T2-2pc or wrath-Templar aura known (§6);
+    --   stack: dual seals live (§3, maintain-both playstyle);
+    --   else Exodin.
+    -- On-use item roles (241037 opener, 241241 upkeep) are NOT probed: the
+    -- warcraftdb titles ("Abandoned Experiment", "Lucky Doubloon") do not
+    -- match on-use-trinket roles (bench §8, NAME UNCONFIRMED) — the build
+    -- lane must resolve via sim items.go/itemhelpers before any icon/name
+    -- is wired (filed, no guess here).
+    local hs_known = hs_id ~= nil
+    local wrath_signal = inputs.sod_t2_known == true
+        or inputs.templar_wrath_remaining ~= nil
+    local sod_mode = nil
+    if is_sod then
+        sod_mode = "sod"
+        if hs_known then
+            sod_mode = "sod_shock"
+        elseif wrath_signal then
+            sod_mode = "sod_wrath"
+        elseif inputs.sod_dual_seal_active == true then
+            sod_mode = "sod_stack"
+        end
+    end
+    inputs.fcfs_mode = is_wrath_family and "wrath" or sod_mode
+    -- The rotation order the running client plays, published for the practice
+    -- surface (ST.PALADIN.practice_rotation_for): the live gather is the only
+    -- place that knows which SoD variant the client plays, so the practice
+    -- slice and the practice decision read the SAME name from here. The twist
+    -- tree (no FCFS mode) answers "twist".
+    ST.PALADIN.practice_running_order = ST.PALADIN.practice_order_for_mode(inputs.fcfs_mode)
+    -- Shockadin Holy Shock known flag (provider-local; the engine reads the
+    -- HS cooldown + stacks, this documents the signal for pins).
+    inputs.sod_hs_known = hs_known
+    -- strictSequence hard-wait (SoD twist APLs): a held twist on a strict
+    -- build waits the swing out instead of filling. Rune-gated, never a
+    -- version string; the frame paints out.hard_wait as WAIT
+    -- (nextaction_ui.lua display_active).
+    inputs.strict_sequence = is_sod
 
     -- Judgement-wait carry from the engine's previous output (kept by the display).
     inputs.waiting_judgement = self.guide_waiting_judgement and true or false
@@ -2635,12 +3504,21 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     -- bit-identically). Forever reuses the window: the beta Ret ST lists
     -- Hammer of Wrath below 20% (UNCONFIRMED).
     -- how_remaining is nil while the spell is unknown on this client.
-    if is_era_family or is_forever_family then
+    -- The TARGET HEALTH also reaches the WotLK client, where the APL's
+    -- Hammer of Wrath row (48806) is an execute-phase cast (the sim's own
+    -- ExtraCastCondition: sim.IsExecutePhase20()); the FCFS engine asks for it
+    -- only below 20 %, and an unknown health withholds it.
+    if is_era_family or is_forever_family or is_wrath_family then
         inputs.target_health_pct = get_guide_target_health_pct()
-        inputs.how_remaining = get_guide_how_remaining(self, now)
     else
         inputs.target_health_pct = nil
+    end
+    if is_era_family or is_forever_family then
+        inputs.how_remaining = get_guide_how_remaining(self, now)
+        inputs.how_cast_seconds = get_guide_how_cast_seconds(now)
+    else
         inputs.how_remaining = nil
+        inputs.how_cast_seconds = nil
     end
     return inputs
 end
@@ -2654,17 +3532,22 @@ end
 -- the engine's flags onto slot keys (the frame only knows keys) and publishes the
 -- rotation source the frame paints below the icons.
 --
--- SEVEN slots (cs, soc, sob, twist, judge, consecration, exorcism) plus the
--- Era execute cue below: EIGHT in total. The contract expects six or fewer
+-- TWELVE slots (cs, soc, sob, twist, judge, consecration, exorcism, how,
+-- holy_shock, aura_mastery, hor, how_wrath). The contract expects six or fewer
 -- per class; the composite twist cue and the execute cue are the paladin's
--- extra two, kept because they are the shipped visuals (the twist is one
+-- extra four, kept because they are the shipped visuals (the twist is one
 -- icon: Command full width with the half-width, centre-cropped Blood icon
--- over its right half - the WA's 'twist 1/2' + 'twist 2/2' pair).
+-- over its right half - the WA's 'twist 1/2' + 'twist 2/2' pair). The
+-- shockadin HS/AM slots render only when the engine prompts them through the
+-- generic out.filler_slot mapping (unknown-hides: no shock signal, no prompt).
+-- The last two are the WotLK APL's utility band (Hand of Reckoning, Hammer of
+-- Wrath): the count pin was re-cut with them (the HU-10 precedent - a count
+-- pin must match the shipped slot set, not a stale one).
 --
 -- Display specifics are exactly the shipped frame's: the 45x45 stacked action icons
 -- (levels 1/3/5), the composite twist at 8/9, the 22.5x24.9 judgement cue at
--- (-9,-10) with its Pixel glow, the three 45x45 filler icons (zoom 0.2 / 0.15 /
--- 0.15) with their FILLER captions, and the Blood opener dimmed to 0.5 while idle. Swipe
+-- (-9,-10) with its Pixel glow, the five 45x45 filler icons (zoom 0.2 / 0.15 x4)
+-- with their FILLER captions, and the Blood opener dimmed to 0.5 while idle. Swipe
 -- fallbacks keep the archive's constants (CS 6 s, Judgement 8 s, seals 30 s); the
 -- seal swipes drive always (from the aura expiries) while the CS / Judgement swipes
 -- only drive while their icon shows - the shipped display's split.
@@ -2709,6 +3592,28 @@ ST.PALADIN.guide = {
         -- FCFS engine's "how" channel there); same slot, same key, HW texture.
         { key = "how", spell_id = guide_how_spell_id, name_suffix = "FillerH",
             level = 15, zoom = 0.15, label = "FILLER" },
+        -- Shockadin Holy Shock (bench/sod_paladin_variants_2026-10-19.md §4;
+        -- 20930r3 max rank per sim/paladin/holy_shock.go; APL-cited, in-client
+        -- UNCONFIRMED): the engine's filler_kind "holy_shock" needs a slot or
+        -- the frame drops it as an unknown key. Same filler shape (no swipe,
+        -- captioned, above everything); lights only when prompted (unknown-hides).
+        { key = "holy_shock", spell_id = 20930, name_suffix = "FillerHS",
+            level = 16, zoom = 0.15, label = "FILLER" },
+        -- Shockadin Aura Mastery (407624 legs rune per sim/paladin/aura_mastery.go;
+        -- Sanctified holy-multiplier, Libram-of-Sanctity-gated; APL-cited, in-client
+        -- UNCONFIRMED): the engine's filler_kind "aura_mastery" rides the same
+        -- generic mapping. Same filler shape; lights only when prompted.
+        { key = "aura_mastery", spell_id = 407624, name_suffix = "FillerAM",
+            level = 17, zoom = 0.15, label = "FILLER" },
+        -- The WotLK APL's UTILITY BAND (bench/paladin_apl_utility_build_2026-10-20.md
+        -- §2): Hand of Reckoning (the APL's i=1) and Hammer of Wrath (i=2). The
+        -- engine's Wrath order carries both above the damage rows, so they land
+        -- on the ACTION channel and light these two icons. Same shape as the
+        -- Crusader Strike action icon (full size, no swipe - the cooldown is
+        -- the client's own, and the frame's swipe is a display channel the
+        -- action icons do not ride).
+        { key = "hor", spell_id = 67485, name_suffix = "IconHor", level = 10 },
+        { key = "how_wrath", spell_id = 48806, name_suffix = "IconHowW", level = 11 },
     },
 
     -- Live inputs: the existing gather, verbatim, into the caller's reused table.
@@ -2749,7 +3654,9 @@ ST.PALADIN.guide = {
         out.inputs_unknown = raw.inputs_unknown == true or inputs.inputs_unknown == true
         -- Era and Forever show no rotation pattern: the keys name CS-cycle
         -- cadences that do not exist without Crusader Strike. (The filler_kind
-        -- "how" passes through untouched to the HoW slot above.)
+        -- "how" passes through untouched to the HoW slot above; "holy_shock"
+        -- and "aura_mastery" ride the same generic mapping to the shockadin
+        -- slots.)
         out.rotation_key = nil
         -- FCFS has no rotation pattern (nothing to paint); the twist cadences
         -- stay TBC-only, Era and Forever stay patternless as before.
@@ -2758,6 +3665,25 @@ ST.PALADIN.guide = {
             out.rotation_key = na.calculate_rotation(inputs.speed, inputs.G)
         end
         out.waiting_judgement = raw.waiting_judgement
+        -- Follow-up advisories (display-only: none of these steers action,
+        -- hold or filler). The guide frame renders stopattack (STOP),
+        -- prepull_ready (PULL, combat path) and hard_wait (WAIT); the
+        -- StopAttack/StartAttack macro itself, the pull-timer source, the
+        -- seal-maintenance slot and the rank-1 slot stay filed (the
+        -- advisories ride along display-inert until those lanes land).
+        out.stopattack = raw.stopattack == true
+        out.prepull_ready = raw.prepull_ready == true
+        out.seal_maintenance = raw.seal_maintenance == true
+        out.rank1_advice = raw.rank1_advice == true
+        out.hard_wait = raw.hard_wait == true
+        -- Mana-governor surfacing (display mapping only, no rule change):
+        -- OOM reads while the governor withholds a reseal (a threshold is
+        -- set, mana sits below it, and the engine rides). The engine spends
+        -- no flag for this, so it is derived here from the same inputs; the
+        -- frame paints out.mana_low as OOM (nextaction_ui.lua).
+        local mana_cap = inputs.twist_mana_threshold
+        out.mana_low = type(mana_cap) == "number" and type(inputs.mana_pct) == "number"
+            and inputs.mana_pct < mana_cap and raw.riding == true
         return out
     end,
 
@@ -2785,10 +3711,25 @@ ST.PALADIN.guide = {
 -- Cooldown HUD: paladin slots and the live state provider
 --=========================================================================================
 -- The slot set is the archived HUD's (archive hud.lua:28-49): Crusader Strike,
--- Judgement, Consecration, Exorcism, the two trinket slots and Avenging Wrath. The
--- descriptor and provider contracts are frozen in hud.lua's header comment; the
--- "trinket" slots are served by the HUD's own tracker, every "spell" slot by
--- ST.PALADIN.get_hud_state below.
+-- Judgement, Consecration, Exorcism, the two trinket slots and Avenging Wrath,
+-- plus the guide→HUD mirror (bench/hud_parity_2026-10-19.md P-1): soc, sob,
+-- how, holy_shock, aura_mastery, and the WotLK APL's utility band (hor, how_wrath
+-- - bench/paladin_apl_utility_build_2026-10-20.md §2). The two band slots are
+-- DISPLAY-ONLY mirrors in the druid Claw shape (classes/druid.lua:2685): the
+-- provider hides them unless hud_show_<key> reads exactly true (nil = off), so a
+-- fresh profile's row is unchanged and no default-visible change ships. The
+-- twist cue stays guide-only (deferred like
+-- shaman's 13→8 in classes/shaman.lua:3057-3060): it is a composite timing cue
+-- with no single live spell flag without engine coupling, and the guide frame
+-- already covers it. Trinkets do not move last: wings ships last in the archive
+-- order, so the mirror appends after wings to preserve the existing indices.
+-- hud_show_soc/sob/how/holy_shock/aura_mastery defaults + widgets ship with the
+-- templates (hud-styles-build 2026-10-19); HS/AM stay unknown-hide provider-side
+-- (shockadin legs). Ids are rank-invariant fallbacks;
+-- cooldowns read by name (rank-agnostic). Wrath: sob carries Divine Storm and
+-- how carries Holy Wrath (guide_sob_spell_id/guide_how_spell_id, same slot same
+-- key); Era/Forever: sob shows the twist seal (Righteousness); otherwise Blood
+-- and Hammer of Wrath.
 --
 -- Exorcism: the archive carried the TBC rank id (27138) for the icon; the rank-1 id
 -- (879, the id the guide already uses) is the one that resolves on every family, so
@@ -2802,11 +3743,31 @@ ST.PALADIN.HUD_SLOTS = {
     { key = "trinket1", title = "Trinket 1", kind = "trinket", inv_slot = 13 },
     { key = "trinket2", title = "Trinket 2", kind = "trinket", inv_slot = 14 },
     { key = "wings", title = "Avenging Wrath", kind = "spell", spell = 31884 },
+    { key = "soc", title = "Seal of Command", kind = "spell", spell = 20375 },
+    { key = "sob", title = "Seal of Blood", kind = "spell", spell = guide_sob_spell_id },
+    { key = "how", title = "Hammer of Wrath", kind = "spell", spell = guide_how_spell_id },
+    { key = "holy_shock", title = "Holy Shock", kind = "spell", spell = 20930 },
+    { key = "aura_mastery", title = "Aura Mastery", kind = "spell", spell = 407624 },
+    -- The WotLK APL's UTILITY BAND (bench/paladin_apl_utility_build_2026-10-20.md
+    -- §2): Hand of Reckoning (the APL's i=1, 67485) and the WotLK Hammer of
+    -- Wrath (i=2, 48806). The ids are the APL's own - the guide's two band slots
+    -- carry the same pair - and the cooldowns read by NAME, like every other
+    -- slot here (the ids are rank-invariant icon fallbacks).
+    { key = "hor", title = "Hand of Reckoning", kind = "spell", spell = 67485 },
+    { key = "how_wrath", title = "Hammer of Wrath (WotLK)", kind = "spell", spell = 48806 },
 }
 
 -- One reused state table: the HUD reads it immediately and never keeps a reference
 -- (see the frozen contract in hud.lua), so there is no per-tick allocation here.
 ST.PALADIN.hud_state = {}
+
+-- The WotLK utility band's last spell-book answer, per slot key: "known" /
+-- "not_known" / "unknown" (the tri-state, compat.lua's
+-- api.is_spell_known_state). The HUD's frozen state table has no room for a
+-- reason, so the class keeps it here: it is the difference between "this build
+-- has no Hand of Reckoning" and "this client could not answer the question",
+-- and the operator's in-client check reads it.
+ST.PALADIN.hud_band_spell_state = {}
 
 -- Localized HUD slot spell names, resolved lazily (name-based cooldown and probe
 -- lookups are rank-agnostic). Resolved values are cached; a failed resolution (spell
@@ -2869,7 +3830,7 @@ local function hud_ability_cooldown(self, slot, now)
         if practice then
             remaining = hud_sim_remaining("cs_cooldown_expires", now)
         elseif st.nextaction and st.nextaction.CS_SPELL_ID
-            and api.is_spell_known(st.nextaction.CS_SPELL_ID) then
+            and is_spell_known_query(st.nextaction.CS_SPELL_ID) then
             remaining = get_guide_cooldown_remaining(self, st.nextaction.CS_SPELL_ID,
                 "guide_cs_expires", "guide_cs_duration")
         else
@@ -2911,7 +3872,7 @@ local function hud_ability_cooldown(self, slot, now)
         if practice then
             return 0, 180
         end
-        local start_time, duration = api.GetSpellCooldown(31884)
+        local start_time, duration = api.GetSpellCooldown(spell_query(31884))
         if start_time and duration and duration > 1.51 then
             local remaining = start_time + duration - now
             if remaining > 0 then
@@ -2919,6 +3880,121 @@ local function hud_ability_cooldown(self, slot, now)
             end
         end
         return 0, 180
+    elseif key == "soc" then
+        -- Seals have no cooldown (GCD-only); the aura swipe rides in the provider.
+        return 0, 0
+    elseif key == "sob" then
+        -- Wrath sob is Divine Storm (a real cooldown); every other family is the
+        -- twist-seal aura (GCD-only here, swipe in the provider). Practice reads
+        -- ready (the sim mirror owns the seals, not the cooldown).
+        if is_wrath_family then
+            if practice then
+                return 0, 0
+            end
+            local ds_id = resolve_ds_spell_id(now)
+            if not ds_id then
+                return 0, 0
+            end
+            local start_time, duration = api.GetSpellCooldown(spell_query(ds_id))
+            if start_time and duration and duration > 1.51 then
+                local remaining = start_time + duration - now
+                if remaining > 0 then
+                    return remaining, duration
+                end
+            end
+            return 0, 0
+        end
+        return 0, 0
+    elseif key == "how" then
+        -- Execute cue: Era/Forever Hammer of Wrath, Wrath Holy Wrath; every other
+        -- family hides (no signal, provider). Practice reads ready.
+        if practice then
+            return 0, 0
+        end
+        local hid = nil
+        if is_wrath_family then
+            hid = resolve_hw_spell_id(now)
+        elseif is_era_family or is_forever_family then
+            hid = resolve_how_spell_id(now)
+        end
+        if not hid then
+            return 0, 0
+        end
+        local start_time, duration = api.GetSpellCooldown(spell_query(hid))
+        if start_time and duration and duration > 1.51 then
+            local remaining = start_time + duration - now
+            if remaining > 0 then
+                return remaining, duration
+            end
+        end
+        return 0, 0
+    elseif key == "holy_shock" then
+        -- Shockadin (SoD-only, ERA-gated): unknown hides (no signal). Practice
+        -- reads ready.
+        if practice then
+            return 0, 0
+        end
+        if not is_era_family then
+            return 0, 0
+        end
+        local hs_id = resolve_hs_spell_id(now)
+        if not hs_id then
+            return 0, 0
+        end
+        local start_time, duration = api.GetSpellCooldown(spell_query(hs_id))
+        if start_time and duration and duration > 1.51 then
+            local remaining = start_time + duration - now
+            if remaining > 0 then
+                return remaining, duration
+            end
+        end
+        return 0, 0
+    elseif key == "aura_mastery" then
+        -- Shockadin legs rune (SoD-only, ERA-gated + known): unknown hides.
+        -- Practice reads ready.
+        if practice then
+            return 0, 0
+        end
+        if not is_era_family then
+            return 0, 0
+        end
+        if not is_spell_known_query(AM_SPELL_ID) then
+            return 0, 0
+        end
+        local start_time, duration = api.GetSpellCooldown(spell_query(AM_SPELL_ID))
+        if start_time and duration and duration > 1.51 then
+            local remaining = start_time + duration - now
+            if remaining > 0 then
+                return remaining, duration
+            end
+        end
+        return 0, 0
+    elseif key == "hor" or key == "how_wrath" then
+        -- The WotLK APL's UTILITY BAND (bench/paladin_apl_utility_build_2026-10-20.md
+        -- §2): Hand of Reckoning (67485) and the WotLK Hammer of Wrath (48806).
+        -- Both carry a REAL cooldown - sim wowsims/wotlk
+        -- sim/paladin/hand_of_reckoning.go:29 (CD 6 s with the Turalyon's
+        -- Plate 2pc, else 8 s) and sim wowsims/wotlk
+        -- sim/paladin/hammer_of_wrath.go:28 (CD 6 s) - so the slot shows the
+        -- client's own cooldown, read by NAME (rank-agnostic: the descriptor's
+        -- id is a rank-invariant icon fallback, this class's HUD convention).
+        -- The client's own duration drives the swipe - never a hardcoded number.
+        -- A client that cannot name the spell reads no state (the caller hides
+        -- the slot). The caller has already gated the slot on the family, the
+        -- spell book and the option, so this branch performs no probe of its
+        -- own.
+        local name = hud_slot_name(slot)
+        if not name then
+            return 0, 0
+        end
+        local start_time, duration = api.GetSpellCooldown(spell_query(name))
+        if start_time and duration and duration > 1.51 then
+            local remaining = start_time + duration - now
+            if remaining > 0 then
+                return remaining, duration
+            end
+        end
+        return 0, 0
     end
     return 0, 0
 end
@@ -2967,6 +4043,57 @@ function ST.PALADIN.get_hud_state(self, slot, now)
     s.text_remaining, s.desaturate, s.usable, s.in_range = nil, nil, nil, nil
     s.glow, s.count, s.texture, s.hidden = nil, nil, nil, nil
     now = now or api.get_time()
+    -- The WotLK APL's UTILITY BAND (bench/paladin_apl_utility_build_2026-10-20.md
+    -- §2): the two display-only mirrors (hor, how_wrath). Three gates, in this
+    -- order, before ANY read:
+    --   1) the option gate - the slot hides unless hud_show_<key> reads exactly
+    --      true (nil = off; the druid Claw shape, classes/druid.lua:2685), so a
+    --      fresh profile's row is unchanged. The key ships false (the druid
+    --      Claw's shape: the display-only mirror is off until the player turns
+    --      it on); false and nil both hide.
+    --   2) the family gate - the band is the WotLK APL's, so every other family
+    --      hides the slot and never asks its book about the two spells.
+    --   3) the spell-book gate - the STATE, not the boolean (see below).
+    -- The gate sits BEFORE the cooldown read: a hidden slot performs no reads.
+    if slot.key == "hor" or slot.key == "how_wrath" then
+        local show_db = self:get_class_table()
+        if type(show_db) ~= "table"
+            or show_db["hud_show_" .. slot.key] ~= true then
+            s.hidden = true
+            return s
+        end
+        if not is_wrath_family then
+            s.hidden = true
+            return s
+        end
+        -- The spell-book gate reads the STATE (compat.lua's
+        -- api.is_spell_known_state), not the binary: the boolean folds "the
+        -- player does not know it" and "this client cannot answer" into one
+        -- false, so the gate could not tell the two apart - and the honest
+        -- reason for a hidden slot differs. The state tells them apart:
+        --   "known"     - the player has the talent: the slot shows.
+        --   "not_known" - the build has no such talent: the slot hides (the
+        --                 probe runs every tick, so a talent change is picked
+        --                 up without a reload).
+        --   "unknown"   - the client could not answer the question: the slot
+        --                 hides as well - unknown-hides, the slot never shows
+        --                 a spell the player cannot cast, and the next tick
+        --                 asks again.
+        -- Both hiding answers are told apart here; only "known" shows. The
+        -- HUD's frozen state table has no room for a reason, so the class
+        -- keeps the last answer per band slot (a diagnostic surface: the
+        -- operator's in-client check reads it).
+        local known, known_state = api.is_spell_known_state(spell_query(slot.spell))
+        ST.PALADIN.hud_band_spell_state[slot.key] = known_state
+        if known_state == "unknown" then
+            s.hidden = true
+            return s
+        end
+        if known ~= true then
+            s.hidden = true
+            return s
+        end
+    end
     local remaining, full = hud_ability_cooldown(self, slot, now)
     local on_cd = remaining > 0
     if on_cd then
@@ -3007,8 +4134,2505 @@ function ST.PALADIN.get_hud_state(self, slot, now)
     elseif slot.key == "wings" then
         -- Glows the moment it is ready, in combat (archive 448-451).
         s.glow = (remaining <= 0 and self.in_combat == true) or false
+    elseif slot.key == "soc" then
+        -- Seal aura swipe (the seal-icons shape): active shows the remaining aura
+        -- over its tracked (or fallback 30 s) length; down keeps the GCD swipe
+        -- above (ready to cast). Unknown (no texture) hides; cold retries.
+        if not hud_slot_name(slot) and not api.GetSpellInfo(slot.spell) then
+            s.hidden = true
+        elseif self.has_soc == true and type(self.soc_expires) == "number"
+            and self.soc_expires > now then
+            local seal_full = self.soc_duration or SEAL_FALLBACK_DURATION
+            s.remaining = self.soc_expires - now
+            s.duration = seal_full
+            s.text_remaining = s.remaining
+            s.desaturate = nil
+        end
+    elseif slot.key == "sob" then
+        if is_wrath_family then
+            -- Divine Storm: unknown hides; ready glows in combat (wings rule).
+            if not resolve_ds_spell_id(now) then
+                s.hidden = true
+            else
+                s.glow = (remaining <= 0 and self.in_combat == true) or false
+            end
+        else
+            -- Twist-seal aura: Era/Forever Righteousness, else Blood. Same shape
+            -- as soc above.
+            local seal_active, seal_expires, seal_full
+            if is_era_family or is_forever_family then
+                seal_active, seal_expires, seal_full = self.has_sor, self.sor_expires, self.sor_duration
+            else
+                seal_active, seal_expires, seal_full = self.has_sob, self.sob_expires, self.sob_duration
+            end
+            if not hud_slot_name(slot) and not api.GetSpellInfo(slot.spell) then
+                s.hidden = true
+            elseif seal_active == true and type(seal_expires) == "number" and seal_expires > now then
+                s.remaining = seal_expires - now
+                s.duration = seal_full or SEAL_FALLBACK_DURATION
+                s.text_remaining = s.remaining
+                s.desaturate = nil
+            end
+        end
+    elseif slot.key == "how" then
+        -- Execute: Era/Forever HoW, Wrath HW; other families hide (no signal).
+        -- Unknown hides; ready glows in combat (wings rule).
+        local hid = nil
+        if is_wrath_family then
+            hid = resolve_hw_spell_id(now)
+        elseif is_era_family or is_forever_family then
+            hid = resolve_how_spell_id(now)
+        end
+        if hid == nil then
+            s.hidden = true
+        else
+            s.glow = (remaining <= 0 and self.in_combat == true) or false
+        end
+    elseif slot.key == "holy_shock" then
+        -- Shockadin: ERA-gated + known, else hidden (no signal). Ready glows.
+        local hs_id = is_era_family and resolve_hs_spell_id(now) or nil
+        if hs_id == nil then
+            s.hidden = true
+        else
+            s.glow = (remaining <= 0 and self.in_combat == true) or false
+        end
+    elseif slot.key == "aura_mastery" then
+        -- Shockadin legs rune: ERA-gated + known, else hidden. Ready glows.
+        if not is_era_family or not is_spell_known_query(AM_SPELL_ID) then
+            s.hidden = true
+        else
+            s.glow = (remaining <= 0 and self.in_combat == true) or false
+        end
+    elseif slot.key == "how_wrath" then
+        -- The WotLK Hammer of Wrath is an EXECUTE-phase cast: the sim's own gate
+        -- (sim wowsims/wotlk sim/paladin/hammer_of_wrath.go:31-32
+        -- ExtraCastCondition: sim.IsExecutePhase20()) asks for it only below 20 %
+        -- target health - the same 20 the engine arms on (nextaction.lua's
+        -- how_wrath arm). Above the threshold the mirror greys the slot, so the
+        -- row never shows a ready spell the engine will not ask for. An unknown
+        -- health claims nothing (the slot keeps its own state).
+        local hp = get_guide_target_health_pct()
+        if type(hp) == "number" and hp >= 20 then
+            s.desaturate = true
+        end
     end
     return s
 end
 
+--=========================================================================================
+-- Practice: the class-side rotation contract
+--
+-- The shared practice engine (practice.lua / practice_ui.lua) owns the session, the
+-- registry and the panels; this section owns what the PALADIN teaches:
+--
+--   ST.PALADIN.practice_rotation       the rotation table, in sim priority order
+--   ST.PALADIN.practice_scenario_step  the expected action at one decision point
+--   ST.PALADIN.practice_drills         the focused single-skill graders
+--
+-- Every decision comes from the SAME pure engine the next-action guide uses
+-- (st.nextaction.evaluate / st.nextaction.evaluate_fcfs), so a practice session
+-- teaches exactly what the guide teaches. Nothing here casts anything, nothing
+-- here is visible by default and nothing here registers itself: the shared
+-- engine looks the three members up by player_class (ST.PALADIN).
+--
+-- THE ROTATION TABLE is the class's APL layer (the operator ruling HU-12, hands-up
+-- 2026-10-20): it carries the APL's SPELL ROWS - the combat rotation, never the
+-- APL's pre-pull rows (Sanctity Aura, Redemption, the primary-seal prepull: those
+-- belong to a prepull table, and the prepull drill's own spec below is where the
+-- paladin keeps them). Every row carries its citation (the APL and the position
+-- in it), the family gate and the family's spell id; the TBC family resolves
+-- every spell by NAME, so a TBC row carries its name and no numeric id. The
+-- rows the shipped orders name are the ones the engine can press; the WotLK
+-- APL's top two rows ride the table as cited rows (see the APL layer below).
+--
+-- THE ACTION KEY SPACE (the keys the guide's slots use, plus the two spell-level
+-- keys the FCFS families need, plus the practice sim's Seal of the Crusader):
+--
+--   soc    Seal of Command             sob    Seal of Blood / Martyr (twist seal)
+--   sotc   Seal of the Crusader        twist  the twist cue (a seal swap)
+--   cs     Crusader Strike             judge  Judgement
+--   ds     Divine Storm                cons   Consecration
+--   exo    Exorcism                    how    Hammer of Wrath
+--   hw     Holy Wrath                  hs     Holy Shock (shockadin)
+--   am     Aura Mastery (shockadin)
+--   hor    Hand of Reckoning (the WotLK APL's top row - a rotation table row
+--          only, see the APL layer below)
+--   how_wrath  Hammer of Wrath (the WotLK APL's second row - a rotation table
+--          row only; the "how" key above is the Era/Forever execute Hammer of
+--          Wrath and the Wrath channel carries Holy Wrath)
+--
+-- The shared engine reports the player's press in the practice sim's spelling
+-- ("consec"); ST.PALADIN.practice_action_aliases maps every spelling onto the
+-- canonical key above, and the graders below normalise both sides before
+-- comparing.
+--
+-- THE DECISION RULE: a step that cannot be decided returns nil - the engine
+-- grades "unknown", never a wrong action. A HOLD / RIDE (the rotation wants
+-- nothing pressed) returns nil as well: there is no action to teach, and
+-- guessing one would punish a correct pause. The richer decision (with the
+-- hold flag, the judge verdict and the reason) is available through
+-- ST.PALADIN.practice_decision for a caller that wants the illegal-cast rule.
+--
+-- THE CONTEXT: { now, last_action, resources, cooldowns } (the shared engine's
+-- shape). Everything else this section reads is OPTIONAL and read through a
+-- tolerant alias list, so a missing field degrades to "unknown" (the drill
+-- answers nil) instead of a wrong grade:
+--
+--   now                the clock, seconds
+--   last_action        the player's last press (any spelling, see above)
+--   resources          { mana_pct, target_health_pct, fight_remaining_pct, ... }
+--   cooldowns          { cs = 0, judge = 3, ... } seconds remaining per action
+--   swing_remaining    seconds to the next swing (or session.swing_ends_at)
+--   gcd_remaining      seconds of GCD left (or session.gcd_expires)
+--   speed              the weapon speed (or session.effective_speed)
+--   gcd_duration       the GCD length (or session.effective_gcd)
+--   seal               "soc" | "sob" | "none" (or session.active_seals)
+--   fcfs_mode          "wrath" | "sod" | "sod_stack" | "sod_shock" | "sod_wrath"
+--   cs_known           whether Crusader Strike is in the book
+--   pull_in_seconds    seconds to the pull (the prepull drill's countdown)
+--   seal_due           the seal the prepull drill expects
+--   prepull_lead       the prepull lead, seconds (the default is per rotation)
+--   cue_at             when the current cue appeared (the lateness reference)
+--   mistakes/attempts  the engine's own running counters (when it aggregates)
+--   session/session_id the session identity (the drill counters' key)
+--=========================================================================================
+
+-- Canonical labels for the practice action keys (the UI reads them; the keys
+-- themselves are the contract).
+local PRACTICE_ACTION_LABELS = {
+    soc = "Seal of Command",
+    sob = "Seal of Blood / Martyr",
+    sotc = "Seal of the Crusader",
+    twist = "Twist",
+    cs = "Crusader Strike",
+    judge = "Judgement",
+    ds = "Divine Storm",
+    cons = "Consecration",
+    exo = "Exorcism",
+    how = "Hammer of Wrath",
+    hw = "Holy Wrath",
+    hs = "Holy Shock",
+    am = "Aura Mastery",
+    hor = "Hand of Reckoning",
+    how_wrath = "Hammer of Wrath (WotLK)",
+    judgement_of_wisdom = "Judgement of Wisdom",
+    holy_strike = "Holy Strike",
+    divine_favor = "Divine Favor",
+}
+
+-- Every spelling the shared engine or the practice sim may report, mapped onto
+-- the canonical key above. The practice sim's own ability keys are the source
+-- of the first column ("consec" -> "cons"); the guide's slot keys and a few
+-- spell names cover the rest.
+ST.PALADIN.practice_action_aliases = {
+    consec = "cons",
+    consecration = "cons",
+    exorcism = "exo",
+    judgement = "judge",
+    judgment = "judge",
+    divine_storm = "ds",
+    divinestorm = "ds",
+    hammer_of_wrath = "how",
+    hammer = "how",
+    holy_wrath = "hw",
+    holywrath = "hw",
+    holy_shock = "hs",
+    holyshock = "hs",
+    aura_mastery = "am",
+    auramastery = "am",
+    seal_of_command = "soc",
+    command = "soc",
+    seal_of_blood = "sob",
+    blood = "sob",
+    seal_of_martyrdom = "sob",
+    martyrdom = "sob",
+    seal_of_the_crusader = "sotc",
+    hand_of_reckoning = "hor",
+    reckoning = "hor",
+    judgement_of_wisdom = "judgement_of_wisdom",
+    judgment_of_wisdom = "judgement_of_wisdom",
+    holy_strike = "holy_strike",
+    holystrike = "holy_strike",
+    divine_favor = "divine_favor",
+    divinefavor = "divine_favor",
+}
+
+--=========================================================================================
+-- The NEUTRAL action set (the panel's legitimate-but-ungraded presses)
+--
+-- The shared engine grades a press against the rotation: the action the rotation
+-- asks for is a HIT, any other action is a MIS-PICK (F) - and a NEUTRAL action is
+-- neither (no attempt, no points, no streak change). The panel offers more than the
+-- rotation asks for: the twist sim's own ability list (practice.lua's
+-- ABILITY_ORDER - the grid the paladin panel draws) carries the consumable, the
+-- trinket, the burst cooldown, the stop-attack macro and the third seal, and NONE
+-- of them is a rotation row.
+--
+-- This table is the class's own statement of those actions: the engine reads
+-- ST.<CLASS>.practice_neutral_actions (the contract fixed by the orchestrator,
+-- practice.lua's class contract block) and treats a press of one of these keys as
+-- NEUTRAL.
+--
+-- THE CLOSED LIST (the class's own suite pins every clause):
+--   * every key is a key the class's OWN panel offers - the shared sim's ability
+--     key (the grid) or the class's own rotation/guide key. No invented key, no
+--     ability the class does not have;
+--   * NO key here is a rotation action on ANY order the paladin plays. The engine
+--     grades the EXPECTED action first, so a rotation press still hits - but a
+--     rotation action published as neutral would make a WRONG rotation press free,
+--     which is the grading hole this table must never open;
+--   * every panel key is classified: a rotation action, a neutral action, or an
+--     intentional mis-pick. A key nobody classified fails the suite, so the next
+--     ability someone adds cannot silently become a free press.
+--
+-- THE KEYS (the first five are keys of the shared sim's ability list - the grid
+-- the paladin panel draws, practice.lua's ABILITY_ORDER):
+--   sotc    Seal of the Crusader   - a real seal ON THE CLASSIC LINE, and no
+--                                     rotation order asks for it (the twist order
+--                                     asks for soc / sob), so a seal swap the
+--                                     rotation does not want is legitimate, not
+--                                     wrong. THE 4.0 CLIENTS REMOVED THE SEAL
+--                                     (it went away in 4.0: the Cata and the MoP
+--                                     pages answer "Not Found" for 20308 and for
+--                                     the whole 21082 / 20162 / 20305-20308 ladder
+--                                     - the class's own sotc_ids table), so the
+--                                     class publishes it on the classic line
+--                                     ONLY and a press of that key on the 4.0+
+--                                     clients is a mis-pick, exactly like the
+--                                     rogue's Shiv on the same clients;
+--   aw      Avenging Wrath        - the burst cooldown. No rotation row carries it
+--                                     (the AW combo drill was retired; the class's
+--                                     own drills are paladin_fcfs_priority,
+--                                     paladin_prepull and paladin_judge_fit, and
+--                                     none of them grades a cooldown);
+--   hpot    Haste Potion          - a consumable;
+--   abacus  Abacus of Violent Odds - a trinket;
+--   stop    Stop Attack           - the stop-attack macro (the paladin's own
+--                                     stopattack discipline is a filed follow-up:
+--                                     bench/paladin_followups_2026-10-19.md).
+--
+-- NOT IN THE SET, and why:
+--   * the rotation actions themselves (cs, judge, twist, soc, sob, cons, exo, how,
+--     ds, hw, hs, am, hor, how_wrath ...) - the rotation grades those;
+--   * the guide slots' other spellings (consecration, exorcism, holy_shock,
+--     aura_mastery) - they ARE the rotation actions under another spelling
+--     (ST.PALADIN.practice_action_aliases maps them onto cons / exo / hs / am),
+--     and a rotation action can never be neutral;
+--   * the abilities the class does NOT offer as practice keys (Healing Flash,
+--     Blessing of Sacrifice, drink): the paladin's practice surface still has no
+--     key for them (the cooldown icon group carries spell IDS, not practice action
+--     keys), so a player can never press them in a practice session. Publishing
+--     them would invent keys the class does not have. The abilities the class DOES
+--     offer (Holy Light, Flash of Light, Lay on Hands, Divine Shield, Blessing of
+--     Protection, Food) are the practice-panel ability list below, and they are
+--     published as neutral in EVERY bucket below - the buckets differ in the Seal
+--     of the Crusader and in nothing else.
+--
+-- THE PUBLISH IS FAMILY-SCOPED, ONE BUCKET PER FAMILY (the shape the engine
+-- reads: the bucket for the running st.family; a family with no bucket answers
+-- nil). The buckets differ in exactly one key - the Seal of the Crusader, which
+-- the 4.0 clients removed - so the classic line keeps the flat set it always
+-- published and the 4.0+ clients publish the same set without that seal. The
+-- class's own suite pins every bucket (a key that drifts out of one bucket fails
+-- the suite), so the two shapes can never disagree.
+--=========================================================================================
+ST.PALADIN.practice_neutral_actions = {
+    -- THE CLASSIC LINE (ERA - the SoD build rides the Era client - TBC, WRATH and
+    -- FOREVER): the seal exists on every one of those clients.
+    ERA = {
+        sotc = true,
+        aw = true,
+        hpot = true,
+        abacus = true,
+        stop = true,
+        -- The common abilities (the practice-panel ability list below): a heal, a
+        -- shield and food are legitimate mid-practice presses, never a mis-pick.
+        holy_light = true,
+        flash_of_light = true,
+        lay_on_hands = true,
+        divine_shield = true,
+        bop = true,
+        food = true,
+    },
+    TBC = {
+        sotc = true,
+        aw = true,
+        hpot = true,
+        abacus = true,
+        stop = true,
+        holy_light = true,
+        flash_of_light = true,
+        lay_on_hands = true,
+        divine_shield = true,
+        bop = true,
+        food = true,
+    },
+    WRATH = {
+        sotc = true,
+        aw = true,
+        hpot = true,
+        abacus = true,
+        stop = true,
+        holy_light = true,
+        flash_of_light = true,
+        lay_on_hands = true,
+        divine_shield = true,
+        bop = true,
+        food = true,
+    },
+    FOREVER = {
+        sotc = true,
+        aw = true,
+        hpot = true,
+        abacus = true,
+        stop = true,
+        holy_light = true,
+        flash_of_light = true,
+        lay_on_hands = true,
+        divine_shield = true,
+        bop = true,
+        food = true,
+    },
+    -- THE 4.0+ CLIENTS (CATA, MISTS and RETAIL): the same set WITHOUT the Seal of
+    -- the Crusader - the spell was removed in 4.0, so the class does not publish it
+    -- there and a press of that key is a mis-pick. Every other key stays: the
+    -- class publishes no rotation for those clients, so none of them is
+    -- rotation-ranked there and each is a legitimate, ungraded press.
+    CATA = {
+        aw = true,
+        hpot = true,
+        abacus = true,
+        stop = true,
+        holy_light = true,
+        flash_of_light = true,
+        lay_on_hands = true,
+        divine_shield = true,
+        bop = true,
+        food = true,
+    },
+    MISTS = {
+        aw = true,
+        hpot = true,
+        abacus = true,
+        stop = true,
+        holy_light = true,
+        flash_of_light = true,
+        lay_on_hands = true,
+        divine_shield = true,
+        bop = true,
+        food = true,
+    },
+    RETAIL = {
+        aw = true,
+        hpot = true,
+        abacus = true,
+        stop = true,
+        holy_light = true,
+        flash_of_light = true,
+        lay_on_hands = true,
+        divine_shield = true,
+        bop = true,
+        food = true,
+    },
+}
+
+--=========================================================================================
+-- The neutral set THIS class publishes for the RUNNING family
+--
+-- The engine reads the publish through its own accessor (practice.lua's
+-- H.practice_neutral_actions) and resolves it for the running client family
+-- (st.family): a FLAT publish answers itself, a family-scoped publish answers
+-- the bucket for that family, and a family the class published no bucket for
+-- answers nil (the engine then grades every non-rotation press exactly as it
+-- did before).
+--
+-- This accessor is that SAME rule, re-implemented here so the class never has to
+-- ask the engine - and so the OFFER GATE below reads the class's OWN truth:
+--
+--   ST.PALADIN.practice_neutral_set() -> the published set | nil
+--
+-- THE OFFER GATE READS IT (the orchestrator's ruling, 2026-10-20): an ability may
+-- only be OFFERED on a family where it is either a rotation action or a neutral
+-- action. An offer that can only ever be a mis-pick is a trap - the player is
+-- invited to press something the grader will always punish. So the panel's
+-- common-ability offer list and this set are ONE truth per family: an ability
+-- with no neutral bucket on that family is NOT offered there (it stays available
+-- on the families where it IS neutral).
+--
+-- THE CATA AND MISTS CLIENTS: the paladin's publish is FLAT, so it already
+-- answers every family - the Cata (4.4.3) and the Mists (5.5.0) clients included.
+-- The class publishes no rotation for those two clients (the twist order names
+-- no row for them - classes/paladin.lua's practice_rotation_for), so none of the
+-- published common abilities is rotation-ranked there: a Holy Light, a Flash of
+-- Light, a Lay on Hands, a Divine Shield, a Blessing of Protection or a Food
+-- press on those clients is a legitimate, ungraded press - never a mis-pick.
+-- Every one of those spells is present on both clients (cited per ability in the
+-- common list below).
+--=========================================================================================
+function ST.PALADIN.practice_neutral_set()
+    local published = ST.PALADIN.practice_neutral_actions
+    if type(published) ~= "table" then
+        return nil
+    end
+    local source = published
+    for _, value in pairs(published) do
+        if type(value) == "table" then
+            -- a family-scoped publish: the running family's own bucket
+            source = published[st.family]
+            break
+        end
+    end
+    if type(source) ~= "table" then
+        return nil
+    end
+    return source
+end
+
+--=========================================================================================
+-- The PRACTICE-PANEL ability list: the common abilities the panel offers
+--
+-- WHY THIS EXISTS: the practice panel's action row offers the class's whole ability
+-- list, and a player legitimately presses a heal, a shield, food or a potion while
+-- practicing. The engine grades such a press NEUTRAL - no attempt, no points, no
+-- streak change, never a mis-pick (bench/practice_neutral_actions_2026-10-20.md). For
+-- that the class needs a KEY for each of them: the panel's vocabulary is the rotation
+-- slice plus the class's own guide slot list, and the common abilities had no key at
+-- all (bench/class_neutral_actions_2026-10-20.md §2 - "the abilities the class does
+-- NOT offer as practice keys ... a player can never press them in a practice
+-- session").
+--
+-- HOW IT REACHES THE PANEL: the list below is APPENDED to the class's own guide slot
+-- list AFTER the guide frame has built its icons - the shaman's apply_family_slots
+-- precedent (classes/shaman.lua). The frame stacks one icon per slot and fades in only
+-- the CURRENT action's, and the frame's icons are built once and never rebuilt, so the
+-- live next-action guide is untouched; the practice panel reads the slot list LIVE, so
+-- the panel's action row offers the common abilities with their own icons.
+--
+-- THE IDS (cited, never invented):
+--   * the resolution asks the client's own spell data for the ENGLISH spell NAME
+--     (the rogue's resolve_named_spell rule, classes/rogue.lua), and the id the
+--     client answers WITH that name is its own rank's id - so a client that
+--     indexes the English name shows its own rank art. Whether the classic-line
+--     global GetSpellInfo takes a name at all is UNCONFIRMED in-client
+--     (bench/final_gate_audit_2026-10-20.md §6 C1: the Blizzard UI calls the
+--     classic global with an id and the Cata/Mists UI code with a name), so the
+--     name leg is a claim the operator's in-client pass still owes;
+--   * the id table is the CITATION and the fallback - it is NOT a guarantee of the
+--     client's own art: a client that does not answer the name, or answers it
+--     without an id, falls back to the ERA corpus's rank-1 ids, which is the
+--     client's own rank only where that id still exists on it (the Healthstone:
+--     the Era id 5720 answers "Not Found" on the Cata and the Mists clients,
+--     whose own rank is 6262 - the ladder is deliberately not extended with it,
+--     bench/class_neutral_family_coverage_2026-10-20.md §1.2);
+--   * the query is family-correct (the operator's name-vs-id rule, bench/lessons.md):
+--     the NAME on TBC (that client answers names, never bare ids), the numeric id on
+--     every other family;
+--   * the id sources: the Classic 1.15 client corpus (/home/sam/wow.export/Spell.csv
+--     - the id plus the client's own description) and the client's spell names from
+--     the Classic spell pages (the /data/spell/<id> page on the warcraftdb site - its
+--     title carries the client's own spell name). The in-tree citations are named
+--     per row.
+--
+-- UNKNOWN-HIDES: an ability the running client does not have is never offered - the
+-- resolution drops it - so the panel never shows a button the client cannot cast.
+--
+-- NO ROTACTION ACTION HERE: none of these keys is a rotation action on any order the
+-- paladin plays (the FCFS orders, the twist order and the APL rows), so none of them
+-- may be a rotation action; the neutral set above publishes exactly these keys.
+--=========================================================================================
+ST.PALADIN.practice_common_actions = {
+    {
+        key = "holy_light",
+        label = "Holy Light",
+        names = { "Holy Light" },
+        -- 19968 (r1) / 19980 / 19981 / 19982 - the Classic 1.15 client's Holy Light
+        -- ladder (corpus Spell.csv: "Heals a friendly target for $s1."; the names
+        -- confirmed at the Classic spell page (19968)).
+        ids = { 19968, 19980, 19981, 19982 },
+    },
+    {
+        key = "flash_of_light",
+        label = "Flash of Light",
+        names = { "Flash of Light" },
+        -- 19750 (r1) / 19751 - the client's Flash of Light ladder (the corpus
+        -- description and the Classic spell page (19750)).
+        ids = { 19750, 19751 },
+    },
+    {
+        key = "lay_on_hands",
+        label = "Lay on Hands",
+        names = { "Lay on Hands" },
+        -- 633 / 2800 / 10310 - the in-tree CD icon slot's id (classes/paladin.lua
+        -- CD_CORE_SLOTS) and the client's rank ladder (the corpus description:
+        -- "Heals a friendly target for an amount equal to the Paladin's maximum
+        -- health.").
+        ids = { 633, 2800, 10310 },
+    },
+    {
+        key = "divine_shield",
+        label = "Divine Shield",
+        names = { "Divine Shield" },
+        -- 642 (r1) / 1020 - the in-tree CD icon slot's id (classes/paladin.lua
+        -- CD_CORE_SLOTS) and LibClassicDurations' own table
+        -- (Libs/LibClassicDurations/classAbilities.lua: "Spell({ 642, 1020 } ...)").
+        ids = { 642, 1020 },
+    },
+    {
+        key = "bop",
+        label = "Blessing of Protection",
+        -- The client RENAMED the spell in 3.0: the Classic and the TBC pages title
+        -- 1022 "Blessing of Protection", the WotLK, the Cataclysm and the MoP pages
+        -- title the same id "Hand of Protection". Both names are offered, so the
+        -- client answers whichever one it knows (the shaman's renamed Water Shield
+        -- rule - the SoD rename).
+        names = { "Blessing of Protection", "Hand of Protection" },
+        -- 1022 (r1) / 5599 / 10278 - LibClassicDurations' own table
+        -- (Libs/LibClassicDurations/classAbilities.lua: "Spell({ 1022, 5599, 10278 }").
+        -- The id 1022 itself is cited by the client's own expansion pages
+        -- (warcraftdb: classic 1022 "Blessing of Protection", wotlk / cataclysm / mop
+        -- 1022 "Hand of Protection").
+        ids = { 1022, 5599, 10278 },
+    },
+    {
+        key = "food",
+        label = "Food",
+        names = { "Food" },
+        -- 433 / 2639 / 5004 / 10256 / 10257 - the client's Food use effects (the
+        -- corpus description: "Restores $o1 health over $d. Must remain seated
+        -- while eating."; the names confirmed at the Classic spell page (433)).
+        ids = { 433, 2639, 5004, 10256, 10257 },
+    },
+}
+
+-- Resolve one common ability against the client's own spell data: the English name
+-- first (a client that indexes it answers its own rank id - the client's own rank
+-- art), then the cited id ladder (the ERA corpus's rank-1 ids - the fallback for a
+-- client that does not index the English name, or answers it without an id). Returns
+-- the panel slot - { key, label, spell_id } - or nil when this client does not have
+-- the spell (unknown-hides: the panel never offers a button the client cannot cast).
+--
+-- Nil-safe throughout: a malformed entry, a missing api or a throwing client read
+-- answers nil, never an error.
+function ST.PALADIN.resolve_practice_common_action(action)
+    if type(action) ~= "table" or type(action.key) ~= "string" or action.key == "" then
+        return nil
+    end
+    if type(api.GetSpellInfo) ~= "function" then
+        return nil
+    end
+    local names = action.names
+    if type(names) == "table" then
+        for i = 1, #names do
+            local name = names[i]
+            local ok, spell_name, _, _, _, _, _, spell_id = pcall(api.GetSpellInfo, name)
+            if ok and type(spell_name) == "string" then
+                local query
+                if st.family == "TBC" then
+                    query = name
+                elseif type(spell_id) == "number" then
+                    query = spell_id
+                else
+                    query = action.ids and action.ids[1] or nil
+                end
+                if query ~= nil then
+                    return { key = action.key, label = action.label, spell_id = query,
+                        practice_common = true }
+                end
+            end
+        end
+    end
+    -- The cited id ladder: the fallback for a client that does not index the English
+    -- name. On TBC the query must be a NAME, so the ladder cannot stand in there.
+    local ids = action.ids
+    if st.family ~= "TBC" and type(ids) == "table" and type(api.get_family_spell_id_state) == "function" then
+        local id = api.get_family_spell_id_state(ids)
+        if type(id) == "number" then
+            return { key = action.key, label = action.label, spell_id = id,
+                practice_common = true }
+        end
+    end
+    return nil
+end
+
+-- The running family's ROTATION actions (the set the offer gate reads): the class's
+-- own published slice for the running client, read the way the panel reads it (the
+-- argument-free call - practice_ui.lua's scenario_action_order). An unknown order
+-- answers nil and the set stays empty.
+function ST.PALADIN.practice_rotation_action_set()
+    local out = {}
+    local ok, entries = pcall(function() return ST.PALADIN.practice_rotation_for() end)
+    if not ok or type(entries) ~= "table" then
+        return out
+    end
+    for i = 1, #entries do
+        local entry = entries[i]
+        if type(entry) == "table" and type(entry.action) == "string" and entry.action ~= "" then
+            out[entry.action] = true
+        end
+    end
+    return out
+end
+
+-- The class's own alias table (the spellings the engine or the sim may report, mapped
+-- onto the canonical key). The paladin publishes one; a class with a single key space
+-- has none, and the normaliser is then the identity.
+function ST.PALADIN.practice_canonical_key(key)
+    local aliases = ST.PALADIN.practice_action_aliases
+    if type(aliases) == "table" and type(key) == "string" then
+        return aliases[key] or key
+    end
+    return key
+end
+
+-- THE OFFER GATE (the orchestrator's ruling, 2026-10-20): may this common ability be
+-- OFFERED on the running family?
+--
+--   (1) the class's own per-ability family gate (the entry's `families` field) names
+--       the running family - the class's own statement about the ability;
+--   (2) the running family's published neutral set carries the key - the offer list
+--       and the neutral set are ONE truth per family;
+--   (3) the running family's rotation does not rank the key - a rotation action is
+--       graded by the rotation, never an offered common ability.
+--
+-- A family the class published no neutral bucket for offers NO common ability: the
+-- ability would be a mis-pick the moment it is pressed.
+function ST.PALADIN.practice_common_offer_allowed(action, neutral, rotation)
+    if type(action) ~= "table" or type(action.key) ~= "string" or action.key == "" then
+        return false
+    end
+    local families = action.families
+    if type(families) == "table" then
+        local named = false
+        for i = 1, #families do
+            if families[i] == st.family then
+                named = true
+                break
+            end
+        end
+        if not named then
+            return false
+        end
+    end
+    if type(neutral) ~= "table" or neutral[action.key] ~= true then
+        return false
+    end
+    if type(rotation) == "table"
+        and rotation[ST.PALADIN.practice_canonical_key(action.key)] == true then
+        return false
+    end
+    return true
+end
+
+-- The panel's ability list: the class's own guide slots plus the common abilities
+-- the running client actually has. The practice panel reads the guide slot list LIVE
+-- (practice_ui.lua's scenario_guide_slots), so this is the list the panel offers.
+function ST.PALADIN.practice_panel_slots()
+    local guide = ST.PALADIN.guide
+    local slots = type(guide) == "table" and guide.slots or nil
+    local out = {}
+    if type(slots) == "table" then
+        for i = 1, #slots do
+            out[i] = slots[i]
+        end
+    end
+    local common = ST.PALADIN.practice_common_actions
+    if type(common) == "table" then
+        -- THE OFFER GATE: a common ability is offered on the running family only if
+        -- that family publishes it (as neutral) or the rotation ranks it there - the
+        -- offer list and the neutral set are one truth per family.
+        local neutral = ST.PALADIN.practice_neutral_set()
+        local rotation = ST.PALADIN.practice_rotation_action_set()
+        for i = 1, #common do
+            local action = common[i]
+            if ST.PALADIN.practice_common_offer_allowed(action, neutral, rotation) then
+                local slot = ST.PALADIN.resolve_practice_common_action(action)
+                if slot then
+                    out[#out + 1] = slot
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- Widen the class's guide slot list with the common abilities. Called AFTER the guide
+-- frame has built its icons and BEFORE the practice panel is built, so the live guide
+-- keeps its own icon set while the practice panel's action row offers the common
+-- abilities. Idempotent: a list that already carries a common slot is left alone.
+function ST.PALADIN.apply_practice_panel_actions()
+    local guide = ST.PALADIN.guide
+    if type(guide) ~= "table" or type(guide.slots) ~= "table" then
+        return false
+    end
+    local current = guide.slots
+    for i = 1, #current do
+        local slot = current[i]
+        if type(slot) == "table" and slot.practice_common == true then
+            return false
+        end
+    end
+    local widened = ST.PALADIN.practice_panel_slots()
+    if type(widened) ~= "table" or #widened <= #current then
+        return false
+    end
+    guide.slots = widened
+    return true
+end
+
+-- The twist tree's decision order: the engine's own branch order (the Crusader
+-- Strike override replaces the seal work, the Judgement cue rides on the
+-- reseal, the fillers come last). This is the GUIDE's order, not a sim claim:
+-- the sim-sourced orders are the FCFS tables below.
+local PRACTICE_ORDER_TWIST = { "cs", "judge", "twist", "soc", "sob", "cons", "exo", "how" }
+
+-- The prepull seal and its lead, per rotation (bench/class_features_drills_
+-- 2026-10-19.md §2 D-P2, sourced to bench/sod_paladin_variants_2026-10-19.md
+-- §1-§6 and bench/paladin_rotation_audit_2026-10-19.md §Era):
+--   twist      the classic APL prepulls the primary seal at -1.5 s
+--   tbc        the tbc-new APL prepulls Seal of the Crusader 27158r7 plus
+--              Judgements at 0 s
+--   sod        p8-exodin prepulls the primary seal at -2.5 s
+--   sod_shock  p8-shockadin-1h/2h prepull at -1.5 s
+--   sod_wrath  p8-wrath prepulls at -1.5 s
+--   sod_stack  p8-stack prepulls Seal of Command at -3 s (SoM at -1.5 s)
+-- The SoD twist build shares the "sod" mode (the live gather has no separate
+-- twist mode), so its -1.5 s prepull is not reachable here; the context can
+-- always name the due seal and the lead itself.
+local PRACTICE_PREPULL = {
+    twist = { seal = "soc", lead = 1.5 },
+    tbc = { seal = "sotc", lead = 0 },
+    sod = { seal = "soc", lead = 2.5 },
+    sod_shock = { seal = "soc", lead = 1.5 },
+    sod_wrath = { seal = "soc", lead = 1.5 },
+    sod_stack = { seal = "soc", lead = 3.0 },
+}
+
+-- The per-order priority tables: the twist order above plus the engine's five
+-- FCFS tables (published by nextaction.lua so no copy can drift from the
+-- engine). READ-ONLY, like the engine's own tables.
+ST.PALADIN.practice_orders = { twist = PRACTICE_ORDER_TWIST }
+if st.nextaction and st.nextaction.FCFS_ORDERS then
+    ST.PALADIN.practice_orders.wrath = st.nextaction.FCFS_ORDERS.wrath
+    ST.PALADIN.practice_orders.sod = st.nextaction.FCFS_ORDERS.sod
+    ST.PALADIN.practice_orders.sod_stack = st.nextaction.FCFS_ORDERS.sod_stack
+    ST.PALADIN.practice_orders.sod_shock = st.nextaction.FCFS_ORDERS.sod_shock
+    ST.PALADIN.practice_orders.sod_wrath = st.nextaction.FCFS_ORDERS.sod_wrath
+end
+
+--=========================================================================================
+-- The APL layer: every rotation row's citation, family gate and spell id
+--
+-- The rotation table carries the APL's SPELL ROWS (the operator ruling HU-12,
+-- hands-up 2026-10-20): the combat rotation, never the pre-pull rows. Every
+-- line below is cited from the fetched APLs (bench/rotation_gap_vs_apl_2026-10-20.md
+-- §6.2-§6.3, which names the repositories and the position of every row):
+--
+--   wowsims/classic  ui/retribution_paladin/apls/basic_ret.apl.json
+--   wowsims/sod      ui/retribution_paladin/apls/p8-{twist,exodin,stack,shockadin-1h,wrath}.apl.json
+--   wowsims/tbc-new  ui/specs/paladin/retribution/apls/default.apl.json
+--   wowsims/forever  ui/specs/paladin/retribution/apls/{twist_of_light,holy_shock}.apl.json
+--   wowsims/wotlk    ui/retribution_paladin/apls/default.apl.json
+--
+-- THE FAMILY GATE: `families` is the set of clients the row is played on.
+-- "SOD" is the Season of Discovery game - it runs on the ERA client and the
+-- class detects it by RUNE, never by a version string
+-- (bench/sod_detect_2026-10-19.md). RETAIL plays no rotation at all (no sim,
+-- no row): the scenario is never offered there.
+--
+-- THE IDS: `ids` carries the family's numeric spell id - the APL's own rank id
+-- (the citation), NOT the runtime probe: the class's engine resolves the
+-- rank-1 ids (nextaction.lua:149-154) and the guide slots carry rank-invariant
+-- icons, so the id below is the APL's, never a live read. The TBC family
+-- resolves every spell by NAME (the class's spell-query discipline), so a TBC
+-- row carries its name in `tbc_name` and no numeric id.
+--=========================================================================================
+-- The APL utility layer's ids and names (a TABLE FIELD, not a local: this module
+-- sits at the Lua 5.1 local ceiling). Every id below is the APL's own rank id
+-- out of the sim sources - a citation, not a live probe:
+--
+--   hor              67485  Hand of Reckoning   (wotlk default.apl.json i=1)
+--   how_wrath        48806  Hammer of Wrath      (wotlk default.apl.json i=2)
+--   judgement_of_wisdom 53408 Judgement of Wisdom (wotlk default.apl.json i=3)
+--   holy_strike      10333  Holy Strike         (forever twist_of_light i=3)
+--   divine_favor     20216  Divine Favor        (forever holy_shock i=8)
+ST.PALADIN.APL_UTILITY = {
+    hor = { id = 67485, name = "Hand of Reckoning" },
+    how_wrath = { id = 48806, name = "Hammer of Wrath" },
+    judgement_of_wisdom = { id = 53408, name = "Judgement of Wisdom" },
+    holy_strike = { id = 10333, name = "Holy Strike" },
+    divine_favor = { id = 20216, name = "Divine Favor" },
+}
+
+ST.PALADIN.practice_action_meta = {
+    cs = {
+        note = "the Crusader Strike the order wants first",
+        families = { SOD = true, TBC = true, WRATH = true },
+        ids = { SOD = 407676, WRATH = 35395 },
+        tbc_name = "Crusader Strike",
+        source = "sim wowsims/sod ui/retribution_paladin/apls/p8-exodin.apl.json i=7 (Crusader Strike 407676; also p8-stack i=5, p8-wrath i=8, p8-shockadin-1h i=11); tbc-new ui/specs/paladin/retribution/apls/default.apl.json i=2 (Crusader Strike, IF aura 31892); wotlk ui/retribution_paladin/apls/default.apl.json i=4 (Crusader Strike 35395) - the Era APL has no Crusader Strike row (bench/paladin_rotation_audit_2026-10-19.md §Era)",
+
+        live = true,
+        engine = true,    },
+    judge = {
+        note = "the Judgement cue (the sim judges inside the fit window)",
+        families = { ERA = true, SOD = true, TBC = true, FOREVER = true, WRATH = true },
+        ids = { ERA = 20271, SOD = 20271, FOREVER = 20271, WRATH = 20271 },
+        tbc_name = "Judgement",
+        source = "classic ui/retribution_paladin/apls/basic_ret.apl.json i=0 (Judgement 20271); sod p8-exodin i=2 / p8-stack i=9 / p8-shockadin-1h i=4 / p8-wrath i=4 (Judgement 20271); tbc-new default.apl.json i=3 (Judgement 20271); forever twist_of_light i=1 / holy_shock i=1 (Judgement 20271); wotlk default.apl.json i=3 casts JUDGEMENT OF WISDOM 53408 - a DIFFERENT spell from this key's Judgement 20271 (which is Judgement of LIGHT on the WotLK client: sim wowsims/wotlk sim/paladin/judgement.go - registerJudgementOfWisdomSpell is 53408, registerJudgementOfLightSpell is 20271), so the WotLK APL row is not this row: it rides the rotation table as its own line (judgement_of_wisdom below). CORRECTION 2026-10-20 (bench/paladin_apl_utility_build_2026-10-20.md §3 C2): the gap analysis named 53408 'Judgement of Light' - the id and the spell are right, the NAME was wrong (53408 is Judgement of Wisdom)",
+
+        live = true,
+        engine = true,    },
+    twist = {
+        note = "the twist cue (a seal swap inside the window)",
+        families = { ERA = true, SOD = true, TBC = true, FOREVER = true },
+        ids = {},
+        source = "the class's own twist tree (nextaction.lua's twist window); the Era APL's twist rows are basic_ret.apl.json i=2 (Seal of the Crusader 20375 r1) and i=3 (Seal of Righteousness 20293 r8), both IF autoTimeToNext < 0.4s, and the SoD p8-twist.apl.json i=5/6 cast the twist with paladinCastWithMacro - a macro cast, so the row carries no spell id of its own",
+
+        live = true,
+        engine = true,    },
+    soc = {
+        note = "the Seal of Command reseal (the twist's seal on the classic line)",
+        families = { ERA = true, SOD = true, TBC = true, FOREVER = true },
+        ids = { ERA = 20375, SOD = 20375, FOREVER = 20920 },
+        tbc_name = "Seal of Command",
+        source = "tbc-new default.apl.json i=5 (Seal of Command 20375 r1 - the reseal guard); forever twist_of_light i=4 (Seal of Command 20920 r5); sod p8-exodin i=3 / p8-wrath i=5 (castPaladinPrimarySeal - the primary-seal macro). The id 20375 is the Seal of the CRUSADER on the Era client and the Seal of Command on TBC (bench/rotation_gap_vs_apl_2026-10-20.md §6.3)",
+
+        live = true,
+        engine = true,    },
+    sob = {
+        note = "the twist's second seal (Blood on TBC, Martyrdom on SoD)",
+        families = { SOD = true, TBC = true },
+        ids = { SOD = 407798 },
+        tbc_name = "Seal of Blood",
+        source = "tbc-new default.apl.json i=1 (Seal of Blood 31892 r1, IF aura 20375 AND autoTimeToNext <= .4s); sod p8-stack i=2 (Seal of Martyrdom 20920 r5) and i=3 (the SoD rune rank 407798); the class's twist tree carries the Blood seal on TBC (nextaction.lua's seal states)",
+
+        live = true,
+        engine = true,    },
+    cons = {
+        note = "the Consecration filler (mana-gated)",
+        families = { SOD = true, TBC = true, FOREVER = true, WRATH = true },
+        ids = { SOD = 20924, FOREVER = 20924, WRATH = 48819 },
+        tbc_name = "Consecration",
+        source = "sod p8-stack i=8 / p8-wrath i=12 (Consecration 20924 r5); tbc-new default.apl.json i=4.g.1 (Consecration 27173 r6); forever twist_of_light i=6.g.0 / holy_shock i=4 (Consecration 20924 r5); wotlk default.apl.json i=7 (Consecration 48819, IF remainingTime > 4s)",
+
+        live = true,
+        engine = true,    },
+    exo = {
+        note = "the Exorcism filler (the Undead/Demon damage row)",
+        families = { SOD = true, TBC = true, FOREVER = true, WRATH = true },
+        ids = { SOD = 415073, FOREVER = 10314, WRATH = 48801 },
+        tbc_name = "Exorcism",
+        source = "sod p8-exodin i=6 / p8-stack i=6 / p8-shockadin-1h i=8 / p8-wrath i=9 (Exorcism 415073); tbc-new default.apl.json i=4.g.0 (Exorcism 27138 r7); forever twist_of_light i=7.g.0 / holy_shock i=10 (Exorcism 10314 r6); wotlk default.apl.json i=6 (Exorcism 48801, IF aura 53488)",
+
+        live = true,
+        engine = true,    },
+    how = {
+        note = "the execute Hammer of Wrath (below 20% target health)",
+        families = { ERA = true, SOD = true, FOREVER = true },
+        ids = { ERA = 24239, SOD = 24239, FOREVER = 24239 },
+        source = "sod p8-twist i=7 (Hammer of Wrath 24239 r3); forever twist_of_light i=2 / holy_shock i=5 (Hammer of Wrath 24239 r3, IF spellCastTime == 0 OR autoTimeSinceLast < 0.2s). The Era APL has no Hammer of Wrath row: the Era execute cue is the class's own below-20% rule (bench/paladin_rotation_audit_2026-10-19.md §Era); the WotLK APL's Hammer of Wrath is its own row (how_wrath below)",
+
+        live = true,
+        engine = true,    },
+    hw = {
+        note = "Holy Wrath on an Undead or Demon target (the SoD stack build's row)",
+        families = { SOD = true, WRATH = true },
+        ids = { SOD = 10318 },
+        source = "sod p8-stack i=7 (Holy Wrath 10318 r2 - Undead only, IF auraKnown(1219193) AND an Undead target). The WotLK APL has NO Holy Wrath row - its damage rows are Exorcism 48801 and Consecration 48819 (bench/rotation_gap_vs_apl_2026-10-20.md §6.4) - so the class keeps its own Undead/Demon line there (the rank ladder is classes/paladin.lua's hw_ids: 48817, 48816, 27139, 10318, 2812, resolved from the client's book)",
+
+        live = true,
+        engine = true,    },
+    ds = {
+        note = "the Divine Storm cooldown (the SoD/Wrath burst)",
+        families = { SOD = true, WRATH = true },
+        ids = { SOD = 407778, WRATH = 53385 },
+        source = "sod p8-exodin i=4 / p8-stack i=4 / p8-wrath i=7 and i=10 (Divine Storm 407778); wotlk default.apl.json i=5 (Divine Storm 53385)",
+
+        live = true,
+        engine = true,    },
+    hs = {
+        note = "Holy Shock at three Holy Power stacks (the shockadin's row)",
+        families = { SOD = true, FOREVER = true },
+        ids = { SOD = 20930, FOREVER = 20930 },
+        source = "sod p8-shockadin-1h i=7 and i=10 (Holy Shock 20930 r3); forever holy_shock i=9 (Holy Shock 20930 r4)",
+
+        live = true,
+        engine = true,    },
+    am = {
+        note = "Aura Mastery at three Holy Power stacks (the Libram-gated row)",
+        families = { SOD = true },
+        ids = { SOD = 407624 },
+        source = "sod p8-shockadin-1h i=6 and i=9 (Aura Mastery 407624 - the legs rune, the Libram of Sanctity gate 1214298)",
+
+        live = true,
+        engine = true,    },
+    hor = {
+        note = "the WotLK APL's top row - Hand of Reckoning (the utility band above the damage order)",
+        families = { WRATH = true },
+        ids = { WRATH = ST.PALADIN.APL_UTILITY.hor.id },
+        source = "wotlk ui/retribution_paladin/apls/default.apl.json i=1 (Hand of Reckoning 67485 - the APL's TOP row; sim wowsims/wotlk sim/paladin/hand_of_reckoning.go:16). APL UTILITY LAYER (bench/paladin_apl_utility_build_2026-10-20.md §2): the row is ARMED - the engine's Wrath order carries it above the damage rows (nextaction.lua's FCFS_ORDER_WRATH) and the read is api.GetSpellCooldown(67485) behind the client's own spell-book gate (the same gate the class's Divine Storm resolver uses for its WotLK talent spell - classes/paladin.lua's resolve_ds_spell_id), so a build without the talent is never prompted. The spell-book probe on a TALENT id is in-client UNCONFIRMED: if the client answers 'unknown' for a learned talent the row stays SILENT (unknown-hides, never a wrong prompt) and the operator's in-client check decides whether another gate is needed",
+        live = true,
+        engine = true,
+    },
+    how_wrath = {
+        note = "the WotLK APL's second row - Hammer of Wrath (the WotLK spell, not the execute one)",
+        families = { WRATH = true },
+        ids = { WRATH = ST.PALADIN.APL_UTILITY.how_wrath.id },
+        source = "wotlk ui/retribution_paladin/apls/default.apl.json i=2 (Hammer of Wrath 48806; sim wowsims/wotlk sim/paladin/hammer_of_wrath.go:12). APL UTILITY LAYER (bench/paladin_apl_utility_build_2026-10-20.md §2): the row is ARMED - the engine's Wrath order carries it below Hand of Reckoning and above the damage rows, and the sim gates the cast on the execute phase (hammer_of_wrath.go:31-32 ExtraCastCondition: sim.IsExecutePhase20()), so the arm asks for it only below 20% target health. The 'how' key is the Era/Forever EXECUTE Hammer of Wrath (24239) - a different spell, a different key",
+        live = true,
+        engine = true,
+    },
+    judgement_of_wisdom = {
+        note = "the WotLK APL's judgement row - Judgement of Wisdom (the target debuff)",
+        families = { WRATH = true },
+        ids = { WRATH = ST.PALADIN.APL_UTILITY.judgement_of_wisdom.id },
+        source = "wotlk ui/retribution_paladin/apls/default.apl.json i=3 (Judgement of Wisdom 53408; sim wowsims/wotlk sim/paladin/judgement.go:22 - registerJudgementOfWisdomSpell, ActionID 53408). NAME CORRECTION 2026-10-20 (bench/paladin_apl_utility_build_2026-10-20.md §3 C2): the gap analysis named this spell 'Judgement of Light' - 53408 is Judgement of WISDOM (the debuff) and 20271 is Judgement of Light (the damage spell), so this row is NOT the shipped 'judge' key (whose WotLK id is 20271)",
+        live = true,
+        engine = false,
+        needs = "an engine arm for this row needs a SLOT that does not collide with the shipped judgement cue: 53408 (Judgement of Wisdom) and 20271 (Judgement of Light) share the WotLK 10 s judgement cooldown (sim wowsims/wotlk sim/paladin/judgement.go:38 - one cdTimer for both judgements), so the two rows can never be ready apart and an arm would REPLACE the shipped judgement cue on the WotLK client. That is the operator-visible re-cut bench/rotation_gap_vs_apl_2026-10-20.md §6.5 filed (the WotLK APL's whole priority list); the read itself exists (api.GetSpellCooldown(53408)), so the row is live but claims no arm until the operator rules on which judgement the WotLK guide cues",
+    },
+    holy_strike = {
+        note = "the Forever APL's Holy Strike row (10333 r8)",
+        families = { FOREVER = true },
+        ids = { FOREVER = ST.PALADIN.APL_UTILITY.holy_strike.id },
+        source = "forever ui/specs/paladin/retribution/apls/twist_of_light.apl.json i=3 (Holy Strike 10333 r8, IF currentTime > 0.5s) and holy_shock.apl.json i=7 (Holy Strike 10333 r8); the id is the client's own (sim wowsims/forever sim/paladin/holy_strike.go:12 - wowhead.com/forever/spell=10333; the client's spell ladder is 679, 678, 1866, 680, 2495, 5569, 10332, 10333)",
+        live = true,
+        engine = false,
+        needs = "an engine arm for this row needs the FOREVER TWIST ORDER re-cut onto the APL's priority list (judgement > hammer of wrath > holy strike > seal of command > seal of righteousness > consecration > exorcism): Holy Strike has NO cooldown of its own on the Forever client (the client's own sim registers it without a CD - sim wowsims/forever sim/paladin/holy_strike.go), so a 'ready' arm would fire on every GCD and displace the twist cue the class's Forever guide exists for. The bench filed the same re-cut as operator-visible (bench/rotation_gap_vs_apl_2026-10-20.md §6.5); the read exists (the class's own spell-book probe, self.holy_strike_known), so the row is live but claims no arm until the operator rules on the Forever order",
+    },
+    divine_favor = {
+        note = "the Forever APL's Divine Favor row (20216)",
+        families = { FOREVER = true },
+        ids = { FOREVER = ST.PALADIN.APL_UTILITY.divine_favor.id },
+        source = "forever ui/specs/paladin/retribution/apls/holy_shock.apl.json i=8 (Divine Favor 20216, IF spellIsReady(20930 r4) AND the target-aura clause on 1310905); the id is the client's own (sim wowsims/forever sim/paladin/spell_data_auto_gen.go:183 DivineFavor: spelldata.Ranked(20216) - the sim's own label is 'Divine Favor'; sim wowsims/classic sim/paladin/divine_favor.go:28 ActionID 20216). NAME CORRECTION 2026-10-20 (bench/paladin_apl_utility_build_2026-10-20.md §3 C1): the gap analysis named this spell 'Devotion Aura' - 20216 is DIVINE FAVOR on the Era, TBC and Forever clients alike (the 1.15 client's own spell tables put 20216 in the Holy skill line, next to Seal of Righteousness and Holy Shock; the Forever client's own ladder says Divine Favor)",
+        live = true,
+        engine = false,
+        needs = "an engine arm for this row needs the APL's own condition modelled: 'the Divine Favor buff is DOWN' (the sim's Divine Favor buff is consumed by the next Holy Shock hit - sim wowsims/classic sim/paladin/divine_favor.go:37 OnSpellHitDealt deactivates the aura) AND 'Holy Shock is ready' (the APL's spellIsReady(20930 r4)) AND the target-aura clause on 1310905 (the Forever client's Consecrated Ground). The cooldown read exists (api.GetSpellCooldown(20216)) and the client's spell book answers the known gate, but the shipped tree has no Holy-Shock cooldown read on the Forever family and no read that separates 'the buff is absent' from 'the buff could not be read' (api.scan_player_aura answers nil for both - compat.lua:514), so an arm built on the cooldown alone could ask for a buff that is UP. Filed, not guessed",
+    },
+}
+
+-- The APL rows the shipped prompt orders do not name: the WotLK APL's top two
+-- (Hand of Reckoning 67485, Hammer of Wrath 48806).
+--
+-- 2026-10-20 (the APL utility layer): the WotLK APL's top two rows left this
+-- table - they are ENGINE rows now. The guide has a slot for each (the
+-- contract's count pin was re-cut: ten slots -> twelve), the engine's Wrath
+-- order carries them above the damage rows (nextaction.lua's FCFS_ORDER_WRATH)
+-- and the class feeds their cooldowns, so the practice slice can ask for them.
+--
+-- WHAT IS LEFT HERE is the APL's rows the engine cannot press yet: each names
+-- the exact read or the exact rule it waits for in `needs` (HU-13's `live` /
+-- `engine` axes), and each is family-gated, so a client never sees another
+-- family's row.
+ST.PALADIN.practice_apl_rows = {
+    {
+        action = "judgement_of_wisdom",
+        order = "wrath",
+        families = { WRATH = true },
+    },
+    {
+        action = "holy_strike",
+        order = "twist",
+        families = { FOREVER = true },
+    },
+    {
+        action = "divine_favor",
+        order = "twist",
+        families = { FOREVER = true },
+    },
+}
+
+-- The APL's PRE-PULL rows (the operator ruling HU-12, hands-up 2026-10-20): they
+-- belong to the PRE-PULL table, never to the combat rotation. The prepull DRILL
+-- grades the SEAL (the spec above: the seal that must be up and the lead); the
+-- utility pre-pulls below have no consumer yet, so they are carried as
+-- citations only - the table is the pre-pull layer, not the rotation.
+--
+--   tbc-new   Prepull: 20218 Sanctity Aura @-18.5 s, group PrepullSeal @-1.5 s
+--             (27158 Seal of the Crusader OR 20375 Seal of Command - the row
+--             the "Prepull Seal Of the Crusader" variable picks), group
+--             PrepullJudge @0 s (20271 Judgement), group PullSeal @0 s
+--             (31892 Seal of Blood OR 20375 Seal of Command)
+--   forever   twist_of_light Prepull: 10301 @-10 s, 20920 r5 @-3 s, 20308 r6
+--             @-1.5 s; holy_shock Prepull: 10301 @-10 s, 20308 r6 @-1.5 s
+--   sod       p8-stack Prepull: 20920 r5 @-3 s, 407798 Seal of Martyrdom
+--             @-1.5 s; p8-twist Prepull: 20920 r5 @-1.5 s (the StopAttack
+--             macro cast), 407798 @0 s (the StartAttack macro cast)
+--
+-- 10301 is "Retribution Aura" - NAME CONFIRMED 2026-10-20 (bench/
+-- paladin_apl_utility_build_2026-10-20.md §3 C3): the Forever client's own
+-- sim file names it (sim wowsims/forever sim/paladin/retribution_aura.go:11 -
+-- wowhead.com/forever/spell=10301) and the 1.15 client's own spell tables put
+-- 10301 in the Retribution skill line. The gap analysis listed it as
+-- "Redemption" with the name UNCONFIRMED.
+--
+-- The class's own PRACTICE_PREPULL table above (the seal + the lead per order)
+-- is what the prepull DRILL grades; this table is the citation layer.
+ST.PALADIN.practice_prepull_rows = {
+    {
+        action = "sanctity_aura",
+        label = "Sanctity Aura",
+        id = 20218,
+        lead = 18.5,
+        families = { TBC = true },
+        source = "sim wowsims/tbc-new ui/specs/paladin/retribution/apls/default.apl.json Prepull: Sanctity Aura (20218) @-18.5 s",
+    },
+    {
+        action = "retribution_aura",
+        label = "Retribution Aura",
+        id = 10301,
+        lead = 10,
+        families = { FOREVER = true },
+        source = "sim wowsims/forever ui/specs/paladin/retribution/apls/twist_of_light.apl.json Prepull: 10301 @-10 s (also holy_shock.apl.json) - the spell is Retribution Aura (sim wowsims/forever sim/paladin/retribution_aura.go:11 - wowhead.com/forever/spell=10301; the 1.15 client's own spell tables put 10301 in the Retribution skill line). NAME CORRECTION 2026-10-20: the gap analysis named it 'Redemption' with the name UNCONFIRMED",
+    },
+    {
+        action = "soc_prepull",
+        label = "Seal of Command",
+        id = 20375,
+        lead = 1.5,
+        families = { TBC = true },
+        source = "sim wowsims/tbc-new ui/specs/paladin/retribution/apls/default.apl.json Prepull: group PrepullSeal @-1.5 s, row 2 (20375 Seal of Command r1 - the branch the 'Prepull Seal Of the Crusader' variable leaves open)",
+    },
+    {
+        action = "sotc_prepull",
+        label = "Seal of the Crusader",
+        id = 27158,
+        lead = 1.5,
+        families = { TBC = true },
+        source = "sim wowsims/tbc-new ui/specs/paladin/retribution/apls/default.apl.json Prepull: group PrepullSeal @-1.5 s, row 1 (27158 Seal of the Crusader - the branch the 'Prepull Seal Of the Crusader' variable picks)",
+    },
+    {
+        action = "judge_prepull",
+        label = "Judgement",
+        id = 20271,
+        lead = 0,
+        families = { TBC = true },
+        source = "sim wowsims/tbc-new ui/specs/paladin/retribution/apls/default.apl.json Prepull: group PrepullJudge @0 s (20271 Judgement)",
+    },
+    {
+        action = "sob_prepull",
+        label = "Seal of Blood",
+        id = 31892,
+        lead = 0,
+        families = { TBC = true },
+        source = "sim wowsims/tbc-new ui/specs/paladin/retribution/apls/default.apl.json Prepull: group PullSeal @0 s, row 1 (31892 Seal of Blood - the branch the 'Prepull Seal Of the Crusader' variable leaves open)",
+    },
+    {
+        action = "soc_pull",
+        label = "Seal of Command",
+        id = 20375,
+        lead = 0,
+        families = { TBC = true },
+        source = "sim wowsims/tbc-new ui/specs/paladin/retribution/apls/default.apl.json Prepull: group PullSeal @0 s, row 2 (20375 Seal of Command - the branch the 'Prepull Seal Of the Crusader' variable picks)",
+    },
+    {
+        action = "soc_prepull",
+        label = "Seal of Command",
+        id = 20920,
+        lead = 3,
+        families = { FOREVER = true },
+        source = "sim wowsims/forever ui/specs/paladin/retribution/apls/twist_of_light.apl.json Prepull: 20920 r5 @-3 s (Seal of Command - the client's own ladder, sim wowsims/forever sim/paladin/spell_data_auto_gen.go:271 SealOfCommand Ranked(20375, 20915, 20918, 20919, 20920))",
+    },
+    {
+        action = "sotc_prepull",
+        label = "Seal of the Crusader",
+        id = 20308,
+        lead = 1.5,
+        families = { FOREVER = true },
+        source = "sim wowsims/forever ui/specs/paladin/retribution/apls/twist_of_light.apl.json Prepull: 20308 r6 @-1.5 s and holy_shock.apl.json Prepull: 20308 r6 @-1.5 s (Seal of the Crusader - the client's own ladder, sim wowsims/forever sim/paladin/spell_data_auto_gen.go:283 SealOfTheCrusader Ranked(21082, 20162, 20305, 20306, 20307, 20308))",
+    },
+    {
+        action = "soc_prepull",
+        label = "Seal of Command",
+        id = 20920,
+        lead = 3,
+        families = { SOD = true },
+        source = "sim wowsims/sod ui/retribution_paladin/apls/p8-stack.apl.json Prepull: 20920 r5 @-3 s (Seal of Command)",
+    },
+    {
+        action = "som_prepull",
+        label = "Seal of Martyrdom",
+        id = 407798,
+        lead = 1.5,
+        families = { SOD = true },
+        source = "sim wowsims/sod ui/retribution_paladin/apls/p8-stack.apl.json Prepull: 407798 @-1.5 s (Seal of Martyrdom - the SoD rune rank; the class's own sob_ids carries the aura id, classes/paladin.lua)",
+    },
+}
+
+-- The rotation table: one entry per action, in the order the rotations name
+-- them, each entry carrying the orders it belongs to and its APL payload (the
+-- citation, the family gate and the family's spell id - the APL layer above).
+-- The order id is the family/variant key ("twist", "wrath", "sod", "sod_stack",
+-- "sod_shock", "sod_wrath"); the priority inside one order is that order's own
+-- table.
+local function build_practice_rotation()
+    local list = {}
+    local seen = {}
+    -- The entry builder lives inside this function: the module sits at the
+    -- Lua 5.1 local ceiling, so a helper of its own would not load.
+    local function new_entry(key)
+        local meta = ST.PALADIN.practice_action_meta[key] or {}
+        return {
+            action = key,
+            label = PRACTICE_ACTION_LABELS[key] or key,
+            orders = {},
+            note = meta.note,
+            source = meta.source,
+            families = meta.families,
+            ids = meta.ids,
+            tbc_name = meta.tbc_name,
+            live = meta.live,
+            engine = meta.engine,
+            needs = meta.needs,
+        }
+    end
+    local order_ids = { "twist", "wrath", "sod", "sod_stack", "sod_shock", "sod_wrath" }
+    for i = 1, #order_ids do
+        local id = order_ids[i]
+        local keys = ST.PALADIN.practice_orders[id]
+        if type(keys) == "table" then
+            for n = 1, #keys do
+                local key = keys[n]
+                local entry = seen[key]
+                if not entry then
+                    entry = new_entry(key)
+                    seen[key] = entry
+                    list[#list + 1] = entry
+                end
+                entry.orders[#entry.orders + 1] = id
+            end
+        end
+    end
+    -- The APL rows the shipped prompt orders do not name (the APL utility
+    -- layer: the WotLK APL's Judgement of Wisdom and the Forever APL's Holy
+    -- Strike and Divine Favor): they carry their order membership like every
+    -- other row, so the table is the full APL layer.
+    local apl_rows = ST.PALADIN.practice_apl_rows
+    for i = 1, #apl_rows do
+        local spec = apl_rows[i]
+        local entry = seen[spec.action]
+        if not entry then
+            entry = new_entry(spec.action)
+            seen[spec.action] = entry
+            list[#list + 1] = entry
+        end
+        entry.orders[#entry.orders + 1] = spec.order
+    end
+    return list
+end
+
+ST.PALADIN.practice_rotation = build_practice_rotation()
+
+-- The rotation entry of one action key (nil when the table does not name it).
+function ST.PALADIN.practice_rotation_entry(action)
+    for n = 1, #ST.PALADIN.practice_rotation do
+        local entry = ST.PALADIN.practice_rotation[n]
+        if entry.action == action then
+            return entry
+        end
+    end
+    return nil
+end
+
+-- The rotation table of one order, in that order's priority (nil for an
+-- unknown order id). The order id is OPTIONAL: the shared panel calls this
+-- without one (the class picks its own slice - the running client's order),
+-- so an argument-free call answers the running order's slice.
+--
+-- THE FAMILY GATE (the deep audit's M2): a row joins the slice only on the
+-- clients whose APL plays it - the row's own `families` set, the same
+-- predicate the rogue, warrior and druid slices use (classes/rogue.lua:2858).
+-- The twist order is shared by the classic line (ERA / TBC / FOREVER), so
+-- without the gate the TBC panel rendered a "Hammer of Wrath" button the TBC
+-- rotation can never ask for: the engine's execute arm is Era/Forever only
+-- (nextaction.lua's filler branch: `era_mode or forever_mode`), so pressing
+-- it graded `out_of_order` = F for a spell the rotation never wanted.
+--
+-- THE FAMILY TOKEN: the SoD game runs on the ERA client, so the ORDER names
+-- it - the SoD variants are their own orders ("sod", "sod_stack",
+-- "sod_shock", "sod_wrath" -> SOD) - and every other order is the twist tree,
+-- which answers the client's own family (compat.lua's st.family: ERA / TBC /
+-- FOREVER). The order and the gate therefore never disagree: the running
+-- order on a SoD client is the SoD one (the live gather publishes it), and
+-- the twist order is the classic line's.
+--
+-- A client that plays no rotation at all (Retail, Cata, Mists) names no row,
+-- so its slice is empty and the panel falls back to the guide slot vocabulary
+-- (practice_ui.lua's designed fallback). No such client can run the scenario
+-- anyway: the rotation scenario needs a live swing engine, and those clients
+-- run the inert stand-in.
+function ST.PALADIN.practice_rotation_for(order_id)
+    local id = order_id
+    if type(id) ~= "string" or id == "" then
+        -- The live gather's answer wins (it knows which SoD variant the client
+        -- plays); the family default stands until it answers.
+        id = ST.PALADIN.practice_running_order or ST.PALADIN.practice_default_order()
+    end
+    local keys = ST.PALADIN.practice_orders[id]
+    if type(keys) ~= "table" then
+        return nil
+    end
+    local family = st.family
+    if id == "wrath" then
+        family = "WRATH"
+    elseif id == "sod" or id == "sod_stack" or id == "sod_shock" or id == "sod_wrath" then
+        family = "SOD"
+    end
+    local out = {}
+    for i = 1, #keys do
+        local entry = ST.PALADIN.practice_rotation_entry(keys[i])
+        if entry and (entry.families == nil or entry.families[family] == true) then
+            out[#out + 1] = entry
+        end
+    end
+    -- The APL rows this order names but the engine's prompt order does not (the
+    -- APL utility layer): they ride the slice as cited rows - but ONLY the ones
+    -- the engine can actually ask for. A row with no engine arm (engine =
+    -- false) can never be the right answer, so it stays out of the practice
+    -- panel's button vocabulary (the hunter lane's rule) and lives in the
+    -- rotation table only. The family gate rides with them: a row another
+    -- family's APL plays is not this client's button either.
+    local apl_rows = ST.PALADIN.practice_apl_rows
+    for i = 1, #apl_rows do
+        local spec = apl_rows[i]
+        if spec.order == id then
+            local entry = ST.PALADIN.practice_rotation_entry(spec.action)
+            if entry and entry.engine ~= false and entry.live ~= false
+                and (entry.families == nil or entry.families[family] == true) then
+                out[#out + 1] = entry
+            end
+        end
+    end
+    return out
+end
+
+-- The scenario key the shared engine should register this class's rotation
+-- scenario under (bench/class_features_drills_2026-10-19.md §2 D: S-P).
+ST.PALADIN.practice_scenario_key = "paladin_rotation"
+
+-- One reused input table and one reused output table: a practice tick
+-- allocates nothing (the guide's own discipline).
+local practice_inputs = {}
+local practice_out = {}
+
+-- The clock: the context first, then the session.
+local function practice_now(self, ctx)
+    if type(ctx) == "table" then
+        local value = ctx.now
+        if type(value) == "number" and value == value then
+            return value
+        end
+    end
+    if type(self) == "table" then
+        local value = self.now
+        if type(value) == "number" and value == value then
+            return value
+        end
+    end
+    return nil
+end
+
+-- The session state: the shared engine may hand over the session (whose sim
+-- lives under .state) or the sim itself.
+local function practice_state(self)
+    if type(self) ~= "table" then
+        return nil
+    end
+    if type(self.state) == "table" then
+        return self.state
+    end
+    return self
+end
+
+-- Cooldown aliases per action key (the context's spelling, the practice sim's
+-- ability key and a couple of spell names).
+local PRACTICE_COOLDOWN_ALIASES = {
+    cs = { "cs", "crusader_strike" },
+    judge = { "judge", "judgement" },
+    ds = { "ds", "divine_storm" },
+    cons = { "cons", "consec", "consecration" },
+    exo = { "exo", "exorcism" },
+    how = { "how", "hammer_of_wrath" },
+    hw = { "hw", "holy_wrath" },
+    soc = { "soc", "seal_of_command" },
+    sob = { "sob", "seal_of_blood", "seal_of_martyrdom" },
+    sotc = { "sotc", "seal_of_the_crusader" },
+    hs = { "hs", "holy_shock" },
+    am = { "am", "aura_mastery" },
+    -- The WotLK APL's utility band. The spell-name aliases are deliberately
+    -- distinct from "how"'s ("hammer_of_wrath" is the Era/Forever EXECUTE
+    -- Hammer of Wrath, 24239): the WotLK one is 48806 and has its own key.
+    hor = { "hor", "hand_of_reckoning" },
+    how_wrath = { "how_wrath", "hammer_of_wrath_wotlk", "wotlk_hammer_of_wrath" },
+}
+
+-- The shipped sim's absolute cooldown fields (practice.lua new_sim): a session
+-- may hand over the sim, whose cooldowns are end times, not remainders.
+local PRACTICE_SIM_EXPIRY = {
+    cs = "cs_cooldown_expires",
+    judge = "judge_cooldown_expires",
+    cons = "consec_cooldown_expires",
+}
+
+-- Seconds remaining for one action key, or nil when the context cannot
+-- answer (unknown = withheld, never a wrong prompt). The engine's 999 sentinel
+-- is passed through unchanged (it means "unknown on this client" there too).
+local function practice_remaining(self, ctx, key)
+    local aliases = PRACTICE_COOLDOWN_ALIASES[key]
+    if not aliases then
+        return nil
+    end
+    if type(ctx) == "table" and type(ctx.cooldowns) == "table" then
+        for i = 1, #aliases do
+            local value = ctx.cooldowns[aliases[i]]
+            if type(value) == "number" and value == value then
+                return value < 0 and 0 or value
+            end
+        end
+    end
+    local now = practice_now(self, ctx)
+    local field = PRACTICE_SIM_EXPIRY[key]
+    if now ~= nil and field ~= nil then
+        local state = practice_state(self)
+        if state then
+            local expires = state[field]
+            if type(expires) == "number" and expires == expires then
+                local remaining = expires - now
+                return remaining < 0 and 0 or remaining
+            end
+        end
+    end
+    return nil
+end
+
+-- The player's press, normalised onto the canonical key (nil when the context
+-- reports no press).
+local function practice_action(ctx)
+    if type(ctx) ~= "table" then
+        return nil
+    end
+    local raw = ctx.last_action
+    if type(raw) ~= "string" or raw == "" then
+        return nil
+    end
+    local key = string.lower(raw)
+    local alias = ST.PALADIN.practice_action_aliases[key]
+    if alias then
+        return alias
+    end
+    if PRACTICE_ACTION_LABELS[key] then
+        return key
+    end
+    return nil
+end
+
+-- The seal state in the ENGINE's vocabulary ("soc" | "sob" | "none"): the
+-- twist seals only. nil when the context cannot answer.
+local function practice_seal(self, ctx)
+    local na = st.nextaction
+    if type(ctx) == "table" then
+        local seal = ctx.seal
+        if type(seal) == "string" and seal ~= "" then
+            if seal == "soc" or seal == "sob" then
+                return seal
+            end
+            if seal == "none" then
+                return "none"
+            end
+        end
+    end
+    local has_soc, has_sob
+    local state = practice_state(self)
+    if state and type(state.active_seals) == "table" then
+        local seals = state.active_seals
+        has_soc = seals.command == true or seals.soc == true
+        has_sob = seals.blood == true or seals.sob == true
+    else
+        local soc = practice_remaining(self, ctx, "soc")
+        local sob = practice_remaining(self, ctx, "sob")
+        if soc == nil and sob == nil then
+            return nil
+        end
+        has_soc = soc ~= nil and soc > 0
+        has_sob = sob ~= nil and sob > 0
+        -- The engine's own rule: Blood wins the dual-seal window, and a Seal
+        -- of Command with 1 s or less left reads as no seal.
+        return na.get_seal_state(has_soc, has_sob, soc)
+    end
+    -- The sim knows which seals are up, not how long they last: the Command
+    -- freshness rule reads as fresh (na.get_seal_state with no expiry).
+    if na then
+        return na.get_seal_state(has_soc, has_sob, nil)
+    end
+    if has_sob then
+        return "sob"
+    end
+    if has_soc then
+        return "soc"
+    end
+    return "none"
+end
+
+-- The seal state in the PRACTICE key space ("soc" | "sob" | "sotc" | "none"):
+-- the prepull drill needs the Seal of the Crusader too, which the twist tree
+-- does not know. nil when the context cannot answer.
+local function practice_seal_key(self, ctx)
+    if type(ctx) == "table" then
+        local seal = ctx.seal_key or ctx.seal
+        if type(seal) == "string" and seal ~= "" then
+            local lower = string.lower(seal)
+            if lower == "soc" or lower == "sob" or lower == "sotc" then
+                return lower
+            end
+            local alias = ST.PALADIN.practice_action_aliases[lower]
+            if alias == "soc" or alias == "sob" or alias == "sotc" then
+                return alias
+            end
+            if lower == "none" then
+                return "none"
+            end
+        end
+    end
+    local state = practice_state(self)
+    if state and type(state.active_seals) == "table" then
+        local seals = state.active_seals
+        if seals.command == true or seals.soc == true then
+            return "soc"
+        end
+        if seals.blood == true or seals.sob == true then
+            return "sob"
+        end
+        if seals.crusader == true or seals.sotc == true then
+            return "sotc"
+        end
+        return "none"
+    end
+    local soc = practice_remaining(self, ctx, "soc")
+    local sob = practice_remaining(self, ctx, "sob")
+    local sotc = practice_remaining(self, ctx, "sotc")
+    if soc ~= nil and soc > 0 then
+        return "soc"
+    end
+    if sob ~= nil and sob > 0 then
+        return "sob"
+    end
+    if sotc ~= nil and sotc > 0 then
+        return "sotc"
+    end
+    return nil
+end
+
+-- Seconds to the next swing, or nil when the context cannot answer.
+local function practice_swing_remaining(self, ctx)
+    if type(ctx) == "table" then
+        local value = ctx.swing_remaining
+        if type(value) == "number" and value == value then
+            return value < 0 and 0 or value
+        end
+    end
+    local now = practice_now(self, ctx)
+    local state = practice_state(self)
+    if state and now ~= nil then
+        local ends = state.swing_ends_at
+        if type(ends) == "number" and ends == ends then
+            local remaining = ends - now
+            return remaining < 0 and 0 or remaining
+        end
+    end
+    return nil
+end
+
+-- Seconds of GCD left, or nil when the context cannot answer.
+local function practice_gcd_remaining(self, ctx)
+    if type(ctx) == "table" then
+        local value = ctx.gcd_remaining
+        if type(value) == "number" and value == value then
+            return value < 0 and 0 or value
+        end
+    end
+    local now = practice_now(self, ctx)
+    local state = practice_state(self)
+    if state and now ~= nil then
+        local expires = state.gcd_expires
+        if type(expires) == "number" and expires == expires then
+            local remaining = expires - now
+            return remaining < 0 and 0 or remaining
+        end
+    end
+    return nil
+end
+
+-- The weapon speed, seconds per swing (nil = the engine's own default).
+local function practice_speed(self, ctx)
+    if type(ctx) == "table" then
+        local value = ctx.speed
+        if type(value) == "number" and value == value then
+            return value
+        end
+    end
+    local state = practice_state(self)
+    if state then
+        local value = state.effective_speed or state.speed
+        if type(value) == "number" and value == value then
+            return value
+        end
+    end
+    return nil
+end
+
+-- The GCD length, seconds (nil = the engine's own default of 1.5).
+local function practice_gcd_duration(self, ctx)
+    if type(ctx) == "table" then
+        local value = ctx.gcd_duration
+        if type(value) == "number" and value == value then
+            return value
+        end
+    end
+    local state = practice_state(self)
+    if state then
+        local value = state.effective_gcd or state.gcd_duration
+        if type(value) == "number" and value == value then
+            return value
+        end
+    end
+    return nil
+end
+
+-- A number out of the context, with the alias list the shared engine may use.
+local function practice_number(ctx, ...)
+    if type(ctx) ~= "table" then
+        return nil
+    end
+    for i = 1, select("#", ...) do
+        local value = ctx[select(i, ...)]
+        if type(value) == "number" and value == value then
+            return value
+        end
+    end
+    return nil
+end
+
+-- A number out of the context's resources table.
+local function practice_resource(ctx, ...)
+    if type(ctx) ~= "table" or type(ctx.resources) ~= "table" then
+        return nil
+    end
+    for i = 1, select("#", ...) do
+        local value = ctx.resources[select(i, ...)]
+        if type(value) == "number" and value == value then
+            return value
+        end
+    end
+    return nil
+end
+
+-- Crusader Strike availability: the context wins, then the client's own spell
+-- book (the same probe the live gather uses), then the family default (Era
+-- has no Crusader Strike at all - bench/class_features_drills_2026-10-19.md
+-- §2 P-14).
+local function practice_cs_known(self, ctx)
+    if type(ctx) == "table" and type(ctx.cs_known) == "boolean" then
+        return ctx.cs_known
+    end
+    local na = st.nextaction
+    if na and na.CS_SPELL_ID then
+        return is_spell_known_query(na.CS_SPELL_ID)
+    end
+    return not is_era_family
+end
+
+-- The FCFS mode the running client plays when nothing else names one: the
+-- family default. Wrath runs its own FCFS table, the SoD runes run the Exodin
+-- table (the shipped default), every other family runs the twist tree (no FCFS
+-- mode). The SoD variants (stack / shockadin / wrath-like) need the build's own
+-- live signals - only the live gather has them, and it names them in the
+-- context (see the ctx builder below).
+function ST.PALADIN.practice_default_mode(self, ctx)
+    if is_wrath_family then
+        return "wrath"
+    end
+    if is_era_family then
+        local now = practice_now(self, ctx) or api.get_time()
+        local ds_id = resolve_ds_spell_id(now)
+        if is_sod_client(practice_cs_known(self, ctx), ds_id) then
+            return "sod"
+        end
+    end
+    return nil
+end
+
+-- The FCFS mode (nil = the twist tree). The context wins, then the session,
+-- then the family default.
+local function practice_fcfs_mode(self, ctx)
+    if type(ctx) == "table" then
+        local mode = ctx.fcfs_mode
+        if type(mode) == "string" and mode ~= "" then
+            return mode
+        end
+    end
+    local state = practice_state(self)
+    if state and type(state.fcfs_mode) == "string" and state.fcfs_mode ~= "" then
+        return state.fcfs_mode
+    end
+    return ST.PALADIN.practice_default_mode(self, ctx)
+end
+
+-- The order the running client plays, when no live gather has answered yet (the
+-- family default: the Wrath FCFS table, the SoD Exodin table or the twist
+-- tree). The live gather's answer wins (practice_running_order): it is the only
+-- place that knows which SoD variant the client plays.
+function ST.PALADIN.practice_default_order()
+    return ST.PALADIN.practice_order_for_mode(ST.PALADIN.practice_default_mode(nil, nil))
+end
+
+-- Build the engine inputs from the practice context. Returns false when the
+-- core timing or the seal cannot be read: the decision would be fiction, and
+-- a fiction is worse than an unknown.
+local function build_practice_inputs(self, ctx, inputs)
+    local now = practice_now(self, ctx)
+    local mode = practice_fcfs_mode(self, ctx)
+    local swing_remaining = practice_swing_remaining(self, ctx)
+    local gcd_remaining = practice_gcd_remaining(self, ctx)
+    if swing_remaining == nil and not (mode and gcd_remaining ~= nil) then
+        return false
+    end
+    local seal = practice_seal(self, ctx)
+    if seal == nil then
+        return false
+    end
+    inputs.now = now
+    inputs.swing_remaining = swing_remaining or 0
+    inputs.gcd_remaining = gcd_remaining or 0
+    inputs.speed = practice_speed(self, ctx)
+    inputs.G = practice_gcd_duration(self, ctx)
+    -- The GCD-before-swing landmark: the gathered value when the live path
+    -- published one, the GCD length otherwise (the sim path, unchanged).
+    inputs.gcd_before_swing = practice_number(ctx, "gcd_before_swing") or inputs.G
+    inputs.twist_window = practice_number(ctx, "twist_window")
+    -- The reaction time and the Crusader Strike delay: the client's own settings
+    -- when the live path published them, the shipped defaults otherwise.
+    inputs.reaction = practice_number(ctx, "reaction") or 0.1
+    inputs.cs_delay_max = practice_number(ctx, "cs_delay_max") or 0.9
+    inputs.seal = seal
+    inputs.waiting_judgement = false
+    inputs.melee_count = practice_number(ctx, "melee_count") or 0
+    inputs.mana_pct = practice_number(ctx, "mana_pct")
+        or practice_resource(ctx, "mana_pct", "mana") or 0
+    inputs.creature_type = nil
+    if type(ctx) == "table" then
+        inputs.creature_type = ctx.creature_type
+        if inputs.creature_type == nil and type(ctx.resources) == "table" then
+            inputs.creature_type = ctx.resources.creature_type
+        end
+    end
+    inputs.target_count = practice_number(ctx, "target_count")
+        or practice_resource(ctx, "target_count")
+    inputs.target_health_pct = practice_number(ctx, "target_health_pct")
+        or practice_resource(ctx, "target_health_pct")
+    inputs.fight_remaining_pct = practice_number(ctx, "fight_remaining_pct")
+        or practice_resource(ctx, "fight_remaining_pct")
+    inputs.how_cast_seconds = practice_number(ctx, "how_cast_seconds")
+    inputs.judge_require_fit = true
+    inputs.era = is_era_family
+    inputs.forever = is_forever_family
+    inputs.fcfs_mode = mode
+    inputs.cs_known = practice_cs_known(self, ctx)
+    -- The cooldown reads. The twist tree treats a missing Judgement cooldown as
+    -- "ready" (it defaults to 0), so an unknown one is passed as the engine's
+    -- 999 sentinel instead: unknown withholds the cue, it never invents one.
+    inputs.cs_remaining = practice_remaining(self, ctx, "cs") or 999
+    inputs.judge_remaining = practice_remaining(self, ctx, "judge") or 999
+    inputs.ds_remaining = practice_remaining(self, ctx, "ds")
+    inputs.cons_remaining = practice_remaining(self, ctx, "cons")
+    inputs.exo_remaining = practice_remaining(self, ctx, "exo")
+    inputs.how_remaining = practice_remaining(self, ctx, "how")
+    inputs.hw_remaining = practice_remaining(self, ctx, "hw")
+    inputs.hs_remaining = practice_remaining(self, ctx, "hs")
+    inputs.am_remaining = practice_remaining(self, ctx, "am")
+    -- The WotLK APL's utility band (the engine's Wrath order asks for these
+    -- first): nil = unknown = withheld, never a wrong press.
+    inputs.hor_remaining = practice_remaining(self, ctx, "hor")
+    inputs.how_wrath_remaining = practice_remaining(self, ctx, "how_wrath")
+    -- The filler mirror: the engine consumes one cooldown value (the filler it
+    -- would pick). The mirror follows the engine's own choice order and its
+    -- own default thresholds, so the two sides always agree.
+    inputs.filler_remaining = nil
+    local mana = inputs.mana_pct
+    local exo_threshold = practice_number(ctx, "mana_exorcism_threshold")
+        or practice_resource(ctx, "mana_exorcism_threshold") or 30
+    local cons_threshold = practice_number(ctx, "mana_consecration_threshold")
+        or practice_resource(ctx, "mana_consecration_threshold") or 35
+    if inputs.creature_type and st.nextaction
+        and st.nextaction.exorcism_target_types[inputs.creature_type] then
+        if mana > exo_threshold then
+            inputs.filler_remaining = practice_remaining(self, ctx, "exo")
+        end
+    elseif mana > cons_threshold then
+        inputs.filler_remaining = practice_remaining(self, ctx, "cons")
+    end
+    -- The SoD variant signals (APL-cited, in-client UNCONFIRMED): read from the
+    -- context when it carries them, unknown otherwise (the engine withholds).
+    inputs.holy_power_stacks = practice_number(ctx, "holy_power_stacks")
+        or practice_resource(ctx, "holy_power_stacks")
+    inputs.holy_power_set_known = nil
+    inputs.sod_dual_seal_active = nil
+    inputs.sod_t2_known = nil
+    inputs.sod_naxx_known = nil
+    inputs.sod_libram_known = nil
+    inputs.am_rune_known = nil
+    inputs.sunlight_remaining = practice_number(ctx, "sunlight_remaining")
+    inputs.templar_stack_remaining = practice_number(ctx, "templar_stack_remaining")
+    inputs.templar_wrath_remaining = practice_number(ctx, "templar_wrath_remaining")
+    -- The stack dual-seal timers (the SoD stack build): the seal's own remaining
+    -- seconds. The sim path has no seal timers (unknown); the live path
+    -- publishes them under the guide's own names.
+    inputs.soc_remaining_seconds = practice_remaining(self, ctx, "soc")
+        or practice_number(ctx, "soc_remaining_seconds")
+    inputs.som_remaining_seconds = practice_remaining(self, ctx, "sob")
+        or practice_number(ctx, "som_remaining_seconds")
+    if type(ctx) == "table" then
+        if type(ctx.holy_power_set_known) == "boolean" then
+            inputs.holy_power_set_known = ctx.holy_power_set_known
+        end
+        if type(ctx.sod_dual_seal_active) == "boolean" then
+            inputs.sod_dual_seal_active = ctx.sod_dual_seal_active
+        end
+        if type(ctx.sod_t2_known) == "boolean" then
+            inputs.sod_t2_known = ctx.sod_t2_known
+        end
+        if type(ctx.sod_naxx_known) == "boolean" then
+            inputs.sod_naxx_known = ctx.sod_naxx_known
+        end
+        if type(ctx.sod_libram_known) == "boolean" then
+            inputs.sod_libram_known = ctx.sod_libram_known
+        end
+        if type(ctx.am_rune_known) == "boolean" then
+            inputs.am_rune_known = ctx.am_rune_known
+        end
+    end
+    return true
+end
+
+-- The filler press (the engine's filler channel), mapped onto the practice key
+-- space. nil when the engine named no filler.
+local function practice_filler_key(filler, mode)
+    if filler == "consecration" then
+        return "cons", "Consecration filler"
+    elseif filler == "exorcism" then
+        return "exo", "Exorcism filler"
+    elseif filler == "how" then
+        if mode == "wrath" then
+            return "hw", "Holy Wrath (Undead or Demon)"
+        end
+        return "how", "Hammer of Wrath execute"
+    elseif filler == "holy_shock" then
+        return "hs", "Holy Shock at three Holy Power stacks"
+    elseif filler == "aura_mastery" then
+        return "am", "Aura Mastery (Libram of Sanctity)"
+    end
+    return nil, nil
+end
+
+-- The engine's answer, mapped onto the practice key space. Returns the key and
+-- a short reason (nil, reason when the rotation wants nothing pressed).
+local function practice_key_from_engine(out, mode)
+    if out.judge_call == true then
+        return "judge", "Judgement cue"
+    end
+    if mode then
+        -- The FCFS engine: hold means "nothing is ready" (the engine named the
+        -- ability to wait for); the action and the filler are the presses.
+        if out.hold == true then
+            return nil, "hold: wait for the named ability"
+        end
+        if out.action == "cs" then
+            return "cs", "Crusader Strike comes first in the order"
+        end
+        if out.action == "hor" then
+            -- The WotLK APL's top row (Hand of Reckoning 67485): the utility
+            -- band sits above the damage rows, so it is the press.
+            return "hor", "Hand of Reckoning comes first in the order"
+        end
+        if out.action == "how_wrath" then
+            -- The WotLK APL's second row (Hammer of Wrath 48806, the execute
+            -- phase cast - not the Era/Forever execute Hammer of Wrath).
+            return "how_wrath", "Hammer of Wrath (WotLK) comes first in the order"
+        end
+        if out.action == "sob" then
+            return "ds", "Divine Storm comes first in the order"
+        end
+        local key, reason = practice_filler_key(out.filler_kind, mode)
+        if key then
+            return key, reason
+        end
+        return nil, "hold: the rotation wants nothing pressed"
+    end
+    -- The twist tree: the seal work (or the Crusader Strike override) is the
+    -- press; while the rotation rides the Blood seal the filler is the only
+    -- press available.
+    if out.riding == true then
+        local key, reason = practice_filler_key(out.filler_kind, mode)
+        if key then
+            return key, reason
+        end
+        return nil, "hold: ride the seal, cast nothing"
+    end
+    if out.action == "cs" then
+        if out.hold == true then
+            -- Crusader Strike is still on cooldown: the rotation wants it, but
+            -- not yet.
+            return nil, "hold: wait for Crusader Strike"
+        end
+        return "cs", "Crusader Strike override"
+    end
+    if out.action == "soc" then
+        return "soc", "Reseal Seal of Command"
+    end
+    if out.action == "sob" then
+        return "sob", "Seal of Blood is the twist seal here"
+    end
+    if out.action == "twist" then
+        return "twist", "Twist window open"
+    end
+    return nil, "hold: the rotation wants nothing pressed"
+end
+
+-- The rotation's decision at one practice decision point. nil when the context
+-- cannot answer (the engine grades "unknown"). Otherwise a table:
+--   action  the practice key to press (nil when the rotation wants nothing)
+--   reason  a short line for the report
+--   hold    true when the rotation wants nothing pressed
+--   judge   true when the Judgement cue is up
+--   mode    the FCFS mode in play (nil = the twist tree)
+function ST.PALADIN.practice_decision(self, ctx)
+    local na = st.nextaction
+    if not (na and na.evaluate) then
+        return nil
+    end
+    if not build_practice_inputs(self, ctx, practice_inputs) then
+        return nil
+    end
+    local mode = practice_inputs.fcfs_mode
+    local out = practice_out
+    -- The engine seeds `action` from the caller's table (the archive's last
+    -- action); a practice tick starts from nothing instead.
+    out.action = nil
+    if mode and na.evaluate_fcfs then
+        na.evaluate_fcfs(practice_inputs, out)
+    else
+        na.evaluate(practice_inputs, out)
+    end
+    if out.inputs_unknown == true then
+        return nil
+    end
+    local key, reason = practice_key_from_engine(out, mode)
+    if key == nil then
+        reason = reason or "hold: the rotation wants nothing pressed"
+    end
+    return {
+        action = key,
+        reason = reason,
+        hold = key == nil,
+        judge = out.judge_call == true,
+        mode = mode,
+    }
+end
+
+-- The expected action at one decision point. nil when the class cannot decide
+-- (unknown). A decision to HOLD is a DECISION, not an unknown (the operator
+-- ruling HU-8, hands-up 2026-10-19): the twist tree's RIDE window and the FCFS
+-- "nothing is ready" answer state the hold explicitly, so the engine can tell a
+-- hold (casting then is an illegal cast) from an unknown (no attempt at all).
+-- The reason is the engine's own line - never a second opinion.
+function ST.PALADIN.practice_scenario_step(self, ctx)
+    local decision = ST.PALADIN.practice_decision(self, ctx)
+    if not decision then
+        return nil
+    end
+    if not decision.action then
+        if decision.hold == true then
+            return { action = nil, hold = true, reason = decision.reason }
+        end
+        return nil
+    end
+    return { action = decision.action, reason = decision.reason }
+end
+
+-- The mis-pick bands (bench/class_features_drills_2026-10-19.md §2 D-P1,
+-- [DESIGN] grading policy): no mis-pick S, one A, two B, three C, four or
+-- five D, more than five F. Over the spec's ten-decision sample the bands land
+-- exactly on that table; between decisions the band is the running grade.
+local function practice_band(mistakes)
+    if type(mistakes) ~= "number" then
+        return nil
+    end
+    if mistakes <= 0 then
+        return "S"
+    elseif mistakes <= 1 then
+        return "A"
+    elseif mistakes <= 2 then
+        return "B"
+    elseif mistakes <= 3 then
+        return "C"
+    elseif mistakes <= 5 then
+        return "D"
+    end
+    return "F"
+end
+
+-- The drill counters live beside the engine, not inside it: a weak-keyed table
+-- keyed by the session (ctx.session / ctx.session_id / the session object), so
+-- a finished session's counters disappear with it and the shared engine's own
+-- tables are never written to. When the engine aggregates the counters itself
+-- (ctx.mistakes / ctx.attempts) those win and nothing is stored here.
+local practice_drill_state = setmetatable({}, { __mode = "k" })
+-- The number of sessions the store holds. A string session id is not
+-- collectable, so the store is dropped wholesale once it grows past the cap.
+local practice_drill_sessions = 0
+local PRACTICE_DRILL_SESSION_CAP = 64
+
+-- The session identity the counters hang off (nil = no session to key on).
+local function practice_drill_session(self, ctx)
+    if type(ctx) == "table" then
+        if ctx.session ~= nil then
+            return ctx.session
+        end
+        if ctx.session_id ~= nil then
+            return ctx.session_id
+        end
+    end
+    if type(self) == "table" then
+        return self
+    end
+    return nil
+end
+
+-- The running counters for one drill: the mistakes, the decisions and the
+-- store entry (nil when the engine owns the counters).
+local function practice_drill_counters(self, ctx, drill_key)
+    if type(ctx) == "table" then
+        local mistakes = ctx.mistakes
+        local decisions = ctx.attempts or ctx.decisions
+        if type(mistakes) == "number" and type(decisions) == "number" then
+            return mistakes, decisions, nil
+        end
+    end
+    local session = practice_drill_session(self, ctx)
+    if session == nil then
+        return nil, nil, nil
+    end
+    local store = practice_drill_state[session]
+    if type(store) ~= "table" then
+        store = {}
+        practice_drill_state[session] = store
+        practice_drill_sessions = practice_drill_sessions + 1
+        if practice_drill_sessions > PRACTICE_DRILL_SESSION_CAP then
+            practice_drill_state = setmetatable({}, { __mode = "k" })
+            practice_drill_sessions = 0
+            store = {}
+            practice_drill_state[session] = store
+            practice_drill_sessions = 1
+        end
+    end
+    local entry = store[drill_key]
+    if type(entry) ~= "table" then
+        entry = { mistakes = 0, decisions = 0 }
+        store[drill_key] = entry
+    end
+    -- A new sample (a fresh decision index, or a new sample id) starts over.
+    local sample = nil
+    if type(ctx) == "table" then
+        sample = ctx.sample_id
+        if sample == nil then
+            sample = ctx.decision_index
+        end
+    end
+    if sample ~= nil and entry.sample ~= nil and sample ~= entry.sample then
+        local restart = type(sample) ~= "number" or type(entry.sample) ~= "number"
+            or sample < entry.sample
+        if restart then
+            entry.mistakes, entry.decisions = 0, 0
+        end
+    end
+    if sample ~= nil then
+        entry.sample = sample
+    end
+    return entry.mistakes, entry.decisions, entry
+end
+
+-- Record one decision and return the band. ok = the player pressed what the
+-- rotation wanted.
+local function practice_grade_band(self, ctx, drill_key, ok)
+    local mistakes, decisions, entry = practice_drill_counters(self, ctx, drill_key)
+    if entry then
+        entry.mistakes = (mistakes or 0) + (ok and 0 or 1)
+        entry.decisions = (decisions or 0) + 1
+        mistakes = entry.mistakes
+    elseif type(mistakes) == "number" then
+        -- The engine's own counters: they hold the totals BEFORE this
+        -- decision, so this one is added here.
+        mistakes = mistakes + (ok and 0 or 1)
+    else
+        -- No session and no counters: this one decision is all there is.
+        return ok and "S" or "F"
+    end
+    return practice_band(mistakes)
+end
+
+-- The action the rotation wants right now (nil when it cannot be decided).
+local function practice_expected_action(self, ctx)
+    local decision = ST.PALADIN.practice_decision(self, ctx)
+    if not decision or not decision.action then
+        return nil
+    end
+    return decision.action
+end
+
+-- The prepull the drill grades: the seal that must be up and the lead (how
+-- far before the pull it has to be cast). The rotation's own table is the
+-- default; the context may name the seal and the lead itself.
+local function practice_prepull_spec(self, ctx)
+    local spec = nil
+    local mode = practice_fcfs_mode(self, ctx)
+    if mode then
+        local entry = PRACTICE_PREPULL[mode]
+        if entry then
+            spec = { seal = entry.seal, lead = entry.lead }
+        end
+    elseif is_tbc_family then
+        -- The tbc-new APL: Seal of the Crusader 27158r7 plus Judgements at 0 s.
+        spec = { seal = "sotc", lead = 0 }
+    elseif is_era_family then
+        -- The classic APL: the primary seal at -1.5 s.
+        spec = { seal = "soc", lead = 1.5 }
+    end
+    -- Forever: no sourced prepull in scope (the spec stays nil).
+    if type(ctx) == "table" then
+        local seal = ctx.seal_due or ctx.due_seal
+        if type(seal) == "string" and seal ~= "" then
+            local alias = ST.PALADIN.practice_action_aliases[string.lower(seal)]
+                or string.lower(seal)
+            local lead = practice_number(ctx, "prepull_lead", "lead_seconds")
+            spec = {
+                seal = alias,
+                lead = lead or (spec and spec.lead) or 0,
+            }
+        end
+    end
+    return spec
+end
+
+-- The pull time (absolute), or nil when the context cannot answer.
+local function practice_pull_at(self, ctx)
+    if type(ctx) == "table" then
+        local at = ctx.pull_at or ctx.pull_time
+        if type(at) == "number" and at == at then
+            return at
+        end
+    end
+    local now = practice_now(self, ctx)
+    local pull_in = practice_number(ctx, "pull_in_seconds", "time_to_pull_seconds")
+    if pull_in == nil then
+        pull_in = practice_resource(ctx, "pull_in_seconds", "time_to_pull_seconds")
+    end
+    if now ~= nil and pull_in ~= nil then
+        return now + pull_in
+    end
+    return nil
+end
+
+-- The Judgement verdict: true (judge now), false (do not judge) or nil (the
+-- context cannot answer - the Judgement cooldown is unknown, so the verdict
+-- would be fiction).
+local function practice_judge_verdict(self, ctx)
+    if practice_remaining(self, ctx, "judge") == nil then
+        return nil
+    end
+    local decision = ST.PALADIN.practice_decision(self, ctx)
+    if not decision then
+        return nil
+    end
+    return decision.judge == true
+end
+
+-- The focused graders. Each one answers nil when its decision cannot be
+-- judged (never a wrong grade).
+ST.PALADIN.practice_drills = {
+    {
+        -- D-P1 (bench/class_features_drills_2026-10-19.md §2): the rotation
+        -- priority order. The expected action is the engine's own answer, which
+        -- for the FCFS families IS the frozen order's first ready entry (the
+        -- never-wait rule) - so the drill grades the order, not the timing.
+        key = "paladin_fcfs_priority",
+        label = "FCFS priority order",
+        grade = function(self, ctx)
+            local expected = practice_expected_action(self, ctx)
+            if expected == nil then
+                return nil
+            end
+            local actual = practice_action(ctx)
+            if actual == nil then
+                return nil
+            end
+            return practice_grade_band(self, ctx, "paladin_fcfs_priority",
+                actual == expected)
+        end,
+    },
+    {
+        -- D-P2: the opener. The seal that must be up before the pull, cast
+        -- inside the lead (the bands are the spec's [DESIGN] policy).
+        key = "paladin_prepull",
+        label = "Prepull seal",
+        grade = function(self, ctx)
+            local spec = practice_prepull_spec(self, ctx)
+            if not spec then
+                return nil
+            end
+            local up = practice_seal_key(self, ctx)
+            if up == nil then
+                return nil
+            end
+            if up ~= spec.seal then
+                -- The wrong seal, or no seal at all.
+                return "F"
+            end
+            local now = practice_now(self, ctx)
+            local pull_at = practice_pull_at(self, ctx)
+            if now == nil or pull_at == nil then
+                -- The seal is up and no countdown is known: nothing to be late
+                -- for.
+                return "S"
+            end
+            local late = now - (pull_at - spec.lead)
+            if late <= 0 then
+                return "S"
+            elseif late <= 0.5 then
+                return "A"
+            elseif late <= 1.0 then
+                return "B"
+            elseif late <= 1.5 then
+                return "C"
+            end
+            -- Up only after the pull.
+            return "D"
+        end,
+    },
+    {
+        -- D-P3: the Judgement decision - is it worth the GCD, given the seal
+        -- state and the time to the next swing (the fit the sim gates hardest).
+        key = "paladin_judge_fit",
+        label = "Judgement fit",
+        grade = function(self, ctx)
+            local verdict = practice_judge_verdict(self, ctx)
+            if verdict == nil then
+                return nil
+            end
+            local actual = practice_action(ctx)
+            if actual == nil then
+                return nil
+            end
+            if (actual == "judge") ~= verdict then
+                -- The wrong verdict: judged when the seal was down, the fit
+                -- failed, or the fight was over.
+                return "F"
+            end
+            local cue = practice_number(ctx, "cue_at", "expected_at", "decision_at")
+            local now = practice_now(self, ctx)
+            if cue == nil or now == nil then
+                return "S"
+            end
+            local late = now - cue
+            if late <= 0 then
+                return "S"
+            end
+            local gcd = practice_gcd_duration(self, ctx) or 1.5
+            if late <= gcd / 3 then
+                return "A"
+            elseif late <= (2 * gcd) / 3 then
+                return "B"
+            elseif late <= gcd then
+                return "C"
+            end
+            return "D"
+        end,
+    },
+}
+
+-- The live pull clock in the ctx (BS-8 item 2 / P-17): the prepull step judges
+-- the pull window from the SAME moment the live guide reads.
+--   ctx.pull_at           the absolute pull timestamp (api.get_time() domain)
+--   ctx.pull_in_seconds   the countdown to the pull, in seconds
+-- Both stay nil when the pull is unknown (the clock is never a guess), and a ctx
+-- that already carries its own pull clock keeps it. The clock lives on the ADDON
+-- OBJECT (the AceAddon table main.lua publishes it on), not on the namespace.
+local function practice_apply_pull_clock(ctx, now)
+    if type(ctx) ~= "table" then
+        return ctx
+    end
+    if ctx.pull_at ~= nil or ctx.pull_in_seconds ~= nil then
+        return ctx
+    end
+    local pull_at = ST.pull_at
+    if type(pull_at) == "number" and pull_at == pull_at then
+        ctx.pull_at = pull_at
+    end
+    if type(ST.pull_in_seconds) == "function" then
+        local ok, value = pcall(ST.pull_in_seconds, ST, now)
+        if ok and type(value) == "number" and value == value then
+            ctx.pull_in_seconds = value
+        end
+    end
+    return ctx
+end
+
+-- The live guide inputs (the class's own gathered state): the ctx builder
+-- reads them when the session state is absent, so the scenario decides on the
+-- SAME numbers the next-action guide shows. pcall-guarded: a half-loaded class
+-- module never throws out of a ctx build (the rogue and the hunter use the
+-- same discipline). The reused table lives on the module table (the module
+-- sits at the Lua 5.1 local ceiling: no file-local room).
+ST.PALADIN.practice_live_inputs = {}
+
+function ST.PALADIN.practice_live_gather(self)
+    if type(ST.PALADIN.gather_guide_inputs) ~= "function" then
+        return nil
+    end
+    local ok, result = pcall(ST.PALADIN.gather_guide_inputs, self,
+        ST.PALADIN.practice_live_inputs)
+    if not ok or type(result) ~= "table" then
+        return nil
+    end
+    return result
+end
+
+-- The gathered names the practice contract reads as FLAT ctx fields (the guide's
+-- own names). Everything else the gather produced rides along in ctx.resources
+-- (the rogue's rule: a field nobody listed still reaches the class's grader).
+ST.PALADIN.practice_gathered_flat = {
+    "swing_remaining", "gcd_remaining", "speed", "seal", "fcfs_mode",
+    "cs_known", "twist_window", "reaction", "cs_delay_max", "gcd_before_swing",
+    "mana_pct", "creature_type", "melee_count", "target_count",
+    "target_health_pct", "fight_remaining_pct", "how_cast_seconds",
+    "holy_power_stacks", "holy_power_set_known", "sod_dual_seal_active",
+    "sod_t2_known", "sod_naxx_known", "sod_libram_known", "am_rune_known",
+    "sunlight_remaining", "templar_stack_remaining", "templar_wrath_remaining",
+    "mana_exorcism_threshold", "mana_consecration_threshold",
+    "soc_remaining_seconds", "som_remaining_seconds",
+}
+
+-- The gathered guide inputs into the ctx (the live path).
+function ST.PALADIN.practice_apply_gathered(ctx, gathered)
+    for key, value in pairs(gathered) do
+        if type(key) == "string" then
+            local kind = type(value)
+            if kind == "number" or kind == "boolean" or kind == "string" then
+                ctx.resources[key] = value
+            end
+        end
+    end
+    local flat = ST.PALADIN.practice_gathered_flat
+    for i = 1, #flat do
+        local name = flat[i]
+        local value = gathered[name]
+        if value ~= nil then
+            ctx[name] = value
+        end
+    end
+    -- The GCD length: the guide's own name for it.
+    if type(gathered.G) == "number" then
+        ctx.gcd_duration = gathered.G
+    end
+    -- The cooldown rows: the engine's own naming (<key>_remaining).
+    for key, value in pairs(gathered) do
+        if type(key) == "string" and type(value) == "number" then
+            local base = key:match("^(.-)_remaining_cd$") or key:match("^(.-)_remaining$")
+            if base and base ~= "" then
+                ctx.cooldowns[base] = value
+            end
+        end
+    end
+    return ctx
+end
+
+-- An adapter for the shipped practice sim: build the context the step and the
+-- drills read, from the sim's own state. The shared engine may use it or
+-- build its own context; either way the class-side contract is the same.
+--
+-- TWO SHAPES, ONE BUILDER:
+--   * the SIM shape (the twist sim): the session state carries the swing clock,
+--     the GCD clock, the cooldowns and the active seals. The sim-shaped fields
+--     are copied verbatim.
+--   * the LIVE shape (the real client): the session state carries NO sim clock
+--     (the addon object has none), so the sim-shaped copy answers nothing and
+--     the scenario had no timing to decide on - every step was UNKNOWN. The
+--     builder therefore falls back to the class's OWN gathered guide inputs (the
+--     same state the next-action guide reads: swing_remaining, gcd_remaining,
+--     the seal, the FCFS mode and the cooldowns), so the scenario decides on
+--     the live numbers.
+--
+-- The fallback runs only when the sim shape did not answer the timing, so the
+-- twist sim keeps its own path bit-identically.
+function ST.PALADIN.practice_context(self, now, last_action)
+    local state = practice_state(self)
+    local ctx = {
+        now = now,
+        last_action = last_action,
+        resources = {},
+        cooldowns = {},
+    }
+    -- The pull moment travels with the ctx: the prepull drill reads it from here.
+    practice_apply_pull_clock(ctx, now)
+    if type(state) == "table" then
+        if type(state.swing_ends_at) == "number" and type(now) == "number" then
+            ctx.swing_remaining = math.max(0, state.swing_ends_at - now)
+        end
+        if type(state.gcd_expires) == "number" and type(now) == "number" then
+            ctx.gcd_remaining = math.max(0, state.gcd_expires - now)
+        end
+        if type(state.effective_speed) == "number" then
+            ctx.speed = state.effective_speed
+        end
+        if type(state.effective_gcd) == "number" then
+            ctx.gcd_duration = state.effective_gcd
+        end
+        local expires = {
+            cs = state.cs_cooldown_expires,
+            judge = state.judge_cooldown_expires,
+            cons = state.consec_cooldown_expires,
+        }
+        for key, value in pairs(expires) do
+            if type(value) == "number" and type(now) == "number" then
+                ctx.cooldowns[key] = math.max(0, value - now)
+            end
+        end
+        if type(state.active_seals) == "table" then
+            local seals = state.active_seals
+            if seals.command == true or seals.soc == true then
+                ctx.seal = "soc"
+            elseif seals.blood == true or seals.sob == true then
+                ctx.seal = "sob"
+            else
+                ctx.seal = "none"
+            end
+        end
+    end
+    -- The live fallback: the sim shape answered no timing, so the class's own
+    -- gathered guide inputs answer it (the live client). Unknown stays unknown:
+    -- a gather that fails or answers nothing leaves the ctx empty and the
+    -- decision nil (the engine grades "unknown", never a wrong action).
+    if ctx.swing_remaining == nil and ctx.gcd_remaining == nil then
+        local gathered = ST.PALADIN.practice_live_gather(self)
+        if gathered then
+            ST.PALADIN.practice_apply_gathered(ctx, gathered)
+        end
+    end
+    return ctx
+end
+
+--=========================================================================================
+-- Shared-layer seams (class-isolation 2026-10-21)
+--=========================================================================================
+-- The paladin's OWN rotation-text provider (C5: moved out of rotationtext.lua,
+-- because a shared module must not define a class's function). Practice-aware,
+-- like the archive's source: while a practice session runs the simulation's own
+-- determine_rotation is used (it honours a locked rotation preset); otherwise
+-- the live swing speed and GCD - the exact values the guide feeds its engine
+-- (gather_guide_inputs: speed = self.mainhand.speed, G =
+-- self:get_spell_gcd_duration()) - run through the shared threshold function
+-- st.nextaction.calculate_rotation. The rotation tables live in the pure engine
+-- and are never duplicated here.
+-- >>> rotationtext provider >>>
+ST.PALADIN.get_rotation_key = function(self)
+    local pui = st.practice_ui
+    if pui and pui.is_active and pui.is_active() and st.practice
+        and st.practice.determine_rotation and pui.sim then
+        return st.practice.determine_rotation(pui.sim)
+    end
+    local na = st.nextaction
+    if not (na and na.calculate_rotation) then
+        return nil
+    end
+    local d = self.mainhand
+    return na.calculate_rotation((d and d.speed) or 0, self:get_spell_gcd_duration())
+end
+-- <<< rotationtext provider <<<
+
+-- The paladin's OWN design-mode elements (C6: moved out of designmode.lua). The
+-- seal-icon row and the twist success text ride on the mainhand bar by default
+-- and move with its overlay; a design-mode drag detaches them (their own save
+-- path writes detached offsets + re-anchors through the class apply seam),
+-- double-click reset re-attaches. Other classes never build these frames; their
+-- elements are not registered at all, so the shared overlay refresh never sees
+-- them.
+-- >>> design elements >>>
+if st.designmode and type(st.designmode.register_element) == "function" then
+    st.designmode.register_element({
+        key = "seal_icons",
+        title = "Seal icons",
+        get_frame = function()
+            if not ST.get_visuals_frame then
+                return nil
+            end
+            local vf = ST:get_visuals_frame("mainhand")
+            local set = vf and vf.seal_icons
+            return set and set.frame or nil
+        end,
+        save = function(x, y)
+            ST.PALADIN.save_seal_icons_position(ST, x, y)
+        end,
+        reset = function()
+            ST.PALADIN.reset_seal_icons_position(ST)
+        end,
+        -- Archive descriptor shape (editmode.lua ELEMENTS "icons"): the enable path
+        -- the card rows and the settings page the future cards lane consumes. Keys
+        -- are the live current-tree option names.
+        enable_path = "seal_icons_enabled",
+        card = { "seal_icons_enabled" },
+        settings = { page = "class" },
+    })
+    st.designmode.register_element({
+        key = "success_text",
+        title = "Successful twist text",
+        get_frame = function()
+            if not ST.get_visuals_frame then
+                return nil
+            end
+            local vf = ST:get_visuals_frame("mainhand")
+            return vf and vf.twist_text or nil
+        end,
+        save = function(x, y)
+            ST.PALADIN.save_twist_text_position(ST, x, y)
+        end,
+        reset = function()
+            ST.PALADIN.reset_twist_text_position(ST)
+        end,
+        -- Archive descriptor shape (editmode.lua ELEMENTS "success").
+        enable_path = "twist_success_text_enabled",
+        card = {
+            "twist_success_text_enabled", "twist_success_text_color",
+            "twist_success_text_size", "twist_success_text_duration",
+        },
+        settings = { page = "class" },
+    })
+end
+-- <<< design elements <<<
+
+-- The shared practice UI's provider for the sim path (the paladin's practice is
+-- the twist sim, not a drill): only the paladin's OWN session seams. The shared
+-- layer asks the ACTIVE class for them, so a paladin session keeps mirroring its
+-- seal state and restores its auras on stop.
+ST.PALADIN.practice_panel = {
+    progress = {
+        mode = "paladin_twist",
+        scenario = "paladin_rotation",
+        drills = { "paladin_twist", "paladin_aw_combo" },
+    },
+    session = {
+        sync_sim = function(self) ST.PALADIN.practice_sync(self) end,
+        clear_sim = function(self) ST.PALADIN.on_aura_change(self) end,
+    },
+}
+
 if st.debug then st.utils.print_msg('-- Parsed classes/paladin.lua module correctly (twist)') end
+
+end

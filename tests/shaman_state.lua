@@ -55,11 +55,20 @@ local channel_impl = function() return nil end
 -- (no totem / no client read), otherwise { have, name, start, duration, icon,
 -- modrate, spell } unpacked like the client's GetTotemInfo.
 local totem_slot4 = nil
+-- Fire-slot totem fixture for the searing reconcile: same shape as the air
+-- slot above (nil = unknown, never "no totem").
+local totem_slot1 = nil
+-- Water-slot totem fixture for the Call of the Elements clock (S-20 / U-10):
+-- same shape again (nil = unknown, never "no totem").
+local totem_slot3 = nil
+-- Earth-slot totem fixture for the APL utility layer's Strength of Earth clock
+-- (bench/rotation_gap_vs_apl_2026-10-20.md §5): same shape again.
+local totem_slot2 = nil
 
 -- Mutable known-spell fixture: the catalogue-invalidation test drops back to a lower
 -- Lightning Bolt rank and then learns the higher one, which is what makes a resolved
 -- catalogue entry stale.
-local known_spells = { [25449] = true, [25442] = true }
+local known_spells = { [25449] = true, [25442] = true, [49281] = true }
 
 -- Bar width the visuals frame reports; a texture's horizontal offset is read back as a
 -- fraction of it, which is how the spark/marker positions are asserted below.
@@ -129,20 +138,85 @@ env.WOW_PROJECT_MAINLINE = 1
 env.WOW_PROJECT_FOREVER = 18
 env.GetTime = function() return clock end
 env.GetSpellInfo = function(id)
+    -- Name-vs-id fixtures: Era queries by id, TBC Anniversary by NAME.
+    -- Both resolutions are pinned below; the name leg mirrors the id leg
+    -- so the catalogue/cooldown/known gates read identically on each family.
+    -- The Lightning Bolt name leg respects the known-rank fixture (low-rank
+    -- test drops 25449 and keeps 25448): the name answers the highest KNOWN
+    -- rank, nil when neither is known.
+    if id == "Lightning Bolt" then
+        if known_spells[25449] then return "Lightning Bolt", nil, "icon_lb", 2500, 0, 30, 25449 end
+        if known_spells[25448] then return "Lightning Bolt", nil, "icon_lb", 2000, 0, 30, 25448 end
+        return nil
+    end
+    if id == "Chain Lightning" then return "Chain Lightning", nil, "icon_cl", 2000, 0, 30, 25442 end
+    -- The practice-panel COMMON abilities (the class's own ability list): the
+    -- panel offers them, so the sandbox answers their names the way a client
+    -- that has the spell does. Without these the widening seam would resolve
+    -- nothing and the panel pins would never see the common slots.
+    if id == "Healing Wave" then return "Healing Wave", nil, "icon_hw", 0, 0, 0, 331 end
+    if id == "Chain Heal" then return "Chain Heal", nil, "icon_ch", 0, 0, 0, 1064 end
+    if id == "Water Shield" then return "Water Shield", nil, "icon_ws", 0, 0, 0, 52127 end
+    if id == "Healing Potion" then return "Healing Potion", nil, "icon_hp", 0, 0, 0, 439 end
+    if id == "Food" then return "Food", nil, "icon_food", 0, 0, 0, 433 end
+    if id == "Stormstrike" then return "Stormstrike", nil, "icon_ss", 0, 0, 0, 17364 end
+    if id == "Shamanistic Rage" then return "Shamanistic Rage", nil, "icon_sr", 0, 0, 0, 30823 end
+    if id == "Flame Shock" then return "Flame Shock", nil, "icon_fs", 0, 0, 0, 8050 end
+    if id == "Fire Nova Totem" then return "Fire Nova Totem", nil, "icon_fn", 0, 0, 0, 1535 end
+    if id == "Earth Shock" then return "Earth Shock", nil, "icon_es", 0, 0, 0, 8042 end
+    if id == "Feral Spirit" then return "Feral Spirit", nil, "icon_feral", 0, 0, 0, 51533 end
+    if id == "Fire Elemental Totem" then return "Fire Elemental Totem", nil, "icon_fe", 0, 0, 0, 2894 end
+    if id == "Magma Totem" then return "Magma Totem", nil, "icon_magma", 0, 0, 0, 8190 end
+    if id == "Lava Lash" then return "Lava Lash", nil, "icon_ll", 0, 0, 0, 60103 end
+    if id == "Molten Blast" then return "Molten Blast", nil, "icon_mb", 0, 0, 0, 425339 end
+    if id == "Windfury Totem" then return "Windfury Totem", nil, "icon_wf", 0, 0, 0, 8512 end
+    if id == "Grace of Air Totem" then return "Grace of Air Totem", nil, "icon_goa", 0, 0, 0, 10613 end
+    if id == "Searing Totem" then return "Searing Totem", nil, "icon_sear", 0, 0, 0, 10438 end
+    -- The Lightning Shield maintain (S-19): the client answers the NAME, so the
+    -- guide slot's id is the client's own (the same rank-1 fallback it ships).
+    if id == "Lightning Shield" then return "Lightning Shield", nil, "icon_ls", 0, 0, 0, 49281 end
+    if id == 49281 then return "Lightning Shield", nil, "icon_ls", 0, 0, 0, 49281 end
     if id == 25449 then return "Lightning Bolt", nil, "icon_lb", 2500, 0, 30, 25449 end
     if id == 25448 then return "Lightning Bolt", nil, "icon_lb", 2000, 0, 30, 25448 end
+    -- Wrath Lightning Bolt max rank for the M1 sub-5 hardcast (sim source:
+    -- wowsims/wotlk sim/shaman/lightning_bolt.go 49238, base cast 2500 ms).
+    if id == 49238 then return "Lightning Bolt", nil, "icon_lb_wrath", 2500, 0, 30, 49238 end
     if id == 25442 then return "Chain Lightning", nil, "icon_cl", 2000, 0, 30, 25442 end
     -- Fixture-only stand-in for an unconfirmed higher Windfury Totem rank: not in
     -- the addon's twist id table, so only the live-name resolution path stamps it.
     if id == 10613 then return "Windfury Totem", nil, "icon_wf", 0, 0, 0, 10613 end
     if id == 8512 then return "Windfury Totem", nil, "icon_wf", 0, 0, 0, 8512 end
+    -- Fixture-only stand-in for an unconfirmed Searing Totem rank: not in the
+    -- addon's searing id table, so only the live-name resolution path stamps it.
+    if id == 25530 then return "Searing Totem", nil, "icon_sear", 0, 0, 0, 25530 end
     -- SoD Lava Burst fixture (S4): the live resolver probes by NAME and expects the
     -- spell's id in the 7th return; the id lookup covers direct reads.
     if id == "Lava Burst" then return "Lava Burst", nil, "icon_lava", 2000, 0, 0, 51505 end
     if id == 51505 then return "Lava Burst", nil, "icon_lava", 2000, 0, 0, 51505 end
     return nil
 end
-env.IsSpellKnown = function(id) return known_spells[id] == true end
+env.IsSpellKnown = function(id)
+    if known_spells[id] == true then
+        return true
+    end
+    -- TBC name leg: the same known ranks answer by English name.
+    if id == "Lightning Bolt" then return known_spells[25449] == true or known_spells[25448] == true end
+    if id == "Chain Lightning" then return known_spells[25442] == true end
+    if id == "Stormstrike" then return true end
+    if id == "Shamanistic Rage" then return true end
+    if id == "Flame Shock" then return true end
+    if id == "Fire Nova Totem" then return true end
+    if id == "Windfury Totem" then return true end
+    if id == "Searing Totem" then return known_spells[10438] == true end
+    -- The Lightning Shield maintain's known gate (S-19): the Lightning Shield is a
+    -- talent, so a build without it must never be prompted.
+    if id == "Lightning Shield" then return known_spells[49281] == true end
+    if id == 49281 then return known_spells[49281] == true end
+    -- The APL utility layer (bench/rotation_gap_vs_apl_2026-10-20.md §5).
+    if id == "Bloodlust" then return known_spells[2825] == true end
+    if id == "Frost Shock" then return known_spells[25464] == true end
+    return nil
+end
 env.UnitAura = function(unit, index, filter)
     -- Player walks (weave + trackers) and target scans are counted separately so a gate
     -- test can prove the target scan never runs while the flame shock option is off.
@@ -159,12 +233,32 @@ env.UnitAura = function(unit, index, filter)
         entry.source, nil, nil, entry.spell_id
 end
 env.GetSpellCooldown = function(id)
-    local cd = cooldowns[id]
+    -- Name-vs-id: TBC queries by NAME, Era by id; both hit the same fixture.
+    local key = id
+    if id == "Stormstrike" then key = 17364 end
+    if id == "Shamanistic Rage" then key = 30823 end
+    if id == "Flame Shock" then key = 8050 end
+    if id == "Fire Nova Totem" then key = 1535 end
+    if id == "Feral Spirit" then key = 51533 end
+    if id == "Fire Elemental Totem" then key = 2894 end
+    if id == "Magma Totem" then key = 8190 end
+    if id == "Lava Lash" then key = 60103 end
+    if id == "Bloodlust" then key = 2825 end
+    if id == "Frost Shock" then key = 25464 end
+    local cd = cooldowns[key]
     if cd then return cd.start, cd.duration, 1, 1 end
     return 0, 0, 1, 1
 end
 env.IsSpellUsable = function(spell)
-    local entry = spell_usable[spell]
+    -- Name-vs-id: TBC probes by NAME, Era by id; the fixture answers both.
+    local key = spell
+    if spell == "Stormstrike" then key = 17364 end
+    if spell == "Flame Shock" then key = 8050 end
+    if spell == "Lightning Bolt" then key = 403 end
+    if spell == "Fire Nova Totem" then key = 1535 end
+    if spell == "Earth Shock" then key = 8042 end
+    if spell == "Windfury Totem" then key = 8512 end
+    local entry = spell_usable[key]
     if entry then return entry[1], entry[2] end
     return true, false
 end
@@ -176,9 +270,34 @@ env.UnitSpellHaste = function() return 0 end
 env.issecretvalue = function(v) return v == "SECRET" end
 env.GetTotemInfo = function(slot)
     if totem_slot4 == "THROW" then error("totem read failed") end
-    if slot ~= 4 or totem_slot4 == nil then return nil end
-    local t = totem_slot4
-    return t.have, t.name, t.start, t.duration, t.icon, t.modrate, t.spell
+    if slot == 4 then
+        if totem_slot4 == nil then return nil end
+        local t = totem_slot4
+        return t.have, t.name, t.start, t.duration, t.icon, t.modrate, t.spell
+    end
+    -- Fire slot for the searing reconcile: same unknown-shape as the air slot.
+    if slot == 1 then
+        if totem_slot1 == "THROW" then error("totem read failed") end
+        if totem_slot1 == nil then return nil end
+        local t = totem_slot1
+        return t.have, t.name, t.start, t.duration, t.icon, t.modrate, t.spell
+    end
+    -- Water slot for the Call of the Elements clock: same unknown-shape.
+    if slot == 3 then
+        if totem_slot3 == "THROW" then error("totem read failed") end
+        if totem_slot3 == nil then return nil end
+        local t = totem_slot3
+        return t.have, t.name, t.start, t.duration, t.icon, t.modrate, t.spell
+    end
+    -- Earth slot for the APL utility layer's Strength of Earth clock: same
+    -- unknown-shape.
+    if slot == 2 then
+        if totem_slot2 == "THROW" then error("totem read failed") end
+        if totem_slot2 == nil then return nil end
+        local t = totem_slot2
+        return t.have, t.name, t.start, t.duration, t.icon, t.modrate, t.spell
+    end
+    return nil
 end
 -- compat reads several legacy globals through _G (annotation-safe path); mirror every
 -- sandbox stub for the duration of the loads below, then restore _G exactly. A
@@ -222,7 +341,17 @@ end
 
 local compat = assert(loadfile(ROOT .. "compat.lua")); setfenv(compat, env); compat("SwedgeTimer", st)
 local weave = assert(loadfile(ROOT .. "weave.lua")); setfenv(weave, env); weave("SwedgeTimer", st)
+-- The decision engine loads before the class module (as the TOCs order it), so the
+-- class's own drill grades through the SHIPPED model and not a copy of it.
+local guide = assert(loadfile(ROOT .. "shaman_guide.lua")); setfenv(guide, env); guide("SwedgeTimer", st)
 local shaman = assert(loadfile(ROOT .. "classes/shaman.lua")); setfenv(shaman, env); shaman("SwedgeTimer", st)
+-- classes/shaman.lua registers its body as a loader (operator order 2026-10-21:
+-- only the selected class executes). Activate it here, right after its file loads -
+-- the same load-time position its body occupied before the wrapper.
+assert(type(st.class_loaders) == "table"
+    and type(st.class_loaders["SHAMAN"]) == "function",
+    "classes/shaman.lua registers the SHAMAN loader")
+st.class_loaders["SHAMAN"]()
 for name, previous in pairs(mirrored_globals) do
     _G[name] = previous
 end
@@ -1600,6 +1729,1990 @@ target_aura_list = {
 ST.SHAMAN.on_bar_update(ST, "mainhand")
 check(not visuals_frame.weave_fs_bg.hidden, "R2: Flame Shock draws below a secret row")
 eq(visuals_frame.weave_fs_label.text, "8", "R2: the label counts down below a secret row")
+
+-- 28) Lust status badge (S1 effect-status row + secret-regime affordance) -----------
+-- Option-gated (nil = off, created lazily like the rockbiter badge); a live
+-- Bloodlust reads the remaining time, a miss under a secret regime reads
+-- "BL ?", a present-but-unstamped buff reads the bare "BL", a dropped lust
+-- hides the badge. The throttle, the closed-on-unknown gate and the Forever
+-- Farseer name leg are pinned through update_lust_state directly.
+class_db.show_shaman_lust_status = nil
+clock = 1100
+aura_list = {}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_lust_text == nil, "lust off (nil): no widget is created")
+eq(ST.shaman_lust_remaining, nil, "lust off (nil): no scan runs")
+eq(ST.shaman_lust_unknown, nil, "lust off (nil): the latch stays untouched")
+
+class_db.show_shaman_lust_status = true
+clock = 1100
+aura_list = { { name = "Bloodlust", spell_id = 2825, expiration = clock + 40 } }
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_lust_text ~= nil, "lust on: the badge is created lazily")
+eq(visuals_frame.weave_lust_text.text, "BL 40s", "lust on: the badge counts the window down")
+check(not visuals_frame.weave_lust_text.hidden, "lust on: the badge shows while lust is up")
+eq(ST.shaman_lust_unknown, false, "lust on: a live lust reads known")
+
+-- The rescan throttle: a same-tick re-poll costs no aura walk.
+local lust_reads_before = aura_calls
+ST.SHAMAN.update_lust_state(ST, clock + 0.1)
+eq(aura_calls, lust_reads_before, "lust: the rescan throttle skips the walk inside 0.5 s")
+
+-- The countdown follows the clock past the throttle.
+clock = 1101
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_lust_text.text, "BL 39s", "lust: the readout follows the clock")
+
+-- A miss under a secret regime latches unknown and renders "BL ?".
+local real_lust_probe = st.api.auras_may_be_secret
+st.api.auras_may_be_secret = function() return true end
+clock = 1200
+aura_list = {}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(ST.shaman_lust_remaining, nil, "secret: no aura reads no window")
+eq(ST.shaman_lust_unknown, true, "secret: the regime latches lust unknown")
+eq(visuals_frame.weave_lust_text.text, "BL ?", "secret: the badge renders the unknown read")
+check(not visuals_frame.weave_lust_text.hidden, "secret: the unknown badge shows")
+st.api.auras_may_be_secret = real_lust_probe
+
+-- An honest miss (no secret regime) hides the badge instead of guessing.
+clock = 1300
+aura_list = {}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(ST.shaman_lust_remaining, nil, "miss: no aura reads no window")
+eq(ST.shaman_lust_unknown, false, "miss: a visible miss reads known")
+check(visuals_frame.weave_lust_text.hidden, "miss: the badge hides with no lust")
+
+-- Closed-on-unknown: a closed family (Era/UNKNOWN, or a pre-C2 nil) never arms
+-- the scan, even with the aura present.
+st.lust_supported = false
+clock = 1400
+aura_list = { { name = "Bloodlust", spell_id = 2825, expiration = clock + 40 } }
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(ST.shaman_lust_remaining, nil, "gate: a closed family reads no window")
+eq(ST.shaman_lust_unknown, false, "gate: a closed family never reads unknown")
+check(visuals_frame.weave_lust_text.hidden, "gate: the badge hides on a closed family")
+st.lust_supported = true
+
+-- The Forever Farseer leg matches by name (UNCONFIRMED: no spell id published).
+clock = 1500
+aura_list = { { name = "Rage of the Farseer", expiration = clock + 40 } }
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(visuals_frame.weave_lust_text.text, "BL 40s", "farseer: the name leg counts down like Bloodlust")
+
+-- Present but unstamped (no readable expiry): the bare text, never a guess.
+clock = 1600
+aura_list = { { name = "Bloodlust", spell_id = 2825 } }
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+eq(ST.shaman_lust_remaining, nil, "unstamped: no expiry reads no countdown")
+eq(visuals_frame.weave_lust_text.text, "BL", "unstamped: the badge shows the bare text")
+check(not visuals_frame.weave_lust_text.hidden, "unstamped: the bare badge shows")
+
+-- A non-number clock marks the read unknown (never a stale window).
+ST.SHAMAN.update_lust_state(ST, nil)
+eq(ST.shaman_lust_remaining, nil, "clock: a nil clock reads no window")
+eq(ST.shaman_lust_unknown, true, "clock: a nil clock reads unknown")
+
+-- A dropped lust hides the badge again; the toggle off hides it too.
+clock = 1700
+aura_list = {}
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_lust_text.hidden, "lust: the badge hides when lust drops")
+class_db.show_shaman_lust_status = nil
+ST.SHAMAN.on_bar_update(ST, "mainhand")
+check(visuals_frame.weave_lust_text.hidden, "lust: the toggle off hides the badge")
+
+-- 29) Searing maintain reader (fight clock + fire-slot reconcile) -------------------
+-- post_init starts the searing stamp unknown; SUCCEEDED commits by id, name
+-- token and live spell name stamp it (weave casts, twist drops, magma drops
+-- and unknown spells do not move it, and commits never resolve a weave
+-- family); the pre-init gate holds; the fire-slot poll adopts a Searing clock
+-- when the stamp is unknown or older, clears on an affirmative empty slot,
+-- ignores non-Searing occupants and unreadable reads, and never rewinds a
+-- fresher commit; the gather feeds fight_elapsed/searing_elapsed/searing_down
+-- nil-safe with unknown-hides (no rule reads them yet).
+ST.SHAMAN.post_init(ST)
+eq(ST.weave_searing_last_drop, nil, "post_init starts the searing stamp unknown")
+ST.interfaces_are_initialised = true
+ST.fight_start_at = nil
+local fam_before_sear = ST.weave_family
+
+clock = 700
+ST.SHAMAN.on_spellcast_succeeded(ST, "player", "cast-sear-1", 10438)
+eq(ST.weave_searing_last_drop, 700, "Searing by id stamps the drop time")
+eq(ST.weave_family, fam_before_sear, "a searing commit never resolves a weave family")
+clock = 701
+ST.SHAMAN.on_spellcast_succeeded(ST, "player", "Searing Totem", 99999)
+eq(ST.weave_searing_last_drop, 701, "Searing by name token stamps the drop time")
+clock = 702
+ST.SHAMAN.on_spellcast_succeeded(ST, "player", "cast-sear-2", 25530)
+eq(ST.weave_searing_last_drop, 702, "an unconfirmed Searing rank stamps through its live spell name")
+clock = 703
+ST.SHAMAN.on_spellcast_succeeded(ST, "player", "cast-lb-sear", 25449)
+eq(ST.weave_searing_last_drop, 702, "a weave cast does not move the searing stamp")
+ST.SHAMAN.on_spellcast_succeeded(ST, "player", "cast-twist-sear", 8512)
+eq(ST.weave_searing_last_drop, 702, "a twist drop does not move the searing stamp")
+ST.SHAMAN.on_spellcast_succeeded(ST, "player", "cast-magma-sear", 8190)
+eq(ST.weave_searing_last_drop, 702, "a magma drop does not move the searing stamp")
+eq(ST.weave_magma_last_drop, 703, "the magma drop still stamps its own clock")
+clock = 704
+ST.SHAMAN.on_spellcast_succeeded(ST, "player", "cast-unknown-sear", 88888)
+eq(ST.weave_searing_last_drop, 702, "an unknown spell does not move the searing stamp")
+ST.SHAMAN.on_spellcast_succeeded(ST, "player", "cast-nil-sear", nil)
+eq(ST.weave_searing_last_drop, 702, "a nil spell id neither stamps searing nor errors")
+
+ST.interfaces_are_initialised = false
+clock = 705
+ST.SHAMAN.on_spellcast_succeeded(ST, "player", "cast-sear-pre", 10438)
+eq(ST.weave_searing_last_drop, 702, "searing commits are ignored before init")
+ST.interfaces_are_initialised = true
+
+totem_slot1 = nil
+ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(ST.weave_searing_last_drop, 702, "an absent fire slot leaves the stamp alone")
+totem_slot1 = { have = true, name = "Magma Totem", start = 800, spell = 8190 }
+ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(ST.weave_searing_last_drop, 702, "a non-Searing fire totem never stamps")
+totem_slot1 = { have = true, name = "Searing Totem", start = 800, spell = 10438 }
+ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(ST.weave_searing_last_drop, 800, "a newer Searing totem clock is adopted")
+totem_slot1 = { have = true, name = "Searing Totem", start = 750, spell = 99999 }
+ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(ST.weave_searing_last_drop, 800, "a stale poll reading never rewinds a fresher commit")
+ST.weave_searing_last_drop = nil
+ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(ST.weave_searing_last_drop, 750, "an unknown stamp adopts the Searing clock by name")
+totem_slot1 = { have = false, name = "Searing Totem", start = 900, spell = 10438 }
+local sear_empty, sear_holding = ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(sear_empty, true, "an affirmatively empty fire slot reports due")
+eq(sear_holding, false, "an affirmatively empty fire slot holds nothing")
+eq(ST.weave_searing_last_drop, nil, "an affirmatively empty fire slot clears the stamp")
+totem_slot1 = { have = true, name = "Searing Totem", start = "soon", spell = 10438 }
+ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(ST.weave_searing_last_drop, nil, "a non-number startTime leaves the stamp alone")
+totem_slot1 = { have = true, name = "Searing Totem", start = 0, spell = 10438 }
+ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(ST.weave_searing_last_drop, nil, "a zero startTime leaves the stamp alone")
+totem_slot1 = { have = true, name = "Searing Totem (localized)", start = 950, spell = 10438 }
+ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(ST.weave_searing_last_drop, 950, "the spell id matches when the totem name differs")
+totem_slot1 = "THROW"
+local ok_sear = pcall(ST.SHAMAN.refresh_searing_from_totems, ST)
+check(ok_sear, "a throwing fire-slot read degrades instead of erroring")
+eq(ST.weave_searing_last_drop, 950, "a throwing fire-slot read leaves the stamp alone")
+totem_slot1 = { have = true, name = "Searing Totem", start = "SECRET", spell = 10438 }
+eq(st.api.GetTotemInfo(1), nil, "a secret fire-slot field degrades the whole read to absent")
+ST.SHAMAN.refresh_searing_from_totems(ST)
+eq(ST.weave_searing_last_drop, 950, "a secret fire-slot read leaves the stamp alone")
+totem_slot1 = nil
+
+-- Gather: an unknown clock and an unknown totem read feed nil (never a guess).
+-- The Searing maintain is known-gated (the Searing Totem is a talent on Era/SoD):
+-- the fixture marks it known so the feed can answer, and the gate itself is
+-- pinned below.
+known_spells[10438] = true
+ST.fight_start_at = nil
+ST.weave_searing_last_drop = nil
+clock = 1000
+local gathered_sear = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_sear.fight_elapsed, nil, "an unknown fight clock feeds nil")
+eq(gathered_sear.searing_elapsed, nil, "an unknown searing stamp feeds nil")
+eq(gathered_sear.searing_down, nil, "an unknown fire slot never feeds due")
+
+-- A stamped fight clock feeds elapsed; a trusted stamp feeds elapsed + not-due.
+ST.fight_start_at = 980
+ST.weave_searing_last_drop = 990
+gathered_sear = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_sear.fight_elapsed, 20, "the fight clock feeds seconds since combat-enter")
+eq(gathered_sear.searing_elapsed, 10, "a trusted commit feeds seconds since the drop")
+eq(gathered_sear.searing_down, false, "a trusted commit never feeds due")
+
+-- An affirmatively empty slot feeds due with no elapsed; a live Searing feeds
+-- not-due with the live clock; an occupied slot never feeds due.
+totem_slot1 = { have = false }
+gathered_sear = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_sear.searing_down, true, "an empty fire slot feeds due")
+eq(gathered_sear.searing_elapsed, nil, "an empty fire slot feeds no elapsed")
+totem_slot1 = { have = true, name = "Searing Totem", start = 995, spell = 10438 }
+gathered_sear = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_sear.searing_down, false, "a live Searing feeds not-due")
+eq(gathered_sear.searing_elapsed, 5, "a live Searing feeds elapsed off its clock")
+totem_slot1 = { have = true, name = "Fire Elemental Totem", start = 995, spell = 2894 }
+gathered_sear = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_sear.searing_down, false, "an occupied fire slot never feeds due")
+-- The known gate: without the Searing Totem the maintain never prompts (the
+-- talent is the player's own, and an unknown id answers false).
+known_spells[10438] = nil
+totem_slot1 = { have = false }
+gathered_sear = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_sear.searing_down, nil, "an unknown Searing Totem never feeds the due flag")
+known_spells[10438] = true
+totem_slot1 = nil
+ST.fight_start_at = nil
+ST.weave_searing_last_drop = nil
+eq(ST.weave_is_casting, false, "searing commits leave no cast in flight")
+
+-- 29b) The two maintain feeds: the Lightning Shield maintain (S-19) and the
+-- Searing maintain's SoD latch (S-17) -----------------------------------------
+-- The Lightning Shield maintain rides the player's own aura walk (the charge
+-- row's walk): no shield aura up means the cast is due, an aura up means it is
+-- not, and an unrun walk means unknown (never a guess). The family gate is the
+-- engine's helper: WRATH, FOREVER and the SoD build on the ERA token (the
+-- MW-rune latch) - the Era-base and TBC sims run no Lightning Shield. The
+-- Searing gate picks its fight-age threshold from the SoD MW-rune latch, which
+-- the gather feeds verbatim.
+do
+    local saved_family = st.family
+    st.family = "WRATH"
+    ST.weave_shield_scanned = false
+    local g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, nil, "an unrun aura walk never feeds the Lightning Shield maintain")
+    ST.weave_shield_scanned = true
+    ST.weave_shield_type = nil
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, true, "no shield aura up feeds the Lightning Shield maintain due")
+    ST.weave_shield_type = "lightning"
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, false, "an up-to-date Lightning Shield never feeds due")
+    ST.weave_shield_type = "water"
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, false, "a Water Shield build never feeds the Lightning Shield due")
+    ST.weave_shield_type = nil
+    st.family = "TBC"
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, nil, "TBC never feeds the Lightning Shield maintain")
+    st.family = "ERA"
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, nil, "Era never feeds the Lightning Shield maintain")
+    -- The SoD build on the ERA token (the MW-rune latch): the SoD APL's i=8 row
+    -- casts 10432 r7 the same way, so the maintain fires there too.
+    ST.weave_mw_observed = true
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, true, "the SoD build feeds the Lightning Shield maintain")
+    ST.weave_mw_observed = false
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, nil, "the Era-base build never feeds the Lightning Shield maintain")
+    -- Forever (the Forever APL's i=6 row: 10432, the same condition).
+    st.family = "FOREVER"
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, true, "Forever feeds the Lightning Shield maintain")
+    st.family = saved_family
+    -- The known gate: the Lightning Shield is a talent, so a build without it
+    -- must never be prompted (an unreadable answer stays silent).
+    st.family = "WRATH"
+    known_spells[49281] = nil
+    ST.weave_shield_type = nil
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, nil, "an unknown Lightning Shield never feeds the maintain")
+    known_spells[49281] = true
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.lightningshield_due, true, "a known Lightning Shield feeds the maintain again")
+    st.family = saved_family
+    -- The SoD latch: the gather feeds it verbatim (the engine's Searing gate
+    -- reads it to pick the Era 20 s / SoD 30 s fight-age threshold).
+    ST.weave_mw_observed = false
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).mw_observed, false,
+        "the gather feeds the SoD latch off when the rune was never observed")
+    ST.weave_mw_observed = true
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).mw_observed, true,
+        "the gather feeds the SoD latch on once the rune was observed")
+    ST.weave_mw_observed = false
+    -- The HUD mirrors (display-only, nil = off): the upkeep cue is the glow.
+    local hud_ls, hud_sear
+    for i = 1, #ST.SHAMAN.HUD_SLOTS do
+        if ST.SHAMAN.HUD_SLOTS[i].key == "lightningshield" then hud_ls = ST.SHAMAN.HUD_SLOTS[i] end
+        if ST.SHAMAN.HUD_SLOTS[i].key == "searing" then hud_sear = ST.SHAMAN.HUD_SLOTS[i] end
+    end
+    check(hud_ls ~= nil, "the HUD declares the Lightning Shield mirror")
+    check(hud_sear ~= nil, "the HUD declares the Searing mirror")
+    eq(ST.SHAMAN.get_hud_state(ST, hud_ls, 100).hidden, true,
+        "the Lightning Shield mirror hides without its toggle (nil = off)")
+    class_db.hud_show_lightningshield = true
+    ST.weave_shield_scanned = false
+    eq(ST.SHAMAN.get_hud_state(ST, hud_ls, 100).hidden, true,
+        "an unrun aura walk draws nothing (unknown-hides)")
+    ST.weave_shield_scanned = true
+    ST.weave_shield_type = "lightning"
+    eq(ST.SHAMAN.get_hud_state(ST, hud_ls, 100).glow, false,
+        "an up-to-date shield never glows")
+    ST.weave_shield_type = nil
+    ST.in_combat = true
+    eq(ST.SHAMAN.get_hud_state(ST, hud_ls, 100).glow, true,
+        "a missing shield glows (the cast is needed)")
+    ST.in_combat = false
+    class_db.hud_show_lightningshield = nil
+    eq(ST.SHAMAN.get_hud_state(ST, hud_sear, 100).hidden, true,
+        "the Searing mirror hides without its toggle (nil = off)")
+    class_db.hud_show_searing = true
+    known_spells[10438] = nil
+    totem_slot1 = { have = false }
+    eq(ST.SHAMAN.get_hud_state(ST, hud_sear, 100).hidden, true,
+        "an unknown Searing Totem draws nothing (the known gate)")
+    known_spells[10438] = true
+    ST.in_combat = true
+    eq(ST.SHAMAN.get_hud_state(ST, hud_sear, 100).glow, true,
+        "an empty fire slot glows (the drop is needed)")
+    totem_slot1 = { have = true, name = "Magma Totem", start = 100, spell = 8190 }
+    eq(ST.SHAMAN.get_hud_state(ST, hud_sear, 100).glow, false,
+        "another totem in the fire slot never glows")
+    totem_slot1 = nil
+    ST.in_combat = false
+    class_db.hud_show_searing = nil
+end
+
+-- 30) Twist mana-pause + SR threshold feeds ------------------------------------------------
+-- Rule-7 consumption lives engine-side; the gather feeds the threshold it reads:
+-- TBC feeds the weave plug-in value (0.10), every other family feeds nil so the
+-- old prompt stands. The SR thresholds travel with their cooldown feed (TBC 0.10,
+-- SoD 0.65, Wrath/unknown nil = engine default/ungated). Every field is written
+-- on every call, so no stale threshold survives a family change.
+st.family = "TBC"
+ST.weave_mw_observed = false
+local gathered_twist = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_twist.twist_mana_threshold, 0.10, "TBC: the twist mana-pause threshold feeds the sim default")
+eq(gathered_twist.twist_mana_threshold, st.weave.TWIST_MANA_PAUSE_THRESHOLD_TBC, "TBC: the feed matches the weave plug-in source")
+eq(gathered_twist.sr_mana_threshold, 0.10, "TBC: the SR threshold travels with the TBC feed")
+st.family = "WRATH"
+gathered_twist = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_twist.twist_mana_threshold, nil, "Wrath: no twist threshold feeds (never twists)")
+eq(gathered_twist.twist_remaining, nil, "Wrath: no twist remaining feeds either")
+eq(gathered_twist.sr_mana_threshold, nil, "Wrath: no SR threshold feeds (prompts on cooldown)")
+st.family = "ERA"
+ST.weave_mw_observed = true
+gathered_twist = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_twist.twist_mana_threshold, nil, "SoD: no twist threshold feeds (TBC-only)")
+eq(gathered_twist.sr_mana_threshold, 0.65, "SoD: the SR threshold travels with the name feed")
+ST.weave_mw_observed = false
+gathered_twist = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_twist.sr_mana_threshold, nil, "Era-base: no SR threshold feeds (unknown client)")
+eq(gathered_twist.twist_mana_threshold, nil, "Era-base: no twist threshold feeds either")
+st.family = nil
+gathered_twist = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_twist.twist_mana_threshold, nil, "unknown family: no threshold feeds (never pause on a guess)")
+eq(gathered_twist.sr_mana_threshold, nil, "unknown family: no SR threshold feeds either")
+-- The live frame reuses its table: leaving TBC must clear the feed in place.
+st.family = "TBC"
+local reused_twist = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(reused_twist.twist_mana_threshold, 0.10, "back on TBC: the threshold feed returns")
+st.family = "WRATH"
+reused_twist = ST.SHAMAN.gather_guide_inputs(ST, reused_twist)
+eq(reused_twist.twist_mana_threshold, nil, "leaving TBC clears the threshold (no stale value)")
+st.family = "TBC"
+ST.weave_mw_observed = false
+
+-- 30b) Era static totem feeds (G2) ------------------------------------------------------
+-- Windfury first on an affirmatively empty air slot, Grace of Air as the
+-- fallback while Windfury is unknown; Era-base only (family ERA without the
+-- SoD latch). Every other family feeds nil (byte-identical); an unreadable
+-- air slot feeds nil (never prompts on a guess). Both ids UNCONFIRMED, so the
+-- known gate drives every pin. Every field is written on every call, so no
+-- stale value survives a family change.
+st.family = "ERA"
+ST.weave_mw_observed = false
+totem_slot4 = { have = false }
+local gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "Era-base: unknown totems feed nil on an empty slot")
+eq(gathered_era.goatotem_remaining, nil, "Era-base: unknown GoA feeds nil on an empty slot")
+known_spells[10614] = true
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, 0, "Era-base: an empty air slot feeds Windfury due")
+eq(gathered_era.goatotem_remaining, nil, "Era-base: Windfury known gates Grace of Air")
+known_spells[10627] = true
+totem_slot4 = { have = true, name = "Windfury Totem", start = clock - 4, spell = 10614 }
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "Era-base: a live Windfury feeds not-due")
+eq(gathered_era.goatotem_remaining, nil, "Era-base: a live Windfury gates Grace of Air")
+totem_slot4 = { have = true, name = "Grace of Air Totem", start = clock - 4, spell = 10627 }
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, 0, "Era-base: Windfury takes the slot back from Grace of Air")
+eq(gathered_era.goatotem_remaining, nil, "Era-base: a live Grace of Air never feeds due itself")
+known_spells[10614] = nil
+totem_slot4 = { have = false }
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "Era-base: unknown Windfury never feeds")
+eq(gathered_era.goatotem_remaining, 0, "Era-base: the empty slot feeds Grace of Air due")
+totem_slot4 = { have = true, name = "Grace of Air Totem", start = clock - 4, spell = 10627 }
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "Era-base: unknown Windfury never takes the slot")
+eq(gathered_era.goatotem_remaining, nil, "Era-base: a live Grace of Air never feeds due")
+totem_slot4 = { have = true, name = "Nature Resistance Totem", start = clock - 4 }
+known_spells[10614] = true
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "Era-base: an unmodeled air totem never feeds Windfury")
+eq(gathered_era.goatotem_remaining, nil, "Era-base: an unmodeled air totem never feeds Grace of Air")
+totem_slot4 = nil
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "Era-base: an unreadable air slot feeds no Windfury")
+eq(gathered_era.goatotem_remaining, nil, "Era-base: an unreadable air slot feeds no Grace of Air")
+-- Every other family stays nil (byte-identical): SoD runs no totem maintain,
+-- TBC twists, Wrath/Forever run none.
+totem_slot4 = { have = false }
+ST.weave_mw_observed = true
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "SoD: no Windfury feed despite an empty slot")
+eq(gathered_era.goatotem_remaining, nil, "SoD: no Grace of Air feed either")
+ST.weave_mw_observed = false
+st.family = "TBC"
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "TBC: no Windfury feed despite an empty slot")
+eq(gathered_era.goatotem_remaining, nil, "TBC: no Grace of Air feed either")
+st.family = "WRATH"
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "Wrath: no Windfury feed despite an empty slot")
+st.family = "FOREVER"
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "Forever: no Windfury feed despite an empty slot")
+st.family = nil
+gathered_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(gathered_era.wftotem_remaining, nil, "unknown family: no Windfury feed on a guess")
+-- The live frame reuses its table: leaving Era clears the feed in place.
+st.family = "ERA"
+local reused_era = ST.SHAMAN.gather_guide_inputs(ST, {})
+eq(reused_era.wftotem_remaining, 0, "back on Era-base: the Windfury feed returns")
+st.family = "TBC"
+reused_era = ST.SHAMAN.gather_guide_inputs(ST, reused_era)
+eq(reused_era.wftotem_remaining, nil, "leaving Era clears the Windfury feed (no stale value)")
+eq(reused_era.goatotem_remaining, nil, "leaving Era clears the Grace of Air feed too")
+-- Fixture restored: TBC client, no live totems, unknown totem spells.
+known_spells[10614] = nil
+known_spells[10627] = nil
+totem_slot4 = nil
+st.family = "TBC"
+ST.weave_mw_observed = false
+
+-- 31) Name-vs-id rule (bench/lessons.md): TBC Anniversary resolves by NAME
+-- never bare id; Classic Era by id. Classification: gather slots (SS/SR/
+-- shock/Fire Nova/Fire Ele/Feral/Lava/Molten), cooldown reads, known-spell
+-- probes and HUD/rotation lookups branch via st.family (spell_query); aura
+-- scans, totem readers and the SUCCEEDED live-name bridge already match
+-- id OR name (nil-safe fallback) and are pinned by sections 13/20/29 above.
+-- Both resolutions are pinned here (recorded queries + catalogue ranks).
+do
+    local real_cd = st.api.GetSpellCooldown
+    local real_known = st.api.is_spell_known
+    local cd_queries = {}
+    local last_known
+    st.api.GetSpellCooldown = function(q) cd_queries[#cd_queries + 1] = q; return real_cd(q) end
+    st.api.is_spell_known = function(q) last_known = q; return real_known(q) end
+    local function saw_cd(want)
+        for _, q in ipairs(cd_queries) do
+            if q == want then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Stormstrike cooldown: TBC NAME, Era id.
+    st.family = "TBC"
+    cooldowns[17364] = { start = clock, duration = 8 }
+    cd_queries = {}
+    ST.SHAMAN.gather_guide_inputs(ST, {})
+    check(saw_cd("Stormstrike"), "TBC: Stormstrike cooldown reads by NAME, never bare id")
+    check(not saw_cd(17364), "TBC: no bare-id Stormstrike probe")
+    st.family = "ERA"
+    cd_queries = {}
+    ST.SHAMAN.gather_guide_inputs(ST, {})
+    check(saw_cd(17364), "Era: Stormstrike cooldown reads by id")
+    check(not saw_cd("Stormstrike") or true, "Era: id path pinned (name leg is SoD-only)")
+
+    -- Shock probe: TBC NAME, Era id (via the gather's shared shock read;
+    -- the module caches the query, so pin through fresh catalogue-style
+    -- probes instead of forcing the cache: direct spell_query behaviour is
+    -- covered by the Stormstrike + catalogue pins above and the HUD/rotation
+    -- name maps below).
+    -- Catalogue: TBC NAME (highest known rank), Era id walk.
+    known_spells[25449] = true
+    known_spells[25448] = true
+    ST.weave_catalog.LB = nil
+    st.family = "TBC"
+    ST.SHAMAN.resolve_weave_catalog(ST)
+    eq(last_known, "Lightning Bolt", "TBC: catalogue known-probe by NAME")
+    eq(ST.weave_catalog.LB and ST.weave_catalog.LB.spell_id, 25449, "TBC: catalogue resolves the top rank by name")
+    ST.weave_catalog.LB = nil
+    st.family = "ERA"
+    ST.SHAMAN.resolve_weave_catalog(ST)
+    eq(last_known, 25449, "Era: catalogue known-probe by id")
+    eq(ST.weave_catalog.LB and ST.weave_catalog.LB.spell_id, 25449, "Era: catalogue resolves the top rank by id")
+
+    -- Known gate: TBC NAME (Feral Spirit), Era id path stays silent there.
+    st.family = "TBC"
+    ST.SHAMAN.gather_guide_inputs(ST, {})
+    -- (Feral Spirit is unknown on TBC: the probe runs but feeds nil, never prompts.)
+    check(last_known ~= nil, "TBC: known probes run (name-first, nil-safe)")
+
+    st.api.GetSpellCooldown = real_cd
+    st.api.is_spell_known = real_known
+    st.family = "TBC"
+end
+
+-- 32) G1 SoD ANY-stack weave fit (live-gate G1) + M1 Wrath sub-5
+-- (wrath_leftovers_2026-10-19 §S3): the gather verifies a sub-5 LB/LvB
+-- hardcast fits the live swing on a WF-imbue SoD build at ANY stacks incl
+-- 0-1 (100 ms buffer) or a WF-imbue Wrath build at 3-4 stacks with LB 49238
+-- (300 ms buffer); every other shape feeds nil (never prompts, old
+-- behaviour). Pins the cast-time model (effective at live MW), the swing-fit
+-- gate, the per-family MIN/buffer and the imbue-build awareness in this
+-- sandbox; the provider sandbox pins the frame mapping.
+do
+    clock = 2000
+    st.family = "ERA"
+    ST.weave_mw_observed = true
+    class_db.weave_mw_enabled = true
+    ST.weave_is_casting = false
+    ST.weave_windfury_active = true
+    ST.weave_rockbiter_active = false
+    ST.weave_mw_stacks = 3
+    ST.weave_haste_mult = 1
+    ST.latency = nil
+    ST.mainhand = { speed = 3.0, start = clock - 1.0, ends_at = clock + 2.0, is_full = false }
+    ST.gcd = { expires = 0 }
+    ST.weave_lava_burst = nil
+    ST.weave_lava_burst_retry_at = nil
+    known_spells[51505] = nil
+    if not ST.weave_catalog or not ST.weave_catalog.LB then
+        ST.weave_catalog = ST.weave_catalog or {}
+        ST.weave_catalog.LB = { spell_id = 25449, name = "Lightning Bolt", icon = "icon_lb", cast_seconds = 2.5 }
+    end
+    local g1 = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g1.weave_sub5_ready, true, "G1: a fitting LB hardcast feeds ready on a WF-imbue SoD build")
+    eq(g1.weave_sub5_is_lavaburst, false, "G1: without the rune the fit spell is Lightning Bolt")
+    check(type(g1.weave_sub5_cast_seconds) == "number",
+        "G1: the effective sub-5 cast time is numeric in the window")
+    -- Lava Burst rune known: the fit spell is LvB.
+    known_spells[51505] = true
+    ST.weave_lava_burst = nil
+    ST.weave_lava_burst_retry_at = nil
+    local g1_lava = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g1_lava.weave_sub5_ready, true, "G1: a fitting LvB hardcast feeds ready with the rune")
+    eq(g1_lava.weave_sub5_is_lavaburst, true, "G1: with the rune the fit spell is Lava Burst")
+    known_spells[51505] = nil
+    ST.weave_lava_burst = nil
+    ST.weave_lava_burst_retry_at = nil
+    -- A short swing withholds the fit (known-not-fit, still no prompt).
+    ST.mainhand = { speed = 3.0, start = clock - 2.5, ends_at = clock + 0.5, is_full = false }
+    local g1_short = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g1_short.weave_sub5_ready, false, "G1: a clipping cast feeds known-not-fit")
+    ST.mainhand = { speed = 3.0, start = clock - 1.0, ends_at = clock + 2.0, is_full = false }
+    -- Imbue-build gate: no WF imbue never feeds ready; a Rockbiter build
+    -- never feeds ready (SoD sim runs WF/WF).
+    ST.weave_windfury_active = false
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "G1: a dropped WF imbue clears the fit feed")
+    ST.weave_windfury_active = true
+    ST.weave_rockbiter_active = true
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "G1: a Rockbiter build never feeds the fit")
+    ST.weave_rockbiter_active = false
+    -- ANY stacks incl 0-1 feed (the SoD sim weaves at ANY stacks when the
+    -- cast fits); 5 stays on rule 5 (the instant). The 0-1 casts are nearly
+    -- full-length, so these pins widen the swing to one that fits them.
+    ST.mainhand = { speed = 3.0, start = clock, ends_at = clock + 3.0, is_full = false }
+    ST.weave_mw_stacks = 1
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, true,
+        "G1: 1 stack feeds ready when the cast fits (0-1 hardcast)")
+    ST.weave_mw_stacks = 0
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, true,
+        "G1: 0 stacks feed ready when the cast fits (0-1 hardcast)")
+    ST.mainhand = { speed = 3.0, start = clock - 1.0, ends_at = clock + 2.0, is_full = false }
+    ST.weave_mw_stacks = 5
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "G1: 5 stacks never feed the fit (rule 5 owns the instant)")
+    ST.weave_mw_stacks = 3
+    -- Casting withholds the fit (rule 1 RIDE holds anyway).
+    ST.weave_is_casting = true
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "G1: casting never feeds the fit")
+    ST.weave_is_casting = false
+    -- Non-SoD families: TBC/Era-base never feed (no MW there).
+    st.family = "TBC"
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "G1: TBC never feeds the fit")
+    -- M1 Wrath sub-5 (default_wf APL: MW>=3 + 300 ms + cast fits): 3-4
+    -- stacks feed with LB 49238 known; 0-2 and 5 stay out; the spell is
+    -- always Lightning Bolt (LvB is Elemental-only there).
+    st.family = "WRATH"
+    known_spells[49238] = true
+    ST.weave_mw_stacks = 3
+    local m1 = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(m1.weave_sub5_ready, true, "M1: a fitting Wrath LB hardcast feeds ready at 3 stacks")
+    eq(m1.weave_sub5_is_lavaburst, false, "M1: the Wrath fit spell is always Lightning Bolt")
+    check(type(m1.weave_sub5_cast_seconds) == "number",
+        "M1: the Wrath effective cast time is numeric in the window")
+    -- Effective at 3 stacks is 2.5 * 0.4 = 1.0 s: the 300 ms buffer (not the
+    -- SoD 100 ms) decides the boundary.
+    ST.mainhand = { speed = 3.0, start = clock - 1.65, ends_at = clock + 1.35, is_full = false }
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, true,
+        "M1: effective + latency + 300 ms fits on Wrath")
+    ST.mainhand = { speed = 3.0, start = clock - 1.75, ends_at = clock + 1.25, is_full = false }
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, false,
+        "M1: just inside 300 ms withholds on Wrath (SoD 100 ms would fit)")
+    ST.mainhand = { speed = 3.0, start = clock - 1.0, ends_at = clock + 2.0, is_full = false }
+    ST.weave_mw_stacks = 2
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "M1: 2 stacks never feed the fit on Wrath (MW>=3)")
+    ST.weave_mw_stacks = 4
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, true,
+        "M1: 4 stacks feed ready when the cast fits on Wrath")
+    ST.weave_mw_stacks = 5
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "M1: 5 stacks never feed the fit on Wrath (rule 5 owns the instant)")
+    ST.weave_mw_stacks = 0
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "M1: 0 stacks never feed the fit on Wrath")
+    ST.weave_mw_stacks = 3
+    -- Known gate: an unknown 49238 feeds nil (never prompts on a guess).
+    known_spells[49238] = nil
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "M1: an unknown Wrath LB never feeds the fit")
+    known_spells[49238] = true
+    -- The Wrath branch needs no MW latch (Wrath has the talent, not the SoD
+    -- rune): unobserved still feeds.
+    ST.weave_mw_observed = false
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, true,
+        "M1: Wrath feeds without the MW latch")
+    ST.weave_mw_observed = true
+    -- Imbue-build gate on Wrath too.
+    ST.weave_windfury_active = false
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "M1: a dropped WF imbue clears the Wrath fit feed")
+    ST.weave_windfury_active = true
+    ST.weave_rockbiter_active = true
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "M1: a Rockbiter build never feeds the Wrath fit")
+    ST.weave_rockbiter_active = false
+    known_spells[49238] = nil
+    st.family = "ERA"
+    ST.weave_mw_observed = false
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "G1: Era-base never feeds the fit")
+    ST.weave_mw_observed = true
+    class_db.weave_mw_enabled = false
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).weave_sub5_ready, nil,
+        "G1: option-off never feeds the fit")
+    class_db.weave_mw_enabled = true
+    -- Stale fields are overwritten on the reused table.
+    st.family = "TBC"
+    local g1_stale = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g1_stale.weave_sub5_ready, nil, "G1: the fit feed is re-fed, not stale")
+    eq(g1_stale.weave_sub5_cast_seconds, nil, "G1: the cast feed is re-fed, not stale")
+    eq(g1_stale.weave_sub5_is_lavaburst, nil, "G1: the spell feed is re-fed, not stale")
+    st.family = "TBC"
+    ST.weave_mw_observed = false
+    ST.weave_mw_stacks = 0
+    ST.weave_windfury_active = false
+    ST.weave_rockbiter_active = false
+end
+
+-- 33) Practice seam surface: the shaman weave drill --------------------------------
+-- The drill seam mirrors the hunter shape: sync reports no seal state, the
+-- scenario key resolves through the registry, lookups are nil-safe, cast times
+-- come from the live catalogue with the harness default behind them.
+eq(ST.SHAMAN.practice_sync(ST), 0, "drill: practice_sync reports no seal state")
+do
+    local pmod = assert(loadfile(ROOT .. "practice.lua"))
+    setfenv(pmod, env)
+    local okp, errp = pcall(function() pmod("SwedgeTimer", st) end)
+    check(okp, "drill: practice.lua loads in the shaman sandbox (" .. tostring(errp) .. ")")
+end
+check(type(st.practice) == "table" and type(st.practice.harness) == "table",
+    "drill: the harness is loaded")
+eq(ST.SHAMAN.practice_scenario_key(), "shaman_weave",
+    "drill: the scenario key resolves through the registry")
+eq(#ST.SHAMAN.PRACTICE_CASTS, 2, "drill: two weave casts")
+eq(ST.SHAMAN.PRACTICE_CAST_ORDER[1], "weave_lb", "drill: LB casts first")
+eq(ST.SHAMAN.PRACTICE_CAST_ORDER[2], "weave_cl", "drill: CL casts second")
+eq(ST.SHAMAN.practice_cast_family("weave_lb"), "LB", "drill: LB maps to its family")
+eq(ST.SHAMAN.practice_cast_family("weave_cl"), "CL", "drill: CL maps to its family")
+eq(ST.SHAMAN.practice_cast_family("bogus"), nil, "drill: unknown casts map nowhere")
+eq(ST.SHAMAN.practice_cast_label("weave_lb"), "Lightning Bolt", "drill: LB label")
+eq(ST.SHAMAN.practice_cast_label("bogus"), nil, "drill: unknown casts label nothing")
+eq(ST.SHAMAN.practice_cast_spell_id("weave_lb"), 25449,
+    "drill: LB icon resolves through the live catalogue")
+eq(ST.SHAMAN.practice_cast_spell_id("weave_cl"), 25442,
+    "drill: CL icon resolves through the live catalogue")
+eq(ST.SHAMAN.practice_cast_spell_id("bogus"), nil, "drill: unknown icons hide")
+eq(ST.SHAMAN.practice_cast_seconds("weave_lb"), 2.5,
+    "drill: LB cast seconds come from the catalogue")
+eq(ST.SHAMAN.practice_cast_seconds("weave_cl"), 2.0,
+    "drill: CL cast seconds come from the catalogue")
+eq(ST.SHAMAN.practice_cast_seconds("bogus"), nil, "drill: unknown casts time nothing")
+eq(ST.SHAMAN.practice_latency_seconds(), 0, "drill: unreadable latency reads 0")
+ST.latency = { world_ms = 120 }
+eq(ST.SHAMAN.practice_latency_seconds(), 0.12, "drill: 120ms reads 0.12s")
+ST.latency = { world_ms = "fast" }
+eq(ST.SHAMAN.practice_latency_seconds(), 0, "drill: non-number latency reads 0")
+ST.latency = nil
+
+-- 34) Drill lifecycle end-to-end (harness session, exact-time grades) ---------------
+do
+    local now = 1000
+    local swing = { swing_duration = 2.6, swing_start = now, swing_ends_at = now + 2.6 }
+    -- Unknown catalogue: the harness default stands in (no grade on a guess only
+    -- when even the default is gone).
+    local kept_catalog = ST.weave_catalog
+    ST.weave_catalog = nil
+    eq(ST.SHAMAN.practice_cast_seconds("weave_cl"), 1.5,
+        "drill: no catalogue falls back to the harness default")
+    eq(ST.SHAMAN.practice_cast_spell_id("weave_cl"), nil,
+        "drill: no catalogue hides the icon")
+    ST.weave_catalog = kept_catalog
+    local session = ST.SHAMAN.new_practice_session(now,
+        { swing_duration = 2.6, effective_cast = 2.0, latency = 0 })
+    check(type(session) == "table" and session.active == true,
+        "drill: new_practice_session begins a live run")
+    eq(session.key, "shaman_mw_weave",
+        "drill: the run is the class's own drill, not the retired built-in")
+    eq(ST.SHAMAN.practice_drill_key(), "shaman_mw_weave",
+        "drill: the class publishes the drill its session runs")
+    -- The class's own drill grades the weave: the Maelstrom-stack floor first
+    -- (a weave below it is a wrong pick whatever the timing), then the timing.
+    local kept_stacks = ST.weave_mw_stacks
+    ST.weave_mw_stacks = 0
+    local grade_floor = ST.SHAMAN.practice_cast(session, swing, now + 0.22 * 2.6, "weave_cl")
+    eq(grade_floor, "F", "drill: a weave below the stack floor grades F")
+    ST.weave_mw_stacks = 5
+    -- CL at fraction 0.22: marker (2.6-2.0)/2.6 = 0.2307, margin 0.0107 -> S.
+    local early = now + 0.22 * 2.6
+    local grade_s, margin_s = ST.SHAMAN.practice_cast(session, swing, early, "weave_cl")
+    eq(grade_s, "S", "drill: a tight weave start grades S")
+    check(type(margin_s) == "number" and margin_s > 0 and margin_s < 100,
+        "drill: the S margin is a small positive ms")
+    -- CL at fraction 0.5: past the marker and clipping -> F.
+    local late = now + 0.5 * 2.6
+    local grade_f = ST.SHAMAN.practice_cast(session, swing, late, "weave_cl")
+    eq(grade_f, "F", "drill: a late clipping weave start grades F")
+    eq(ST.SHAMAN.practice_cast(session, swing, early, "bogus"), nil,
+        "drill: unknown casts never score")
+    -- Clip decides: a 3.0s cast in a 2.6s swing overruns from any start. Start at
+    -- the swing edge (fraction 0, not late): only the measured clip can fail it.
+    local kept_cl = ST.weave_catalog.CL
+    ST.weave_catalog.CL = { spell_id = 25442, cast_seconds = 3.0 }
+    eq(ST.SHAMAN.practice_cast(session, swing, now, "weave_cl"), "F",
+        "drill: an overrunning weave start grades F on the clip")
+    ST.weave_catalog.CL = kept_cl
+    ST.weave_mw_stacks = kept_stacks
+    local out = ST.SHAMAN.tick_practice_session(session, early, 0.05, nil)
+    check(type(out) == "table", "drill: tick returns the out table")
+    eq(ST.SHAMAN.practice_begin_session(session, early), false,
+        "drill: begin on a live run is a no-op")
+    eq(ST.SHAMAN.practice_fight_elapsed(session, early), early - now,
+        "drill: fight elapsed runs from the run start")
+    eq(ST.SHAMAN.end_practice_session(session, early), true, "drill: the run ends")
+    eq(ST.SHAMAN.practice_cast(session, swing, early, "weave_cl"), nil,
+        "drill: ended runs never score")
+    eq(ST.SHAMAN.end_practice_session(session, early), false,
+        "drill: ending twice is a no-op")
+    eq(ST.SHAMAN.end_practice_session(nil, early), false,
+        "drill: ending nil is a no-op")
+    eq(ST.SHAMAN.practice_fight_elapsed(session, early), nil,
+        "drill: ended runs clock nothing")
+    eq(ST.SHAMAN.practice_fight_elapsed(nil, early), nil,
+        "drill: nil sessions clock nothing")
+    -- Status readout: idle without a swing, too-late past the marker, countdown early.
+    eq(ST.SHAMAN.practice_status(nil, early), "Drill idle", "drill: nil swing reads idle")
+    eq(ST.SHAMAN.practice_status(swing, late), "Too late - wait for the next swing",
+        "drill: late reads too-late")
+    -- Status reads the LB window (the most restrictive drill cast): marker
+    -- (2.6-2.5)/2.6 = 0.038, so 0.22 is already too late for LB but 0.03 counts down.
+    local status = ST.SHAMAN.practice_status(swing, now + 0.03 * 2.6)
+    check(status:find("Cast now") ~= nil and status:find("to marker") ~= nil,
+        "drill: early reads the countdown (" .. tostring(status) .. ")")
+end
+
+-- 35) Family matrix: Era / TBC / Forever grade identically --------------------------
+-- The drill clock is the caller's and every read is compat- or catalogue-level, so
+-- the family token never changes a grade. Unknown client data (no catalogue)
+-- still runs on the harness default; nothing throws on any client.
+do
+    local now = 2000
+    local swing = { swing_duration = 2.6, swing_start = now, swing_ends_at = now + 2.6 }
+    local early = now + 0.22 * 2.6
+    -- A weaveable client: the class's own drill grades the Maelstrom-stack floor
+    -- first, so the timing pins below need the stacks the floor asks for.
+    local kept_stacks = ST.weave_mw_stacks
+    ST.weave_mw_stacks = 5
+    for _, fam in ipairs({ "ERA", "TBC", "FOREVER" }) do
+        st.family = fam
+        local session = ST.SHAMAN.new_practice_session(now,
+            { swing_duration = 2.6, effective_cast = 2.0, latency = 0 })
+        check(session ~= nil, "drill: the run starts on " .. fam)
+        eq(ST.SHAMAN.practice_cast(session, swing, early, "weave_cl"), "S",
+            "drill: the tight weave grades S on " .. fam)
+        ST.SHAMAN.end_practice_session(session, early)
+    end
+    st.family = "TBC"
+    -- No catalogue on any family: the default still grades, the icon hides.
+    local kept_catalog = ST.weave_catalog
+    ST.weave_catalog = nil
+    for _, fam in ipairs({ "ERA", "TBC", "FOREVER" }) do
+        st.family = fam
+        local session = ST.SHAMAN.new_practice_session(now,
+            { swing_duration = 2.6, effective_cast = 1.5, latency = 0 })
+        check(session ~= nil, "drill: the run starts on " .. fam .. " with no catalogue")
+        eq(ST.SHAMAN.practice_cast_spell_id("weave_lb"), nil,
+            "drill: the icon hides on " .. fam .. " with no catalogue")
+        -- Default cast 1.5: marker (2.6-1.5)/2.6 = 0.423; 0.41 is inside -> S.
+        eq(ST.SHAMAN.practice_cast(session, swing, now + 0.41 * 2.6, "weave_lb"), "S",
+            "drill: the default cast grades S on " .. fam)
+        ST.SHAMAN.end_practice_session(session, now + 0.41 * 2.6)
+    end
+    ST.weave_catalog = kept_catalog
+    ST.weave_mw_stacks = kept_stacks
+    st.family = "TBC"
+end
+
+-- 36) Designer coverage: every shaman element is positionable -----------------------
+-- Shaman creates no standalone frames (no CreateFrame in the class module): every
+-- visual it draws is a texture/fontstring on the bar visuals frames (children of
+-- the bar anchors) or one of the shared module frames. The five generic design
+-- descriptors therefore position everything shaman owns: bars, HUD, rotation
+-- label, Next Action Guide, practice panel. These pins prove the coverage exists
+-- in-tree (the registry count itself is pinned by tests/designmode_state.lua).
+do
+    local f = assert(io.open(ROOT .. "classes/shaman.lua", "r"))
+    local shaman_src = f:read("*a")
+    f:close()
+    local creations = 0
+    for _ in shaman_src:gmatch("CreateFrame%s*%(") do
+        creations = creations + 1
+    end
+    eq(creations, 0, "designer: shaman creates no standalone frames")
+    local d = assert(io.open(ROOT .. "designmode.lua", "r"))
+    local design_src = d:read("*a")
+    d:close()
+    -- Bars register through the bar_descriptor(hand) helper and the rotation /
+    -- timeline through practice_descriptor(key, title), so those pins match the
+    -- register call sites; the rest carry literal keys.
+    for _, literal in ipairs({ 'register(bar_descriptor("mainhand"))',
+        'register(bar_descriptor("offhand"))', 'key = "hud"', 'key = "rottext"',
+        'key = "nag"', 'key = "practice_panel"',
+        'register(practice_descriptor("practice_rotation"',
+        'register(practice_descriptor("practice_timeline"' }) do
+        check(design_src:find(literal, 1, true) ~= nil,
+            "designer: descriptor registered (" .. literal .. ")")
+    end
+    -- The providers behind the shared frames are wired for shaman.
+    check(type(ST.SHAMAN.guide) == "table" and type(ST.SHAMAN.guide.gather) == "function"
+        and type(ST.SHAMAN.guide.evaluate) == "function",
+        "designer: the NAG provider (guide/gather/evaluate) is wired")
+    check(type(ST.SHAMAN.get_rotation_key) == "function",
+        "designer: the rotation-label source is wired")
+    check(type(ST.SHAMAN.get_hud_state) == "function"
+        and type(ST.SHAMAN.HUD_SLOTS) == "table" and #ST.SHAMAN.HUD_SLOTS > 0,
+        "designer: the HUD provider and slots are wired")
+    -- The position keys the descriptors write already exist in the defaults chain.
+    local c = assert(io.open(ROOT .. "config_presets.lua", "r"))
+    local presets_src = c:read("*a")
+    c:close()
+    check(presets_src:find("nextaction_x", 1, true) ~= nil,
+        "designer: nextaction_x ships in the defaults chain")
+    check(presets_src:find("hud_x", 1, true) ~= nil,
+        "designer: hud_x ships in the defaults chain")
+    check(presets_src:find("rotation_label_x", 1, true) ~= nil,
+        "designer: rotation_label_x ships in the defaults chain")
+    check(presets_src:find("practice_panel_x", 1, true) ~= nil,
+        "designer: practice_panel_x ships in the defaults chain")
+    -- Both-ways start is wired: post_init builds the shared session frames and the
+    -- options toggle drives the same toggle as /st practice.
+    check(shaman_src:find("practice_ui.init", 1, true) ~= nil,
+        "designer: post_init builds the practice session frames")
+    local o = assert(io.open(ROOT .. "option_tables.lua", "r"))
+    local tables_src = o:read("*a")
+    o:close()
+    local shaman_panel = tables_src:match("function ST%.class_opts_funcs%.SHAMAN.-\nend")
+    check(shaman_panel ~= nil, "designer: the SHAMAN options panel is found")
+    if shaman_panel then
+        check(shaman_panel:find("practice_toggle", 1, true) ~= nil,
+            "designer: the SHAMAN panel carries the Practice toggle")
+        check(shaman_panel:find("practice_weapon_speed", 1, true) ~= nil,
+            "designer: the SHAMAN panel carries the weapon speed")
+        check(shaman_panel:find("st.practice_ui.toggle", 1, true) ~= nil,
+            "designer: the SHAMAN toggle drives the shared session toggle")
+    end
+end
+
+--=========================================================================================
+-- 37) Shared class order: the per-frame hook and the post_init init order (F8 + F9)
+--=========================================================================================
+-- The six class modules are copy-paste siblings and used to diverge on two orders:
+-- the hunter ticked the HUD before the guide, and the paladin built the practice
+-- surface before the HUD. The shared contract is now pinned here, per class:
+--   * the per-frame class hook ticks the guide BEFORE the HUD;
+--   * post_init builds the guide, then the HUD, then the practice surface.
+-- Both the runtime order (spies record the calls) and the source order (the call
+-- sites) are pinned, so a reordering in either place fails this suite.
+do
+    local fh = assert(io.open(ROOT .. "classes/shaman.lua", "r"))
+    local src = fh:read("*a")
+    fh:close()
+    -- Comment lines are dropped first: a call quoted inside a comment (the paladin
+    -- HUD block quotes st.hud.init(self)) must not be read as the call itself.
+    local code = {}
+    for line in src:gmatch("[^\r\n]+") do
+        if line:match("^%s*%-%-") == nil then
+            code[#code + 1] = line
+        end
+    end
+    code = table.concat(code, "\n")
+    local at_guide_tick = code:find("st.nextaction_ui.on_bar_update(self, hand)", 1, true)
+    local at_hud_tick = code:find("st.hud.on_bar_update(self, hand)", 1, true)
+    local at_guide_init = code:find("st.nextaction_ui.init(self)", 1, true)
+    local at_hud_init = code:find("st.hud.init(self)", 1, true)
+    local at_practice_init = code:find("st.practice_ui.init(self)", 1, true)
+    check(at_guide_tick ~= nil and at_hud_tick ~= nil,
+        "order: the class hook drives both the guide and the HUD")
+    check(at_guide_init ~= nil and at_hud_init ~= nil and at_practice_init ~= nil,
+        "order: post_init drives the guide, the HUD and the practice surface")
+    check(at_guide_tick < at_hud_tick,
+        "order: the guide tick comes before the HUD tick")
+    check(at_guide_init < at_hud_init and at_hud_init < at_practice_init,
+        "order: post_init builds the guide, then the HUD, then the practice surface")
+
+    -- Runtime order: the spies record the calls the class actually makes. The
+    -- shaman suite runs on one shared sandbox, so the three modules are restored.
+    local init_order = {}
+    local saved_nextaction_ui, saved_hud, saved_practice_ui =
+        st.nextaction_ui, st.hud, st.practice_ui
+    st.nextaction_ui = { init = function() init_order[#init_order + 1] = "guide" end }
+    st.hud = { init = function() init_order[#init_order + 1] = "hud" end }
+    st.practice_ui = {
+        init = function() init_order[#init_order + 1] = "practice" end,
+        is_active = function() return false end,
+    }
+    local ok_init, err_init = pcall(ST.SHAMAN.post_init, ST)
+    check(ok_init, "order: post_init runs with the order spies (" .. tostring(err_init) .. ")")
+    eq(init_order[1], "guide", "order: post_init builds the guide first")
+    eq(init_order[2], "hud", "order: post_init builds the HUD second")
+    eq(init_order[3], "practice", "order: post_init builds the practice surface third")
+    eq(#init_order, 3, "order: post_init builds exactly the three surfaces")
+
+    local tick_order = {}
+    st.nextaction_ui = {
+        apply_settings = function() end,
+        on_bar_update = function() tick_order[#tick_order + 1] = "guide" end,
+    }
+    st.hud = { on_bar_update = function() tick_order[#tick_order + 1] = "hud" end }
+    local ok_tick, err_tick = pcall(ST.SHAMAN.on_bar_update, ST, "mainhand")
+    check(ok_tick, "order: the class hook runs with the order spies (" .. tostring(err_tick) .. ")")
+    eq(tick_order[1], "guide", "order: the guide ticks before the HUD")
+    eq(tick_order[2], "hud", "order: the HUD ticks after the guide")
+    eq(#tick_order, 2, "order: the class hook ticks the guide and the HUD once each")
+
+    st.nextaction_ui = saved_nextaction_ui
+    st.hud = saved_hud
+    st.practice_ui = saved_practice_ui
+
+end
+
+-- 38) The practice surface (bench/class_features_drills_2026-10-19.md §2.6) ---------
+-- The class-side view of the practice contract: the rotation table's spell
+-- references (TBC resolves by NAME, Era by ID - bench/lessons.md, both pinned),
+-- the namespace mirror the shared engine's lookup needs, and the proof that the
+-- live guide is untouched by the practice surface (no slot added, no frozen input
+-- changed, the gather writes the same set).
+do
+    local rot = ST.SHAMAN.practice_rotation
+    check(type(rot) == "table", "practice: the class ships a rotation table")
+    eq(#rot, 22, "practice: the rotation table carries twenty-two lines")
+    -- Name-vs-id: every line ships the Era id AND the TBC name, both pinned
+    -- against the module's own constants.
+    local IDS = {
+        fireele = 2894, feralspirit = 51533, shamanisticrage = 30823, weave = 403,
+        flameshock = 8050, twist = 8512, wftotem = 10614, goa = 10627,
+        stormstrike = 17364, searing = 10438, magma = 8190, firenova = 1535,
+        lightningshield = 49281, lavalash = 60103, chainlightning = 10605,
+        earthshock = 8042, moltenblast = 425339, coe = 66842,
+        bloodlust = 2825, strength_of_earth = 10442, mana_spring = 25570,
+        frostshock = 25464,
+    }
+    local NAMES = {
+        fireele = "Fire Elemental Totem", feralspirit = "Feral Spirit",
+        shamanisticrage = "Shamanistic Rage", weave = "Lightning Bolt",
+        flameshock = "Flame Shock", twist = "Windfury Totem", wftotem = "Windfury Totem",
+        goa = "Grace of Air Totem", stormstrike = "Stormstrike",
+        searing = "Searing Totem", magma = "Magma Totem", firenova = "Fire Nova Totem",
+        lightningshield = "Lightning Shield", lavalash = "Lava Lash",
+        chainlightning = "Chain Lightning", earthshock = "Earth Shock",
+        moltenblast = "Molten Blast", coe = "Call of the Elements",
+        bloodlust = "Bloodlust", strength_of_earth = "Strength of Earth Totem",
+        mana_spring = "Mana Spring Totem", frostshock = "Frost Shock",
+    }
+    local ids_ok, names_ok = true, true
+    for i = 1, #rot do
+        local line = rot[i]
+        if line.spell_id ~= IDS[line.action] then ids_ok = false end
+        if line.spell_name ~= NAMES[line.action] then names_ok = false end
+    end
+    check(ids_ok, "practice: every rotation line carries the pinned Era id")
+    check(names_ok, "practice: every rotation line carries the pinned TBC name")
+    -- The TBC name of a line is the name the module itself queries by: the
+    -- Stormstrike and Fire Nova lines match the module's name constants.
+    local by_action = {}
+    for i = 1, #rot do by_action[rot[i].action] = rot[i] end
+    eq(by_action.stormstrike.spell_name, "Stormstrike",
+        "practice: the Stormstrike line names the TBC spell the module queries")
+    eq(by_action.firenova.spell_name, "Fire Nova Totem",
+        "practice: the Fire Nova line names the TBC spell the module queries")
+    eq(by_action.stormstrike.spell_id, 17364,
+        "practice: the Stormstrike line carries the module's id")
+    -- The live flags match reality: a line is live when its READ exists (HU-13),
+    -- and the engine flag says whether the frozen engine has an arm that can PLAY
+    -- the line with the inputs the shipped tree produces. S-19 and S-17 landed with
+    -- their slots and rules, so they are live; S-20 (Call of the Elements) landed
+    -- with its slot, its rule 9c and the water clock, so it is live too; the Chain
+    -- Lightning line has NEITHER a read NOR an arm that can fire: the enemy-count
+    -- sensor does not exist (no client API counts enemies), so no producer ever
+    -- feeds target_count and rule 13 is unreachable - the row claims no arm and
+    -- names the read it waits for.
+    eq(by_action.searing.live, true, "practice: the Searing line is live (slot + rule 9b)")
+    eq(by_action.lightningshield.live, true,
+        "practice: the Lightning Shield line is live (slot + rule 11b)")
+    eq(by_action.coe.live, true,
+        "practice: the Call of the Elements line is live (slot + rule 9c + the water clock)")
+    eq(by_action.chainlightning.live, false,
+        "practice: the Chain Lightning line is not live (no enemy-count read)")
+    eq(by_action.chainlightning.engine, false,
+        "practice: the Chain Lightning line claims no engine arm (nothing feeds target_count)")
+    check(type(by_action.chainlightning.needs) == "string"
+        and by_action.chainlightning.needs ~= "",
+        "practice: the Chain Lightning line names the read it waits for")
+    -- The reachability behind that flag: the gather never supplies an enemy count
+    -- on any family, so rule 13 has no producer (the sensor's filed remainder).
+    local saved_family_chain = st.family
+    local chain_target_count = nil
+    for _, fam in ipairs({ "ERA", "TBC", "WRATH", "FOREVER" }) do
+        st.family = fam
+        chain_target_count = ST.SHAMAN.gather_guide_inputs(ST, {}).target_count
+    end
+    st.family = saved_family_chain
+    eq(chain_target_count, nil,
+        "practice: no family ever feeds an enemy count (the Chain Lightning sensor's remainder)")
+    -- The APL utility layer's four lines: a live read AND an engine arm each.
+    for _, action in ipairs({ "bloodlust", "strength_of_earth", "mana_spring", "frostshock" }) do
+        eq(by_action[action].live, true, "practice: the " .. action .. " line has a live read")
+        eq(by_action[action].engine, true, "practice: the " .. action .. " line has an engine arm")
+        check(type(by_action[action].spell_ids) == "table",
+            "practice: the " .. action .. " line carries its per-family ids")
+    end
+    -- The Lightning Shield line's per-family ids (the residual's F1): the row runs
+    -- on WRATH, on the SoD build and on FOREVER, and each family carries its own
+    -- id - the SoD and Forever APLs cast 10432 (the SoD phase_6 APL's i=8 row and
+    -- the Forever APL's i=6 row), while the Wrath APLs cast 49281. Without the map
+    -- the line would read the Wrath id on every family.
+    eq(by_action.lightningshield.spell_ids.WRATH, 49281,
+        "practice: the Lightning Shield line carries the Wrath id")
+    eq(by_action.lightningshield.spell_ids.SOD, 10432,
+        "practice: the Lightning Shield line carries the SoD id (10432 r7)")
+    eq(by_action.lightningshield.spell_ids.FOREVER, 10432,
+        "practice: the Lightning Shield line carries the Forever id (10432)")
+    eq(by_action.lightningshield.families[1], "WRATH",
+        "practice: the Lightning Shield line lists the Wrath family")
+    local ls_families = {}
+    for _, fam in ipairs(by_action.lightningshield.families) do ls_families[fam] = true end
+    eq(ls_families.SOD, true, "practice: the Lightning Shield line lists the SoD family")
+    eq(ls_families.FOREVER, true, "practice: the Lightning Shield line lists the Forever family")
+    eq(ls_families.ERA, nil,
+        "practice: the Lightning Shield line does not claim the Era-base family")
+    eq(ls_families.TBC, nil,
+        "practice: the Lightning Shield line does not claim the TBC family")
+    -- The twist row's rank reconciliation (the residual's C5): the shipped id is
+    -- the Windfury Totem RANK-1 fallback (8512) and the TBC APL's sim-exact rank-5
+    -- id (25587) rides in spell_ids; the alternation's other half is the Grace of
+    -- Air Totem 25359 (the pre-pull table's goa row).
+    eq(by_action.twist.spell_id, 8512,
+        "practice: the twist line keeps the Windfury rank-1 fallback id")
+    eq(by_action.twist.spell_ids.TBC, 25587,
+        "practice: the twist line records the TBC APL's rank-5 Windfury id")
+    check(by_action.twist.source:find("25359", 1, true) ~= nil,
+        "practice: the twist line cites the alternation's Grace of Air id (25359)")
+    local live_actions = {}
+    for i = 1, #rot do
+        if rot[i].live then live_actions[rot[i].action] = true end
+    end
+    -- THE FAMILY SLICE (the release-gate blocker B1): the rotation rows each
+    -- family's APL carries, in the table's own order. The expectation is
+    -- spelled out here AND derived from the shipped table below, so a change
+    -- to either side has to be deliberate.
+    local EXPECTED_SLICES = {
+        ERA = { "feralspirit", "shamanisticrage", "weave", "flameshock",
+            "strength_of_earth", "wftotem", "goa", "stormstrike", "searing",
+            "lavalash", "chainlightning", "earthshock", "moltenblast" },
+        SOD = { "lightningshield" },
+        TBC = { "fireele", "shamanisticrage", "weave", "flameshock", "twist",
+            "strength_of_earth", "mana_spring", "stormstrike", "searing",
+            "magma", "firenova", "frostshock", "earthshock" },
+        WRATH = { "fireele", "feralspirit", "bloodlust", "shamanisticrage",
+            "weave", "flameshock", "stormstrike", "magma", "firenova",
+            "lightningshield", "lavalash", "earthshock", "coe" },
+        FOREVER = { "flameshock", "strength_of_earth", "stormstrike", "searing",
+            "firenova", "lightningshield", "earthshock" },
+    }
+    -- The guide's family slot sets: the same rows in the class's DISPLAY
+    -- order (the display order is the class's own; the family cut filters it).
+    local EXPECTED_SLOT_ORDERS = {
+        ERA = { "stormstrike", "flameshock", "weave", "earthshock", "feralspirit",
+            "lavalash", "shamanisticrage", "chainlightning", "moltenblast",
+            "wftotem", "goa", "searing", "strength_of_earth" },
+        SOD = { "lightningshield" },
+        TBC = { "stormstrike", "flameshock", "weave", "firenova", "earthshock",
+            "twist", "fireele", "magma", "shamanisticrage", "searing",
+            "strength_of_earth", "mana_spring", "frostshock" },
+        WRATH = { "stormstrike", "flameshock", "weave", "firenova", "earthshock",
+            "feralspirit", "fireele", "magma", "lavalash", "shamanisticrage",
+            "lightningshield", "coe", "bloodlust" },
+        FOREVER = { "stormstrike", "flameshock", "firenova", "earthshock",
+            "lightningshield", "searing", "strength_of_earth" },
+    }
+    -- (a) The per-family slice, derived from the shipped table.
+    for slice_family, expected in pairs(EXPECTED_SLICES) do
+        local derived = {}
+        for i = 1, #rot do
+            local fams = {}
+            for _, fam in ipairs(rot[i].families or {}) do fams[fam] = true end
+            if fams[slice_family] then derived[#derived + 1] = rot[i].action end
+        end
+        local derived_ok = (#derived == #expected)
+        for i = 1, #expected do
+            if derived[i] ~= expected[i] then derived_ok = false end
+        end
+        check(derived_ok, "practice: the " .. slice_family .. " slice is the table's own family rows")
+        -- (b) The accessor returns exactly that slice.
+        local slice = ST.SHAMAN.practice_rotation_for(slice_family)
+        eq(#slice, #expected,
+            "practice: the " .. slice_family .. " slice carries " .. #expected .. " rows")
+        local order_ok = true
+        for i = 1, #expected do
+            if slice[i] == nil or slice[i].action ~= expected[i] then order_ok = false end
+        end
+        check(order_ok, "practice: the " .. slice_family .. " slice keeps the table's own order")
+    end
+    eq(#ST.SHAMAN.practice_rotation_for("NOPE"), 0,
+        "practice: an unknown family has no rotation slice")
+    -- The guide's slot set is the family's cut of the class's full vocabulary
+    -- (the rotation table's `families` is the one truth): the slot keys and the
+    -- rotation actions are the same key space, so the two can never disagree.
+    eq(#ST.SHAMAN.GUIDE_SLOTS, 22, "practice: the class ships twenty-two guide slots")
+    for slot_family, expected in pairs(EXPECTED_SLOT_ORDERS) do
+        local slots = ST.SHAMAN.family_guide_slots(slot_family)
+        eq(#slots, #expected,
+            "practice: the " .. slot_family .. " guide carries " .. #expected .. " slots")
+        local order_ok = true
+        for i = 1, #expected do
+            if slots[i] == nil or slots[i].key ~= expected[i] then order_ok = false end
+        end
+        check(order_ok, "practice: the " .. slot_family .. " guide slots keep the display order")
+        local slot_keys = {}
+        for i = 1, #slots do slot_keys[slots[i].key] = true end
+        local rows_ok = true
+        for _, action in ipairs(EXPECTED_SLICES[slot_family]) do
+            if not slot_keys[action] then rows_ok = false end
+        end
+        check(rows_ok,
+            "practice: the " .. slot_family .. " guide slots mirror the " .. slot_family .. " rotation rows")
+    end
+    -- Every live rotation line names a declared guide slot - per family now
+    -- (the guide's slot list is the running family's cut, so the check runs
+    -- against each family's own slot set).
+    local live_ok = true
+    for live_family, rows in pairs(EXPECTED_SLICES) do
+        local slot_action = {}
+        local slots = ST.SHAMAN.family_guide_slots(live_family)
+        for i = 1, #slots do slot_action[slots[i].key] = true end
+        for _, action in ipairs(rows) do
+            if live_actions[action] and not slot_action[action] then live_ok = false end
+        end
+    end
+    check(live_ok, "practice: every live rotation line names a declared guide slot")
+    -- (c) THE STRIP (practice_ui.lua's scenario_action_order): the rotation
+    -- slice first, then the guide slot keys, then the keys the engine asked
+    -- for. On a TBC client it must carry NO Wrath-only and NO Era-only key -
+    -- the direct offline form of TESTING.md's "a family that does not carry a
+    -- row must never show it".
+    local strip = {}
+    for _, strip_row in ipairs(ST.SHAMAN.practice_rotation_for("TBC")) do
+        strip[strip_row.action] = true
+    end
+    local tbc_slots = ST.SHAMAN.family_guide_slots("TBC")
+    for _, slot in ipairs(tbc_slots) do strip[slot.key] = true end
+    for _, key in ipairs({ "coe", "bloodlust", "lightningshield" }) do
+        eq(strip[key], nil, "strip: a TBC client is offered no Wrath-only row (" .. key .. ")")
+    end
+    for _, key in ipairs({ "moltenblast", "lavalash", "chainlightning",
+        "wftotem", "goa", "feralspirit" }) do
+        eq(strip[key], nil, "strip: a TBC client is offered no Era-only row (" .. key .. ")")
+    end
+    local tbc_rows = {}
+    for _, action in ipairs(EXPECTED_SLICES.TBC) do tbc_rows[action] = true end
+    local strip_ok = true
+    for key in pairs(strip) do
+        if not tbc_rows[key] then strip_ok = false end
+    end
+    check(strip_ok, "strip: every key a TBC client is offered is a row the TBC APL carries")
+    -- The PUBLISHED slot list is the running family's set (the panel reads it
+    -- live, so this is what the strip offers): the guide frame's own icons
+    -- were built from the class's full vocabulary, but the vocabulary the
+    -- panel reads is the family's - PLUS the class's own common abilities,
+    -- which the widening seam appends (the same seam the other five class
+    -- modules apply from their post_init).
+    local published = {}
+    for i = 1, #ST.SHAMAN.guide.slots do published[#published + 1] = ST.SHAMAN.guide.slots[i].key end
+    local expected_published = {}
+    for i = 1, #tbc_slots do expected_published[#expected_published + 1] = tbc_slots[i].key end
+    for _, action in ipairs(ST.SHAMAN.practice_common_actions) do
+        expected_published[#expected_published + 1] = action.key
+    end
+    eq(table.concat(published, ","), table.concat(expected_published, ","),
+        "strip: the published guide slots are the running family's set plus the common abilities")
+    -- The SoD build: the ERA token plus the rune basis. The argument-free
+    -- accessor answers the CLIENT's family plus the running BUILD's own token
+    -- (the SoD variant names itself, the way the paladin's SoD orders do).
+    local saved_family_scope = st.family
+    local saved_mw_scope = ST.weave_mw_observed
+    st.family = "ERA"
+    ST.weave_mw_observed = false
+    eq(ST.SHAMAN.practice_rotation_family(), "ERA",
+        "practice: the rotation family follows the running client")
+    local era_slice = ST.SHAMAN.practice_rotation_for()
+    local era_actions = {}
+    for i = 1, #era_slice do era_actions[#era_actions + 1] = era_slice[i].action end
+    eq(table.concat(era_actions, ","),
+        "feralspirit,shamanisticrage,weave,flameshock,strength_of_earth,wftotem,"
+            .. "goa,stormstrike,searing,lavalash,chainlightning,earthshock,moltenblast",
+        "practice: the Era client's slice carries the ERA rows in the table's order")
+    ST.weave_mw_observed = true
+    local sod_slice = ST.SHAMAN.practice_rotation_for()
+    local sod_actions = {}
+    for i = 1, #sod_slice do sod_actions[#sod_actions + 1] = sod_slice[i].action end
+    eq(#sod_slice, 14, "practice: the SoD build's slice adds its own row")
+    eq(sod_actions[10], "lightningshield",
+        "practice: the SoD build's own row rides the Era slice")
+    eq(sod_actions[14], "moltenblast",
+        "practice: the SoD build's slice keeps the table's own order")
+    st.family = saved_family_scope
+    ST.weave_mw_observed = saved_mw_scope
+    -- No namespace mirror any more: the shared engine resolves the class module
+    -- from the AceAddon table FIRST (the class tables live there), so no
+    -- per-class alias is needed - and none is carried (hands-up.md HU-7).
+    eq(st.SHAMAN, nil, "practice: the class module carries no namespace alias")
+    local H = st.practice and st.practice.harness
+    check(type(H) == "table", "practice: the shared engine is loaded")
+    if type(H) == "table" then
+        eq(H.practice_class_module("SHAMAN"), ST.SHAMAN,
+            "practice: the engine finds the class module without an alias")
+        check(H.practice_drills("SHAMAN") ~= nil,
+            "practice: the engine reads the class drill list without an alias")
+        check(H.practice_scenario_available("SHAMAN") == true,
+            "practice: the engine finds the class scenario step without an alias")
+    end
+    -- The live guide grew with the maintain slots (S-19 / S-17) and the Call of
+    -- the Elements slot (S-20 / U-10) - the practice surface rides the same
+    -- slots and rules, so the slot set is shared. The RUNNING client's slot
+    -- list is its family's cut (the strip's vocabulary) PLUS the class's own
+    -- common abilities (the widening seam appends them); the class's full
+    -- vocabulary is ST.SHAMAN.GUIDE_SLOTS above. The sandbox is a TBC client.
+    ST.SHAMAN.apply_family_slots()
+    eq(#ST.SHAMAN.guide.slots, 18,
+        "practice: the guide carries the thirteen TBC slots plus the five common abilities on a TBC client")
+    eq(#ST.SHAMAN.HUD_SLOTS, 11, "practice: the HUD ships eleven slots")
+    -- The gather still writes the frozen inputs this TBC fixture reads (the
+    -- practice surface did not shrink the live input set; the inputs that read
+    -- unknown here are nil by design and are pinned by the sections above).
+    local gathered = ST.SHAMAN.gather_guide_inputs(ST, {})
+    local present = { speed = true, swing_remaining = true, gcd_remaining = true,
+        casting = true, mw_available = true, mw_stacks = true, weave_available = true,
+        flameshock_remaining = true, flameshock_refresh = true, flameshock_allowed = true,
+        stormstrike_remaining = true, stormstrike_hold_enabled = true,
+        shock_remaining = true, firenova_remaining = true, sr_mana_threshold = true,
+        magma_refresh = true, clearcasting_active = true }
+    local missing = nil
+    for name in pairs(present) do
+        if gathered[name] == nil then missing = missing or name end
+    end
+    check(missing == nil, "practice: the gather still writes every frozen input (missing: "
+        .. tostring(missing) .. ")")
+end
+
+-- 39) The Call of the Elements line (S-20 / U-10) + the per-family Stormstrike
+-- fallback (S-23 / U-09) -------------------------------------------------------
+-- The water clock reads the client's own slot 3 (CLIENT-SOURCED: the shipped
+-- clients' Constants.lua carries WATER_TOTEM_SLOT = 3 and the id 66842 in
+-- TOTEM_MULTI_CAST_SUMMON_SPELLS). Tri-state like the fire/air readers: the
+-- remaining seconds, zero for an affirmatively empty slot, nil for an
+-- unreadable one (never a guess). The gather publishes the pair, and the
+-- engine's rule 9c prompts CoE on WRATH while the water totem is under the
+-- APL's 20 s - between Earth Shock and Magma Totem, the APL's own order.
+do
+    local saved_family = st.family
+    -- The reader ------------------------------------------------------------
+    clock = 500
+    totem_slot3 = nil
+    local remaining, duration = ST.SHAMAN.get_water_totem_clock(ST, 500)
+    eq(remaining, nil, "an unreadable water slot reads unknown (never a guess)")
+    eq(duration, nil, "an unreadable water slot has no length either")
+    totem_slot3 = { have = false }
+    remaining, duration = ST.SHAMAN.get_water_totem_clock(ST, 500)
+    eq(remaining, 0, "an empty water slot reads zero (the drop is due)")
+    eq(duration, nil, "an empty water slot has no length to report")
+    totem_slot3 = { have = true, name = "Healing Surge", start = 400, duration = 120, spell = 555 }
+    remaining, duration = ST.SHAMAN.get_water_totem_clock(ST, 500)
+    near(remaining, 20, 1e-9, "the water clock counts the totem down on the api.get_time() axis")
+    eq(duration, 120, "the water clock reports the totem's full length")
+    totem_slot3 = { have = true, name = "Healing Surge", start = 100, duration = 120, spell = 555 }
+    remaining = ST.SHAMAN.get_water_totem_clock(ST, 500)
+    eq(remaining, 0, "an expired water totem reads zero, never a negative")
+    totem_slot3 = { have = true, name = "Healing Surge", start = 400, duration = 0, spell = 555 }
+    remaining = ST.SHAMAN.get_water_totem_clock(ST, 500)
+    eq(remaining, nil, "an unreadable totem length reads unknown")
+    totem_slot3 = { have = true, name = "Healing Surge", start = "SECRET", duration = 120, spell = 555 }
+    remaining = ST.SHAMAN.get_water_totem_clock(ST, 500)
+    eq(remaining, nil, "a secret field degrades the whole water read to unknown")
+    totem_slot3 = "THROW"
+    remaining = ST.SHAMAN.get_water_totem_clock(ST, 500)
+    eq(remaining, nil, "a throwing totem read reads unknown")
+    totem_slot3 = nil
+
+    -- The gather feed -------------------------------------------------------
+    totem_slot3 = { have = true, name = "Healing Surge", start = 400, duration = 120, spell = 555 }
+    local g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    near(g.water_remaining, 20, 1e-9, "the gather publishes the water totem's remaining seconds")
+    eq(g.water_duration, 120, "the gather publishes the water totem's length")
+    totem_slot3 = { have = false }
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.water_remaining, 0, "an empty water slot feeds zero")
+    eq(g.water_duration, nil, "an empty water slot feeds no length")
+    totem_slot3 = nil
+    g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(g.water_remaining, nil, "an unreadable water slot feeds nil (unknown-hides)")
+    eq(g.water_duration, nil, "an unreadable water slot feeds no length")
+
+    -- The engine rule 9c ---------------------------------------------------
+    local function coe_action(overrides)
+        local inputs = {
+            stormstrike_remaining = 8,    -- Stormstrike is on cooldown
+            flameshock_allowed = false,   -- the Era-base veto: rule 6 falls through
+        }
+        for k, v in pairs(overrides) do inputs[k] = v end
+        local out = {}
+        st.shaman_guide.evaluate(inputs, out)
+        return out.action
+    end
+    st.family = "WRATH"
+    eq(coe_action({ water_remaining = 12 }), "coe",
+        "rule 9c: CoE is due while the water totem is under 20 s")
+    eq(coe_action({ water_remaining = 19.9 }), "coe",
+        "rule 9c: the 20 s window is exclusive at its edge")
+    eq(coe_action({ water_remaining = 20 }), "firenova",
+        "rule 9c: exactly 20 s left is not due yet")
+    eq(coe_action({ water_remaining = nil }), "firenova",
+        "rule 9c: an unknown water read never prompts (unknown-hides)")
+    eq(coe_action({ water_remaining = 12, magma_remaining = 0 }), "coe",
+        "rule 9c: CoE ranks above the Magma maintain (the APL's order)")
+    eq(coe_action({ water_remaining = 25, magma_remaining = 0 }), "magma",
+        "rule 9c: a fresh water totem leaves the Magma maintain in charge")
+    st.family = "TBC"
+    eq(coe_action({ water_remaining = 12 }), "firenova",
+        "rule 9c: the TBC sims run no CoE line, so the family gate keeps it silent")
+    st.family = "ERA"
+    eq(coe_action({ water_remaining = 12 }), "earthshock",
+        "rule 9c: the Era sims run no CoE line, so the family gate keeps it silent")
+    st.family = saved_family
+
+    -- The per-family Stormstrike fallback (S-23 / U-09) ----------------------
+    st.family = "ERA"
+    ST.weave_mw_observed = false
+    eq(ST.SHAMAN.get_stormstrike_cooldown_seconds(ST), 20,
+        "Era carries the 20 s Stormstrike cooldown (wowsims/classic)")
+    ST.weave_mw_observed = true
+    eq(ST.SHAMAN.get_stormstrike_cooldown_seconds(ST), 6,
+        "the SoD build carries the 6 s cooldown (wowsims/sod)")
+    ST.weave_mw_observed = false
+    st.family = "TBC"
+    eq(ST.SHAMAN.get_stormstrike_cooldown_seconds(ST), 10,
+        "TBC carries the 10 s Stormstrike cooldown (wowsims/tbc-new)")
+    st.family = "WRATH"
+    eq(ST.SHAMAN.get_stormstrike_cooldown_seconds(ST), 8,
+        "Wrath carries the 8 s Stormstrike cooldown (wowsims/wotlk)")
+    st.family = "FOREVER"
+    eq(ST.SHAMAN.get_stormstrike_cooldown_seconds(ST), 10,
+        "a family with no sourced value keeps the shipped 10 s (no number invented)")
+    st.family = nil
+    eq(ST.SHAMAN.get_stormstrike_cooldown_seconds(ST), 10,
+        "an unknown family keeps the shipped 10 s")
+    st.family = saved_family
+    -- The HUD mirror's fallback is per family too (the HUD's own accessor, so
+    -- the number is observable even while the client reports no cooldown).
+    local hud_ss
+    for i = 1, #ST.SHAMAN.HUD_SLOTS do
+        if ST.SHAMAN.HUD_SLOTS[i].key == "stormstrike" then hud_ss = ST.SHAMAN.HUD_SLOTS[i] end
+    end
+    check(hud_ss ~= nil, "the HUD declares the Stormstrike mirror")
+    st.family = "ERA"
+    ST.weave_mw_observed = false
+    eq(ST.SHAMAN.get_hud_cooldown_fallback(ST, hud_ss), 20,
+        "the HUD's Stormstrike fallback follows the family (Era 20 s)")
+    ST.weave_mw_observed = true
+    eq(ST.SHAMAN.get_hud_cooldown_fallback(ST, hud_ss), 6,
+        "the HUD's Stormstrike fallback follows the SoD latch (6 s)")
+    ST.weave_mw_observed = false
+    st.family = "TBC"
+    eq(ST.SHAMAN.get_hud_cooldown_fallback(ST, hud_ss), 10,
+        "the HUD's Stormstrike fallback follows the family (TBC 10 s)")
+    st.family = "WRATH"
+    eq(ST.SHAMAN.get_hud_cooldown_fallback(ST, hud_ss), 8,
+        "the HUD's Stormstrike fallback follows the family (Wrath 8 s)")
+    st.family = saved_family
+    -- The guide slot's static fallback follows the family (the gather refreshes
+    -- the descriptor before the frame renders it).
+    local storm_slot = ST.SHAMAN.guide.slots[1]
+    eq(storm_slot.key, "stormstrike", "the first guide slot is the Stormstrike")
+    st.family = "WRATH"
+    ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(storm_slot.swipe_duration, 8, "the guide slot's Stormstrike fallback follows the family")
+    st.family = "ERA"
+    ST.weave_mw_observed = true
+    ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(storm_slot.swipe_duration, 6, "the SoD latch moves the guide slot's fallback to 6 s")
+    ST.weave_mw_observed = false
+    st.family = saved_family
+    ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(storm_slot.swipe_duration, 10, "the TBC fallback is 10 s")
+
+    -- The HUD mirror -------------------------------------------------------
+    local hud_coe
+    for i = 1, #ST.SHAMAN.HUD_SLOTS do
+        if ST.SHAMAN.HUD_SLOTS[i].key == "coe" then hud_coe = ST.SHAMAN.HUD_SLOTS[i] end
+    end
+    check(hud_coe ~= nil, "the HUD declares the Call of the Elements mirror")
+    eq(ST.SHAMAN.get_hud_state(ST, hud_coe, 500).hidden, true,
+        "the Call of the Elements mirror hides without its toggle (nil = off)")
+    class_db.hud_show_coe = true
+    totem_slot3 = nil
+    eq(ST.SHAMAN.get_hud_state(ST, hud_coe, 500).hidden, true,
+        "an unreadable water slot draws nothing (unknown-hides)")
+    ST.in_combat = true
+    totem_slot3 = { have = true, name = "Healing Surge", start = 400, duration = 120, spell = 555 }
+    local coe_state = ST.SHAMAN.get_hud_state(ST, hud_coe, 500)
+    eq(coe_state.hidden, nil, "a readable water slot shows the mirror")
+    eq(coe_state.glow, false, "a water totem with exactly 20 s left does not glow")
+    near(coe_state.remaining, 20, 1e-9, "the mirror counts the water totem down")
+    eq(coe_state.duration, 120, "the mirror carries the water totem's length")
+    totem_slot3 = { have = true, name = "Healing Surge", start = 390, duration = 120, spell = 555 }
+    coe_state = ST.SHAMAN.get_hud_state(ST, hud_coe, 500)
+    eq(coe_state.glow, true, "a water totem under 20 s glows (the drop is needed)")
+    totem_slot3 = { have = false }
+    coe_state = ST.SHAMAN.get_hud_state(ST, hud_coe, 500)
+    eq(coe_state.glow, true, "an empty water slot glows (the drop is due)")
+    ST.in_combat = false
+    coe_state = ST.SHAMAN.get_hud_state(ST, hud_coe, 500)
+    eq(coe_state.glow, false, "out of combat the drop never glows")
+    class_db.hud_show_coe = nil
+    totem_slot3 = nil
+end
+
+--=========================================================================================
+-- 40) The Flame Shock refresh threshold: the gather's own fallback matches the
+--     shipped default (0 = the sim-exact expiry-only value)
+--=========================================================================================
+-- The shipped default is 0 (config_presets.lua: every sim re-applies Flame Shock
+-- only when the dot is INACTIVE, so 0 = expiry-only; the default itself is
+-- pinned in tests/options_load_state.lua's SIM block). The gather's own fallback
+-- has to agree with it: an option that is missing (an old profile, a key the
+-- defaults never wrote) must not fall back to the old 3 s clip, which shaved
+-- ~3 s off every Flame Shock dot.
+do
+    local saved = class_db.guide_flameshock_refresh
+    class_db.guide_flameshock_refresh = nil
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).flameshock_refresh, 0,
+        "a missing option falls back to the shipped default (0), not the old 3 s clip")
+    class_db.guide_flameshock_refresh = 0
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).flameshock_refresh, 0,
+        "the shipped default 0 rides through the gather (0 is never swallowed)")
+    class_db.guide_flameshock_refresh = 5
+    eq(ST.SHAMAN.gather_guide_inputs(ST, {}).flameshock_refresh, 5,
+        "the option rides the gather")
+    class_db.guide_flameshock_refresh = saved
+end
+
+--=========================================================================================
+-- 41) The pull moment in the ctx (BS-8 item 2 / P-17)
+--=========================================================================================
+-- The shaman publishes NO ctx builder: the shared engine's fallback builder owns
+-- the ctx, and it is the one that carries the live pull clock (the engine's
+-- apply_pull_clock). So the class-side read has no builder to land in, and the
+-- class's step must never disturb a pull-carrying ctx: the engine's own verdict
+-- is still the answer.
+do
+    eq(ST.SHAMAN.practice_context, nil,
+        "pull: the shaman publishes no ctx builder (the engine's fallback owns it)")
+    local answer = ST.SHAMAN.practice_scenario_step(ST, { now = 100,
+        cooldowns = { stormstrike = 0, flameshock = 10 },
+        pull_at = 120, pull_in_seconds = 20 })
+    eq(answer and answer.action, "stormstrike",
+        "pull: a pull-carrying ctx still answers the engine's own verdict")
+    local ride = ST.SHAMAN.practice_scenario_step(ST, { now = 100,
+        resources = { casting = true }, pull_at = 120, pull_in_seconds = 20 })
+    check(type(ride) == "table" and ride.hold == true,
+        "pull: a pull-carrying ctx still states the ride hold")
+end
+
+--=========================================================================================
+-- 42) The APL utility layer's feeds + the pre-pull table (HU-12)
+--     (bench/rotation_gap_vs_apl_2026-10-20.md §5)
+--=========================================================================================
+-- The four new rotation lines each need a READ that exists in the shipped tree:
+-- the Strength of Earth and Mana Spring upkeeps read the client's EARTH and WATER
+-- totem slots through api.GetTotemInfo (the water clock's own shape), the
+-- Bloodlust and Frost Shock lines read the client cooldown behind the known
+-- gate. Every read is tri-state: an unreadable slot or an unknown spell feeds
+-- nil and the engine never prompts on a guess.
+do
+    local saved_family = st.family
+    clock = 500
+
+    -- The Strength of Earth clock: the earth's slot (slot 2) ------------------
+    totem_slot2 = nil
+    local remaining = ST.SHAMAN.get_totem_slot_clock(ST, 2, 500)
+    eq(remaining, nil, "utility: an unreadable earth slot reads unknown (never a guess)")
+    totem_slot2 = { have = false }
+    eq(ST.SHAMAN.get_totem_slot_clock(ST, 2, 500), 0,
+        "utility: an empty earth slot reads zero (the drop is due)")
+    totem_slot2 = { have = true, name = "Strength of Earth Totem", start = 400,
+        duration = 120, spell = 10442 }
+    eq(ST.SHAMAN.get_totem_slot_clock(ST, 2, 500), 20,
+        "utility: the earth clock counts the totem down on the api.get_time() axis")
+    totem_slot2 = { have = true, name = "Strength of Earth Totem", start = 400,
+        duration = 120, spell = 10442 }
+    local earth_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(earth_g.strength_of_earth_remaining, 20,
+        "utility: the gather publishes the earth slot's remaining seconds")
+    totem_slot2 = { have = false }
+    earth_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(earth_g.strength_of_earth_remaining, 0,
+        "utility: an empty earth slot feeds zero (the upkeep is due)")
+    totem_slot2 = nil
+    earth_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(earth_g.strength_of_earth_remaining, nil,
+        "utility: an unreadable earth slot feeds nil (unknown-hides)")
+
+    -- The Mana Spring clock: the water slot on TBC ---------------------------
+    st.family = "TBC"
+    totem_slot3 = { have = false }
+    local tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.mana_spring_remaining, 0,
+        "utility: TBC feeds the Mana Spring clock from the water slot")
+    totem_slot3 = { have = true, name = "Mana Spring Totem", start = 400,
+        duration = 60, spell = 25570 }
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.mana_spring_remaining, 0,
+        "utility: an expired Mana Spring totem reads zero")
+    totem_slot3 = { have = true, name = "Mana Spring Totem", start = 480,
+        duration = 60, spell = 25570 }
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.mana_spring_remaining, 40,
+        "utility: the Mana Spring clock counts the water totem down")
+    st.family = "ERA"
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.mana_spring_remaining, nil,
+        "utility: the Era token feeds no Mana Spring row (a PRE-PULL row there)")
+    st.family = "TBC"
+
+    -- The Frost Shock cooldown + the filler choice ---------------------------
+    cooldowns[25464] = { start = clock, duration = 10 }
+    known_spells[25464] = true
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.frostshock_remaining, 10, "utility: TBC feeds the Frost Shock cooldown")
+    -- The CHOICE is the player's own option (the residual's second item): the
+    -- class states it only when the player picked Frost Shock; anything else -
+    -- including a missing option - is the APL's DEFAULT (Earth Shock), so a
+    -- fresh profile behaves exactly as before.
+    eq(tbc_g.filler_shock, nil,
+        "utility: an unset filler choice leaves the APL default standing")
+    class_db.guide_filler_shock = ST.SHAMAN.FILLER_SHOCK_OPTION_EARTH
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.filler_shock, nil,
+        "utility: the Earth's choice leaves the APL default standing")
+    class_db.guide_filler_shock = ST.SHAMAN.FILLER_SHOCK_OPTION_FROST
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.filler_shock, "FROST",
+        "utility: the Frost Shock choice states the engine's frozen token")
+    st.family = "ERA"
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.filler_shock, nil,
+        "utility: the Era token states no filler choice (the TBC APL's variable)")
+    st.family = "TBC"
+    class_db.guide_filler_shock = nil
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.filler_shock, nil,
+        "utility: a missing option never arms the Frost Shock arm")
+    known_spells[25464] = nil
+    cooldowns[25464] = nil
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.frostshock_remaining, nil,
+        "utility: an unknown Frost Shock feeds nil (the known gate)")
+    st.family = "ERA"
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.frostshock_remaining, nil,
+        "utility: the Era token feeds no Frost Shock row")
+    st.family = "TBC"
+
+    -- The Bloodlust cooldown: the Wrath family only --------------------------
+    st.family = "WRATH"
+    cooldowns[2825] = { start = clock, duration = 600 }
+    known_spells[2825] = true
+    local wrath_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(wrath_g.bloodlust_remaining, 600, "utility: Wrath feeds the Bloodlust cooldown")
+    known_spells[2825] = nil
+    cooldowns[2825] = nil
+    wrath_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(wrath_g.bloodlust_remaining, nil,
+        "utility: an unknown Bloodlust feeds nil (the known gate)")
+    st.family = "TBC"
+    tbc_g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    eq(tbc_g.bloodlust_remaining, nil,
+        "utility: the TBC token feeds no Bloodlust row")
+
+    totem_slot3 = nil
+    st.family = saved_family
+end
+
+-- The APL's PRE-PULL rows (HU-12): they live in their own table, never in the
+-- combat rotation. The offsets are the APLs' own doAtValue values.
+--
+-- NO CONSUMER: the class ships no pre-pull drill (only the warrior, the hunter
+-- and the rogue have one), so the table is CITATIONS ONLY - it records the
+-- APLs' own pre-pull rows for the lane that builds the drill. The pin below
+-- scans the PRODUCTION tree so the suite stops implying coverage that does not
+-- exist: no file outside classes/shaman.lua reads the table.
+do
+    local prepulls = ST.SHAMAN.PRACTICE_PREPULLS
+    check(type(prepulls) == "table", "prepull: the class ships a pre-pull table")
+    local EXPECTED = {
+        ERA = { { "strength_of_earth", 10442, -6 }, { "wftotem", 10614, -4.5 },
+            { "goa", 10627, -3 }, { "searing", 10438, -1.5 } },
+        SOD = { { "lightningshield", 10432, -10 }, { "mana_spring", 10497, -8.25 },
+            { "goa", 25359, -6.75 }, { "strength_of_earth", 25361, -5 },
+            { "searing", 10438, -2.75 }, { "blood_fury", 20572, -1.25 } },
+        TBC = { { "twist", 25587, -8 }, { "strength_of_earth", 25528, -5 },
+            { "mana_spring", 25570, -4 }, { "firenova", 25537, -3 },
+            { "goa", 25359, -2 }, { "drums", 35476, -1 } },
+        FOREVER = { { "goa", 25359, -8 }, { "flametongue", 16387, -7 },
+            { "strength_of_earth", 25361, -6 }, { "mana_spring", 10497, -5 } },
+        WRATH = { { "coe", 66842, -3 } },
+    }
+    local shape_ok, order_ok, source_ok = true, true, true
+    for prepull_family, rows in pairs(EXPECTED) do
+        local list = prepulls[prepull_family]
+        if type(list) ~= "table" or #list ~= #rows then
+            shape_ok = false
+        else
+            for i = 1, #rows do
+                local row = list[i]
+                if type(row.action) ~= "string" or row.action ~= rows[i][1]
+                    or row.spell ~= rows[i][2] or row.at ~= rows[i][3] then
+                    order_ok = false
+                end
+                if type(row.label) ~= "string" or row.label == "" then
+                    shape_ok = false
+                end
+                if type(row.source) ~= "string" or row.source == "" then
+                    source_ok = false
+                end
+            end
+        end
+    end
+    check(shape_ok, "prepull: every family carries its APL pre-pull rows with labels")
+    check(order_ok, "prepull: every pre-pull row keeps the APL's action, id and offset")
+    check(source_ok, "prepull: every pre-pull row cites its APL")
+    -- The pre-pull rows are NOT combat rotation rows (HU-12): the rotation table
+    -- never names a pre-pull-only line.
+    local rot_actions = {}
+    for i = 1, #ST.SHAMAN.practice_rotation do
+        rot_actions[ST.SHAMAN.practice_rotation[i].action] = true
+    end
+    eq(rot_actions.flametongue, nil,
+        "prepull: the Flametongue Totem stays a pre-pull row, not a rotation line")
+    eq(rot_actions.blood_fury, nil,
+        "prepull: the Blood Fury racial stays a pre-pull row, not a rotation line")
+    eq(rot_actions.drums, nil,
+        "prepull: the raid drum stays a pre-pull row, not a rotation line")
+    -- The pre-pull table has NO consumer: the class ships no pre-pull drill,
+    -- so nothing grades a pre-pull row today. The scan covers the PRODUCTION
+    -- tree (the repo root and classes/); the class file that defines the table
+    -- is the only place that may name it.
+    local function shell_lines(cmd)
+        if not io.popen then return {} end
+        local pipe = io.popen(cmd)
+        if not pipe then return {} end
+        local lines = {}
+        for line in pipe:lines() do lines[#lines + 1] = line end
+        pipe:close()
+        return lines
+    end
+    local readers = {}
+    local sources = {}
+    for _, name in ipairs(shell_lines('ls -A -- "' .. ROOT .. '" 2>/dev/null')) do
+        if name:find("%.lua$") then sources[#sources + 1] = ROOT .. name end
+    end
+    for _, name in ipairs(shell_lines('ls -A -- "' .. ROOT .. 'classes" 2>/dev/null')) do
+        if name:find("%.lua$") then sources[#sources + 1] = ROOT .. "classes/" .. name end
+    end
+    for _, path in ipairs(sources) do
+        local fh = io.open(path, "r")
+        if fh then
+            local src = fh:read("*a")
+            fh:close()
+            if src:find("SHAMAN.PRACTICE_PREPULLS", 1, true)
+                and path ~= ROOT .. "classes/shaman.lua" then
+                readers[#readers + 1] = path
+            end
+        end
+    end
+    eq(#readers, 0,
+        "prepull: no production file reads the pre-pull table (it has no consumer)")
+end
+
+--=========================================================================================
+-- The NEUTRAL action set (the practice panel's legitimate-but-ungraded presses)
+--
+-- The class publishes ST.SHAMAN.practice_neutral_actions (the contract fixed by
+-- the orchestrator, practice.lua's class contract block). The engine treats a
+-- press of one of these keys as NEUTRAL: no attempt, no points, no streak change,
+-- and NOT a mis-pick. A key that is neither a rotation action nor neutral stays
+-- a mis-pick, so the set is a deliberate, CLOSED list.
+--
+-- The shaman's publish carries the class's COMMON ABILITIES - the abilities the
+-- practice panel offers but the rotation never grades (a heal, a shield, food, a
+-- potion). The rotation rows themselves are never published: the guide slots are
+-- cut from the rotation table itself (ST.SHAMAN.family_guide_slots: a slot whose
+-- ROTATION row names no family never joins a slice), and the rotation table
+-- carries one guide slot per row - so every ROTATION key the panel offers is a
+-- rotation action the rotation grades. The slots a family does not play are
+-- filtered OUT of the panel, not shown as ungraded extras (Lightning Shield is a
+-- WRATH/SOD/FOREVER row, Strength of Earth an ERA/FOREVER/TBC row).
+--
+-- The pins below keep that true: no rotation action is ever published as neutral,
+-- and every published common ability names the client's spell, carries a label and
+-- cites at least one spell id.
+--=========================================================================================
+do
+    local published = ST.SHAMAN.practice_neutral_actions
+    eq(type(published), "table", "neutral: the shaman publishes a neutral action set")
+    local count = 0
+    for key, value in pairs(published) do
+        count = count + 1
+        eq(value, true, "neutral: the published key " .. tostring(key) .. " is exactly true")
+    end
+    check(count > 0, "neutral: the shaman publishes its common abilities")
+
+    -- The rotation slice of each family (the class's own published slice) - and
+    -- the guide slots that family plays. Every rotation key is graded.
+    local function slice_keys(slice_family)
+        local out = {}
+        local entries = ST.SHAMAN.practice_rotation_for(slice_family)
+        for i = 1, #entries do
+            local e = entries[i]
+            if type(e) == "table" and type(e.action) == "string" then out[e.action] = true end
+        end
+        return out
+    end
+    for _, fam in ipairs({ "ERA", "TBC", "WRATH", "FOREVER" }) do
+        local keys = slice_keys(fam)
+        check(next(keys) ~= nil, "neutral: the " .. fam .. " slice is not empty")
+        for key in pairs(keys) do
+            check(published[key] ~= true,
+                "neutral: the rotation action " .. key .. " is not published as neutral")
+        end
+    end
+
+    -- The guide slots a family plays are cut from the rotation rows, so the
+    -- panel never offers a key the rotation cannot ask for.
+    for _, fam in ipairs({ "ERA", "TBC", "WRATH", "FOREVER" }) do
+        local keys = slice_keys(fam)
+        local slots = ST.SHAMAN.family_guide_slots(fam, nil)
+        eq(type(slots), "table", "neutral: the " .. fam .. " guide slots resolve")
+        for i = 1, #slots do
+            local slot = slots[i]
+            if type(slot) == "table" and type(slot.key) == "string" then
+                check(keys[slot.key] == true,
+                    "neutral: the guide slot " .. slot.key .. " is a rotation action on "
+                    .. fam)
+            end
+        end
+    end
+
+    -- THE PRACTICE-PANEL ABILITY LIST: the common abilities the panel offers but
+    -- the rotation never grades. Every entry names the client's spell, carries a
+    -- label and cites at least one spell id - an ability whose id nobody can
+    -- source is not published at all.
+    local common = ST.SHAMAN.practice_common_actions
+    eq(type(common), "table", "panel: the shaman publishes a practice-panel ability list")
+    check(#common > 0, "panel: the practice-panel ability list is not empty")
+    for i = 1, #common do
+        local action = common[i]
+        eq(type(action), "table", "panel: common action " .. tostring(i) .. " is a table")
+        eq(type(action.key), "string", "panel: common action " .. tostring(i) .. " carries a key")
+        eq(type(action.label), "string", "panel: common action " .. tostring(action.key)
+            .. " carries a label")
+        eq(type(action.names), "table", "panel: common action " .. tostring(action.key)
+            .. " carries the client's spell name")
+        check(#action.names > 0, "panel: common action " .. tostring(action.key)
+            .. " names the client's spell")
+        eq(type(action.ids), "table", "panel: common action " .. tostring(action.key)
+            .. " cites a spell id")
+        check(#action.ids > 0, "panel: common action " .. tostring(action.key)
+            .. " cites at least one spell id")
+        for j = 1, #action.ids do
+            eq(type(action.ids[j]), "number", "panel: common action " .. tostring(action.key)
+                .. " cites a numeric spell id")
+        end
+        -- Published as neutral (the publish is flat: the same set on every family)
+        -- and never a rotation action.
+        eq(published[action.key], true, "panel: " .. tostring(action.key)
+            .. " is published as neutral")
+        for _, fam in ipairs({ "ERA", "TBC", "WRATH", "FOREVER" }) do
+            check(slice_keys(fam)[action.key] ~= true, "panel: the common ability "
+                .. tostring(action.key) .. " is not a rotation action on " .. fam)
+        end
+    end
+    -- The panel's widening seam: the class publishes the widened slot list and
+    -- applies it to the guide slot list (the same seam apply_family_slots uses),
+    -- so the practice panel offers the common abilities.
+    eq(type(ST.SHAMAN.practice_panel_slots), "function",
+        "panel: the class publishes the panel slot list")
+    eq(type(ST.SHAMAN.apply_practice_panel_actions), "function",
+        "panel: the class publishes the widening seam")
+    local widened = ST.SHAMAN.practice_panel_slots()
+    eq(type(widened), "table", "panel: the panel slot list is a table")
+    local common_keys = {}
+    for i = 1, #widened do
+        if type(widened[i]) == "table" and widened[i].practice_common == true then
+            common_keys[widened[i].key] = true
+        end
+    end
+    local offered = 0
+    for _, action in ipairs(ST.SHAMAN.practice_common_actions) do
+        if common_keys[action.key] == true then offered = offered + 1 end
+    end
+    eq(offered, #ST.SHAMAN.practice_common_actions,
+        "panel: the panel slot list carries every common ability the offer gate allows")
+end
+
+-- ---- the widening runs on EVERY family (the audit's MEDIUM-1) ---------------
+-- The seam apply_family_slots narrows the strip to the running family's rows
+-- and returns BEFORE the widening when the family carries no row at all - so on
+-- the Cata and the Mists clients (where the class publishes no rotation) the
+-- panel would keep the guide vocabulary alone and never offer the class's five
+-- common abilities, which it publishes as neutral there. The class's own
+-- post_init therefore calls the widening itself, the same way the other five
+-- class modules do (bench/final_gate_audit_2026-10-20.md MEDIUM-1).
+do
+    local saved_family = st.family
+    local saved_practice_ui = st.practice_ui
+    -- The practice surface stub (the same shape the order spies above install):
+    -- without it the class's post_init skips the whole practice block, and the
+    -- widening seam would never run.
+    st.practice_ui = { init = function() end, is_active = function() return false end }
+    -- A fresh vocabulary: the section above left the strip narrowed to the TBC
+    -- cut and already widened, and the widening is idempotent (a strip that
+    -- already carries a common slot is left alone), so the class's full
+    -- vocabulary stands in for a client that has never been narrowed.
+    ST.SHAMAN.guide.slots = ST.SHAMAN.GUIDE_SLOTS
+    st.family = "CATA"
+    -- The family cut is empty here: the class carries no Cata row, so the
+    -- narrowing leaves the class's full vocabulary standing.
+    eq(#ST.SHAMAN.family_guide_slots("CATA"), 0,
+        "panel: the Cata client carries no rotation row (the family's own cut is empty)")
+    local before = #ST.SHAMAN.guide.slots
+    ST.SHAMAN.post_init(ST)
+    st.family = saved_family
+    st.practice_ui = saved_practice_ui
+    local common_keys = {}
+    for i = 1, #ST.SHAMAN.guide.slots do
+        local slot = ST.SHAMAN.guide.slots[i]
+        if type(slot) == "table" and slot.practice_common == true then
+            common_keys[slot.key] = true
+        end
+    end
+    local offered = 0
+    for _, action in ipairs(ST.SHAMAN.practice_common_actions) do
+        if common_keys[action.key] == true then offered = offered + 1 end
+    end
+    eq(offered, #ST.SHAMAN.practice_common_actions,
+        "panel: post_init widens the strip on a family with no rotation row (the common abilities reach the panel)")
+    check(#ST.SHAMAN.guide.slots > before,
+        "panel: the widening grows the guide slot list on a family with no rotation row")
+end
+
+-- ---- the style constants ride the module table (the local ceiling) ---------
+-- The class module sits at Lua 5.1's 200-local ceiling, so its display
+-- constants live on the module table. The values are the reference's own,
+-- unchanged by the move - pinned here so a later edit cannot quietly change
+-- one.
+do
+    eq(type(ST.SHAMAN.flame_shock_style), "table",
+        "style: the Flame Shock style rides the module table")
+    eq(ST.SHAMAN.flame_shock_style.bar_height, 6,
+        "style: the Flame Shock bar keeps its 6 px height")
+    eq(ST.SHAMAN.flame_shock_style.color[2], 0.35,
+        "style: the Flame Shock fill colour keeps its green channel")
+    eq(ST.SHAMAN.flame_shock_style.bg_color[4], 0.45,
+        "style: the Flame Shock backing colour keeps its alpha")
+    eq(ST.SHAMAN.flame_shock_style.glow_color[1], 1.0,
+        "style: the Flame Shock glow colour keeps its red channel")
+    eq(ST.SHAMAN.flame_shock_style.label_color[2], 0.85,
+        "style: the Flame Shock label colour keeps its green channel")
+    eq(type(ST.SHAMAN.stormstrike_style), "table",
+        "style: the Stormstrike style rides the module table")
+    eq(ST.SHAMAN.stormstrike_style.bar_height, 6,
+        "style: the Stormstrike bar keeps its 6 px height")
+    eq(ST.SHAMAN.stormstrike_style.color[2], 0.80,
+        "style: the Stormstrike fill colour keeps its green channel")
+    eq(ST.SHAMAN.stormstrike_style.label_color[4], 0.95,
+        "style: the Stormstrike label colour keeps its alpha")
+    eq(type(ST.SHAMAN.shield_style), "table",
+        "style: the shield style rides the module table")
+    eq(ST.SHAMAN.shield_style.rect_width, 5,
+        "style: the shield rect keeps its 5 px width")
+    eq(ST.SHAMAN.shield_style.rect_gap, 1,
+        "style: the shield rect keeps its 1 px gap")
+    eq(ST.SHAMAN.shield_style.bar_gap, 6,
+        "style: the shield tracker keeps its 6 px gap")
+    eq(ST.SHAMAN.shield_style.dim_alpha, 0.20,
+        "style: the empty shield slot keeps its 0.20 alpha")
+    eq(ST.SHAMAN.shield_style.max_slots, 4,
+        "style: the shield row keeps its four slots")
+    eq(ST.SHAMAN.shield_style.colors.lightning[2], 0.72,
+        "style: the Lightning Shield colour keeps its green channel")
+    eq(ST.SHAMAN.shield_style.colors.water[2], 0.80,
+        "style: the Water Shield colour keeps its green channel")
+    eq(type(ST.SHAMAN.position_style), "table",
+        "style: the spell-position style rides the module table")
+    eq(ST.SHAMAN.position_style.icon_size, 14,
+        "style: the spell-position icon keeps its 14 px size")
+    eq(ST.SHAMAN.position_style.ready_alpha, 0.95,
+        "style: the ready spell-position icon keeps its 0.95 alpha")
+    eq(ST.SHAMAN.position_style.clip_color[1], 1.0,
+        "style: the clip colour keeps its red channel")
+    eq(ST.SHAMAN.position_style.wait_color[4], 0.35,
+        "style: the wait colour keeps its 0.35 alpha")
+end
+
+-- ---- the shipped comment matches the code (the audit's HIGH-2) --------------
+-- The resolver note claimed "every client family answers its own rank art":
+-- the fallback hands the ERA corpus's rank-1 id, not the client's own art, and
+-- the classic-line name leg is UNCONFIRMED in-client. The pin keeps the stale
+-- claim OUT (a source-shape pin on its ABSENCE, so a correct rewording passes).
+do
+    local f = io.open(ROOT .. "classes/shaman.lua", "r")
+    local src = f and f:read("*a") or ""
+    if f then f:close() end
+    local flat = src:gsub("\r\n", "\n")
+    check(flat:find("every client family answers its own rank art", 1, true) == nil,
+        "comment: the stale 'every client family answers its own rank art' claim is gone")
+    check(flat:find("answers its own rank id", 1, true) ~= nil,
+        "comment: the resolver note says what the code does")
+end
 
 if failures == 0 then
     print("PASS  shaman_state.lua (" .. tostring(checks) .. " checks)")

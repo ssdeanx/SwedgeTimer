@@ -1,1 +1,58 @@
 * text=auto eol=lf
+desks/
+bench/
+Media/
+
+# The attributes file itself.
+/.gitattributes export-ignore
+
+# Workshop, journals, notes, audit output.
+/AGENTS.md export-ignore
+/CAIRN.md export-ignore
+/hands-up.md export-ignore
+/MEMORY.md export-ignore
+/workshop.md export-ignore
+/bench/** export-ignore
+/desks/** export-ignore
+/docs/** export-ignore
+
+# A stale full copy of the add-on with its own TacoTip.toc, kept in-repo but
+# never packaged.
+/OLD/** export-ignore
+
+# In-game WoWUnit suite and the release verifier itself.
+/Tests/** export-ignore
+/Tools/** export-ignore
+
+# The Extras companion is its own CurseForge project, shipped as its own
+# package; a TacoTip archive must not contain a second .toc. The Extras
+# package's own rules live in `TacoTip_Extras/.gitattributes`; the two are
+# read in different scopes (a TacoTip archive is built from the repository
+# root, an Extras archive from the subtree), so they do not fight.
+/TacoTip_Extras/** export-ignore
+
+# Library `.toc` metadata. TacoTip.toc loads every library by explicit path,
+# so these would be extra .toc files with nothing to load.
+/Libs/LibDetours-1.0/LibDetours-1.0.toc export-ignore
+/Libs/LibStub/LibStub.toc export-ignore
+
+* text=auto eol=lf
+
+# Screenshots and marketing images. `tt.tga` is referenced by `## IconTexture`
+# in TacoTip.toc and stays.
+/*.png export-ignore
+
+# Dot files: editor, agent and tooling state.
+/.agents/** export-ignore
+/.codegraph export-ignore
+/.cortexkit/** export-ignore
+/.directory export-ignore
+/.github/** export-ignore
+/.gitignore export-ignore
+/.luacheckrc export-ignore
+/.luarc.json export-ignore
+/.omg/** export-ignore
+/.omo/** export-ignore
+/.opencode/** export-ignore
+/.vscode/** export-ignore
+/docs/swedge/** export-ignore

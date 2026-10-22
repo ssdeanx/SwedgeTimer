@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T16:40:00Z",
+  "run_id": "class-neutral-family-coverage-2026-10-20",
+  "agent_name": "class-neutral-family-coverage",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Deriving the offer list from the class's OWN published set (one gate, six classes) made the offer list and the neutral set structurally unable to disagree, and it gave the pin teeth: the four family-scoped classes have families (Cata / Mists) with no bucket, so a broken gate is a killable mutant. The Cata / Mists spell truth came from the clients' own expansion spell pages (the warcraftdb expansion domains), which is what let the per-class answer be cited rather than guessed.",
+    "what_was_hard": "The scope discipline bit: tests/warrior_state.lua (a sibling lane's file) pins 'only a client family publishes a bucket', so the warrior could not publish a CATA / MISTS bucket without touching a file outside this lane's scope. The Cata / Mists answer therefore became 'a bucket follows the rotation' (the four family-scoped classes exclude; the two flat publishes cover) - the honest per-class split the class suites' own contract already implied. The class files' chunk-local budget (the warrior is at 199 of Lua 5.1's 200) forced the helpers onto the class table instead of file-scope locals.",
+    "skill_gap": "A citation that contains 'db.' (warcraftdb.com) trips the options suite's source scan for db keys in the class files - the class files must cite the site without the domain, or the options lane's scan has to learn to skip URLs."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -38,6 +38,9 @@ local api = st.api
 st.hunter_ui = st.hunter_ui or {}
 local ui = st.hunter_ui
 
+-- Error-isolation labels for the per-subfeature guard sites registered in ui.update.
+st.guard.label("hunter_ui", "Hunter UI")
+
 --=========================================================================================
 -- Constants (reference values in the comments)
 --=========================================================================================
@@ -45,6 +48,17 @@ local CAST_BAR_GAP = 2                     -- HUNTER_CAST_BAR_GAP, Constants:162
 local MELEE_ANCHOR_GAP = 2                 -- reference melee/OH stack gap, UI.lua:36-37
 local RANGE_HELPER_GAP = 3                 -- HUNTER_RANGE_HELPER_GAP, ClassMods.lua:5533
 local RANGE_HELPER_WIDTH = 7               -- HUNTER_RANGE_HELPER_WIDTH, Constants:163
+-- Sweet-spot band, expressed in exact yards (R3, 2026-10-21). The reference's index-3
+-- CheckInteractDistance probe is the trade band at ~10 yd ("just outside melee"), so the
+-- band is 5 < yards <= 10. 5 is main.lua's RF_MELEE_RANGE (the library's 5 yd item
+-- ladder; see main.lua's range section) and the lower bound keeps a 4 yd reading with a
+-- dead melee spell probe from being labelled "sweet". CheckInteractDistance is gone
+-- from this file (protected on TBC Anniversary; compat exposes no wrapper at all).
+-- Blizzard calls it only from secure popup code (UnitPopupSharedUtils.lua:194,
+-- classic_anniversary); the addon block is the 2026-10-21 in-client
+-- ADDON_ACTION_BLOCKED log, not a documented restriction.
+local RANGE_HELPER_MELEE_RANGE = 5
+local RANGE_HELPER_SWEET_SPOT = 10
 local RAPID_FIRE_SPELL_ID = 3045           -- RAPID_FIRE_SPELL_ID, ClassMods.lua:5880
 local RAPID_FIRE_FALLBACK_DURATION = 15    -- RAPID_FIRE_DURATION, ClassMods.lua:5882
 local RAPID_FIRE_BAR_HEIGHT = 4            -- HUNTER_RAPID_FIRE_BAR_HEIGHT, Constants:167
@@ -105,6 +119,15 @@ local BADGE_GLOW_COLOR = {1, 0.85, 0, 0.35}
 local CAST_ZONE_SAFE = {0.2, 0.78, 0.25, 0.4}
 local CAST_ZONE_UNSAFE = {1, 0, 0, 0.4}
 local CAST_ZONE_MARKER_WIDTH = 3            -- the reference's threshold marker (UI.lua:834)
+-- Target-of-target warning (H1, bench/competitor_gaps_2026-10-19.md §Hunter): HST's
+-- "target warning state ... when your target's target is you", as a red label above
+-- the cast bar. Option-gated nil = off (hunter_target_warning_enabled strictly true
+-- shows it; the options pass wires the default); an unknown state hides, so the label
+-- only ever shows on an explicit true from ST.HUNTER.get_target_warning.
+local TARGET_WARNING_TEXT = ">> TARGETING YOU <<"
+local TARGET_WARNING_COLOR = {1, 0.15, 0.15, 1}
+local TARGET_WARNING_GAP = 4
+local TARGET_WARNING_TEXT_SIZE = 12
 
 --=========================================================================================
 -- Helpers
@@ -145,11 +168,18 @@ local function ranged_bar_ready(self)
     return self.ranged ~= nil and self:bar_is_enabled("ranged") == true
 end
 
--- Resolve a spell id to the running client's localized name, with the id as fallback
--- (IsSpellInRange and aura scans accept either; a client that knows the spell answers
--- the name form).
+-- Resolve a spell id to the running client's token for range probes: the
+-- localized name on TBC (the state APIs take names, never bare ids - operator
+-- client fact; docs/hunter-wa.json proves the id->name leg with
+-- GetSpellInfo(75/2973/2974) range checks), the name with the id as fallback
+-- everywhere else (IsSpellInRange and aura scans accept either; a client that
+-- knows the spell answers the name form). Nil on TBC while the spell data has
+-- not answered (unknown hides - probe_in_range already nil-guards).
 local function resolve_spell(spell_id)
     local name = api.GetSpellInfo(spell_id)
+    if st.family == "TBC" then
+        return name, name
+    end
     return name or spell_id, name
 end
 
@@ -199,13 +229,15 @@ local function create_cast_bar(ranged_frame, texture, font_path, db_hand)
     frame.latency:Hide()
 
     frame.text = frame:CreateFontString(nil, "OVERLAY")
+    -- The font goes on BEFORE the first SetText: a FontString with no font throws
+    -- "Font not set" on a real client. The chain (the LSM path, then
+    -- STANDARD_TEXT_FONT, then the classic client font) never throws and always
+    -- leaves a font that exists.
+    st.utils.apply_font(frame.text, font_path, db_hand.text_size or 12, "")
     frame.text:SetPoint("CENTER", frame, "CENTER", 0, 0)
     frame.text:SetTextColor(1, 1, 1, 1)
     frame.text:SetShadowColor(0, 0, 0, 1)
     frame.text:SetShadowOffset(1, -1)
-    if font_path then
-        frame.text:SetFont(font_path, db_hand.text_size or 12, "")
-    end
 
     frame:Hide()
     return frame
@@ -221,7 +253,7 @@ local function create_range_helper(ranged_frame)
     return helper
 end
 
-local function create_rapid_fire_bar(ranged_frame, texture)
+local function create_rapid_fire_bar(ranged_frame, texture, font_path, text_size)
     local bar = CreateFrame("StatusBar", addon_name .. "HunterRapidFireBar", ranged_frame)
     bar:SetHeight(RAPID_FIRE_BAR_HEIGHT)
     bar:SetMinMaxValues(0, 1)
@@ -238,6 +270,9 @@ local function create_rapid_fire_bar(ranged_frame, texture)
 
     -- Whole-seconds label beside the bar (reference ClassMods.lua:5968-5974).
     bar.label = bar:CreateFontString(nil, "OVERLAY")
+    -- The label is written per frame, so it carries a font from the start: a
+    -- FontString with no font throws "Font not set" on the first SetText.
+    st.utils.apply_font(bar.label, font_path, text_size, "")
     bar.label:SetPoint("LEFT", bar, "RIGHT", 2, 0)
     bar.label:SetJustifyH("LEFT")
     bar.label:SetTextColor(unpack(RAPID_FIRE_BAR_COLOR))
@@ -285,7 +320,27 @@ local function create_cast_zone(ranged_frame)
     return zone, marker
 end
 
-local function create_badge(name, ranged_frame)
+local function create_target_warning(cast_frame, font_path)
+    -- H1 target warning label (see the TARGET_WARNING_* constants): a red text line
+    -- above the cast bar, CENTER-fallback when no frame exists to hang it on.
+    local parent = cast_frame or UIParent
+    local label = parent:CreateFontString(nil, "OVERLAY")
+    -- The font goes on BEFORE the text: a FontString with no font throws
+    -- "Font not set" on a real client (the label is written once, at creation).
+    -- The chain never throws and always leaves a font that exists.
+    st.utils.apply_font(label, font_path, TARGET_WARNING_TEXT_SIZE, "OUTLINE")
+    label:SetText(TARGET_WARNING_TEXT)
+    label:SetTextColor(unpack(TARGET_WARNING_COLOR))
+    if cast_frame then
+        label:SetPoint("BOTTOM", cast_frame, "TOP", 0, TARGET_WARNING_GAP)
+    else
+        label:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    end
+    label:Hide()
+    return label
+end
+
+local function create_badge(name, ranged_frame, font_path, text_size)
     -- The tracked-icon pattern (reference ClassMods.lua:6224-6279): icon texture with
     -- the standard inset, an additive gold glow overlay, one text. Callers place the
     -- text (BW: the countdown above the icon; Frenzy: the stack count bottom-right).
@@ -303,6 +358,9 @@ local function create_badge(name, ranged_frame)
     end
     frame.glow:Hide()
     frame.text = frame:CreateFontString(nil, "OVERLAY")
+    -- The badge text is written per frame, so it carries a font from the start: a
+    -- FontString with no font throws "Font not set" on the first SetText.
+    st.utils.apply_font(frame.text, font_path, text_size, "")
     frame.text:SetTextColor(1, 1, 1, 0.95)
     frame.text:Hide()
     frame:Hide()
@@ -312,13 +370,19 @@ end
 function ui.build(self, ranged_frame)
     local db_hand = self:get_hand_table("ranged")
     local texture = LSM:Fetch("statusbar", db_hand.bar_texture_key)
-    local font_path = LSM:Fetch("font", db_hand.text_font)
+    -- The font path is resolved through the shared chain (utils.lua): a key that no
+    -- longer resolves (the font lives in another addon's LSM registration) must not
+    -- leave a FontString without a font - the fallback chain takes over.
+    local font_path = st.utils.fetch_font_path(db_hand.text_font)
+    local text_size = db_hand.text_size or 12
 
     ui.ranged_frame = ranged_frame
     ui.cast_frame = create_cast_bar(ranged_frame, texture, font_path, db_hand)
     ui.range_helper = create_range_helper(ranged_frame)
-    ui.rapid_fire_bar = create_rapid_fire_bar(ranged_frame, texture)
+    ui.rapid_fire_bar = create_rapid_fire_bar(ranged_frame, texture, font_path, text_size)
     ui.aspect_icon = create_aspect_icon(ranged_frame)
+    -- H1 target warning (option-gated nil = off; text set once, visibility per frame).
+    ui.target_warning = create_target_warning(ui.cast_frame, font_path)
 
     -- Transition state: nil/false means "normal anchors".
     ui.melee_anchored = false
@@ -352,10 +416,10 @@ function ui.build(self, ranged_frame)
     -- case its update is a no-op). Badge text placement follows the reference: BW's
     -- countdown above the icon, Frenzy's stack count bottom-right.
     ui.cast_zone, ui.cast_zone_marker = create_cast_zone(ranged_frame)
-    ui.bw_badge = create_badge("HunterBWBadge", ranged_frame)
+    ui.bw_badge = create_badge("HunterBWBadge", ranged_frame, font_path, text_size)
     ui.bw_badge.text:SetPoint("BOTTOM", ui.bw_badge, "TOP", 0, 2)
     ui.bw_badge.text:SetJustifyH("CENTER")
-    ui.frenzy_badge = create_badge("HunterFrenzyBadge", ranged_frame)
+    ui.frenzy_badge = create_badge("HunterFrenzyBadge", ranged_frame, font_path, text_size)
     ui.frenzy_badge.text:SetPoint("BOTTOMRIGHT", ui.frenzy_badge, "BOTTOMRIGHT", -1, 1)
     ui.frenzy_badge.text:SetJustifyH("RIGHT")
 
@@ -746,6 +810,39 @@ function ui.update_cast_zone(self, db, now)
 end
 
 --=========================================================================================
+-- Target-of-target warning (H1, competitor_gaps)
+--=========================================================================================
+-- Red "targeting you" label above the cast bar. Option-gated nil = off
+-- (hunter_target_warning_enabled strictly true shows; the options pass wires the
+-- default): a disabled widget performs no unit reads at all. Unknown hides: the label
+-- only shows on an explicit true from ST.HUNTER.get_target_warning.
+function ui.update_target_warning(self, db)
+    local label = ui.target_warning
+    if not label then
+        return
+    end
+    if db.hunter_target_warning_enabled ~= true then
+        if label:IsShown() then
+            label:Hide()
+        end
+        return
+    end
+    local warn
+    if self.HUNTER and self.HUNTER.get_target_warning then
+        warn = self.HUNTER.get_target_warning(self)
+    end
+    if warn == true then
+        if not label:IsShown() then
+            label:Show()
+        end
+    else
+        if label:IsShown() then
+            label:Hide()
+        end
+    end
+end
+
+--=========================================================================================
 -- Range helper (reference ClassMods.lua:5538-5701)
 --=========================================================================================
 local function probe_in_range(token)
@@ -791,7 +888,14 @@ function ui.update_range_helper(self, db)
     if melee == nil then
         melee = probe_in_range(ui.raptor_token)
     end
-    local sweet = api.CheckInteractDistance("target", 3)
+    -- Sweet spot from exact yards, one probe per update. nil = the client cannot answer
+    -- (unknown, so it must not count as "a probe answered"); false = known to be outside
+    -- the band (the old CheckInteractDistance probe answered false there too).
+    local yards = api.UnitDistance("target")
+    local sweet = nil
+    if yards ~= nil then
+        sweet = yards > RANGE_HELPER_MELEE_RANGE and yards <= RANGE_HELPER_SWEET_SPOT
+    end
     local ranged = probe_in_range(ui.auto_shot_token)
     if melee == nil and sweet == nil and ranged == nil then
         if helper:IsShown() then
@@ -861,6 +965,24 @@ function ui.update_rapid_fire(self, db, now)
         end
     end
     if not duration and not expiration then
+        -- Readiness 2x window (hunter_open §1): while the double-RF window is
+        -- live and no RF aura is up, the bar shows full with a "2x" readout (the
+        -- same bar + label, so the build-time widget census holds). Option-gated
+        -- nil = off; unknown hides.
+        if db.hunter_readiness_badge_enabled == true and self.HUNTER
+            and self.HUNTER.get_readiness_window then
+            local window_remaining = self.HUNTER.get_readiness_window(
+                self.hunter_readiness_at, now)
+            if window_remaining ~= nil then
+                bar:SetMinMaxValues(0, RAPID_FIRE_FALLBACK_DURATION)
+                bar:SetValue(RAPID_FIRE_FALLBACK_DURATION)
+                bar.label:SetText("2x")
+                if not bar:IsShown() then
+                    bar:Show()
+                end
+                return
+            end
+        end
         -- Only shown while the aura's duration is up, never for its cooldown.
         if bar:IsShown() then
             bar:Hide()
@@ -1051,8 +1173,240 @@ function ui.update_pet_badges(self, db, now)
 end
 
 --=========================================================================================
--- Aspect icon (reference ClassMods.lua:6026-6135)
+-- OOM Viper badge (hunter_open §2)
 --=========================================================================================
+-- "VIPER" badge while mana sits below the swap band, Viper is known but not
+-- active (the TBC <5% swap edge; SoD's Viper id differs, both probed).
+-- Option-gated nil = off; unknown hides. The widget is created lazily on the
+-- first enabled tick (never in build) so the build-time widget census
+-- (bars_state, reconcile-owned) is untouched until reconcile hoists it.
+local function ensure_oom_badge()
+    if ui.oom_badge then
+        return ui.oom_badge
+    end
+    local badge = create_badge("HunterOomViperBadge", ui.ranged_frame)
+    badge.text:SetPoint("CENTER", badge, "CENTER", 0, 0)
+    badge.text:SetJustifyH("CENTER")
+    ui.oom_badge = badge
+    return badge
+end
+
+function ui.update_oom_viper(self, db, now)
+    local badge = ui.oom_badge
+    if db.hunter_oom_viper_badge_enabled ~= true then
+        if badge and badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    local H = self.HUNTER
+    if not (H and H.get_oom_viper_prompt and H.get_mana_fraction
+        and H.is_viper_active and H.is_viper_known) then
+        if badge and badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    -- Throttled like the pet badges: the badge holds its last state between polls.
+    if ui.oom_scan_at and now < ui.oom_scan_at then
+        return
+    end
+    ui.oom_scan_at = now + BADGE_SCAN_INTERVAL
+    local prompt = H.get_oom_viper_prompt(H.get_mana_fraction(),
+        H.is_viper_active(), H.is_viper_known(), true)
+    if prompt == nil then
+        if badge and badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    badge = ensure_oom_badge()
+    -- Badge row: left of the Frenzy badge when that is on, else left of the BW
+    -- badge when that is on, else the row anchor (the pet-badge chain's pattern).
+    local anchor = badge_row_anchor(db)
+    if db.hunter_bw_badge_enabled == true and ui.bw_badge then
+        anchor = ui.bw_badge
+    end
+    if db.hunter_frenzy_stacks_enabled == true and ui.frenzy_badge then
+        anchor = ui.frenzy_badge
+    end
+    if ui.oom_anchor ~= anchor then
+        ui.oom_anchor = anchor
+        badge:ClearAllPoints()
+        badge:SetPoint("RIGHT", anchor, "LEFT", -2, 0)
+    end
+    if ui.oom_text ~= prompt then
+        ui.oom_text = prompt
+        badge.text:SetText(prompt)
+    end
+    if not badge.text:IsShown() then
+        badge.text:Show()
+    end
+    if not badge:IsShown() then
+        badge:Show()
+    end
+end
+
+--=========================================================================================
+-- Lock and Load trap-proc badge (hunter_open §1)
+--=========================================================================================
+-- "LnL" badge while the trap-proc window is live (the Wrath 56344 / SoD 415413
+-- proc ids, SIM-CONFIRMED, CLIENT-UNCONFIRMED - see classes/hunter.lua).
+-- Badge layer only: the guide engine never reads it. Option-gated nil = off
+-- (hunter_lnl_badge_enabled, wired by the options pass); unknown hides. The
+-- widget is created lazily on the first enabled tick (never in build) so the
+-- build-time widget census (bars_state, reconcile-owned) is untouched until
+-- reconcile hoists it - the OOM badge's pattern verbatim.
+local function ensure_lnl_badge()
+    if ui.lnl_badge then
+        return ui.lnl_badge
+    end
+    local badge = create_badge("HunterLnlBadge", ui.ranged_frame)
+    badge.text:SetPoint("CENTER", badge, "CENTER", 0, 0)
+    badge.text:SetJustifyH("CENTER")
+    ui.lnl_badge = badge
+    return badge
+end
+
+function ui.update_lnl_badge(self, db, now)
+    local badge = ui.lnl_badge
+    if db.hunter_lnl_badge_enabled ~= true then
+        if badge and badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    local H = self.HUNTER
+    if not (H and H.get_lnl_prompt and H.get_lnl_remaining) then
+        if badge and badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    -- Throttled like the pet badges: the badge holds its last state between polls.
+    if ui.lnl_scan_at and now < ui.lnl_scan_at then
+        return
+    end
+    ui.lnl_scan_at = now + BADGE_SCAN_INTERVAL
+    local prompt = H.get_lnl_prompt(H.get_lnl_remaining(self, now), true)
+    if prompt == nil then
+        if badge and badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    badge = ensure_lnl_badge()
+    -- Badge row: left of the OOM badge when that is on, else left of the
+    -- Frenzy badge when that is on, else left of the BW badge when that is on,
+    -- else the row anchor (the OOM badge's chain extended by one).
+    local anchor = badge_row_anchor(db)
+    if db.hunter_bw_badge_enabled == true and ui.bw_badge then
+        anchor = ui.bw_badge
+    end
+    if db.hunter_frenzy_stacks_enabled == true and ui.frenzy_badge then
+        anchor = ui.frenzy_badge
+    end
+    if db.hunter_oom_viper_badge_enabled == true and ui.oom_badge then
+        anchor = ui.oom_badge
+    end
+    if ui.lnl_anchor ~= anchor then
+        ui.lnl_anchor = anchor
+        badge:ClearAllPoints()
+        badge:SetPoint("RIGHT", anchor, "LEFT", -2, 0)
+    end
+    if ui.lnl_text ~= prompt then
+        ui.lnl_text = prompt
+        badge.text:SetText(prompt)
+    end
+    if not badge.text:IsShown() then
+        badge.text:Show()
+    end
+    if not badge:IsShown() then
+        badge:Show()
+    end
+end
+
+--=========================================================================================
+-- Trap badge (hunter_wa_map §6: the placed-phase display)
+--=========================================================================================
+-- Countdown while a trap is armed on the ground (the wired placed phase; the
+-- filed active phase rides the same badge when the CLEU lane lands - the state
+-- shape already carries phase). Option-gated nil = off
+-- (hunter_trap_badge_enabled, options pass wires the default); unknown hides.
+-- The widget is created lazily on the first enabled tick (never in build) so
+-- the build-time widget census (bars_state, reconcile-owned) is untouched until
+-- reconcile hoists it - the OOM/LnL badge pattern verbatim.
+local function ensure_trap_badge()
+    if ui.trap_badge then
+        return ui.trap_badge
+    end
+    local badge = create_badge("HunterTrapBadge", ui.ranged_frame)
+    badge.text:SetPoint("CENTER", badge, "CENTER", 0, 0)
+    badge.text:SetJustifyH("CENTER")
+    ui.trap_badge = badge
+    return badge
+end
+
+function ui.update_trap_badge(self, db, now)
+    local badge = ui.trap_badge
+    if db.hunter_trap_badge_enabled ~= true then
+        if badge and badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    local H = self.HUNTER
+    if not (H and H.get_trap_remaining) then
+        if badge and badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    -- Throttled like the pet badges: the badge holds its last state between polls.
+    if ui.trap_scan_at and now < ui.trap_scan_at then
+        return
+    end
+    ui.trap_scan_at = now + BADGE_SCAN_INTERVAL
+    local remaining = H.get_trap_remaining(self, now)
+    if remaining == nil then
+        if badge and badge:IsShown() then
+            badge:Hide()
+        end
+        return
+    end
+    badge = ensure_trap_badge()
+    -- Badge row: left of the LnL badge when that is on, else left of the OOM
+    -- badge when that is on, else the pet-badge chain (the LnL pattern extended).
+    local anchor = badge_row_anchor(db)
+    if db.hunter_bw_badge_enabled == true and ui.bw_badge then
+        anchor = ui.bw_badge
+    end
+    if db.hunter_frenzy_stacks_enabled == true and ui.frenzy_badge then
+        anchor = ui.frenzy_badge
+    end
+    if db.hunter_oom_viper_badge_enabled == true and ui.oom_badge then
+        anchor = ui.oom_badge
+    end
+    if db.hunter_lnl_badge_enabled == true and ui.lnl_badge then
+        anchor = ui.lnl_badge
+    end
+    if ui.trap_anchor ~= anchor then
+        ui.trap_anchor = anchor
+        badge:ClearAllPoints()
+        badge:SetPoint("RIGHT", anchor, "LEFT", -2, 0)
+    end
+    local text = string.format("%.0fs", remaining)
+    if ui.trap_text ~= text then
+        ui.trap_text = text
+        badge.text:SetText(text)
+    end
+    if not badge.text:IsShown() then
+        badge.text:Show()
+    end
+    if not badge:IsShown() then
+        badge:Show()
+    end
+end
 function ui.update_aspect_icon(self, db, now)
     local icon = ui.aspect_icon
     if db.hunter_aspect_icon_enabled == false then
@@ -1135,13 +1489,28 @@ function ui.hide_all(self)
     if ui.cast_zone_marker then
         ui.cast_zone_marker:Hide()
     end
+    if ui.target_warning then
+        ui.target_warning:Hide()
+    end
     if ui.bw_badge then
         ui.bw_badge:Hide()
     end
     if ui.frenzy_badge then
         ui.frenzy_badge:Hide()
     end
+    if ui.oom_badge then
+        ui.oom_badge:Hide()
+    end
+    if ui.lnl_badge then
+        ui.lnl_badge:Hide()
+    end
+    if ui.trap_badge then
+        ui.trap_badge:Hide()
+    end
     ui.zone_safe = nil
+    ui.oom_scan_at = nil
+    ui.lnl_scan_at = nil
+    ui.trap_scan_at = nil
     ui.sync_melee_anchor(self)
 end
 
@@ -1155,13 +1524,22 @@ function ui.update(self)
     end
     local db = self:get_class_table()
     local now = api.get_time()
-    ui.update_cast_bar(self, db, now)
+    -- R3 (2026-10-21): every sub-feature is its own guarded site, so one throwing
+    -- updater cannot take the rest of the hunter UI down - the retired
+    -- CheckInteractDistance probe did exactly that through the class hook. The guard
+    -- announces the first throw per site, counts it and quarantines after
+    -- st.guard.QUARANTINE_THROWS (25).
+    st.guard.run(self, "hunter_ui:cast_bar", ui.update_cast_bar, self, db, now)
     ui.sync_melee_anchor(self)
-    ui.update_cast_zone(self, db, now)
-    ui.update_range_helper(self, db)
-    ui.update_rapid_fire(self, db, now)
-    ui.update_pet_badges(self, db, now)
-    ui.update_aspect_icon(self, db, now)
+    st.guard.run(self, "hunter_ui:cast_zone", ui.update_cast_zone, self, db, now)
+    st.guard.run(self, "hunter_ui:target_warning", ui.update_target_warning, self, db)
+    st.guard.run(self, "hunter_ui:range_helper", ui.update_range_helper, self, db)
+    st.guard.run(self, "hunter_ui:rapid_fire", ui.update_rapid_fire, self, db, now)
+    st.guard.run(self, "hunter_ui:pet_badges", ui.update_pet_badges, self, db, now)
+    st.guard.run(self, "hunter_ui:oom_viper", ui.update_oom_viper, self, db, now)
+    st.guard.run(self, "hunter_ui:lnl_badge", ui.update_lnl_badge, self, db, now)
+    st.guard.run(self, "hunter_ui:trap_badge", ui.update_trap_badge, self, db, now)
+    st.guard.run(self, "hunter_ui:aspect_icon", ui.update_aspect_icon, self, db, now)
 end
 
 function ui.force_rapid_fire_refresh(self)

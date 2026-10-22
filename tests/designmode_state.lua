@@ -38,7 +38,16 @@
 --     drag OnUpdate unhooked, guides hidden, layer hidden, Ctrl-locks restored; the Esc
 --     path (the layer's OnHide script) runs the same teardown; toggle round-trips;
 --   * the practice element appearing/disappearing with a session (availability gated by
---     st.practice_ui.is_active()), pooled overlay reuse (no new frame on re-appear).
+--     st.practice_ui.is_active()), pooled overlay reuse (no new frame on re-appear);
+--   * R1-R6 (the 2026-10-21 options-panel coexistence pass): the full-screen chrome is
+--     mouse-transparent and the overlay INPUT strata sit below the panel's
+--     FULLSCREEN_DIALOG (18); the veil/grid/guides/overlay visuals draw above the panel
+--     with the drag maths + save seam untouched (19); opening/closing/Esc-ing the
+--     options never ends the session, Esc still ends it when nothing else is open -
+--     including the OnHide race backstop and the Interface Options host (20); the
+--     control panel's LOCK (visible label, frozen-but-shown overlays) and EXIT buttons
+--     (21); no protected calls and no frame creation under lockdown (22); nothing
+--     exists or changes outside a session (23).
 --
 -- NOT executed here (main.lua owns them, pinned by tests/main_init_state.lua): the
 -- /st design chat command and the design-mode options button; and main.lua's
@@ -98,8 +107,23 @@ end
 local function make_fontstring()
     local f = { hidden = false, text = "" }
     function f:SetPoint() end
-    function f:SetFont(path, size, flags) f.font = { path, size, flags }; return true end
-    function f:SetText(text) f.text = text end
+    -- SoD-faithful: SetFont with a nil path latches nothing (false, like the
+    -- client); SetText with no font throws ("Font not set"). Every FontString the
+    -- design mode creates must carry a font BEFORE its first SetText.
+    function f:SetFont(path, size, flags)
+        if path == nil then
+            return false
+        end
+        f.font = { path, size, flags }
+        return true
+    end
+    function f:GetFont() return f.font and f.font[1] or nil end
+    function f:SetText(text)
+        if f.font == nil then
+            error("Font not set", 2)
+        end
+        f.text = text
+    end
     function f:SetTextColor(r, g, b, a) f.color = { r, g, b, a } end
     function f:SetShadowColor(r, g, b, a) f.shadow_color = { r, g, b, a } end
     function f:SetShadowOffset(x, y) f.shadow_offset = { x, y } end
@@ -138,9 +162,21 @@ local function make_frame(name, kind)
         f.scripts[event] = fn
     end
     function f:GetScript(event) return f.scripts[event] end
-    function f:Show() f.shown = true end
-    function f:Hide() f.shown = false end
-    function f:SetShown(shown) f.shown = shown end
+    -- Client-faithful: Show/Hide fire OnShow/OnHide exactly once per transition
+    -- (that is what makes the Esc path executable offline).
+    function f:Show()
+        if f.shown then return end
+        f.shown = true
+        if f.scripts.OnShow then f.scripts.OnShow(f) end
+    end
+    function f:Hide()
+        if not f.shown then return end
+        f.shown = false
+        if f.scripts.OnHide then f.scripts.OnHide(f) end
+    end
+    function f:SetShown(shown)
+        if shown then f:Show() else f:Hide() end
+    end
     function f:IsShown() return f.shown end
     function f:GetScale() return f.scale end
     function f:GetEffectiveScale() return f.eff_scale end
@@ -151,6 +187,12 @@ local function make_frame(name, kind)
     function f:GetRight() return f.derive_rect and (f.cx + f.w / 2) or f.right end
     function f:GetTop() return f.derive_rect and (f.cy + f.h / 2) or f.top end
     function f:GetBottom() return f.derive_rect and (f.cy - f.h / 2) or f.bottom end
+    function f:SetMovable(movable) f.movable = movable end
+    function f:StartMoving() f.moving = true end
+    function f:StopMovingOrSizing() f.moving = false end
+    -- A button's label rides its template's FontString (Blizzard supplies the font,
+    -- not this addon's font chain), so SetText on a frame stub just records it.
+    function f:SetText(text) f.text = text end
     function f:CreateTexture()
         local t = make_texture()
         f.textures[#f.textures + 1] = t
@@ -285,6 +327,22 @@ local function build(opts)
     local ACR = { NotifyChange = function(_, name) sb.notify[#sb.notify + 1] = name end }
     sb.LWIN, sb.ACR = LWIN, ACR
 
+    -- The AceConfig floating options panel (what `/st` opens): modelled exactly the
+    -- way designmode.lua reads it - AceConfigDialog.OpenFrames[options_table_name]
+    -- plus IsShown. Hidden by default; the R3 sections flip it with Show/Hide.
+    -- CloseAll mirrors AceConfigDialog:CloseAll, which its CloseSpecialWindows wrapper
+    -- runs in the same Esc press (AceConfigDialog-3.0.lua:1845-1851).
+    local options_frame = make_frame("AceOptionsDialog")
+    options_frame:Hide()
+    local ACD = { OpenFrames = {} }
+    ACD.OpenFrames[ST.options_table_name] = options_frame
+    ACD.CloseAll = function(self)
+        for _, f in pairs(self.OpenFrames) do
+            if f:IsShown() then f:Hide() end
+        end
+    end
+    sb.ACD, sb.options_frame = ACD, options_frame
+
     local LCG = {
         PixelGlow_Start = function(frame, color, n, freq, length, th, x, y, border, key)
             sb.glow_starts = sb.glow_starts + 1
@@ -307,10 +365,27 @@ local function build(opts)
     env.GetTimePreciseSec = function() return 0 end
     env.GetTime = function() return 0 end
     env.GetBuildInfo = function() return "3.3.5", "12340", "today", 38002 end
-    env.STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
+    -- The client's own standard font (the shared chain's middle step). A distinctive
+    -- value proves which step carried the overlay title; opts.std_font = false
+    -- removes it so the chain's classic-client fallback has to carry the title.
+    local std_font = opts.std_font
+    if std_font == nil then
+        std_font = "Fonts\\FRIZQT__.TTF"
+    end
+    if std_font == false then
+        std_font = nil
+    end
+    env.STANDARD_TEXT_FONT = std_font
     env.UIParent = UIParent
     env.UISpecialFrames = {}
     env.tinsert = table.insert
+    env.tremove = table.remove
+    -- The Classic Interface Options window (it hosts the AddToBlizOptions embed):
+    -- hidden by default; the R3 sections flip it through sb.interface_options.
+    local interface_options = make_frame("InterfaceOptionsFrame")
+    interface_options:Hide()
+    env.InterfaceOptionsFrame = interface_options
+    sb.interface_options = interface_options
     env.InCombatLockdown = function() return sb.lockdown end
     env.GetCursorPosition = function() return sb.cursor_x, sb.cursor_y end
     env.IsShiftKeyDown = function() return sb.shift end
@@ -331,6 +406,7 @@ local function build(opts)
     env.CreateFrame = function(kind, name, parent)
         local f = make_frame(name, kind or "Frame")
         f.parent = parent
+        if name then env[name] = f end        -- named frames are globals in the client
         sb.created_frames = sb.created_frames + 1
         sb.frames[#sb.frames + 1] = f
         return f
@@ -339,12 +415,13 @@ local function build(opts)
         if major == "AceAddon-3.0" then return { GetAddon = function() return ST end } end
         if major == "LibWindow-1.1" then return LWIN end
         if major == "AceConfigRegistry-3.0" then return ACR end
+        if major == "AceConfigDialog-3.0" then return ACD end
         if major == "LibCustomGlow-1.0" then return LCG end
         return {}
     end
 
     local st = {}
-    for _, path in ipairs({ "compat.lua", "utils.lua", "design.lua", "bars.lua", "designmode.lua" }) do
+    for _, path in ipairs({ "compat.lua", "utils.lua", "guard.lua", "design.lua", "bars.lua", "designmode.lua" }) do
         local chunk = assert(loadfile(ROOT .. path))
         setfenv(chunk, env)
         local ok, err = pcall(chunk, "SwedgeTimer", st)
@@ -396,6 +473,15 @@ local function build(opts)
         pui.rotation_display = rot
         pui.timeline_frame = tl
         sb.rot_saves, sb.tl_saves, sb.rot_resets, sb.tl_resets = 0, 0, 0, 0
+        local hr = make_frame("HunterShotReport")
+        hr.derive_rect = true
+        hr.w, hr.h = 260, 110
+        local er = make_frame("WarriorExecuteReport")
+        er.derive_rect = true
+        er.w, er.h = 260, 110
+        pui.hunter_report_frame = hr
+        pui.warrior_execute_report_frame = er
+        sb.hr_saves, sb.er_saves, sb.hr_resets, sb.er_resets = 0, 0, 0, 0
         pui.design_targets = {
             {
                 key = "practice_rotation",
@@ -429,6 +515,40 @@ local function build(opts)
                     sb.tl_resets = sb.tl_resets + 1
                     tl:ClearAllPoints()
                     tl:SetPoint("CENTER", UIParent, "CENTER", 0, -200)
+                end,
+            },
+            {
+                key = "practice_hunter_report",
+                title = "Hunter shot report",
+                get_frame = function() return pui.hunter_report_frame end,
+                available = function() return sb.hr_shown == true end,
+                save = function(x, y)
+                    sb.hr_saves = sb.hr_saves + 1
+                    sb.hr_saved = { x, y }
+                    hr:ClearAllPoints()
+                    hr:SetPoint("CENTER", UIParent, "CENTER", x, y)
+                end,
+                reset = function()
+                    sb.hr_resets = sb.hr_resets + 1
+                    hr:ClearAllPoints()
+                    hr:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+                end,
+            },
+            {
+                key = "practice_warrior_report",
+                title = "Warrior Execute report",
+                get_frame = function() return pui.warrior_execute_report_frame end,
+                available = function() return sb.er_shown == true end,
+                save = function(x, y)
+                    sb.er_saves = sb.er_saves + 1
+                    sb.er_saved = { x, y }
+                    er:ClearAllPoints()
+                    er:SetPoint("CENTER", UIParent, "CENTER", x, y)
+                end,
+                reset = function()
+                    sb.er_resets = sb.er_resets + 1
+                    er:ClearAllPoints()
+                    er:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
                 end,
             },
         }
@@ -465,15 +585,16 @@ end
 local function overlays(sb)
     local out = {}
     for _, f in ipairs(sb.frames) do
-        if f.kind == "Button" then out[#out + 1] = f end
+        if f.is_overlay then out[#out + 1] = f end
     end
     return out
 end
 
+-- The overlay's label lives on its VISUAL frame (the copy above the options panel).
 local function overlay_titles(sb)
     local out = {}
     for _, o in ipairs(overlays(sb)) do
-        out[#out + 1] = o.fontstrings[1] and o.fontstrings[1].text or nil
+        out[#out + 1] = o.visual.fontstrings[1] and o.visual.fontstrings[1].text or nil
     end
     return out
 end
@@ -481,14 +602,14 @@ end
 local function shown_overlay_titles(sb)
     local out = {}
     for _, o in ipairs(overlays(sb)) do
-        if o.shown then out[#out + 1] = o.fontstrings[1] and o.fontstrings[1].text or nil end
+        if o.shown then out[#out + 1] = o.visual.fontstrings[1] and o.visual.fontstrings[1].text or nil end
     end
     return out
 end
 
 local function overlay_for(sb, title)
     for _, o in ipairs(overlays(sb)) do
-        if o.fontstrings[1] and o.fontstrings[1].text == title then return o end
+        if o.visual.fontstrings[1] and o.visual.fontstrings[1].text == title then return o end
     end
 end
 
@@ -496,6 +617,34 @@ local function layer_of(sb)
     for _, f in ipairs(sb.frames) do
         if f.name == "SwedgeTimerDesignMode" then return f end
     end
+end
+
+local function control_of(sb)
+    for _, f in ipairs(sb.frames) do
+        if f.name == "SwedgeTimerDesignModeControl" then return f end
+    end
+end
+
+-- The client's Esc path, modelled from the reference FrameXML (classic_era
+-- UIParentPanelManager.lua:1041-1050): CloseSpecialWindows hides EVERY shown
+-- UISpecialFrames entry. AceConfigDialog wraps that global, so its CloseAll runs in
+-- the SAME Esc press (AceConfigDialog-3.0.lua:1845-1851) - specials first, then the
+-- options dialogs.
+local function client_escape(sb)
+    local names = {}
+    for i = 1, #sb.env.UISpecialFrames do names[i] = sb.env.UISpecialFrames[i] end
+    for _, name in ipairs(names) do
+        local f = sb.env[name]
+        if f and f:IsShown() then f:Hide() end
+    end
+    sb.ACD:CloseAll()
+end
+
+local function registered_in_specials(sb, name)
+    for _, v in pairs(sb.env.UISpecialFrames) do
+        if v == name then return true end
+    end
+    return false
 end
 
 -- Shown grid lines = the layer's textures after the dim veil; the centre cross always
@@ -533,8 +682,8 @@ check(type(st.utils) == "table", "utils.lua loaded (st.utils)")
 check(type(st.design) == "table", "design.lua loaded (st.design)")
 check(type(DM) == "table", "designmode.lua defines st.designmode")
 for _, name in ipairs({ "enter", "exit", "stop", "toggle", "refresh", "refresh_grid",
-    "is_active", "on_combat_start", "registry", "register_template",
-    "unregister_template" }) do
+    "is_active", "on_combat_start", "is_locked", "set_locked", "registry",
+    "register_template", "unregister_template", "register_element" }) do
     check(DM[name] ~= nil, "designmode.lua exposes " .. name)
 end
 check(type(DM.templates) == "table" and DM.templates.count == 0,
@@ -543,9 +692,10 @@ check(type(base.ST.register_zone) == "function", "bars.lua loaded (ST:register_z
 check(type(base.ST.new_pips) == "function", "bars.lua loaded (ST:new_pips)")
 eq(sb.created_frames, 0, "no frames are created at file load")
 eq(DM.is_active(), false, "design mode starts inactive")
-eq(DM.registry.count, 9, "the registry holds the nine real elements")
+eq(DM.is_locked(), false, "the session lock starts unlocked (no db key, nil = off)")
+eq(DM.registry.count, 11, "the registry holds the eleven shared real elements")
 local keys = { "bar_mainhand", "bar_offhand", "bar_ranged", "hud", "rottext", "nag", "practice_panel",
-    "practice_rotation", "practice_timeline" }
+    "practice_rotation", "practice_timeline", "practice_hunter_report", "practice_warrior_report" }
 for i = 1, #keys do
     check(DM.registry.by_key[keys[i]] ~= nil, "registry element: " .. keys[i])
 end
@@ -556,6 +706,8 @@ eq(DM.registry.by_key.nag.title, "Next action guide", "guide element title")
 eq(DM.registry.by_key.practice_panel.title, "Practice panel", "practice element title")
 eq(DM.registry.by_key.practice_rotation.title, "Practice rotation display", "rotation element title")
 eq(DM.registry.by_key.practice_timeline.title, "Practice timeline", "timeline element title")
+eq(DM.registry.by_key.practice_hunter_report.title, "Hunter shot report", "shot report element title")
+eq(DM.registry.by_key.practice_warrior_report.title, "Warrior Execute report", "Execute report element title")
 eq(DM.registry.by_key.practice_panel.lock, nil, "the practice element has no lock seam")
 eq(DM.registry.by_key.practice_rotation.lock, nil, "the rotation element has no lock seam either")
 -- Without the practice module's own design_targets table the two delegated
@@ -564,6 +716,10 @@ eq(DM.registry.by_key.practice_rotation.get_frame(), nil, "rotation: no delegate
 eq(DM.registry.by_key.practice_rotation.available(), false, "rotation: no delegate -> unavailable")
 eq(DM.registry.by_key.practice_timeline.get_frame(), nil, "timeline: no delegate -> no frame")
 eq(DM.registry.by_key.practice_timeline.available(), false, "timeline: no delegate -> unavailable")
+eq(DM.registry.by_key.practice_hunter_report.get_frame(), nil, "shot report: no delegate -> no frame")
+eq(DM.registry.by_key.practice_hunter_report.available(), false, "shot report: no delegate -> unavailable")
+eq(DM.registry.by_key.practice_warrior_report.get_frame(), nil, "Execute report: no delegate -> no frame")
+eq(DM.registry.by_key.practice_warrior_report.available(), false, "Execute report: no delegate -> unavailable")
 eq(DM.stop(true), false, "stop while inactive is a no-op returning false")
 
 --=========================================================================================
@@ -579,11 +735,18 @@ do
     check(F.prints[1]:find("Design mode on", 1, true) ~= nil, "the enter notice names design mode")
     check(F.prints[1]:find("Shift = no snap", 1, true) ~= nil, "the enter notice documents the modifiers")
 
-    -- Layer + guides + one overlay per element: 2 bars + hud + rottext + nag + practice.
+    -- Layer + guides + control panel + one overlay pair per element: 2 bars + hud +
+    -- rottext + nag + practice.
     local layer = layer_of(F)
     check(layer ~= nil, "enter creates the design layer")
     eq(layer.shown, true, "the layer is shown")
-    eq(layer.strata, "BACKGROUND", "the layer sits at the BACKGROUND strata")
+    -- R2: the veil + grid draw ABOVE the AceConfig options panel (the AceGUI Frame
+    -- container is FULLSCREEN_DIALOG / level 100, AceGUIContainer-Frame.lua:189-190).
+    eq(layer.strata, "FULLSCREEN_DIALOG", "the layer sits above the options panel")
+    eq(layer.level, 110, "the layer draws over the panel (level 100)")
+    -- R1: the full-screen chrome is explicitly mouse-transparent, so the panel keeps
+    -- every mouse press under the veil and the grid.
+    eq(layer.mouse, false, "the layer never takes mouse")
     eq(layer.name, "SwedgeTimerDesignMode", "the layer carries the addon's name")
     eq(F.env.UISpecialFrames[1], "SwedgeTimerDesignMode", "the layer is an Esc special frame")
     check(type(layer:GetScript("OnHide")) == "function", "the layer has an OnHide (Esc) handler")
@@ -591,7 +754,8 @@ do
 
     local titles = overlay_titles(F)
     eq(#titles, 6, "enter creates one overlay per available element")
-    eq(F.created_frames, 2 + 6, "enter creates only the layer, guides and the 6 overlays")
+    eq(F.created_frames, 5 + 12,
+        "enter creates the layer, guides, control panel + its 2 buttons, and 6 overlay pairs")
     eq(titles[1], "Mainhand bar", "overlay 1 is the mainhand bar")
     eq(titles[2], "Offhand bar", "overlay 2 is the offhand bar")
     eq(titles[3], "Cooldown HUD", "overlay 3 is the Cooldown HUD")
@@ -602,34 +766,73 @@ do
         eq(o.shown, true, "overlay " .. i .. " is shown")
     end
 
-    -- Overlay 1 is attached to the mainhand anchor frame: parented, above it, hugging
-    -- its box, with a warm label.
+    -- Overlay 1's INPUT sits below the options panel (FULLSCREEN strata, strictly under
+    -- FULLSCREEN_DIALOG), so no overlay can swallow the panel's mouse - while its VISUAL
+    -- twin draws ABOVE the panel and is mouse-transparent. Both hug the element's box
+    -- (the anchor that rides the target through the drag tick).
     local o1 = overlays(F)[1]
     local bar = F.element.bar_mainhand
-    eq(o1.parent, bar, "the bar overlay is parented to the element frame")
-    eq(o1.level, (bar.level or 1) + 20, "the overlay sits above the element")
+    eq(o1.parent, F.UIParent, "the input button rides UIParent (strata pinned, not inherited)")
+    eq(o1.strata, "FULLSCREEN", "the input sits below the options panel's strata")
+    eq(o1.level, 1, "the input has its own pinned level")
+    local v1 = o1.visual
+    check(v1 ~= nil, "the overlay carries a visual twin")
+    eq(v1.parent, F.UIParent, "the visual rides UIParent too")
+    eq(v1.strata, "FULLSCREEN_DIALOG", "the visual draws above the options panel")
+    eq(v1.level, 130, "the visual draws over the panel and the veil")
+    eq(v1.mouse, false, "the visual never takes mouse")
+    eq(v1.shown, true, "the visual is shown with its input")
     local p1, p2 = o1.points[1], o1.points[2]
     eq(p1[1], "TOPLEFT", "the overlay anchors top-left")
     eq(p1[2], bar, "the overlay hugs the element's top-left")
     eq(p2[1], "BOTTOMRIGHT", "the overlay anchors bottom-right")
     eq(p2[2], bar, "the overlay hugs the element's bottom-right")
+    local vp1, vp2 = v1.points[1], v1.points[2]
+    eq(vp1[1], "TOPLEFT", "the visual anchors top-left")
+    eq(vp1[2], bar, "the visual hugs the element's top-left")
+    eq(vp2[1], "BOTTOMRIGHT", "the visual anchors bottom-right")
+    eq(vp2[2], bar, "the visual hugs the element's bottom-right")
     eq(o1.mouse, true, "the overlay takes mouse")
     eq(o1.drag_button, "LeftButton", "the overlay drags with the left button")
     check(type(o1:GetScript("OnDragStart")) == "function", "the overlay has an OnDragStart")
     check(type(o1:GetScript("OnDragStop")) == "function", "the overlay has an OnDragStop")
     check(type(o1:GetScript("OnDoubleClick")) == "function", "the overlay has an OnDoubleClick")
-    eq(o1.fontstrings[1].color[1], 1, "the label uses the warm colour (r)")
-    eq(o1.fontstrings[1].font[3], "OUTLINE", "the label is outlined")
+    eq(v1.fontstrings[1].color[1], 1, "the label uses the warm colour (r)")
+    eq(v1.fontstrings[1].font[3], "OUTLINE", "the label is outlined")
 
-    -- The guides frame exists but starts hidden (no drag yet).
+    -- The guides frame exists but starts hidden (no drag yet). Finder: unnamed,
+    -- full-screen (SetAllPoints) - the overlay visuals are unnamed too but never
+    -- call SetAllPoints.
     local guides
     for _, f in ipairs(F.frames) do
-        if f.kind == "Frame" and f.name == nil and f ~= layer then guides = guides or f end
+        if f.kind == "Frame" and f.name == nil and f.all_points then guides = guides or f end
     end
     check(guides ~= nil, "enter creates the guide frame")
     eq(guides.shown, false, "the guides start hidden")
-    eq(guides.strata, "DIALOG", "the guides sit above the layer")
+    eq(guides.strata, "FULLSCREEN_DIALOG", "the guides sit above the options panel")
+    eq(guides.level, 140, "the guides draw over the veil and the overlay visuals")
     eq(guides.mouse, false, "the guides never take mouse")
+
+    -- The control panel (R4/R5): built on enter (never at load), shown with the
+    -- session, above the design visuals, with a title and two labelled buttons.
+    local control = control_of(F)
+    check(control ~= nil, "enter creates the control panel")
+    eq(control.shown, true, "the control panel is shown with the session")
+    eq(control.strata, "FULLSCREEN_DIALOG", "the control panel sits above the options panel")
+    eq(control.level, 150, "the control panel draws over everything design")
+    eq(control.mouse, true, "the control panel takes mouse over its own rect")
+    eq(control.movable, true, "the control panel is movable")
+    eq(control.drag_button, "LeftButton", "the control panel drags with the left button")
+    check(type(control:GetScript("OnDragStart")) == "function", "the control panel has a drag start")
+    check(type(control:GetScript("OnDragStop")) == "function", "the control panel has a drag stop")
+    eq(control.title.text, "SwedgeTimer design mode", "the control panel carries a title")
+    check(control.title.font ~= nil, "the control panel title is fonted before SetText")
+    eq(control.lock_btn.text, "Lock frames", "the lock button starts labelled Lock frames")
+    eq(control.exit_btn.text, "Exit", "the exit button is labelled")
+    eq(control.lock_btn.parent, control, "the lock button is a child of the control panel")
+    eq(control.lock_btn.mouse, true, "the lock button takes mouse")
+    eq(control.exit_btn.mouse, true, "the exit button takes mouse")
+    eq(DM.is_locked(), false, "a fresh session starts unlocked")
 
     -- The grid is drawn: 2 centre lines + one pair per step out to the half screen.
     eq(shown_grid_lines(layer), grid_line_count(24, 1024, 768), "the 24 px grid is drawn")
@@ -659,7 +862,7 @@ do
     d.enter()
     local titles = overlay_titles(F)
     eq(#titles, 4, "an element without a frame and an inactive practice panel are skipped")
-    eq(F.created_frames, 2 + 4, "no frames are created for the skipped elements")
+    eq(F.created_frames, 5 + 8, "no frames are created for the skipped elements")
     eq(titles[1], "Mainhand bar", "the available bars still get overlays (1)")
     eq(titles[2], "Offhand bar", "the available bars still get overlays (2)")
     eq(titles[3], "Cooldown HUD", "the HUD still gets an overlay")
@@ -819,7 +1022,7 @@ do
     eq(F.lwin_saved[1].point[5], 110, "drag: ...with the snapped y")
     local guides
     for _, f in ipairs(F.frames) do
-        if f.kind == "Frame" and f.name == nil and f.all_points and f.mouse == false then guides = f end
+        if f.kind == "Frame" and f.name == nil and f.all_points then guides = f end
     end
     eq(guides.shown, false, "drag: the guides are hidden again on drop")
 
@@ -989,8 +1192,10 @@ do
     d.exit()
     eq(d.is_active(), false, "exit deactivates the session")
     eq(layer.shown, false, "exit hides the layer")
+    eq(control_of(F).shown, false, "exit hides the control panel")
     for i, o in ipairs(ovs) do
         eq(o.shown, false, "exit hides overlay " .. i)
+        eq(o.visual.shown, false, "exit hides the visual of overlay " .. i)
         eq(o:GetScript("OnUpdate"), nil, "exit unhooks overlay " .. i .. "'s tick")
         eq(o.parent, F.UIParent, "exit re-parents overlay " .. i .. " to UIParent")
         eq(o.desc, nil, "exit clears overlay " .. i .. "'s element")
@@ -1100,19 +1305,19 @@ do
     d.refresh()
     eq(#shown_overlay_titles(F), 6, "the running practice panel gains an overlay on refresh")
     eq(shown_overlay_titles(F)[6], "Practice panel", "...labelled as the practice panel")
-    eq(F.created_frames, frames + 1, "one overlay frame is created for it")
+    eq(F.created_frames, frames + 2, "one overlay pair is created for it")
 
     -- The panel hides: its overlay goes away without touching the pool.
     F.element.practice.shown = false
     d.refresh()
     eq(#shown_overlay_titles(F), 5, "a hidden element loses its overlay")
-    eq(F.created_frames, frames + 1, "hiding reuses the pool (no new frame)")
+    eq(F.created_frames, frames + 2, "hiding reuses the pool (no new frame)")
 
     -- It comes back: the pooled overlay is reused, no new frame.
     F.element.practice.shown = true
     d.refresh()
     eq(#shown_overlay_titles(F), 6, "the element reappears on refresh")
-    eq(F.created_frames, frames + 1, "reappearing reuses the pooled overlay")
+    eq(F.created_frames, frames + 2, "reappearing reuses the pooled overlay")
 
     -- The session ends: availability hides it even while the panel frame is shown.
     F.practice_active = false
@@ -1121,7 +1326,7 @@ do
     local practice_overlay = overlays(F)[6]
     eq(practice_overlay.shown, false, "the dropped overlay is hidden")
     eq(practice_overlay.desc, nil, "the dropped overlay lets go of its element")
-    eq(practice_overlay.fontstrings[1].text, "Practice panel", "the pooled overlay keeps its label")
+    eq(practice_overlay.visual.fontstrings[1].text, "Practice panel", "the pooled overlay keeps its label")
 
     -- refresh while inactive is a no-op.
     local idle = build()
@@ -1294,7 +1499,7 @@ do
         { design = { key = "test_pips", title = "Test pips" } })
     check(dm.registry.by_key.test_pips ~= nil, "the pips registers as a design target")
     eq(dm.registry.by_key.test_pips.title, "Test pips", "the design target carries the title")
-    eq(dm.registry.count, 10, "the registry grew by the pips element")
+    eq(dm.registry.count, 12, "the registry grew by the pips element")
     local desc = dm.registry.by_key.test_pips
     eq(desc.get_frame(), pips, "the design target resolves the pips frame")
 
@@ -1371,7 +1576,7 @@ do
     check(o ~= nil, "the bar overlay exists")
     local guides
     for _, f in ipairs(F.frames) do
-        if f.kind == "Frame" and f.name == nil and f.all_points and f.mouse == false then guides = f end
+        if f.kind == "Frame" and f.name == nil and f.all_points then guides = f end
     end
     check(guides ~= nil, "the guide frame exists")
 
@@ -1486,17 +1691,17 @@ do
     eq(titles[6], "Practice panel", "overlay 6 is the practice panel")
     eq(titles[7], "Practice rotation display", "overlay 7 is the rotation display")
     eq(titles[8], "Practice timeline", "overlay 8 is the timeline")
-    eq(F.created_frames, 2 + 8, "enter creates only the layer, guides and the 8 overlays")
+    eq(F.created_frames, 5 + 16, "enter creates the chrome and the 8 overlay pairs")
 
     -- The session ends: availability hides both without touching the pool.
     F.practice_active = false
     d.refresh()
     eq(#shown_overlay_titles(F), 5, "a stopped session loses panel + rotation + timeline overlays")
-    eq(F.created_frames, 2 + 8, "hiding reuses the pool (no new frame)")
+    eq(F.created_frames, 5 + 16, "hiding reuses the pool (no new frame)")
     F.practice_active = true
     d.refresh()
     eq(#shown_overlay_titles(F), 8, "a new session brings both overlays back")
-    eq(F.created_frames, 2 + 8, "reappearing reuses the pooled overlays")
+    eq(F.created_frames, 5 + 16, "reappearing reuses the pooled overlays")
 
     -- Drag save runs the practice module's own save seam with snapped coords:
     -- raw (-40, -200) on a 400x60 frame grids to (-40, -198); raw (100, 50)
@@ -1528,6 +1733,496 @@ do
     -- Double-click reset runs the module's own reset seam.
     ro:GetScript("OnDoubleClick")(ro)
     eq(F.rot_resets, 1, "rotation reset runs the delegate reset once")
+end
+
+--=========================================================================================
+-- 17) paladin bar-child behavior + practice report targets
+--=========================================================================================
+do
+    -- G1 (class-isolation 2026-10-21 C6): the seal-icon row and the twist
+    -- success text are the PALADIN's OWN design elements now. The shared registry
+    -- does not know them; the paladin registers them through DM.register_element
+    -- when its loader runs. This suite extracts the marked block from
+    -- classes/paladin.lua, runs it against a recording registrar, and drives the
+    -- descriptors exactly as the overlay refresh would.
+    local b = build()
+    local d = b.st.designmode
+    eq(d.registry.by_key.seal_icons, nil, "seal icons: the shared registry does not own it")
+    eq(d.registry.by_key.success_text, nil, "success text: the shared registry does not own it")
+    local dm_fh = assert(io.open(ROOT .. "designmode.lua", "r"))
+    local dm_src = dm_fh:read("*a")
+    dm_fh:close()
+    check(dm_src:find("ST.PALADIN", 1, true) == nil,
+        "designmode.lua no longer names the paladin")
+    check(dm_src:find("function DM.register_element(", 1, true) ~= nil,
+        "designmode.lua exposes the generic element-registration seam")
+    local pal_fh = assert(io.open(ROOT .. "classes/paladin.lua", "r"))
+    local pal_src = pal_fh:read("*a")
+    pal_fh:close()
+    local marker_a = "-- >>> design elements >>>"
+    local marker_z = "-- <<< design elements <<<"
+    local a = pal_src:find(marker_a, 1, true)
+    local z = pal_src:find(marker_z, 1, true)
+    check(a ~= nil and z ~= nil and a < z,
+        "classes/paladin.lua carries its design-element block")
+    local recorded = {}
+    local fake_dm = { register_element = function(desc) recorded[#recorded + 1] = desc end }
+    local pal_chunk = assert(loadstring(pal_src:sub(a + #marker_a, z - 1)))
+    setfenv(pal_chunk, setmetatable({ st = { designmode = fake_dm }, ST = b.ST },
+        { __index = _G }))
+    pal_chunk()
+    eq(#recorded, 2, "the paladin registers its own two design elements")
+    local seal_desc, text_desc = recorded[1], recorded[2]
+    eq(seal_desc.key, "seal_icons", "seal icons element key")
+    eq(seal_desc.title, "Seal icons", "seal icons element title")
+    eq(text_desc.key, "success_text", "success text element key")
+    eq(text_desc.title, "Successful twist text", "success text element title")
+    eq(seal_desc.get_frame(), nil, "seal icons: no visuals frame -> no frame")
+    eq(text_desc.get_frame(), nil, "success text: no visuals frame -> no frame")
+    local saved = {}
+    b.ST.PALADIN = {
+        save_seal_icons_position = function(_, x, y) saved.seal = { x, y } end,
+        reset_seal_icons_position = function(_) saved.seal_reset = true end,
+        save_twist_text_position = function(_, x, y) saved.text = { x, y } end,
+        reset_twist_text_position = function(_) saved.text_reset = true end,
+    }
+    local seal_frame, text_frame = make_frame("SealIcons"), make_frame("TwistText")
+    b.ST.get_visuals_frame = function(_, hand)
+        eq(hand, "mainhand", "seal icons: resolved off the mainhand visuals")
+        return { seal_icons = { frame = seal_frame }, twist_text = text_frame }
+    end
+    eq(seal_desc.get_frame(), seal_frame, "seal icons: resolves the icon row")
+    eq(text_desc.get_frame(), text_frame, "success text: resolves the twist text")
+    seal_desc.save(11, -22)
+    eq(saved.seal[1], 11, "seal icons save: forwards x")
+    eq(saved.seal[2], -22, "seal icons save: forwards y")
+    seal_desc.reset()
+    eq(saved.seal_reset, true, "seal icons reset: restores the attached layout")
+    text_desc.save(7, -70)
+    eq(saved.text[1], 7, "success text save: forwards x")
+    eq(saved.text[2], -70, "success text save: forwards y")
+    text_desc.reset()
+    eq(saved.text_reset, true, "success text reset: restores the attached layout")
+end
+
+do
+    -- M5: the report descriptors delegate to the practice module's own table:
+    -- hidden until shown, save/reset move the live frame.
+    local b = build({ practice_extras = true })
+    local d, F = b.st.designmode, b.sb
+    local hdesc = d.registry.by_key.practice_hunter_report
+    local edesc = d.registry.by_key.practice_warrior_report
+    check(hdesc ~= nil and edesc ~= nil, "both report descriptors are registered")
+    eq(hdesc.available(), false, "shot report: hidden until shown")
+    eq(edesc.available(), false, "Execute report: hidden until shown")
+    check(hdesc.get_frame() ~= nil, "shot report: resolves its frame through the delegate")
+    check(edesc.get_frame() ~= nil, "Execute report: resolves its frame through the delegate")
+
+    -- Shown: both join the overlay set (rotation + timeline + 2 reports).
+    F.hr_shown, F.er_shown = true, true
+    d.enter()
+    local titles = shown_overlay_titles(F)
+    eq(#titles, 10, "enter with both reports shown draws all ten overlays")
+    eq(titles[9], "Hunter shot report", "overlay 9 is the shot report")
+    eq(titles[10], "Warrior Execute report", "overlay 10 is the Execute report")
+    F.hr_shown = false
+    d.refresh()
+    eq(#shown_overlay_titles(F), 9, "hiding the shot report drops its overlay")
+    F.hr_shown = true
+    d.refresh()
+    eq(#shown_overlay_titles(F), 10, "re-showing brings the overlay back")
+
+    -- Drag save runs the delegate seam with the snapped drop.
+    hdesc.save(120, 60)
+    eq(F.hr_saves, 1, "shot report drag runs the delegate save once")
+    eq(F.hr_saved[1], 120, "shot report drag saves the x")
+    hdesc.reset()
+    eq(F.hr_resets, 1, "shot report reset runs the delegate reset once")
+    edesc.save(-40, 90)
+    eq(F.er_saves, 1, "Execute report drag runs the delegate save once")
+    edesc.reset()
+    eq(F.er_resets, 1, "Execute report reset runs the delegate reset once")
+    d.exit()
+end
+
+--=========================================================================================
+-- 17) Font: the overlay title carries a font BEFORE its first SetText
+--
+-- The SoD client throws "FontString:SetText(): Font not set" when a FontString
+-- receives text before any SetFont. The sandbox FontString above is SoD-faithful
+-- (SetFont(nil) latches nothing; SetText with no font throws), so a fontless title
+-- dies in this suite instead of the client's chat box. The title is fonted through
+-- the shared chain (utils.lua apply_font): the caller's path -> STANDARD_TEXT_FONT
+-- -> the classic client font, every step pcall-guarded and never throwing.
+--=========================================================================================
+do
+    local function read(path)
+        local f = assert(io.open(ROOT .. path, "r"))
+        local text = f:read("*a")
+        f:close()
+        return text
+    end
+
+    -- The standard font is the chain's middle step: a distinctive value proves it
+    -- carried the title (and not the classic-client fallback).
+    local F = build({ std_font = "Fonts\\STANDARD_TEST.TTF" })
+    local d = F.st.designmode
+    local ok_enter, err_enter = pcall(d.enter)
+    check(ok_enter, "font: entering design mode never throws (" .. tostring(err_enter) .. ")")
+    local ovs = overlays(F.sb)
+    check(#ovs > 0, "font: the session drew at least one overlay")
+    local fonted, unfonted = 0, 0
+    for _, o in ipairs(ovs) do
+        local title = o.visual.fontstrings[1]
+        if title and title.font ~= nil then
+            fonted = fonted + 1
+            eq(title:GetFont(), "Fonts\\STANDARD_TEST.TTF",
+                "font: the overlay title carries the standard font")
+        else
+            unfonted = unfonted + 1
+        end
+    end
+    eq(unfonted, 0, "font: every overlay title carries a font")
+    check(fonted > 0, "font: the overlay titles are fonted")
+    d.exit()
+
+    -- No STANDARD_TEXT_FONT on the client: the chain's classic-client fallback still
+    -- carries the title (the call never throws).
+    local G = build({ std_font = false })
+    local ok_enter2, err_enter2 = pcall(G.st.designmode.enter)
+    check(ok_enter2, "font: entering without STANDARD_TEXT_FONT never throws (" .. tostring(err_enter2) .. ")")
+    local fallback = overlays(G.sb)[1]
+    check(fallback ~= nil and fallback.visual.fontstrings[1] ~= nil
+        and fallback.visual.fontstrings[1].GetFont() == "Fonts\\FRIZQT__.TTF",
+        "font: a missing STANDARD_TEXT_FONT falls back to the classic client font")
+    G.st.designmode.exit()
+
+    -- Source order: the shared chain fonts the title before its first SetText, and no
+    -- direct SetFont call survives in designmode.lua.
+    local src = read("designmode.lua")
+    local font_at = src:find("st.utils.apply_font(o.title", 1, true)
+    local text_at = src:find("o.title:SetText(", 1, true)
+    check(font_at ~= nil and text_at ~= nil and font_at < text_at,
+        "font: the overlay title is fonted before its first SetText")
+    check(src:find(":SetFont(", 1, true) == nil,
+        "font: no direct SetFont call survives in designmode.lua")
+    check(src:find("st.utils.apply_font", 1, true) ~= nil,
+        "font: designmode.lua uses the shared font chain")
+end
+
+--=========================================================================================
+-- 18) R1: the options panel keeps its mouse - no design surface swallows a press
+--
+-- Facts: the options panel is the AceGUI "Frame" container at FULLSCREEN_DIALOG /
+-- level 100 (AceGUIContainer-Frame.lua:189-190); its title drag only ENDS in the
+-- title's own mouse-up (same file :40-54, :233-237), so any mouse-enabled design
+-- frame over it can eat the press. The strata ladder: ... DIALOG < FULLSCREEN <
+-- FULLSCREEN_DIALOG < TOOLTIP.
+--=========================================================================================
+do
+    local b = build()
+    local d, F = b.st.designmode, b.sb
+    d.enter()
+
+    -- The full-screen design chrome is explicitly mouse-transparent...
+    eq(layer_of(F).mouse, false, "R1: the veil + grid layer never takes mouse")
+    local guides
+    for _, f in ipairs(F.frames) do
+        if f.kind == "Frame" and f.name == nil and f.all_points then guides = guides or f end
+    end
+    eq(guides.mouse, false, "R1: the guides never take mouse")
+    -- ...the overlay visuals too (they ride above the panel, so they must pass every
+    -- press through to it)...
+    for i, o in ipairs(overlays(F)) do
+        eq(o.visual.mouse, false, "R1: overlay " .. i .. "'s visual never takes mouse")
+    end
+    -- ...and the mouse-enabled input sits a whole strata BELOW the panel, so not even
+    -- an element sitting exactly under the panel can take its press.
+    for i, o in ipairs(overlays(F)) do
+        eq(o.mouse, true, "R1: overlay " .. i .. " stays draggable")
+        eq(o.strata, "FULLSCREEN", "R1: overlay " .. i .. "'s input sits below the panel")
+    end
+    -- The one design surface allowed above the panel is the small control panel (its
+    -- own rect, never full-screen) - R1's explicit exception.
+    local control = control_of(F)
+    eq(control.level, 150, "R1: only the control panel rides above the panel")
+    check(control.w <= 400 and control.h <= 200, "R1: the control panel is a small rect, not full-screen")
+    -- And design mode never touches the panel frame itself (R6 keeps it as today).
+    eq(F.options_frame.strata, nil, "R1: design mode never re-stratas the options panel")
+    eq(F.options_frame.points, nil, "R1: design mode never re-anchors the options panel")
+    d.exit()
+end
+
+--=========================================================================================
+-- 19) R2: the design visuals draw ABOVE the options panel, drag maths untouched
+--=========================================================================================
+do
+    local b = build({ hands = { "mainhand" }, practice = false })
+    local d, F = b.st.designmode, b.sb
+    F.options_frame:Show()                  -- the panel is open over the design session
+    d.enter()
+    local layer = layer_of(F)
+    eq(layer.strata, "FULLSCREEN_DIALOG", "R2: the layer draws at the panel's strata")
+    check(layer.level > 100, "R2: the layer draws over the panel (level > 100)")
+    local guides
+    for _, f in ipairs(F.frames) do
+        if f.kind == "Frame" and f.name == nil and f.all_points then guides = guides or f end
+    end
+    check(guides.level > 100, "R2: the guides draw over the panel")
+    local o = overlay_for(F, "Mainhand bar")
+    eq(o.visual.strata, "FULLSCREEN_DIALOG", "R2: the overlay visual draws at the panel's strata")
+    check(o.visual.level > 100, "R2: the overlay visual draws over the panel")
+    eq(o.visual.shown, true, "R2: the overlay stays visible while the panel is open")
+
+    -- The drag maths is untouched with the panel open: the tick moves the TARGET
+    -- through the same centre maths, both overlay frames keep their anchors on the
+    -- element's box (they ride it in the client, drag tick included), and the drop
+    -- hands the snapped coordinates to the element's OWN save seam - the db keys stay
+    -- the single source of truth.
+    local bar = F.element.bar_mainhand
+    bar.cx, bar.cy = 50, 60
+    bar.w, bar.h = 200, 20
+    F.cursor_x, F.cursor_y = 200, 100
+    o:GetScript("OnDragStart")(o)
+    eq(o.dragging, true, "R2: the drag starts while the panel is open")
+    eq(last_point(bar)[4], 52, "R2: the tick still snaps the target (x)")
+    eq(last_point(bar)[5], 62, "R2: the tick still snaps the target (y)")
+    eq(o.points[1][2], bar, "R2: the input still hugs the target box during the drag")
+    eq(o.visual.points[1][2], bar, "R2: the visual still hugs the target box during the drag")
+    o:GetScript("OnDragStop")(o)
+    eq(#F.lwin_saved, 1, "R2: the drop runs the bar's own save (LibWindow.SavePosition)")
+    eq(F.lwin_saved[1].point[4], 52, "R2: ...with the snapped x")
+    eq(F.lwin_saved[1].point[5], 62, "R2: ...with the snapped y")
+    d.exit()
+end
+
+--=========================================================================================
+-- 20) R3: opening/closing/escaping the options never takes the session down
+--=========================================================================================
+do
+    local b = build()
+    local d, F = b.st.designmode, b.sb
+    d.enter()
+    local layer = layer_of(F)
+
+    -- (a) Open + close the panel (its CLOSE button / ACD Close): the session and the
+    -- visuals survive - nothing in designmode.lua hooks the panel's lifetime.
+    F.options_frame:Show()
+    check(d.is_active(), "R3: opening the options panel leaves design mode active")
+    eq(layer.shown, true, "R3: opening the options panel leaves the visuals up")
+    layer:GetScript("OnUpdate")(layer, 10)
+    eq(registered_in_specials(F, "SwedgeTimerDesignMode"), false,
+        "R3: while the panel is open the layer is out of UISpecialFrames")
+    F.options_frame:Hide()
+    check(d.is_active(), "R3: closing the options panel leaves design mode active")
+    eq(layer.shown, true, "R3: closing the options panel leaves the visuals up")
+    layer:GetScript("OnUpdate")(layer, 10)
+    eq(registered_in_specials(F, "SwedgeTimerDesignMode"), true,
+        "R3: the close puts the layer back into UISpecialFrames")
+
+    -- (b) Esc while the panel is open: the layer is out of the list, so the client's
+    -- CloseSpecialWindows (UIParentPanelManager.lua:1041-1050) cannot reach it, while
+    -- AceConfigDialog's wrapper still closes the panel in the same press.
+    F.options_frame:Show()
+    layer:GetScript("OnUpdate")(layer, 10)
+    local prints = #F.prints
+    client_escape(F)
+    check(d.is_active(), "R3: Esc with the options panel open keeps design mode alive")
+    eq(layer.shown, true, "R3: ...and keeps the visuals up")
+    eq(F.options_frame:IsShown(), false, "R3: ...while that Esc still closes the options panel")
+    eq(#F.prints, prints, "R3: ...with no design-mode notice")
+
+    -- (c) With the panel gone the next tick re-registers the layer: the NEXT Esc
+    -- (nothing else open) ends the session exactly as before.
+    layer:GetScript("OnUpdate")(layer, 10)
+    eq(registered_in_specials(F, "SwedgeTimerDesignMode"), true,
+        "R3: closing the options re-registers the layer")
+    client_escape(F)
+    eq(d.is_active(), false, "R3: Esc with nothing else open still ends design mode")
+    eq(layer.shown, false, "R3: ...hiding the visuals")
+    check(F.prints[#F.prints]:find("Design mode off", 1, true) ~= nil,
+        "R3: ...with the usual off notice")
+
+    -- (d) The race backstop: the panel opens and Esc lands BEFORE the next tick's
+    -- de-registration - the layer's OnHide puts itself straight back up.
+    d.enter()
+    layer = layer_of(F)
+    F.options_frame:Show()
+    layer:GetScript("OnUpdate")(layer, 10)  -- not needed for the race, but harmless
+    layer:Hide()                            -- what the client's CloseSpecialWindows does
+    eq(layer.shown, true, "R3: OnHide re-shows the layer while an options window is open")
+    check(d.is_active(), "R3: the OnHide backstop keeps design mode alive in the race")
+    eq(registered_in_specials(F, "SwedgeTimerDesignMode"), false,
+        "R3: the backstop also re-syncs the registration")
+    F.options_frame:Hide()
+    d.exit()
+
+    -- (e) The Classic Interface Options window (host of the AddToBlizOptions embed)
+    -- counts as an options window too; every read is nil-safe.
+    d.enter()
+    layer = layer_of(F)
+    F.interface_options:Show()
+    layer:GetScript("OnUpdate")(layer, 10)
+    eq(registered_in_specials(F, "SwedgeTimerDesignMode"), false,
+        "R3: an open Interface Options window drops the layer too")
+    F.interface_options:Hide()
+    layer:GetScript("OnUpdate")(layer, 10)
+    eq(registered_in_specials(F, "SwedgeTimerDesignMode"), true,
+        "R3: closing it re-registers the layer")
+    d.exit()
+
+    -- (f) Inactive: the historic permanent registration is kept (a hidden layer in
+    -- the list is a no-op, and this is how the module always behaved).
+    eq(registered_in_specials(F, "SwedgeTimerDesignMode"), true,
+        "R3: a stopped session keeps its UISpecialFrames registration")
+end
+
+--=========================================================================================
+-- 21) R4: the control panel's LOCK/EXIT buttons
+--=========================================================================================
+do
+    local b = build({ hands = { "mainhand" }, practice = false })
+    local d, F = b.st.designmode, b.sb
+    d.enter()
+    local control = control_of(F)
+    local o = overlay_for(F, "Mainhand bar")
+    local bar = F.element.bar_mainhand
+    bar.cx, bar.cy = 50, 60
+    bar.w, bar.h = 200, 20
+
+    -- Unlocked (the default): the overlay drags exactly as before.
+    F.cursor_x, F.cursor_y = 200, 100
+    o:GetScript("OnDragStart")(o)
+    eq(o.dragging, true, "R4: unlocked, the overlay drags")
+    o:GetScript("OnDragStop")(o)
+    eq(#F.lwin_saved, 1, "R4: unlocked, the drop saves through the element's seam")
+
+    -- LOCK: the button flips the session state AND its label.
+    control.lock_btn:GetScript("OnClick")(control.lock_btn)
+    eq(d.is_locked(), true, "R4: the lock button locks")
+    eq(control.lock_btn.text, "Unlock frames", "R4: the lock label shows the state")
+
+    -- Locked: visible but frozen - no drag, no reset, no tick.
+    eq(o.shown, true, "R4: locked, the overlay stays shown")
+    eq(o.visual.shown, true, "R4: locked, the visual stays shown")
+    local saves = #F.lwin_saved
+    local hand_before = F.hand_dbs.mainhand.x
+    F.cursor_x, F.cursor_y = 300, 200
+    o:GetScript("OnDragStart")(o)
+    eq(o.dragging, nil, "R4: locked, the drag is refused")
+    eq(o:GetScript("OnUpdate"), nil, "R4: locked, no drag tick is hooked")
+    o:GetScript("OnDoubleClick")(o)
+    eq(#F.lwin_saved, saves, "R4: locked, the double-click reset is refused too")
+    eq(F.hand_dbs.mainhand.x, hand_before, "R4: locked, no position is written")
+
+    -- UNLOCK: the same button restores the current behaviour.
+    control.lock_btn:GetScript("OnClick")(control.lock_btn)
+    eq(d.is_locked(), false, "R4: the button unlocks again")
+    eq(control.lock_btn.text, "Lock frames", "R4: the label returns")
+    F.cursor_x, F.cursor_y = 200, 100
+    o:GetScript("OnDragStart")(o)
+    eq(o.dragging, true, "R4: unlocked, the overlay drags again")
+    o:GetScript("OnDragStop")(o)
+    eq(#F.lwin_saved, saves + 1, "R4: unlocked, the save seam runs again")
+
+    -- The overlay tooltip announces the lock while it is on.
+    control.lock_btn:GetScript("OnClick")(control.lock_btn)
+    F.tooltip_lines = nil
+    o:GetScript("OnEnter")(o)
+    local found = false
+    for i = 1, #(F.tooltip_lines or {}) do
+        if F.tooltip_lines[i]:find("locked", 1, true) then found = true end
+    end
+    eq(found, true, "R4: the overlay tooltip announces the lock")
+
+    -- EXIT while still locked: the same path /st design takes (DM.exit -> stop), and
+    -- the session lock dies with the session.
+    control.exit_btn:GetScript("OnClick")(control.exit_btn)
+    eq(d.is_active(), false, "R4: the exit button ends design mode")
+    eq(control.shown, false, "R4: ...hiding the control panel")
+    check(F.prints[#F.prints]:find("Design mode off", 1, true) ~= nil,
+        "R4: ...through the usual notice")
+    eq(d.is_locked(), false, "R4: the session lock dies with the session")
+
+    -- The lock is per session: a fresh enter starts unlocked again.
+    control.lock_btn:GetScript("OnClick")(control.lock_btn)   -- sets the pooled button's state
+    d.enter()
+    eq(d.is_locked(), false, "R4: a fresh session starts unlocked")
+    eq(control_of(F).lock_btn.text, "Lock frames", "R4: ...with the Lock label back")
+    d.exit()
+end
+
+--=========================================================================================
+-- 22) R5: no protected/secure calls, no frame creation in combat
+--=========================================================================================
+do
+    -- (a) Enter under lockdown refuses BEFORE any frame (control panel included) is
+    -- built: ensure_* only runs after the combat guard.
+    local b = build()
+    b.sb.lockdown = true
+    b.st.designmode.enter()
+    eq(b.sb.created_frames, 0, "R5: enter in combat creates no control panel either")
+    eq(b.st.designmode.is_active(), false, "R5: enter in combat stays inactive")
+    b.sb.lockdown = false
+
+    -- (b) A fight starting takes the control panel down with the session, and the
+    -- refused exit under lockdown changes nothing.
+    local d, F = b.st.designmode, b.sb
+    d.enter()
+    local control = control_of(F)
+    eq(control.shown, true, "R5: the control panel is up between fights")
+    d.set_locked(true)
+    F.lockdown = true
+    d.exit()
+    eq(d.is_active(), true, "R5: exit is refused in combat (as before)")
+    eq(control.shown, true, "R5: the refused exit leaves the panel up")
+    eq(d.is_locked(), true, "R5: the refused exit leaves the lock alone")
+    d.on_combat_start()
+    eq(control.shown, false, "R5: the fight-start close hides the control panel")
+    eq(d.is_locked(), false, "R5: the fight-start close also clears the lock")
+
+    -- (c) Static: the module holds no secure-hander / protected-call pattern.
+    local f = assert(io.open(ROOT .. "designmode.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    for _, needle in ipairs({ "SecureActionButtonTemplate", "SecureHandler",
+        "RegisterStateDriver", "SetAttribute(" }) do
+        check(src:find(needle, 1, true) == nil, "R5: no protected pattern '" .. needle .. "'")
+    end
+end
+
+--=========================================================================================
+-- 23) R6: nothing outside design mode changes
+--=========================================================================================
+do
+    -- At load the module creates nothing at all (also pinned in section 1).
+    local b = build()
+    local d, F = b.st.designmode, b.sb
+    eq(#F.frames, 0, "R6: a fresh load builds nothing")
+    eq(F.options_frame:IsShown(), false, "R6: the fixture's options panel starts closed")
+
+    -- During a session with the panel open, then stopped: every design surface is
+    -- hidden afterwards, the panel keeps its own state, and no frame is rebuilt.
+    d.enter()
+    local control = control_of(F)
+    local o = overlay_for(F, "Mainhand bar")
+    local layer = layer_of(F)
+    F.options_frame:Show()
+    d.exit()
+    eq(control.shown, false, "R6: the control panel is hidden while design mode is off")
+    eq(o.shown, false, "R6: the overlay input is hidden while design mode is off")
+    eq(o.visual.shown, false, "R6: the overlay visual is hidden while design mode is off")
+    eq(layer.shown, false, "R6: the veil is hidden while design mode is off")
+    eq(F.options_frame:IsShown(), true, "R6: stopping design mode leaves the options panel open")
+    eq(d.is_active(), false, "R6: design mode is off")
+    eq(d.is_locked(), false, "R6: the lock is off")
+
+    -- A second cycle re-uses every pooled frame: no rebuild, no new mouse surface.
+    local frames = F.created_frames
+    d.enter()
+    eq(F.created_frames, frames, "R6: re-entering re-uses the pooled panel + overlays")
+    d.exit()
+    eq(F.created_frames, frames, "R6: a full cycle creates nothing new")
 end
 
 --=========================================================================================

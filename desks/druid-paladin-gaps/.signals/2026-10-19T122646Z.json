@@ -1,0 +1,22 @@
+{
+  "agent_name": "druid-paladin-gaps",
+  "escalation": {
+    "blocked_on": null,
+    "reason": null,
+    "recommendation": null
+  },
+  "patterns": {
+    "skill_gap": "SoD TF energy grant beyond the cited +60 needs in-client confirmation before extending the supplier",
+    "what_was_hard": "Scope forbade both TOC edits and new-file harness breakage, so the NEW-module requirement was satisfied without new files; concurrent lanes dirtied the tree mid-run (bars_state/wiring_check noise isolated, none mine)",
+    "what_worked": "Pure-first math with nil-safe unknown-hides kept every pre-existing pin green; family-gated SoD supplier preserved legacy behavior elsewhere"
+  },
+  "self_assessment": {
+    "accuracy": 5,
+    "completeness": 5,
+    "confidence": 4,
+    "intent": 5
+  },
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T12:26:46Z"
+}

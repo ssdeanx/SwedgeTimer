@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T13:59:29Z",
+  "agent_name": "warrior-rotfix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "audit spec was truncated mid-G1 on disk; rebuilt the gap list from the audit-desk journal + memory, then re-verified every id against fresh wowsims APL/Go sources and wowhead spell pages before editing",
+    "what_was_hard": "ww_ids held 7 wrong ids (only 1680 valid); the 47436 Battle-Shout collision and 25208 Rend misplacement crossed two tables; wiring_check rejected the first-draft hamstring matcher (dead hook) and it was removed per wire-not-strip, keeping the knowledge probe",
+    "skill_gap": "none new; SoD/Wrath floor numbers and slot-shape decisions need owner/design input, filed as follow-ups"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-21T14:47:54Z",
+  "agent_name": "class-activation",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 3
+  },
+  "patterns": {
+    "what_worked": "Surgical wrapper edits: the rogue body was wrapped without re-indenting or reformatting; activation placed in init_libs before post_init; order pinned by a loader that installs the hooks, so a wrong order leaves no post_init hook. All 10 mutation proofs fail the owning suite.",
+    "what_was_hard": "Six shared suites load classes/rogue.lua and assert on its body; they needed the generic loader activation (combined brief R5) to keep the harness green. The toc_check local guard now measures the wrapper (3) instead of the body closure (71) - filed with the exact fix, not edited.",
+    "skill_gap": "First edit raced a parallel shell append on the same file (the closing end was lost); re-applied sequentially and verified with luac. Rule for next time: never touch the same file from two calls in one block."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "A2: wrap the other five class files, add the all-six proof suite, and decide whether Auto + a missing supported module should print the fail-closed line (A1 only notices an explicit pick or a throwing loader). Apply the filed toc_check max-locals fix."
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:06:00Z",
+  "run_id": "shaman-slots-2026-10-19",
+  "agent_name": "shaman-slots",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The LS maintain rides the charge row's own aura walk (no new read at all), and the Searing maintain reused the audit's own pure predicate - moving it up so the live guide and the D-S4 drill grade one gate instead of two. The client's own spell data resolves both UNCONFIRMED slot ids by name, which kills the blank-icon risk without inventing an id.",
+    "what_was_hard": "The ranking (rule 11b below Fire Nova, above Lava Lash) had to match BOTH the sim APL spine and the frozen rotation table, and the Searing Totem is a talent on Era/SoD - an ungated maintain would prompt a player who cannot cast it, so it carries the same known gate the Fire Elemental (also a talent) carries.",
+    "skill_gap": "The HUD row's geometry is driven by the toggle-level want, so a new HUD slot without a config_presets default is counted in the row width before the provider's first hide observation - the provider-level nil=off hide self-corrects it in the first tick, but the options pass still owns the default."
+  },
+  "escalation": {
+    "reason": "The harness's single red at the lane's close is tests/druid_state.lua (the druid energy-shift grade) - the parallel druid lane's mid-edit (classes/druid.lua changed at 22:03). That suite loads none of this lane's files, so it is crossfire for the orchestrator to reconcile, not a regression here.",
+    "blocked_on": null,
+    "recommendation": "Orchestrator: validate the six in-scope files, dispatch the options pass for hud_show_lightningshield / hud_show_searing (default false) + the widgets, and note the filed CoE water-clock probe for a future lane."
+  }
+}

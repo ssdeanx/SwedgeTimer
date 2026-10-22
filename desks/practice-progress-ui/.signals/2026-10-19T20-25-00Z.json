@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T20:25:00Z",
+  "run_id": "practice-progress-ui-2026-10-19",
+  "agent_name": "practice-progress-ui",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the two pure modules' read models first and rendering ONLY what they produce meant the page could never disagree with the rules - every figure traces to st.practice_stats.snapshot / st.practice_progress.profile_snapshot. Making the options page a set of description widgets whose name is a function kept it additive (no get/set, so no db key) and let the reset live entirely in the module, where it could drop the hook lane's live cache and refuse a newer-build blob. The 33-mutant sweep (missing toc line, bad defaults, unwired reset, broken sparkline, broken scroll) proved the pins bite.",
+    "what_was_hard": "The history list's scroll. A client ScrollFrame would have been 5 lines, but its scroll range and UpdateScrollChildRect semantics cannot be verified offline, so it would have shipped as UNCONFIRMED in-client behaviour. Replaced it with a module-owned offset plus a thumb - more code, but fully offline-provable and it degrades to 'the newest sessions are visible'. The other hard part was the concurrent practice-hook lane editing practice_ui.lua, config.lua and practice_progress.lua underneath this lane: one harness red (a frame-count pin in practice_ui_state.lua) was theirs, not mine, and it cleared on its own.",
+    "skill_gap": "The first draft of the options page referenced a local helper (ui_module_refresh) that was declared AFTER the table constructor - a Lua closure scoping trap that only showed up when the button was actually clicked. Defensive: declare locals before the closures that capture them."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

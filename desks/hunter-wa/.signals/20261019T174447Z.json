@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T17:44:47Z",
+  "agent_name": "hunter-wa",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "WA JSON proved the id->name leg (GetSpellInfo on TBC), so spell_token maps dynamically with no hardcoded English names; guide-suite TBC stub made name-aware instead of weakening pins",
+    "what_was_hard": "concurrent lanes editing the same test files mid-session (harness reds + luacheck warnings in shaman/druid/rogue files); guide-suite id-keyed cooldown stub masked the TBC-name breakage until the 8-fail triage",
+    "skill_gap": "in-client TBC verification still owed (name-form state queries need 2.5.6 confirmation)"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

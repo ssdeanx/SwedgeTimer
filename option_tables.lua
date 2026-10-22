@@ -178,7 +178,9 @@ function ST:generate_top_level_options_table()
         name = "Melee-weave proximity bar",
         desc = "Show a vertical bar next to the player frame that fills as the distance to "..
             "your attackable target closes (melee to 30 yd) and drains as it grows; the "..
-            "label prints the current range band in yards. Off by default.",
+            "label prints the current range band in yards. Off by default. When enabled "..
+            "with no target or no range reading the bar hides rather than guessing - an "..
+            "empty bar means unknown, not zero.",
         get = function()
             return ST:get_class_table().weave_range_enabled == true
         end,
@@ -189,23 +191,41 @@ function ST:generate_top_level_options_table()
             return not ST:get_class_table().class_enabled
         end,
     }
-    self.opts_table.args.timers_locked = {
-        type = "toggle",
-        order = 1.2,
-        name = "Timers locked",
-        desc = "Prevents all swing timers from being dragged or scaled with the mouse.",
+    -- Class activation (main.lua: ST:activate_class). Operator order 2026-10-21:
+    -- only the selected class's module executes. "Auto" (default) is the class being
+    -- played; an explicit pick activates that class's module instead. The value is read
+    -- at init, so a change applies at the next login/reload. Nil-safe: a stored false
+    -- hides the widget, and nil reads as "Auto".
+    self.opts_table.args.class_activation = {
+        type = "select",
+        order = 1.14,
+        name = "Class module",
+        desc = "Which class module SwedgeTimer activates. Auto (the default) activates the "..
+            "class you are playing; picking a class activates that class's module instead. "..
+            "Only the selected class is loaded - the others stay inert. Applies at the next "..
+            "login or reload.",
+        values = {
+            Auto = "Auto (your class)",
+            DRUID = "Druid",
+            HUNTER = "Hunter",
+            PALADIN = "Paladin",
+            ROGUE = "Rogue",
+            SHAMAN = "Shaman",
+            WARRIOR = "Warrior",
+        },
+        sorting = { "Auto", "DRUID", "HUNTER", "PALADIN", "ROGUE", "SHAMAN", "WARRIOR" },
         get = function()
-            local db = ST:get_class_table()
-            return db.timers_locked
-        end,
-        set = function(_, input)
-            local db = ST:get_class_table()
-            db.timers_locked = input
-            if db.timers_locked then
-                ST:lock_frames()
-            else
-                ST:unlock_frames()
+            local value = ST:get_class_table().class_activation
+            if value == nil or value == false then
+                return "Auto"
             end
+            return value
+        end,
+        set = function(_, value)
+            ST:get_class_table().class_activation = value
+        end,
+        hidden = function()
+            return ST:get_class_table().class_activation == false
         end,
     }
     self.opts_table.args.welcome_message = {
@@ -216,37 +236,66 @@ function ST:generate_top_level_options_table()
         get = "getter",
         set = "setter",
     }
-    -- Diagnostics (diag.lua): per-tick budget counters. Off by default; the gate is
-    -- decided at init, so the toggle applies at the next login/reload (see diag.lua's
-    -- wrap_onupdate).
-    self.opts_table.args.diag_tick_counters = {
-        type = "toggle",
-        order = 1.31,
-        name = "Diagnostic tick counters",
-        desc = "Count the hand-bar OnUpdate ticks and measure their CPU time for /st diag. "..
-            "Applies at the next login or reload; off by default.",
-        get = "getter",
-        set = "setter",
-    }
-    -- Enemy swing bar (enemy_swing.lua): the hostile-target swing bar, classic-line
-    -- families only. Off by default; the driver reads the toggle live on its events.
-    self.opts_table.args.enemy_swing_enabled = {
-        type = "toggle",
-        order = 1.32,
-        name = "Enemy swing bar",
-        desc = "Track your hostile target's mainhand swing with a bar under the mainhand "..
-            "timer (classic-line clients only). Off by default.",
-        get = "getter",
-        set = "setter",
-    }
 
-    -- Add behaviour panel
+    -- Add behaviour panel: the scattered timer-behaviour toggles live here, not at
+    -- top level (the panel shipped empty before 2026-10-19). Each moved widget keeps
+    -- its live consumer - timers_locked -> main.lua lock/unlock + designmode.lua +
+    -- hunter_ui.lua reads; diag_tick_counters -> diag.lua wrap_onupdate (~= true
+    -- gate, config.lua false); enemy_swing_enabled -> enemy_swing.lua
+    -- feature_enabled (== true gate, config.lua false). Per-hand visibility
+    -- (show_behaviour/show_condition/require_in_range/dim_oor) stays in the hand
+    -- panels: those keys live in the per-hand db tables and main.lua
+    -- handle_bar_visibility reads them there, so a global copy would orphan.
     ST.behaviour_group = {
         name = "Behaviour",
         type = "group",
         desc = "Configure timer behaviour options.",
         order = 1.4,
-        args = {},
+        handler = ST.opts_funcs.global,
+        args = {
+            timers_locked = {
+                type = "toggle",
+                order = 1.1,
+                name = "Timers locked",
+                desc = "Prevents all swing timers from being dragged or scaled with the mouse.",
+                get = function()
+                    local db = ST:get_class_table()
+                    return db.timers_locked
+                end,
+                set = function(_, input)
+                    local db = ST:get_class_table()
+                    db.timers_locked = input
+                    if db.timers_locked then
+                        ST:lock_frames()
+                    else
+                        ST:unlock_frames()
+                    end
+                end,
+            },
+            -- Enemy swing bar (enemy_swing.lua): the hostile-target swing bar, classic-line
+            -- families only. Off by default; the driver reads the toggle live on its events.
+            enemy_swing_enabled = {
+                type = "toggle",
+                order = 1.2,
+                name = "Enemy swing bar",
+                desc = "Track your hostile target's mainhand swing with a bar under the mainhand "..
+                    "timer (classic-line clients only). Off by default.",
+                get = "getter",
+                set = "setter",
+            },
+            -- Diagnostics (diag.lua): per-tick budget counters. Off by default; the gate is
+            -- decided at init, so the toggle applies at the next login/reload (see diag.lua's
+            -- wrap_onupdate).
+            diag_tick_counters = {
+                type = "toggle",
+                order = 1.3,
+                name = "Diagnostic tick counters",
+                desc = "Count the hand-bar OnUpdate ticks and measure their CPU time for /st diag. "..
+                    "Applies at the next login or reload; off by default.",
+                get = "getter",
+                set = "setter",
+            },
+        },
     }
     ST.opts_table.args.behaviour = ST.behaviour_group
 
@@ -275,14 +324,18 @@ function ST:generate_top_level_options_table()
                 type = "execute",
                 order = 1.1,
                 name = function()
-                    if st.designmode and st.designmode.is_active() then
+                    -- Callable-guarded, not just nil-guarded: a partially loaded
+                    -- designmode.lua leaves st.designmode without is_active, and a
+                    -- throwing name blanks the whole Design Mode page in AceConfig.
+                    if st.designmode and type(st.designmode.is_active) == "function"
+                        and st.designmode.is_active() then
                         return "Stop Design Mode"
                     end
                     return "Start Design Mode"
                 end,
                 desc = "Toggle design mode. Also available as /st design; Esc ends it.",
                 func = function()
-                    if st.designmode then
+                    if st.designmode and type(st.designmode.toggle) == "function" then
                         st.designmode.toggle(ST)
                     end
                 end,
@@ -297,7 +350,9 @@ function ST:generate_top_level_options_table()
                 end,
                 set = function(_, value)
                     ST:get_class_table().design_grid_enabled = value
-                    if st.designmode then st.designmode.refresh_grid() end
+                    if st.designmode and type(st.designmode.refresh_grid) == "function" then
+                        st.designmode.refresh_grid()
+                    end
                 end,
             },
             design_grid = {
@@ -311,7 +366,9 @@ function ST:generate_top_level_options_table()
                 end,
                 set = function(_, value)
                     ST:get_class_table().design_grid = value
-                    if st.designmode then st.designmode.refresh_grid() end
+                    if st.designmode and type(st.designmode.refresh_grid) == "function" then
+                        st.designmode.refresh_grid()
+                    end
                 end,
                 disabled = function()
                     return ST:get_class_table().design_grid_enabled == false
@@ -364,6 +421,524 @@ function ST:generate_top_level_options_table()
                 order = 1.6,
                 name = "\nElements only exist while their module has built them - a class with no "..
                     "Cooldown HUD slots or a hidden practice panel will not offer one to position.",
+            },
+        },
+    }
+
+    -- Add the Practice Mode page (practice.lua registry + practice_ui.lua session):
+    -- the dedicated-page shape of the archived settings (settings_ui.lua
+    -- "Guides & Practice" > "Practice Mode": Simulation / Boss fight /
+    -- Rotation display / Fight timeline / Feedback). The toggle below is the
+    -- same seam as the class panel's Start/Stop Practice and /st practice: one
+    -- session, no new invocation. Drill rows mirror the archive Simulation /
+    -- Boss-fight tabs with live consumers in practice_ui.lua; the paladin class
+    -- panel keeps its own practice widgets untouched.
+    ST.opts_table.args.practice = {
+        name = "Practice",
+        type = "group",
+        desc = "Run class practice drills: simulated fights with graded attempts.",
+        order = 1.46,
+        args = {
+            practice_desc = {
+                type = "description",
+                order = 1.0,
+                name = "Class practice drills: fully simulated fights (no mana cost, no real "..
+                    "casts) with graded attempts. Panel icons and keybinds cast simulated "..
+                    "spells; the class panels drill their own technique - paladin seal-twist "..
+                    "timing on the swing sim (plus the Avenging Wrath + Haste Pot / Seal of "..
+                    "Blood macro window), hunter forced-move windows, shaman weave timing, "..
+                    "rogue energy-pool timing (plus the Era SS-after-swing window), druid "..
+                    "powershifts - while warrior grades live Execute-range entries with no "..
+                    "sim of its own. Start here, from the class panel, or with /st practice.",
+            },
+            practice_toggle = {
+                type = "execute",
+                order = 1.1,
+                name = function()
+                    if st.practice_ui and type(st.practice_ui.is_active) == "function"
+                        and st.practice_ui.is_active() then
+                        return "Stop Practice"
+                    end
+                    return "Start Practice"
+                end,
+                desc = "Toggle the practice session (same session as /st practice and the class panel button). A session can only be started out of combat.",
+                func = function()
+                    if st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                        st.practice_ui.toggle(ST)
+                    end
+                end,
+            },
+            -- The practice mode (the shared engine lane): "class" is the shipped
+            -- per-class session (the default - a fresh profile behaves exactly as
+            -- before), "scenario" runs the class's rotation scenario and "drills"
+            -- runs the class's focused drill list. The value is nil-safe: an
+            -- unset or unknown value means the class session.
+            practice_mode = {
+                type = "select",
+                order = 1.2,
+                name = "Practice mode",
+                desc = "Which practice session the Start/Stop toggle runs. "..
+                    "Class session is the shipped per-class drill. "..
+                    "Rotation scenario runs the class's own rotation end to end and grades the "..
+                    "sequence you cast. Drill list shows the class's focused drills, one button "..
+                    "each. A class that ships no scenario (or no drills) refuses that session "..
+                    "with a clear message - it never falls back to another class's drill.",
+                values = {
+                    class = "Class session (default)",
+                    scenario = "Rotation scenario",
+                    drills = "Drill list",
+                },
+                get = function()
+                    local mode = ST:get_class_table().practice_mode
+                    if mode == "scenario" or mode == "drills" then
+                        return mode
+                    end
+                    return "class"
+                end,
+                set = function(_, value)
+                    ST:get_class_table().practice_mode = value
+                end,
+            },
+            practice_mode_note = {
+                type = "description",
+                order = 1.21,
+                name = function()
+                    local pr = st.practice
+                    local H = pr and pr.harness
+                    if type(H) ~= "table" then
+                        return "The practice engine is not available on this client."
+                    end
+                    local class_key = ST.player_class
+                    local scenario = H.practice_scenario_available(class_key) and "yes" or "no"
+                    local drills = H.practice_drills(class_key)
+                    local count = drills and #drills or 0
+                    local text = string.format(
+                        "This class ships a rotation scenario: %s. Focused drills: %d.",
+                        scenario, count)
+                    -- The truth for the family the player is on: the rotation
+                    -- scenario needs a LIVE swing engine (the rotation is timed
+                    -- off the swing), and the client that keeps the inert
+                    -- stand-in has none. The option must not advertise a session
+                    -- the client cannot run.
+                    local engine = ST.swing_engine
+                    if type(engine) == "string" and engine == "inert-standin" then
+                        text = text ..
+                            " The rotation scenario cannot run on this client (no live swing engine)."
+                    end
+                    return text
+                end,
+            },
+            practice_sim_header = {
+                type = "header",
+                order = 2.0,
+                name = "Simulation",
+            },
+            practice_weapon_speed = {
+                type = "range",
+                order = 2.1,
+                name = "Weapon speed override (s)",
+                desc = "0 uses the equipped weapon speed.",
+                min = 0, max = 4, step = 0.1,
+                get = function()
+                    return ST:get_class_table().practice_weapon_speed or 0
+                end,
+                set = function(_, value)
+                    ST:get_class_table().practice_weapon_speed = value
+                end,
+            },
+            practice_aw_includes_pot = {
+                type = "toggle",
+                order = 2.2,
+                name = "AW macro: Haste Pot",
+                desc = "When Avenging Wrath is cast, also activate Haste Potion automatically (no GCD). Simulates a /cast Avenging Wrath + /use Haste Potion macro. Off by default.",
+                get = function()
+                    return ST:get_class_table().practice_aw_includes_pot == true
+                end,
+                set = function(_, value)
+                    ST:get_class_table().practice_aw_includes_pot = value
+                end,
+            },
+            practice_aw_includes_sob = {
+                type = "toggle",
+                order = 2.3,
+                name = "AW macro: Seal of Blood",
+                desc = "When Avenging Wrath is cast, also cast Seal of Blood automatically if the GCD is free (arms a twist like a manual seal when Command is up). Simulates a /cast Avenging Wrath + /cast Seal of Blood macro. Off by default.",
+                get = function()
+                    return ST:get_class_table().practice_aw_includes_sob == true
+                end,
+                set = function(_, value)
+                    ST:get_class_table().practice_aw_includes_sob = value
+                end,
+            },
+            practice_dst_enabled = {
+                type = "toggle",
+                order = 2.4,
+                name = "Dragonspine Trophy proc",
+                desc = "Simulate Dragonspine Trophy: random chance on melee swing to gain haste (~1 PPM, 20 s ICD). Off by default.",
+                get = function()
+                    return ST:get_class_table().practice_dst_enabled == true
+                end,
+                set = function(_, value)
+                    ST:get_class_table().practice_dst_enabled = value
+                end,
+            },
+            practice_spell_queue_window = {
+                type = "range",
+                order = 2.5,
+                name = "Spell queue window (ms)",
+                desc = "Simulates WoW's spell queue window: a press inside this long before the GCD ends queues and fires when the GCD clears. 0 disables. Default 400 ms (WoW's SpellQueueWindow CVar).",
+                min = 0, max = 400, step = 10,
+                get = function()
+                    return (tonumber(ST:get_class_table().practice_spell_queue_window) or 0.4) * 1000
+                end,
+                set = function(_, value)
+                    ST:get_class_table().practice_spell_queue_window = value / 1000
+                end,
+            },
+            practice_fight_header = {
+                type = "header",
+                order = 3.0,
+                name = "Boss Fight",
+            },
+            practice_bl_delay = {
+                type = "range",
+                order = 3.1,
+                name = "Bloodlust delay (s)",
+                desc = "During a boss fight Bloodlust auto-fires after this many seconds. 0 fires on fight start.",
+                min = 0, max = 120, step = 1,
+                get = function()
+                    return tonumber(ST:get_class_table().practice_bl_delay) or 0
+                end,
+                set = function(_, value)
+                    ST:get_class_table().practice_bl_delay = value
+                end,
+            },
+            practice_rotation_header = {
+                type = "header",
+                order = 4.0,
+                name = "Rotation Display",
+            },
+            practice_rotation_desc = {
+                type = "description",
+                order = 4.1,
+                name = "The rotation display shows during the session whenever the rotation "..
+                    "resolves (Rotation: <name> plus step icons). Position is session-local; "..
+                    "it always shows while a fight runs - no option ships for it.",
+            },
+            practice_timeline_header = {
+                type = "header",
+                order = 5.0,
+                name = "Fight Timeline",
+            },
+            practice_timeline_desc = {
+                type = "description",
+                order = 5.1,
+                name = "The fight timeline (WarcraftLogs-style cast log) always opens on fight "..
+                    "start and persists for post-fight review. Position is session-local; it "..
+                    "always shows - no option ships for it.",
+            },
+            practice_feedback_header = {
+                type = "header",
+                order = 6.0,
+                name = "Feedback Text",
+            },
+            practice_result_duration = {
+                type = "range",
+                order = 6.1,
+                name = "Result text duration (s)",
+                desc = "How long the TWIST!/MISS popup stays on screen.",
+                min = 0.3, max = 3.0, step = 0.1,
+                get = function()
+                    return ST:get_class_table().practice_result_duration or 0.8
+                end,
+                set = function(_, value)
+                    ST:get_class_table().practice_result_duration = value
+                end,
+            },
+            practice_result_text_size = {
+                type = "range",
+                order = 6.2,
+                name = "Result text size",
+                desc = "Font size of the TWIST!/MISS popup.",
+                min = 12, max = 48, step = 1,
+                get = function()
+                    return ST:get_class_table().practice_result_text_size or 28
+                end,
+                set = function(_, value)
+                    ST:get_class_table().practice_result_text_size = value
+                    if st.practice_ui and type(st.practice_ui.update_result_font) == "function" then
+                        st.practice_ui.update_result_font(ST)
+                    end
+                end,
+            },
+            practice_result_color_hit = {
+                order = 6.3,
+                type = "color",
+                name = "Twist text color",
+                desc = "Colour of the TWIST! popup on a successful twist.",
+                hasAlpha = false,
+                get = function()
+                    local c = ST:get_class_table().practice_result_color_hit or {0, 1, 0, 1}
+                    return c[1], c[2], c[3], c[4] or 1
+                end,
+                set = function(_, r, g, b, a)
+                    ST:get_class_table().practice_result_color_hit = {r, g, b, a}
+                end,
+            },
+            practice_result_color_miss = {
+                order = 6.4,
+                type = "color",
+                name = "Miss text color",
+                desc = "Colour of the MISS popup on a failed twist.",
+                hasAlpha = false,
+                get = function()
+                    local c = ST:get_class_table().practice_result_color_miss or {1, 0.2, 0.2, 1}
+                    return c[1], c[2], c[3], c[4] or 1
+                end,
+                set = function(_, r, g, b, a)
+                    ST:get_class_table().practice_result_color_miss = {r, g, b, a}
+                end,
+            },
+        },
+    }
+
+    -- The Progress page (design spec §3): the practice progression read model, shown
+    -- through description widgets whose name is a function, so the page always carries
+    -- the live numbers. Nothing here writes progression DATA - the two exceptions are
+    -- the explicit reset action at the bottom of the page and the badge visibility
+    -- toggle below (a class-table setting, not progression data: it only decides
+    -- whether the surface is drawn).
+    --
+    -- The numbers come from the pure modules' own read models
+    -- (st.practice_progress.profile_snapshot + st.practice_stats.snapshot, wired by
+    -- practice_progress_ui.lua), so the page can never disagree with the rules that
+    -- produced the data. Every read is nil-safe: with no practice data the page shows
+    -- "No practice data yet" instead of an error.
+    --
+    -- The helpers below are local to this function on purpose: the page owns no state
+    -- of its own beyond the reset arming, which lives in practice_progress_ui.lua.
+    local function progress_model(scope)
+        local module = st.practice_progress_ui
+        if type(module) ~= "table" then return nil end
+        local reader = (scope == "account") and module.account_model or module.current_model
+        if type(reader) ~= "function" then return nil end
+        local ok, model = pcall(reader, ST)
+        if not ok or type(model) ~= "table" then return nil end
+        return model
+    end
+    local function progress_text(renderer, scope)
+        local module = st.practice_progress_ui
+        if type(module) ~= "table" then
+            return "Practice progress is not available on this client."
+        end
+        if type(module[renderer]) ~= "function" then return "" end
+        local model = progress_model(scope)
+        if not model then return "Practice progress is not available on this client." end
+        local ok, text = pcall(module[renderer], model)
+        if not ok or type(text) ~= "string" then return "" end
+        return text
+    end
+    -- Ask AceConfig to redraw the open page after a change the page itself made (the
+    -- reset), so the description widgets pick up the new numbers straight away.
+    local function ui_module_refresh()
+        local module = st.practice_progress_ui
+        if type(module) ~= "table" or type(module.notify_options_refresh) ~= "function" then
+            return
+        end
+        module.notify_options_refresh()
+    end
+
+    ST.opts_table.args.progress = {
+        name = "Progress",
+        type = "group",
+        desc = "Practice progression: level, XP, per-drill mastery, achievements and the "..
+            "lifetime practice statistics.",
+        order = 1.47,
+        args = {
+            progress_desc = {
+                type = "description",
+                order = 1.0,
+                name = function()
+                    local module = st.practice_progress_ui
+                    if type(module) ~= "table" then
+                        return "Practice progress is not available on this client."
+                    end
+                    return "Your practice progression for this class. XP, mastery and "..
+                        "achievements are earned by running drills; they never gate a "..
+                        "drill. The stats frame shows the full history, the accuracy "..
+                        "sparkline and the per-class table."
+                end,
+            },
+            progress_level = {
+                type = "description",
+                order = 1.1,
+                name = function()
+                    return progress_text("render_level")
+                end,
+            },
+            progress_xp_bar = {
+                type = "description",
+                order = 1.2,
+                name = function()
+                    return progress_text("render_xp_bar")
+                end,
+            },
+            progress_mastery_header = {
+                type = "header",
+                order = 2.0,
+                name = "Drill mastery",
+            },
+            progress_mastery = {
+                type = "description",
+                order = 2.1,
+                name = function()
+                    return progress_text("render_mastery")
+                end,
+            },
+            progress_achievements_header = {
+                type = "header",
+                order = 3.0,
+                name = "Achievements",
+            },
+            progress_achievements = {
+                type = "description",
+                order = 3.1,
+                name = function()
+                    return progress_text("render_achievements")
+                end,
+            },
+            progress_stats_header = {
+                type = "header",
+                order = 4.0,
+                name = "Statistics",
+            },
+            progress_stats = {
+                type = "description",
+                order = 4.1,
+                name = function()
+                    return progress_text("render_stats")
+                end,
+            },
+            progress_account = {
+                type = "description",
+                order = 4.2,
+                name = function()
+                    local account = progress_model("account")
+                    if not account or not account.has_data then return "" end
+                    local own = progress_model()
+                    -- Only worth a second block when the account holds more than this
+                    -- class does - other classes were played too.
+                    if own and own.has_data
+                        and own.stats.attempts >= account.stats.attempts then
+                        return ""
+                    end
+                    local text = progress_text("render_stats", "account")
+                    if text == "" then return "" end
+                    return "All classes:\n" .. text
+                end,
+            },
+            progress_open_stats = {
+                type = "execute",
+                order = 5.0,
+                name = "Open the stats frame",
+                desc = "Opens a separate window with the accuracy sparkline over the last "..
+                    "50 sessions, the per-drill and per-class tables and the session history.",
+                func = function()
+                    local module = st.practice_progress_ui
+                    if type(module) ~= "table" or type(module.open_frame) ~= "function" then
+                        return
+                    end
+                    module.open_frame(ST)
+                end,
+            },
+            -- The practice level badge (HU-9). The badge, the session XP bar and the
+            -- level-up / achievement chat notices all ride ONE class-table key:
+            -- practice_panel_badge (config_presets.lua ships it TRUE - the operator
+            -- order of 2026-10-19, "start at lvl 1, gain xp each practice, level up",
+            -- is the gate for that default-visible change).
+            --
+            -- Before this widget the key had NO widget anywhere, so with the surface
+            -- visible by default there was no in-game way to turn it off (only a
+            -- SavedVariables edit). The widget is the documented surface: the module
+            -- owns the read (ui.badge_is_enabled, nil-safe == true) and the write
+            -- (ui.set_badge_enabled, which writes the class table and redraws the
+            -- badge), so a profile that turns the badge off KEEPS it off (the saved
+            -- false wins over the default on the next load).
+            --
+            -- Nil-safe: with no practice_ui module loaded the getter reads false and
+            -- the setter is a no-op, so a half-loaded addon never breaks the page.
+            progress_badge = {
+                type = "toggle",
+                order = 5.1,
+                name = "Show the practice level badge",
+                desc = "Show the practice level badge under the practice panel, with the "..
+                    "session XP bar and the level-up / achievement chat notices. Turning "..
+                    "it off hides the surface and silences the notices; the progression "..
+                    "data is still collected and saved.",
+                get = function()
+                    local module = st.practice_ui
+                    if type(module) ~= "table" or type(module.badge_is_enabled) ~= "function" then
+                        return false
+                    end
+                    local ok, on = pcall(module.badge_is_enabled, ST)
+                    if not ok then return false end
+                    return on == true
+                end,
+                set = function(_, value)
+                    local module = st.practice_ui
+                    if type(module) ~= "table" or type(module.set_badge_enabled) ~= "function" then
+                        return
+                    end
+                    module.set_badge_enabled(ST, value == true)
+                end,
+            },
+            progress_reset_header = {
+                type = "header",
+                order = 6.0,
+                name = "Reset",
+            },
+            progress_reset = {
+                type = "execute",
+                order = 6.1,
+                name = function()
+                    local module = st.practice_progress_ui
+                    if type(module) == "table" and type(module.reset_armed) == "function"
+                        and module.reset_armed() then
+                        return "Confirm: reset all practice progress"
+                    end
+                    return "Reset all practice progress"
+                end,
+                desc = "Erases every practice level, XP, drill mastery, achievement and saved "..
+                    "session. Click once to arm it, then click again to confirm; the Cancel "..
+                    "button disarms it. There is no undo.",
+                func = function()
+                    local module = st.practice_progress_ui
+                    if type(module) ~= "table" or type(module.request_reset) ~= "function" then
+                        return
+                    end
+                    module.request_reset(ST)
+                    ui_module_refresh()
+                end,
+            },
+            progress_reset_cancel = {
+                type = "execute",
+                order = 6.2,
+                name = "Cancel the reset",
+                hidden = function()
+                    local module = st.practice_progress_ui
+                    if type(module) ~= "table" or type(module.reset_armed) ~= "function" then
+                        return true
+                    end
+                    return not module.reset_armed()
+                end,
+                func = function()
+                    local module = st.practice_progress_ui
+                    if type(module) ~= "table" or type(module.disarm_reset) ~= "function" then
+                        return
+                    end
+                    module.disarm_reset()
+                    ui_module_refresh()
+                end,
             },
         },
     }
@@ -811,7 +1386,7 @@ local twist_sound_options = {
 -- slot_toggles is an array of { key = "hud_show_<slot>", name = "...",
 -- desc = "..." } mirroring the class's HUD_SLOTS keys/titles; hud_desc,
 -- glow_desc and format_desc carry the class-specific copy.
-local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_desc)
+local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_desc, format_values)
     local widgets = {
         hud_header = {
             type = "header",
@@ -834,7 +1409,7 @@ local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_de
         hud_locked = {
             type = "toggle",
             order = 8.11,
-            name = "Lock frame",
+            name = "Lock HUD frame",
             desc = "Prevent dragging the HUD frame. While unlocked the HUD stays visible so it can be "..
                 "positioned, with sample cooldowns running.",
             get = "getter",
@@ -1098,7 +1673,7 @@ local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_de
         rotation_label_locked = {
             type = "toggle",
             order = 9.11,
-            name = "Lock frame",
+            name = "Lock label frame",
             desc = "Prevent dragging the label. While unlocked the label stays visible so it can be positioned.",
             get = "getter",
             set = "setter",
@@ -1106,7 +1681,7 @@ local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_de
         rotation_label_visibility_key = {
             type = "select",
             order = 9.12,
-            name = "Show text",
+            name = "Show label",
             desc = "When to show the label (Practice Mode always shows it).",
             values = { always = "Always show", in_combat = "In combat" },
             get = "getter",
@@ -1120,7 +1695,7 @@ local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_de
             order = 9.13,
             name = "Format",
             desc = format_desc,
-            values = { key = "2/3", labelled = "Rotation: 2/3", steps = "CS, Twist, Twist", both = "2/3  -  CS, Twist, Twist" },
+            values = format_values or { key = "2/3", labelled = "Rotation: 2/3", steps = "CS, Twist, Twist", both = "2/3  -  CS, Twist, Twist" },
             get = "getter",
             set = "setter",
             disabled = function()
@@ -1136,7 +1711,7 @@ local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_de
             values = { left = "Left", center = "Center", right = "Right" },
             get = "getter",
             set = function(_, value)
-                if st.rotation_text then
+                if st.rotation_text and type(st.rotation_text.set_align) == "function" then
                     st.rotation_text.set_align(value)
                 end
             end,
@@ -1215,7 +1790,7 @@ local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_de
         rotation_label_color = {
             order = 9.24,
             type = "color",
-            name = "Color",
+            name = "Label color",
             desc = "Colour of the label.",
             hasAlpha = true,
             get = "color_getter",
@@ -1234,6 +1809,116 @@ local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_de
         }
     end
     return widgets
+end
+
+-- HUD layout templates (bench/hud_templates_2026-10-19.md §7): one select per
+-- class that loads a curated slot + geometry set from ST.<CLASS>.HUD_TEMPLATES
+-- (config_presets.lua) through the normal db keys. The HUD's own tick notices
+-- the db change (layout_changed -> apply_settings, hud.lua:1141-1144), so the
+-- setter writes keys only — no new widget API, no hud.lua call.
+--
+-- Nil-safe: a nil hud_template, or a stored id with no table, reads as Custom
+-- (Custom leaves everything untouched — zero default-visible change). Picking
+-- Custom stores nil and writes nothing else. Picking a template writes its
+-- full slot set (explicit true/false per key, so switching templates never
+-- leaves a stale slot on) plus its four geometry keys, then stores the id.
+--
+-- Dirty-detect is derived state, not a setter chain: get returns the stored id
+-- only while the db still matches that template's set; any manual
+-- toggle/geometry tweak reads back as Custom (reselect to re-apply).
+local function hud_template_matches(db, template)
+    if type(db) ~= "table" or type(template) ~= "table" then
+        return false
+    end
+    local slots = template.slots
+    if type(slots) ~= "table" then
+        return false
+    end
+    for slot_key, show in pairs(slots) do
+        local want = show and true or false
+        local got = db["hud_show_" .. slot_key] and true or false
+        if got ~= want then
+            return false
+        end
+    end
+    if db.hud_icon_size ~= template.hud_icon_size then
+        return false
+    end
+    if db.hud_spacing ~= template.hud_spacing then
+        return false
+    end
+    if db.hud_orientation ~= template.hud_orientation then
+        return false
+    end
+    local want_match = template.hud_match_bar_width and true or false
+    local got_match = db.hud_match_bar_width and true or false
+    return got_match == want_match
+end
+
+local function hud_template_widget(class_token, values)
+    return {
+        type = "select",
+        order = 8.02,
+        name = "Layout template",
+        desc = "Load a curated slot + size set in one click (Custom, the default, "..
+            "leaves everything as-is). Picking a template writes its slots and "..
+            "geometry to the normal options below and remembers the pick; any "..
+            "manual tweak after that reads back as Custom — reselect to re-apply. "..
+            "Drag the unlocked frame in /st design to place the row.",
+        values = values,
+        get = function()
+            local db = ST:get_class_table()
+            local stored = db and db.hud_template or nil
+            if type(stored) ~= "string" then
+                return "custom"
+            end
+            local class_tbl = ST[class_token]
+            local templates = class_tbl and class_tbl.HUD_TEMPLATES or nil
+            local template = templates and templates[stored] or nil
+            if template == nil then
+                return "custom"
+            end
+            if hud_template_matches(db, template) then
+                return stored
+            end
+            return "custom"
+        end,
+        set = function(_, value)
+            local db = ST:get_class_table()
+            if not db then
+                return
+            end
+            if value == nil or value == "custom" then
+                db.hud_template = nil
+                return
+            end
+            local class_tbl = ST[class_token]
+            local templates = class_tbl and class_tbl.HUD_TEMPLATES or nil
+            local template = templates and templates[value] or nil
+            if template == nil then
+                db.hud_template = nil
+                return
+            end
+            if type(template.slots) == "table" then
+                for slot_key, show in pairs(template.slots) do
+                    db["hud_show_" .. slot_key] = show and true or false
+                end
+            end
+            if template.hud_icon_size ~= nil then
+                db.hud_icon_size = template.hud_icon_size
+            end
+            if template.hud_spacing ~= nil then
+                db.hud_spacing = template.hud_spacing
+            end
+            if template.hud_orientation ~= nil then
+                db.hud_orientation = template.hud_orientation
+            end
+            if template.hud_match_bar_width ~= nil then
+                db.hud_match_bar_width = template.hud_match_bar_width
+            end
+            db.hud_template = value
+        end,
+    }
 end
 
 function ST.class_opts_funcs.PALADIN(self)
@@ -1256,7 +1941,7 @@ function ST.class_opts_funcs.PALADIN(self)
         use_seal_colors = {
             type = "toggle",
             order = 1.11,
-            name = "Enable",
+            name = "Enable seal colors",
             desc = "Enables custom colors for the mainhand bar based on active seal.",
             get = "getter",
             set = "setter",
@@ -1378,7 +2063,7 @@ function ST.class_opts_funcs.PALADIN(self)
         use_aow_glow = {
             type = "toggle",
             order = 2.2,
-            name = "Enable",
+            name = "Enable Art of War glow",
             desc = "Enables a glow color when the Paladin has Art of War",
             get = "getter",
             set = "setter",
@@ -1403,7 +2088,7 @@ function ST.class_opts_funcs.PALADIN(self)
         aow_glow_color = {
             order=2.3,
             type="color",
-            name="Color",
+            name="Art of War glow color",
             desc="Glow color to use when the Paladin has an Art of War proc.",
             hasAlpha=true,
             get = "color_getter",
@@ -1530,10 +2215,14 @@ function ST.class_opts_funcs.PALADIN(self)
         twist_feedback_enabled = {
             type = "toggle",
             order = 3.4,
-            name = "Twist attempt feedback",
-            desc = "Shows attempt feedback on the timer bar, and the success text when that is enabled.",
+            name = "Twist attempt flash",
+            desc = "Flash the bar while two seals are active on the swing; the floating text has its own toggle below (Success text).",
             get = "getter",
             set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.twist_enabled
+            end,
         },
         twist_score_enabled = {
             type = "toggle",
@@ -1564,10 +2253,47 @@ function ST.class_opts_funcs.PALADIN(self)
             get = "getter",
             set = "setter",
         },
+        reseal_marker_enabled = {
+            type = "toggle",
+            order = 3.44,
+            name = "Reseal marker",
+            desc = "Show a marker at the swing position where the global cooldown clears, "..
+                "so reseal timing reads against the twist window (off by default).",
+            get = "getter",
+            set = "setter",
+        },
+        -- Mana-sustain governor (the engine plug reads db.twist_mana_threshold_pct
+        -- nil-safe at classes/paladin.lua:3281-3285; nextaction.lua:556-557 keeps the
+        -- reseal's mana and rides the swing below it). Nil-safe getter: a fresh profile
+        -- renders 0 = off (AceConfigDialog feeds get straight into Slider:SetValue,
+        -- which errors on nil), never an empty slider; 0 behaves as off because
+        -- mana_pct never reads below 0. The shipped default is 0 (the documented OFF
+        -- state - config_presets.lua carries the reason and the citation).
+        mana_header = {
+            type = "header",
+            order = 3.46,
+            name = "Mana Governor",
+        },
+        twist_mana_threshold_pct = {
+            type = "range",
+            order = 3.47,
+            name = "Twist mana threshold (%)",
+            desc = "Skip the twist reseal and ride the swing instead while mana sits below "..
+                "this percentage. 0 disables the governor (archived behaviour).",
+            min = 0, max = 100, step = 1,
+            get = function()
+                local v = ST:get_class_table().twist_mana_threshold_pct
+                if type(v) == "number" and v == v then
+                    return v
+                end
+                return 0
+            end,
+            set = "setter",
+        },
         twist_color_twisting = {
             order=3.5,
             type="color",
-            name="Armed / attempted color",
+            name="Twist armed color",
             desc="Color to use when a seal twist is armed or attempted.",
             hasAlpha=true,
             get = "color_getter",
@@ -1576,7 +2302,7 @@ function ST.class_opts_funcs.PALADIN(self)
         twist_color_cant = {
             order=3.6,
             type="color",
-            name="'Can't twist' warning color",
+            name="Twist impossible color",
             desc="Color to use when a twist cannot land within the current swing.",
             hasAlpha=true,
             get = "color_getter",
@@ -1636,6 +2362,10 @@ function ST.class_opts_funcs.PALADIN(self)
             desc = "Shows a LibCustomGlow Pixel glow on the bar when a twist attempt lands.",
             get = "getter",
             set = "setter",
+            disabled = function()
+                local db = ST:get_class_table()
+                return not db.twist_enabled
+            end,
         },
         twist_success_glow_color = {
             order = 3.97,
@@ -1662,6 +2392,11 @@ function ST.class_opts_funcs.PALADIN(self)
                 local db = ST:get_class_table()
                 return not db.twist_success_glow_enabled
             end,
+        },
+        seal_tracker_header = {
+            type = "header",
+            order = 3.984,
+            name = "Seal & Judgement Trackers",
         },
         judgement_marker_enabled = {
             type = "toggle",
@@ -1693,7 +2428,7 @@ function ST.class_opts_funcs.PALADIN(self)
         lag_detection_enabled = {
             type = "toggle",
             order = 4.1,
-            name = "Warn on impossible twists",
+            name = "Impossible-twist warning",
             desc = "Enables the warning color when a twist cannot land within the current swing.",
             get = "getter",
             set = "setter",
@@ -1729,7 +2464,7 @@ function ST.class_opts_funcs.PALADIN(self)
             order = 4.4,
             name = "Window padding mode",
             desc = "Whether to push the twist window back from the end of the swing to account for input and "..
-                "latency. Dynamic uses the lag calibration values above; Fixed uses the offset below.",
+                "latency. Dynamic uses the lag calibration values above; Fixed uses the offset below; None disables the padding.",
             values = {None="None", Fixed="Fixed", Dynamic="Dynamic"},
             get = "getter",
             set = "setter",
@@ -1769,7 +2504,7 @@ function ST.class_opts_funcs.PALADIN(self)
         nextaction_locked = {
             type = "toggle",
             order = 5.11,
-            name = "Lock frame",
+            name = "Lock guide frame",
             desc = "Prevent dragging the guide frame.",
             get = "getter",
             set = "setter",
@@ -1859,7 +2594,7 @@ function ST.class_opts_funcs.PALADIN(self)
         nextaction_show_label = {
             type = "toggle",
             order = 5.24,
-            name = "Show \"Next action:\" label",
+            name = "Show frame title",
             desc = "Show the small frame label.",
             get = "getter",
             set = "setter",
@@ -1972,21 +2707,21 @@ function ST.class_opts_funcs.PALADIN(self)
             type = "description",
             name = "Practice minigame: simulate a boss fight's swing rotation and seal twisting in a "..
                 "separate simulation, without attacking anything. The panel's ability icons cast "..
-                "simulated spells (left click); /st practice toggles the session. The full practice "..
-                "options (rotation lock, haste buttons, keybinds) are still in development.",
+                "simulated spells (left click); /st practice toggles the session. Only weapon speed, result styling and panel position ship as options; rotation lock, haste buttons and keybinds are still in development.",
         },
         practice_toggle = {
             type = "execute",
             order = 7.1,
             name = function()
-                if st.practice_ui and st.practice_ui.is_active() then
+                if st.practice_ui and type(st.practice_ui.is_active) == "function"
+                    and st.practice_ui.is_active() then
                     return "Stop Practice"
                 end
                 return "Start Practice"
             end,
             desc = "Toggle the practice session. A session can only be started out of combat.",
             func = function()
-                if st.practice_ui then
+                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
                     st.practice_ui.toggle(ST)
                 end
             end,
@@ -2024,7 +2759,7 @@ function ST.class_opts_funcs.PALADIN(self)
             get = "getter",
             set = function(_, value)
                 ST:get_class_table().practice_result_text_size = value
-                if st.practice_ui then
+                if st.practice_ui and type(st.practice_ui.update_result_font) == "function" then
                     st.practice_ui.update_result_font(ST)
                 end
             end,
@@ -2099,7 +2834,7 @@ function ST.class_opts_funcs.PALADIN(self)
                 -- Re-anchor through the panel's own position applier (practice_ui.lua
                 -- apply_settings re-reads the offsets above; combat-lockdown defers
                 -- it internally), mirroring the update_result_font seam above.
-                if st.practice_ui and st.practice_ui.apply_settings then
+                if st.practice_ui and type(st.practice_ui.apply_settings) == "function" then
                     st.practice_ui.apply_settings(ST)
                 end
             end,
@@ -2124,6 +2859,16 @@ function ST.class_opts_funcs.PALADIN(self)
                 "target), tint blue without mana and red out of range, and Exorcism and Avenging Wrath "..
                 "glow when they are the right call. Unlock the frame to drag it into place.",
         },
+        -- Layout template (bench/hud_templates_2026-10-19.md §7): curated sets
+        -- from ST.PALADIN.HUD_TEMPLATES, applied on explicit pick only
+        -- (nil = Custom, writes nothing).
+        -- Gallery shortlist 3: Core rows are the Luxthos Era-line visual-check target.
+        hud_template = hud_template_widget("PALADIN", {
+            custom = "Custom",
+            twist_core = "P-T1 Twist Core",
+            full_ret = "P-T2 Full Ret + Trinkets",
+            minimal = "P-T3 Minimal",
+        }),
         hud_enabled = {
             type = "toggle",
             order = 8.1,
@@ -2135,7 +2880,7 @@ function ST.class_opts_funcs.PALADIN(self)
         hud_locked = {
             type = "toggle",
             order = 8.11,
-            name = "Lock frame",
+            name = "Lock HUD frame",
             desc = "Prevent dragging the HUD frame. While unlocked the HUD stays visible so it can be "..
                 "positioned, with sample cooldowns running.",
             get = "getter",
@@ -2434,6 +3179,75 @@ function ST.class_opts_funcs.PALADIN(self)
             get = "getter",
             set = "setter",
         },
+        -- SoD/shockadin mirror slots (descriptors + provider in
+        -- classes/paladin.lua:3396-3409/:3657-3774; defaults ship on in
+        -- ST.PALADIN.defaults, templates in ST.PALADIN.HUD_TEMPLATES).
+        -- Gallery bench/paladin_styles_2026-10-19.md §0: SoD-native slots
+        -- extend P-T2, not P-T1.
+        hud_show_soc = {
+            type = "toggle",
+            order = 8.48,
+            name = "Seal of Command",
+            desc = "Show the Seal of Command icon (active seal shows its aura).",
+            get = "getter",
+            set = "setter",
+        },
+        hud_show_sob = {
+            type = "toggle",
+            order = 8.49,
+            name = "Seal of Blood",
+            desc = "Show the Seal of Blood icon (Wrath: Divine Storm, with its cooldown swipe).",
+            get = "getter",
+            set = "setter",
+        },
+        hud_show_how = {
+            type = "toggle",
+            order = 8.50,
+            name = "Hammer of Wrath",
+            desc = "Show the Hammer of Wrath icon (glows in combat inside Execute range).",
+            get = "getter",
+            set = "setter",
+        },
+        hud_show_holy_shock = {
+            type = "toggle",
+            order = 8.51,
+            name = "Holy Shock",
+            desc = "Show the Holy Shock icon (SoD shockadin only; hidden where unknown).",
+            get = "getter",
+            set = "setter",
+        },
+        hud_show_aura_mastery = {
+            type = "toggle",
+            order = 8.52,
+            name = "Aura Mastery",
+            desc = "Show the Aura Mastery icon (SoD shockadin only; hidden where unknown).",
+            get = "getter",
+            set = "setter",
+        },
+        -- The WotLK APL's UTILITY BAND (bench/paladin_apl_utility_build_2026-10-20.md
+        -- §2): the two display-only mirrors (descriptors + provider in
+        -- classes/paladin.lua's HUD_SLOTS + get_hud_state). Consumers:
+        -- classes/paladin.lua's provider reads hud_show_<key> == true (nil = off)
+        -- - the druid Claw shape, so both ship false in ST.PALADIN.defaults and a
+        -- fresh profile's HUD row is unchanged. WotLK only: the provider's family
+        -- gate hides both on every other client.
+        hud_show_hor = {
+            type = "toggle",
+            order = 8.53,
+            name = "Hand of Reckoning",
+            desc = "Show the Hand of Reckoning icon (with its cooldown swipe; WotLK only).",
+            get = "getter",
+            set = "setter",
+        },
+        hud_show_how_wrath = {
+            type = "toggle",
+            order = 8.54,
+            name = "Hammer of Wrath (WotLK)",
+            desc = "Show the WotLK Hammer of Wrath icon (with its cooldown swipe; greys above "
+                .. "20 % target health, WotLK only).",
+            get = "getter",
+            set = "setter",
+        },
 
         -- Rotation label (rotationtext.lua). The shared rotation_label_* keys live in
         -- ST.class_defaults; the label reads them through the class getter/setter and
@@ -2464,7 +3278,7 @@ function ST.class_opts_funcs.PALADIN(self)
         rotation_label_locked = {
             type = "toggle",
             order = 9.11,
-            name = "Lock frame",
+            name = "Lock label frame",
             desc = "Prevent dragging the label. While unlocked the label stays visible so it can be positioned.",
             get = "getter",
             set = "setter",
@@ -2472,7 +3286,7 @@ function ST.class_opts_funcs.PALADIN(self)
         rotation_label_visibility_key = {
             type = "select",
             order = 9.12,
-            name = "Show text",
+            name = "Show label",
             desc = "When to show the label (Practice Mode always shows it).",
             values = { always = "Always show", in_combat = "In combat" },
             get = "getter",
@@ -2503,7 +3317,7 @@ function ST.class_opts_funcs.PALADIN(self)
             values = { left = "Left", center = "Center", right = "Right" },
             get = "getter",
             set = function(_, value)
-                if st.rotation_text then
+                if st.rotation_text and type(st.rotation_text.set_align) == "function" then
                     st.rotation_text.set_align(value)
                 end
             end,
@@ -2582,11 +3396,31 @@ function ST.class_opts_funcs.PALADIN(self)
         rotation_label_color = {
             order = 9.24,
             type = "color",
-            name = "Color",
+            name = "Label color",
             desc = "Colour of the label.",
             hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
+        },
+
+        -- Sim reference (wowsims): text-only, no clickability (WoW cannot open
+        -- external links, so the URLs below are display text, not buttons).
+        -- The Next Action Guide practices the sim rotation in-game: twist
+        -- windows, Crusader Strike timing and filler gating follow the sim
+        -- numbers where sourced (see bench/paladin_rotation_audit_2026-10-19.md).
+        wowsims_header = {
+            type = "header",
+            order = 10.0,
+            name = "Sim Reference",
+        },
+        wowsims_desc = {
+            order = 10.01,
+            type = "description",
+            name = "Rotation numbers follow the wowsims sims: https://github.com/wowsims/classic, "..
+                "https://github.com/wowsims/sod, https://github.com/wowsims/tbc-new, "..
+                "https://github.com/wowsims/forever (Wrath has no in-scope sim; "..
+                "that row is Wowhead-guide-derived). Practice the sim in-game: "..
+                "enable the guide above and run its prompts against the sim APL.",
         },
     }
     return opts_group
@@ -2604,7 +3438,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             order = 0.81,
             name = "Hide when Protection",
             desc = "When enabled, the timer will hide when the Warrior is in Protection spec ("..
-            "activated when Improved Defensive Stance is talented).",
+            "activated when Improved Defensive Stance is talented). Talent detection is a heuristic; verify in-client.",
             get = "getter",
             set = "setter",
         },
@@ -2613,7 +3447,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             order = 0.82,
             name = "Hide when Arms",
             desc = "When enabled, the timer will hide when the Warrior is in Arms spec ("..
-            "activated when Bladestorm is talented).",
+            "activated when Bladestorm is talented). Talent detection is a heuristic; verify in-client.",
             get = "getter",
             set = "setter",
         },
@@ -2627,11 +3461,6 @@ function ST.class_opts_funcs.WARRIOR(self)
             type = "description",
             name = "The mainhand timer bar can be configured to turn a custom color when an on-next-attack ability is queued."
         },
-        lb0 = {
-            type = "header",
-            order = 1.03,
-            name = "",
-        },
         enable_hs_color = {
             type = "toggle",
             order = 1.1,
@@ -2643,7 +3472,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         hs_color = {
             order=1.2,
             type="color",
-            name="Color",
+            name="Heroic Strike color",
             desc="Color to use when Heroic Strike is queued.",
             hasAlpha=true,
             get = "color_getter",
@@ -2664,7 +3493,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         cleave_color = {
             order=1.4,
             type="color",
-            name="Color",
+            name="Cleave color",
             desc="Color to use when Cleave is queued.",
             hasAlpha=true,
             get = "color_getter",
@@ -2674,11 +3503,6 @@ function ST.class_opts_funcs.WARRIOR(self)
                 return not db.enable_cleave_color
             end,
         },
-        lb1 = {
-            type = "header",
-            order = 1.45,
-            name = "",
-        },
         rage_desc = {
             order = 1.5,
             type = "description",
@@ -2686,16 +3510,11 @@ function ST.class_opts_funcs.WARRIOR(self)
                 "has queued an on-next-attack ability, but has since dropped below the rage threshold necessary "..
                 "to use the ability."
         },
-        lb2 = {
-            type = "header",
-            order = 1.55,
-            name = "",
-        },
         insufficient_rage_color = {
             order=1.6,
             type="color",
-            name="Insufficient Rage color",
-            desc="Color to use when the player drops below the rage threshold for the queued ability.",
+            name="Queued-but-unaffordable color",
+            desc="Color while a queued Heroic Strike / Cleave sits above your current rage.",
             hasAlpha=true,
             get = "color_getter",
             set = "color_setter",
@@ -2714,7 +3533,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         use_bloodsurge_glow = {
             type = "toggle",
             order = 2.2,
-            name = "Enable",
+            name = "Enable Bloodsurge glow",
             desc = "Enables a glow color when the Warrior has Bloodsurge",
             get = "getter",
             set = "setter",
@@ -2791,7 +3610,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_deep_wounds_bar = {
             type = "toggle",
-            order = 3.1,
+            order = 3.10,
             name = "Deep Wounds bar",
             desc = "Show your own Deep Wounds bleed duration on the current target above "..
                 "the mainhand bar, with a glow in the last 4 seconds.",
@@ -2799,7 +3618,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             set = "setter",
         },
         warrior_deep_wounds_bar_color = {
-            order=3.2,
+            order=3.11,
             type="color",
             name="Deep Wounds color",
             desc="Color of the Deep Wounds duration bar.",
@@ -2813,7 +3632,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_sunder_armor_bar = {
             type = "toggle",
-            order = 3.3,
+            order = 3.12,
             name = "Sunder Armor bar",
             desc = "Show your own Sunder Armor duration and stack count (1-5) on the "..
                 "current target above the mainhand bar, with a glow in the last 4 seconds.",
@@ -2821,7 +3640,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             set = "setter",
         },
         warrior_sunder_armor_bar_color = {
-            order=3.4,
+            order=3.13,
             type="color",
             name="Sunder Armor color",
             desc="Color of the Sunder Armor duration bar.",
@@ -2835,7 +3654,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_rend_bar = {
             type = "toggle",
-            order = 3.5,
+            order = 3.14,
             name = "Rend bar",
             desc = "Show your own Rend duration on the current target above the mainhand "..
                 "bar, with a glow in the last 4 seconds.",
@@ -2843,7 +3662,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             set = "setter",
         },
         warrior_rend_bar_color = {
-            order=3.6,
+            order=3.15,
             type="color",
             name="Rend color",
             desc="Color of the Rend duration bar.",
@@ -2857,7 +3676,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_thunder_clap_bar = {
             type = "toggle",
-            order = 3.7,
+            order = 3.16,
             name = "Thunder Clap bar",
             desc = "Show your own Thunder Clap duration on the current target above the "..
                 "mainhand bar, with a glow in the last 4 seconds.",
@@ -2865,7 +3684,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             set = "setter",
         },
         warrior_thunder_clap_bar_color = {
-            order=3.8,
+            order=3.17,
             type="color",
             name="Thunder Clap color",
             desc="Color of the Thunder Clap duration bar.",
@@ -2879,7 +3698,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_demo_shout_bar = {
             type = "toggle",
-            order = 3.9,
+            order = 3.18,
             name = "Demo Shout bar",
             desc = "Show your own Demoralizing (Demolition) Shout duration on the current "..
                 "target above the mainhand bar, with a glow in the last 4 seconds.",
@@ -2887,7 +3706,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             set = "setter",
         },
         warrior_demo_shout_bar_color = {
-            order=3.10,
+            order=3.19,
             type="color",
             name="Demo Shout color",
             desc="Color of the Demoralizing Shout duration bar.",
@@ -2901,7 +3720,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_shield_block_bar = {
             type = "toggle",
-            order = 3.11,
+            order = 3.20,
             name = "Shield Block bar",
             desc = "Show a 4 px Shield Block duration bar with its icon above the "..
                 "mainhand bar while the buff is active.",
@@ -2909,7 +3728,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             set = "setter",
         },
         warrior_shield_block_bar_color = {
-            order=3.12,
+            order=3.21,
             type="color",
             name="Shield Block color",
             desc="Color of the Shield Block duration bar.",
@@ -2923,7 +3742,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_slam_cast_bar = {
             type = "toggle",
-            order = 3.13,
+            order = 3.22,
             name = "Slam cast bar",
             desc = "Show a small Slam cast-progress bar above the mainhand bar while "..
                 "casting Slam.",
@@ -2932,7 +3751,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_overpower_flash = {
             type = "toggle",
-            order = 3.14,
+            order = 3.23,
             name = "Overpower proc flash",
             desc = "Pulse a gold border and an OP marker around the mainhand bar while "..
                 "an Overpower proc window is open (armed when your attack is dodged).",
@@ -2941,7 +3760,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_rampage_badge = {
             type = "toggle",
-            order = 3.15,
+            order = 3.24,
             name = "Rampage badge",
             desc = "Show the Rampage stack count and refresh window beside the mainhand "..
                 "bar while the buff is live.",
@@ -2950,8 +3769,8 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_bank_cue = {
             type = "toggle",
-            order = 3.16,
-            name = "BANK cue",
+            order = 3.25,
+            name = "Queued-ability BANK cue",
             desc = "Show an amber edge and a centred BANK label while a queued "..
                 "on-next-attack ability is unaffordable in combat.",
             get = "getter",
@@ -2959,9 +3778,26 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         show_warrior_battle_shout_badge = {
             type = "toggle",
-            order = 3.17,
+            order = 3.26,
             name = "Battle Shout badge",
             desc = "Show your Battle Shout's remaining time beside the bar.",
+            get = "getter",
+            set = "setter",
+        },
+        show_warrior_desync_alert = {
+            type = "toggle",
+            order = 3.27,
+            name = "Offhand desync spark",
+            desc = "Show a spark where the offhand will land while mainhand and offhand swings are desynced (off by default).",
+            get = "getter",
+            set = "setter",
+        },
+        show_warrior_commanding_suppression = {
+            type = "toggle",
+            order = 3.28,
+            name = "Commanding suppression",
+            desc = "While Commanding Shout covers Battle Shout, hide the Battle Shout "..
+                "badge and show the Commanding countdown instead (off by default).",
             get = "getter",
             set = "setter",
         },
@@ -2973,7 +3809,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         nag_desc = {
             type = "description",
             order = 4.05,
-            name = "On-screen rotation prompt (off by default): the next ability to press "..
+            name = "On-screen rotation prompt (on by default): the next ability to press "..
                 "(Overpower, Execute, Slam, Heroic Strike, Cleave) with the HOLD/RIDE cue "..
                 "when an on-next-attack ability is queued or rage is short. Drag the frame "..
                 "while it is unlocked to position it.",
@@ -2989,7 +3825,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         nextaction_locked = {
             type = "toggle",
             order = 4.11,
-            name = "Lock frame",
+            name = "Lock guide frame",
             desc = "Prevent dragging the guide frame.",
             get = "getter",
             set = "setter",
@@ -3044,12 +3880,231 @@ function ST.class_opts_funcs.WARRIOR(self)
         },
         guide_execute_pct = {
             type = "range",
-            order = 4.16,
+            order = 4.131,
             name = "Execute range (%)",
             desc = "Suggest Execute while the target is below this health percentage.",
             min = 5, max = 35, step = 1,
             get = "getter",
             set = "setter",
+        },
+        -- Forever Rend upkeep (W-15 / bench/class_features_drills_2026-10-19.md:292:
+        -- "Rend upkeep (SoD 11574 + rune 412507; Forever 11574 toggle <= 3 s)"; the
+        -- Forever APL's Rend-weave group is toggle-gated). The pure rule is LIVE -
+        -- warrior_guide.lua's should_maintain_rend_outside_arms with
+        -- REND_REFRESH_DEFAULT = 3, wired into rule R - but the provider feeds
+        -- rend_upkeep_enabled only on SoD (Blood Frenzy rune 412507 known), so the
+        -- rule is dormant on the Forever client.
+        --
+        -- This widget owns the KEY; the provider read that carries it into the guide
+        -- inputs is the FILED line (classes/warrior.lua:3049-3053 - the warrior
+        -- lane's file). Nil-safe: the key is read as == true, so nil and false both
+        -- leave the rule dormant. OFF by default (no default entry ships in
+        -- config_presets.lua) - the rule has never run on Forever, and arming it
+        -- needs a deliberate choice, not a fresh profile.
+        guide_forever_rend_upkeep = {
+            type = "toggle",
+            order = 4.132,
+            name = "Forever Rend upkeep",
+            desc = "Prompt the Rend upkeep on the WoW Forever client: the Forever APL's "..
+                "Rend-weave group re-applies Rend while the debuff has 3 seconds or fewer "..
+                "left. Off by default - the rule stays dormant while it is off.",
+            get = function()
+                return ST:get_class_table().guide_forever_rend_upkeep == true
+            end,
+            set = function(_, value)
+                ST:get_class_table().guide_forever_rend_upkeep = (value == true)
+            end,
+        },
+        -- Practice (the archive's Guides & Practice page shape, warrior entry):
+        -- the shared practice session every class shares, started both ways
+        -- (this toggle or /st practice), plus the warrior Execute drill report
+        -- below. The report grades live Execute entries through the practice
+        -- harness: no sim session, no panel casts - fight a target and every
+        -- crossing into Execute range logs the rage pooled at the entry. No new
+        -- db keys: every widget reads nil-safe with the shipped paladin
+        -- defaults below, and the report stays hidden until opened (nil = off).
+        practice_header = {
+            type = "header",
+            order = 5.0,
+            name = "Execute Practice",
+        },
+        practice_desc = {
+            order = 5.05,
+            type = "description",
+            name = "Execute-phase drill plus the shared practice session: the toggle below (or "..
+                "/st practice) starts and stops the shared session, while the Execute report "..
+                "below grades live Execute-range entries with no session of its own - fight a "..
+                "target and every crossing into Execute range logs the rage pooled at the entry. "..
+                "Only weapon speed, result styling and panel position ship as options.",
+        },
+        practice_toggle = {
+            type = "execute",
+            order = 5.1,
+            name = function()
+                -- Callable-guarded, not just nil-guarded: a partially loaded
+                -- practice_ui.lua leaves st.practice_ui without is_active, and a
+                -- throwing name blanks the whole options page in AceConfig.
+                if st.practice_ui and type(st.practice_ui.is_active) == "function"
+                    and st.practice_ui.is_active() then
+                    return "Stop Practice"
+                end
+                return "Start Practice"
+            end,
+            desc = "Toggle the practice session. A session can only be started out of combat.",
+            func = function()
+                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST)
+                end
+            end,
+        },
+        practice_weapon_speed = {
+            type = "range",
+            order = 5.2,
+            name = "Weapon speed override (s)",
+            desc = "0 uses the equipped weapon speed.",
+            min = 0, max = 4, step = 0.1,
+            get = function()
+                return ST:get_class_table().practice_weapon_speed or 0
+            end,
+            set = "setter",
+        },
+        -- Practice result feedback and panel placement. Every widget reads the
+        -- archived practice_result_* / practice_panel_* keys nil-safe (the
+        -- paladin defaults stand in until set); the session UI (practice_ui.lua)
+        -- owns the same fallbacks, so the options and the panel round-trip in
+        -- both directions. The two result colours are stored in the 0-1 range
+        -- the result popup paints with (SetTextColor), NOT the shared 0-255
+        -- convention, so they use direct get/set functions.
+        practice_result_duration = {
+            type = "range",
+            order = 5.3,
+            name = "Result text duration (s)",
+            desc = "How long the result popup stays on screen.",
+            min = 0.3, max = 3.0, step = 0.1,
+            get = function()
+                return ST:get_class_table().practice_result_duration or 0.8
+            end,
+            set = "setter",
+        },
+        practice_result_text_size = {
+            type = "range",
+            order = 5.31,
+            name = "Result text size",
+            desc = "Font size of the result popup.",
+            min = 12, max = 48, step = 1,
+            get = function()
+                return ST:get_class_table().practice_result_text_size or 28
+            end,
+            set = function(_, value)
+                ST:get_class_table().practice_result_text_size = value
+                if st.practice_ui and type(st.practice_ui.update_result_font) == "function" then
+                    st.practice_ui.update_result_font(ST)
+                end
+            end,
+        },
+        practice_result_color_hit = {
+            order = 5.32,
+            type = "color",
+            name = "Hit text color",
+            desc = "Colour of the result popup on a scored attempt.",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_hit or {0, 1, 0, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_hit = {r, g, b, a}
+            end,
+        },
+        practice_result_color_miss = {
+            order = 5.33,
+            type = "color",
+            name = "Miss text color",
+            desc = "Colour of the result popup on a failed attempt.",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_miss or {1, 0.2, 0.2, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_miss = {r, g, b, a}
+            end,
+        },
+        practice_panel_x = {
+            type = "input",
+            order = 5.34,
+            name = "Panel X position",
+            desc = "Horizontal offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_x or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_x = n
+                end
+            end,
+        },
+        practice_panel_y = {
+            type = "input",
+            order = 5.35,
+            name = "Panel Y position",
+            desc = "Vertical offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_y or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_y = n
+                end
+            end,
+        },
+        practice_reset_position = {
+            type = "execute",
+            order = 5.36,
+            name = "Reset panel position",
+            desc = "Move the practice panel back to its default spot beside the swing bar.",
+            func = function()
+                local db = ST:get_class_table()
+                db.practice_panel_x = 0
+                db.practice_panel_y = 0
+                -- Re-anchor through the panel's own position applier (practice_ui.lua
+                -- apply_settings re-reads the offsets above; combat-lockdown defers
+                -- it internally), mirroring the update_result_font seam above.
+                if st.practice_ui and type(st.practice_ui.apply_settings) == "function" then
+                    st.practice_ui.apply_settings(ST)
+                end
+            end,
+        },
+        execute_report_header = {
+            type = "header",
+            order = 5.5,
+            name = "Execute Report",
+        },
+        execute_report_desc = {
+            order = 5.51,
+            type = "description",
+            name = "Execute-phase drill (W6): no session - fight a target into Execute range. "..
+                "Every crossing into Execute range logs the rage pooled at the entry, graded S "..
+                "(full pool) to F (empty). The frame starts hidden; stop_fight re-renders it "..
+                "when visible.",
+        },
+        warrior_execute_report = {
+            type = "execute",
+            order = 5.52,
+            name = function()
+                if st.practice_ui and st.practice_ui.warrior_execute_report_visible then
+                    return "Hide Execute Report"
+                end
+                return "Show Execute Report"
+            end,
+            desc = "Toggle the post-fight Execute report frame.",
+            func = function()
+                if st.practice_ui and type(st.practice_ui.toggle_warrior_execute_report) == "function" then
+                    st.practice_ui.toggle_warrior_execute_report(ST)
+                end
+            end,
         },
     }
     -- Cooldown HUD + Rotation Text (shared hud_rotation_widgets builder: the same
@@ -3068,6 +4123,12 @@ function ST.class_opts_funcs.WARRIOR(self)
         { key = "hud_show_ms", name = "Mortal Strike", desc = "Show the Mortal Strike icon (with its GCD swipe)." },
         { key = "hud_show_bladestorm", name = "Bladestorm", desc = "Show the Bladestorm icon." },
         { key = "hud_show_raging_blow", name = "Raging Blow", desc = "Show the Raging Blow icon." },
+        -- Hamstring weave filler (closes designer-templates G1: the default +
+        -- template entries shipped without a widget, so the slot could only be
+        -- toggled via template or /run). Sunder upkeep slot (Forever HUD mirror
+        -- classes/warrior.lua:3013-3017; templates cover the union).
+        { key = "hud_show_hamstring", name = "Hamstring", desc = "Show the Hamstring icon (with its GCD swipe)." },
+        { key = "hud_show_sunder", name = "Sunder Armor", desc = "Show the Sunder Armor icon (with its GCD swipe)." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
     },
@@ -3077,9 +4138,39 @@ function ST.class_opts_funcs.WARRIOR(self)
             "Unlock the frame to drag it into place.",
         "Overpower glows while its dodge window is live and Execute glows in combat inside "..
             "Execute range, both only while the toggle is on. No other icon glows.",
-        "What the label says: the rotation alone, with a prefix, its steps, or both.")) do
+        "What the label says: the rotation alone, with a prefix, its steps, or both.",
+        { key = "Execute", labelled = "Rotation: Execute", steps = "OP, Execute, Slam", both = "Execute  -  OP, Execute, Slam" })) do
         opts_group[k] = v
     end
+    -- Sim reference (wowsims): text-only, no clickability (WoW cannot open
+    -- external links, so the URLs below are display text, not buttons).
+    -- The Next Action Guide practices the sim rotation in-game: Execute range,
+    -- Heroic Strike floors and Whirlwind delay follow the sim numbers where
+    -- sourced (see bench/warrior_rotation_audit_2026-10-19.md).
+    opts_group.wowsims_header = {
+        type = "header",
+        order = 10.0,
+        name = "Sim Reference",
+    }
+    opts_group.wowsims_desc = {
+        order = 10.01,
+        type = "description",
+        name = "Rotation numbers follow the wowsims sims: https://github.com/wowsims/classic, "..
+            "https://github.com/wowsims/sod, https://github.com/wowsims/tbc-new, "..
+            "https://github.com/wowsims/forever (Wrath and Victory Rush have no "..
+            "in-scope sim; those rows stay unconfirmed). Practice the sim in-game: "..
+            "enable the guide above and run its prompts against the sim APL.",
+    }
+    -- Layout template (bench/hud_templates_2026-10-19.md §7): curated sets
+    -- from ST.WARRIOR.HUD_TEMPLATES, applied on explicit pick only
+    -- (nil = Custom, writes nothing). W-T3 is the provisional arms/SoD union.
+    -- Gallery shortlist 5: W-T1 copy names the queue-color reads (shipped HS tint).
+    opts_group.hud_template = hud_template_widget("WARRIOR", {
+        custom = "Custom",
+        fury_core = "W-T1 Fury Core",
+        full_trinkets = "W-T2 Full + Trinkets",
+        arms_sod = "W-T3 Arms / SoD (provisional)",
+    })
     return opts_group
 end
 
@@ -3112,7 +4203,7 @@ function ST.class_opts_funcs.HUNTER(self)
         enable_raptor_strike_color = {
             type = "toggle",
             order = 1.1,
-            name = "Enable",
+            name = "Enable Raptor Strike color",
             desc = "Enables a special bar color when Raptor Strike is queued on the next attack.",
             get = "getter",
             set = "setter",
@@ -3120,7 +4211,7 @@ function ST.class_opts_funcs.HUNTER(self)
         raptor_strike_color = {
             order=1.2,
             type="color",
-            name="Color",
+            name="Raptor Strike color",
             desc="Color to use when Raptor Strike is queued.",
             hasAlpha=true,
             get = "color_getter",
@@ -3139,7 +4230,7 @@ function ST.class_opts_funcs.HUNTER(self)
         enable_steady_shot_color = {
             type = "toggle",
             order = 2.1,
-            name = "Enable",
+            name = "Enable Steady Shot color",
             desc = "Enables a special bar color when Steady Shot is queued.",
             get = "getter",
             set = "setter",
@@ -3147,7 +4238,7 @@ function ST.class_opts_funcs.HUNTER(self)
         steady_shot_color = {
             order=2.2,
             type="color",
-            name="Color",
+            name="Steady Shot color",
             desc="Color to use when Steady Shot is queued.",
             hasAlpha=true,
             get = "color_getter",
@@ -3168,7 +4259,7 @@ function ST.class_opts_funcs.HUNTER(self)
         hunter_cast_bar_enabled = {
             type = "toggle",
             order = 3.1,
-            name = "Enable",
+            name = "Enable cast bar",
             desc = "Shows the hunter cast bar above the ranged bar.",
             get = "getter",
             set = "setter",
@@ -3189,9 +4280,9 @@ function ST.class_opts_funcs.HUNTER(self)
         hunter_cast_bar_color = {
             order = 3.3,
             type = "color",
-            name = "Color",
+            name = "Cast bar color",
             desc = "Color of the hunter cast bar. The Auto Shot window always uses this colour; live casts "..
-                "overlay it in green when the cast is clip-safe and red when it is not.",
+                "tint green while stopping is safe and red while it is not.",
             hasAlpha = true,
             get = "hunter_cast_color_getter",
             set = "hunter_cast_color_setter",
@@ -3205,7 +4296,26 @@ function ST.class_opts_funcs.HUNTER(self)
             order = 3.4,
             name = "Movement-safe cast zone",
             desc = "Show a safe-to-move zone on the ranged bar while casting (green when "..
-                "stopping is safe, red when it is not).",
+                "stopping is safe, red when it is not). Works without the cast bar.",
+            get = "getter",
+            set = "setter",
+        },
+        target_warning_header = {
+            type = "header",
+            order = 3.5,
+            name = "Target Warning",
+        },
+        target_warning_desc = {
+            order = 3.501,
+            type = "description",
+            name = "A red \"targeting you\" label above the cast bar while your target is "..
+                "targeting you. Unknown hides: the label only shows on a confirmed read.",
+        },
+        hunter_target_warning_enabled = {
+            type = "toggle",
+            order = 3.51,
+            name = "Enable target warning",
+            desc = "Shows the target-of-target warning label (off by default).",
             get = "getter",
             set = "setter",
         },
@@ -3223,8 +4333,16 @@ function ST.class_opts_funcs.HUNTER(self)
         hunter_range_helper_enabled = {
             type = "toggle",
             order = 4.1,
-            name = "Enable",
+            name = "Enable range helper",
             desc = "Shows the 4-state range helper beside the ranged bar.",
+            get = "getter",
+            set = "setter",
+        },
+        hunter_weave_prog_enabled = {
+            type = "toggle",
+            order = 4.2,
+            name = "Melee-weave progress tracking",
+            desc = "Track the melee-weave distance approximation each frame (off by default). No visible change on its own: a future display reads this state.",
             get = "getter",
             set = "setter",
         },
@@ -3242,7 +4360,7 @@ function ST.class_opts_funcs.HUNTER(self)
         hunter_rapid_fire_bar_enabled = {
             type = "toggle",
             order = 5.1,
-            name = "Enable",
+            name = "Enable Rapid Fire bar",
             desc = "Shows the Rapid Fire duration bar while the buff is active.",
             get = "getter",
             set = "setter",
@@ -3261,7 +4379,7 @@ function ST.class_opts_funcs.HUNTER(self)
         hunter_aspect_icon_enabled = {
             type = "toggle",
             order = 6.1,
-            name = "Enable",
+            name = "Enable aspect icon",
             desc = "Shows the active aspect's icon beside the ranged bar.",
             get = "getter",
             set = "setter",
@@ -3304,7 +4422,7 @@ function ST.class_opts_funcs.HUNTER(self)
         nag_desc = {
             type = "description",
             order = 7.05,
-            name = "On-screen rotation prompt (off by default): Steady Shot when the cast "..
+            name = "On-screen rotation prompt (on by default): Steady Shot when the cast "..
                 "fits before the next Auto Shot, with the HOLD cue inside the hidden Auto "..
                 "Shot window and the RIDE cue while a Steady Shot cast or a queued on-next-"..
                 "swing ability is riding. Drag the frame while it is unlocked to position it.",
@@ -3319,8 +4437,8 @@ function ST.class_opts_funcs.HUNTER(self)
         },
         hunter_multi_target = {
             type = "toggle",
-            order = 7.2,
-            name = "Multi-target mode (manual) (future)",
+            order = 7.101,
+            name = "Multi-target mode (manual, not wired yet)",
             desc = "Treat the fight as 2+ targets: the guide prefers Multi-Shot over the "..
                 "single-target filler. Manual because automatic target counting is "..
                 "unreliable in raids.",
@@ -3330,7 +4448,7 @@ function ST.class_opts_funcs.HUNTER(self)
         nextaction_locked = {
             type = "toggle",
             order = 7.11,
-            name = "Lock frame",
+            name = "Lock guide frame",
             desc = "Prevent dragging the guide frame.",
             get = "getter",
             set = "setter",
@@ -3383,6 +4501,219 @@ function ST.class_opts_funcs.HUNTER(self)
                 end
             end,
         },
+        shot_report_header = {
+            type = "header",
+            order = 7.5,
+            name = "Shot Report",
+        },
+        shot_report_desc = {
+            order = 7.51,
+            type = "description",
+            name = "Post-fight shot analytics (clip rate, latency buffer, next-cast hint) "..
+                "over the rolling last-N shots. The frame starts hidden; stop_fight "..
+                "re-renders it when visible.",
+        },
+        hunter_shot_report = {
+            type = "execute",
+            order = 7.52,
+            name = function()
+                if st.practice_ui and st.practice_ui.hunter_report_visible then
+                    return "Hide Shot Report"
+                end
+                return "Show Shot Report"
+            end,
+            desc = "Toggle the post-fight shot report frame.",
+            func = function()
+                if st.practice_ui and type(st.practice_ui.toggle_hunter_report) == "function" then
+                    st.practice_ui.toggle_hunter_report(ST)
+                end
+            end,
+        },
+        proc_badges_header = {
+            type = "header",
+            order = 7.4,
+            name = "Proc & Readiness Badges",
+        },
+        proc_badges_desc = {
+            order = 7.41,
+            type = "description",
+            name = "Badge-layer prompts (never drive the guide engine): the double "..
+                "Rapid Fire window after Readiness, the Improved Steady Shot tint, "..
+                "and the OOM Viper swap cue. All off by default.",
+        },
+        hunter_readiness_badge_enabled = {
+            type = "toggle",
+            order = 7.42,
+            name = "Readiness double-Rapid Fire window",
+            desc = "Show a 2x readout on the Rapid Fire bar while the double "..
+                "Rapid Fire window after Readiness is live (off by default).",
+            get = "getter",
+            set = "setter",
+        },
+        hunter_iss_badge_enabled = {
+            type = "toggle",
+            order = 7.43,
+            name = "Steady Shot proc tint (ISS)",
+            desc = "Glow the Steady Shot and Aimed Shot HUD icons while the "..
+                "Improved Steady Shot proc is banked (off by default).",
+            get = "getter",
+            set = "setter",
+        },
+        hunter_oom_viper_badge_enabled = {
+            type = "toggle",
+            order = 7.44,
+            name = "Low-mana Viper badge (OOM)",
+            desc = "Show a VIPER badge while mana sits below the swap band and "..
+                "Aspect of the Viper is known but not active (off by default).",
+            get = "getter",
+            set = "setter",
+        },
+        hunter_lnl_badge_enabled = {
+            type = "toggle",
+            order = 7.45,
+            name = "Trap-proc badge (Lock and Load)",
+            desc = "Show an \"LnL\" badge while the Lock and Load trap-proc window is live "..
+                "(off by default; hidden while the proc state is unknown).",
+            get = "getter",
+            set = "setter",
+        },
+        hunter_practice_header = {
+            type = "header",
+            order = 7.6,
+            name = "Forced-Move Practice",
+        },
+        hunter_practice_desc = {
+            order = 7.61,
+            type = "description",
+            name = "Forced-move drill from the practice registry (stay mobile inside the move "..
+                "windows, keep casts clear of the next one). Start/stop with /st practice or "..
+                "the button below; the panel's shot icons cast simulated shots (no mana, no "..
+                "real casts), graded S/A/B/C/D/F into the session score.",
+        },
+        hunter_practice_toggle = {
+            type = "execute",
+            order = 7.62,
+            name = function()
+                if st.practice_ui and type(st.practice_ui.is_active) == "function"
+                    and st.practice_ui.is_active() then
+                    return "Stop Practice"
+                end
+                return "Start Practice"
+            end,
+            desc = "Toggle the practice session. A session can only be started out of combat.",
+            func = function()
+                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST)
+                end
+            end,
+        },
+        -- Simulation + feedback rows (paladin parity, owner order 2026-10-19): the
+        -- same knobs the shared session reads from the class table (result
+        -- styling, panel position), so the hunter page has the same shape as the
+        -- paladin's. No weapon-speed override: the forced-move drill runs no
+        -- drill swing (practice_ui.lua:4115), so that key would be an orphan here.
+        practice_result_duration = {
+            type = "range",
+            order = 7.63,
+            name = "Result text duration (s)",
+            desc = "How long the grade popup stays on screen.",
+            min = 0.3, max = 3.0, step = 0.1,
+            get = function()
+                return ST:get_class_table().practice_result_duration or 0.8
+            end,
+            set = "setter",
+        },
+        practice_result_text_size = {
+            type = "range",
+            order = 7.64,
+            name = "Result text size",
+            desc = "Font size of the grade popup.",
+            min = 12, max = 48, step = 1,
+            get = function()
+                return ST:get_class_table().practice_result_text_size or 28
+            end,
+            set = function(_, value)
+                ST:get_class_table().practice_result_text_size = value
+                if st.practice_ui and type(st.practice_ui.update_result_font) == "function" then
+                    st.practice_ui.update_result_font(ST)
+                end
+            end,
+        },
+        practice_result_color_hit = {
+            order = 7.65,
+            type = "color",
+            name = "Pass text color",
+            desc = "Colour of the grade popup on a passing grade.",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_hit or {0, 1, 0, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_hit = {r, g, b, a}
+            end,
+        },
+        practice_result_color_miss = {
+            order = 7.66,
+            type = "color",
+            name = "Fail text color",
+            desc = "Colour of the grade popup on a failing grade.",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_miss or {1, 0.2, 0.2, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_miss = {r, g, b, a}
+            end,
+        },
+        practice_panel_x = {
+            type = "input",
+            order = 7.67,
+            name = "Panel X position",
+            desc = "Horizontal offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_x or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_x = n
+                end
+            end,
+        },
+        practice_panel_y = {
+            type = "input",
+            order = 7.68,
+            name = "Panel Y position",
+            desc = "Vertical offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_y or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_y = n
+                end
+            end,
+        },
+        practice_reset_position = {
+            type = "execute",
+            order = 7.69,
+            name = "Reset panel position",
+            desc = "Move the practice panel back to its default spot beside the swing bar.",
+            func = function()
+                local db = ST:get_class_table()
+                db.practice_panel_x = 0
+                db.practice_panel_y = 0
+                -- Re-anchor through the panel's own position applier (practice_ui.lua
+                -- apply_settings re-reads the offsets above; combat-lockdown defers
+                -- it internally), mirroring the update_result_font seam above.
+                if st.practice_ui and type(st.practice_ui.apply_settings) == "function" then
+                    st.practice_ui.apply_settings(ST)
+                end
+            end,
+        },
     }
     -- Cooldown HUD + Rotation Text (shared hud_rotation_widgets builder: the same
     -- 8.x/9.x structure as the paladin's sections; the slot toggles mirror
@@ -3403,9 +4734,39 @@ function ST.class_opts_funcs.HUNTER(self)
             "once it is ready in combat. Unlock the frame to drag it into place.",
         "Kill Command glows once it is ready in combat, only while the toggle is on. No other "..
             "icon glows.",
-        "What the label says: the rotation alone, with a prefix, its steps, or both.")) do
+        "What the label says: the rotation alone, with a prefix, its steps, or both.",
+        { key = "Steady", labelled = "Rotation: Steady", steps = "Steady, Auto, Steady", both = "Steady  -  Steady, Auto, Steady" })) do
         opts_group[k] = v
     end
+    -- Sim reference (wowsims): text-only, no clickability (WoW cannot open
+    -- external links, so the URLs below are display text, not buttons).
+    -- The Next Action Guide practices the sim rotation in-game: filler choice,
+    -- Lock and Load arms and Serpent guards follow the sim numbers where
+    -- sourced (see bench/hunter_rotation_audit_2026-10-19.md).
+    opts_group.wowsims_header = {
+        type = "header",
+        order = 10.0,
+        name = "Sim Reference",
+    }
+    opts_group.wowsims_desc = {
+        order = 10.01,
+        type = "description",
+        name = "Rotation numbers follow the wowsims sims: https://github.com/wowsims/classic, "..
+            "https://github.com/wowsims/sod, https://github.com/wowsims/tbc-new, "..
+            "https://github.com/wowsims/wotlk, https://github.com/wowsims/forever. "..
+            "Practice the sim in-game: enable the guide above and run its prompts "..
+            "against the sim APL.",
+    }
+    -- Layout template (bench/hud_templates_2026-10-19.md §7): curated sets
+    -- from ST.HUNTER.HUD_TEMPLATES, applied on explicit pick only
+    -- (nil = Custom, writes nothing).
+    -- Gallery shortlist 3: Core rows are the Luxthos Era-line visual-check target.
+    opts_group.hud_template = hud_template_widget("HUNTER", {
+        custom = "Custom",
+        shot_rotation = "H-T1 Shot Rotation",
+        full_bm = "H-T2 Full BM + Trinkets",
+        minimal_glow = "H-T3 Minimal + Glow",
+    })
     return opts_group
 end
 
@@ -3494,15 +4855,10 @@ function ST.class_opts_funcs.DRUID(self)
         use_form_colors = {
             type = "toggle",
             order = 4.3,
-            name = "Enable",
+            name = "Enable form colors",
             desc = "Enables form-dependent colors.",
             get = "getter",
             set = "setter",
-        },
-        lb02 = {
-            type = "description",
-            order = 4.4,
-            name = "",
         },
         form_color_bear = {
             order=5.0,
@@ -3562,11 +4918,11 @@ function ST.class_opts_funcs.DRUID(self)
         -- Maul color
         class_header = {
             type = "header",
-            order = 11.0,
+            order = 6.0,
             name = "Maul",
         },
         queue_desc = {
-            order = 11.02,
+            order = 6.02,
             type = "description",
             name = "The timer bar can be configured to turn a custom color when maul is queued."
         },
@@ -3577,17 +4933,17 @@ function ST.class_opts_funcs.DRUID(self)
         -- },
         enable_maul_color = {
             type = "toggle",
-            order = 11.1,
-            name = "Enable Maul Color",
+            order = 6.1,
+            name = "Enable Maul color",
             desc = "Enables a custom color for the mainhand bar when Maul is queued.",
             get = "getter",
             set = "setter",
         },
         maul_color = {
-            order=11.2,
+            order=6.2,
             type="color",
-            name="Color",
-            desc="Color to use when Heroic Strike is queued.",
+            name="Maul color",
+            desc="Color to use when Maul is queued.",
             hasAlpha=true,
             get = "color_getter",
             set = "color_setter",
@@ -3603,7 +4959,7 @@ function ST.class_opts_funcs.DRUID(self)
         --     name = "",
         -- },
         rage_desc = {
-            order = 12.1,
+            order = 6.51,
             type = "description",
             name = "If the above is enabled, the mainhand timer bar will turn a certain color when the player "..
                 "has queued Maul, but has since dropped below the rage threshold necessary "..
@@ -3615,7 +4971,7 @@ function ST.class_opts_funcs.DRUID(self)
         --     name = "",
         -- },
         insufficient_rage_color = {
-            order=12.3,
+            order=6.53,
             type="color",
             name="Insufficient Rage color",
             desc="Color to use for the timer bar when the player drops below the rage threshold for the queued ability.",
@@ -3629,11 +4985,11 @@ function ST.class_opts_funcs.DRUID(self)
         -- Mangle/Rip/Rake target debuff bars.
         trackers_header = {
             type = "header",
-            order = 13.0,
+            order = 7.0,
             name = "Druid Trackers",
         },
         trackers_desc = {
-            order = 13.01,
+            order = 7.01,
             type = "description",
             name = "Feral/forms helper visuals: the 2-second cat-form energy cycle "..
                 "beside the mainhand bar, the current shape on the bar while "..
@@ -3641,7 +4997,7 @@ function ST.class_opts_funcs.DRUID(self)
         },
         show_druid_energy_tick = {
             type = "toggle",
-            order = 13.1,
+            order = 7.1,
             name = "Energy tick bar",
             desc = "Show a thin bar left of the mainhand bar tracking the 2-second "..
                 "cat-form energy cycle (it fills as the next natural tick approaches).",
@@ -3649,7 +5005,7 @@ function ST.class_opts_funcs.DRUID(self)
             set = "setter",
         },
         druid_energy_tick_color = {
-            order=13.2,
+            order=7.2,
             type="color",
             name="Energy tick color",
             desc="Color of the energy tick bar.",
@@ -3663,7 +5019,7 @@ function ST.class_opts_funcs.DRUID(self)
         },
         show_druid_form_label = {
             type = "toggle",
-            order = 13.3,
+            order = 7.3,
             name = "Form label",
             desc = "Show the current shape (Cat / Bear / Caster) on the mainhand bar "..
                 "while shapeshifted; the configured bar texts are untouched in no form.",
@@ -3672,7 +5028,7 @@ function ST.class_opts_funcs.DRUID(self)
         },
         show_druid_mangle_bar = {
             type = "toggle",
-            order = 13.4,
+            order = 7.4,
             name = "Mangle bar",
             desc = "Show your own Mangle duration on the current target above the "..
                 "mainhand bar, with a glow in the last 4 seconds.",
@@ -3680,7 +5036,7 @@ function ST.class_opts_funcs.DRUID(self)
             set = "setter",
         },
         druid_mangle_bar_color = {
-            order=13.5,
+            order=7.5,
             type="color",
             name="Mangle bar color",
             desc="Color of the Mangle duration bar.",
@@ -3694,7 +5050,7 @@ function ST.class_opts_funcs.DRUID(self)
         },
         show_druid_rip_bar = {
             type = "toggle",
-            order = 13.6,
+            order = 7.6,
             name = "Rip bar",
             desc = "Show your own Rip duration on the current target above the "..
                 "mainhand bar, with a glow in the last 4 seconds.",
@@ -3702,7 +5058,7 @@ function ST.class_opts_funcs.DRUID(self)
             set = "setter",
         },
         druid_rip_bar_color = {
-            order=13.7,
+            order=7.7,
             type="color",
             name="Rip bar color",
             desc="Color of the Rip duration bar.",
@@ -3716,7 +5072,7 @@ function ST.class_opts_funcs.DRUID(self)
         },
         show_druid_rake_bar = {
             type = "toggle",
-            order = 13.8,
+            order = 7.8,
             name = "Rake bar",
             desc = "Show your own Rake duration on the current target above the "..
                 "mainhand bar, with a glow in the last 4 seconds.",
@@ -3724,7 +5080,7 @@ function ST.class_opts_funcs.DRUID(self)
             set = "setter",
         },
         druid_rake_bar_color = {
-            order=13.9,
+            order=7.9,
             type="color",
             name="Rake bar color",
             desc="Color of the Rake duration bar.",
@@ -3738,15 +5094,15 @@ function ST.class_opts_funcs.DRUID(self)
         },
         show_druid_pips = {
             type = "toggle",
-            order = 13.11,
-            name = "Combo points",
+            order = 7.11,
+            name = "Combo-point pips",
             desc = "Show combo points as pips under the bar in cat form (the row glows at 5).",
             get = "getter",
             set = "setter",
         },
         show_druid_shred_countdown = {
             type = "toggle",
-            order = 13.12,
+            order = 7.12,
             name = "Shred countdown",
             desc = "Show \"Shred in Xs\" below the bar until the next energy tick can afford "..
                 "a Shred (TBC/Wrath only).",
@@ -3755,15 +5111,15 @@ function ST.class_opts_funcs.DRUID(self)
         },
         show_druid_maul_badge = {
             type = "toggle",
-            order = 13.13,
-            name = "Maul cap badge",
+            order = 7.13,
+            name = "Rage-cap Maul badge",
             desc = "Show the at-cap time (\"Cap Ns\") in bear form while rage is capped.",
             get = "getter",
             set = "setter",
         },
         show_druid_omen_glow = {
             type = "toggle",
-            order = 13.14,
+            order = 7.14,
             name = "Omen glow",
             desc = "Glow the energy bar while the Omen of Clarity proc is up.",
             get = "getter",
@@ -3771,31 +5127,191 @@ function ST.class_opts_funcs.DRUID(self)
         },
         show_druid_gcd_tick = {
             type = "toggle",
-            order = 13.15,
+            order = 7.15,
             name = "GCD tick marker",
             desc = "Show a marker on the energy bar for the global cooldown's position "..
                 "in the energy cycle.",
             get = "getter",
             set = "setter",
         },
+        show_druid_ttd_readout = {
+            type = "toggle",
+            order = 7.16,
+            name = "Target time-to-die readout",
+            desc = "Show the target's time-to-die (\"TTD 8s\") below the bar. Unknown "..
+                "hides: no target, unreadable or dead health shows nothing (off by default).",
+            get = "getter",
+            set = "setter",
+        },
+
+        -- Practice (the shared session: the toggle below starts it, the panel icons
+        -- cast the simulated spells; opt-in, out-of-combat gated like the paladin's
+        -- Twist Practice entry - no default-visible change).
+        druid_practice_header = {
+            type = "header",
+            order = 7.17,
+            name = "Practice",
+        },
+        druid_practice_desc = {
+            order = 7.171,
+            type = "description",
+            name = "Practice minigame: simulate a boss fight's swing rotation in a "..
+                "separate simulation, without attacking anything. The panel's ability icons cast "..
+                "simulated spells (left click); the toggle below or /st practice toggles the "..
+                "session. The druid powershift drill (druid_powershift) is registered for this "..
+                "class and grades through the same scoring pipeline.",
+        },
+        druid_practice_toggle = {
+            type = "execute",
+            order = 7.172,
+            name = function()
+                if st.practice_ui and type(st.practice_ui.is_active) == "function"
+                    and st.practice_ui.is_active() then
+                    return "Stop Practice"
+                end
+                return "Start Practice"
+            end,
+            desc = "Toggle the practice session. A session can only be started out of combat.",
+            func = function()
+                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST)
+                end
+            end,
+        },
+        -- Simulation + feedback rows: the same knobs the shared session reads from
+        -- the class table (weapon speed, result styling, panel position), mirrored
+        -- from the paladin's Practice section so the page has the same shape.
+        practice_weapon_speed = {
+            type = "range",
+            order = 7.18,
+            name = "Weapon speed override (s)",
+            desc = "0 uses the equipped weapon speed.",
+            min = 0, max = 4, step = 0.1,
+            get = "getter",
+            set = "setter",
+        },
+        -- Practice result feedback and panel placement. Every widget edits the
+        -- practice_result_* / practice_panel_* keys the session UI (practice_ui.lua)
+        -- already reads, so the shipped defaults and the options round-trip in both
+        -- directions. The two result colours are stored in the 0-1 range the result
+        -- popup paints with (SetTextColor), NOT the shared 0-255 convention, so they
+        -- use direct get/set functions instead of the class color_getter/color_setter.
+        practice_result_duration = {
+            type = "range",
+            order = 7.19,
+            name = "Result text duration (s)",
+            desc = "How long the TWIST!/MISS popup stays on screen.",
+            min = 0.3, max = 3.0, step = 0.1,
+            get = "getter",
+            set = "setter",
+        },
+        practice_result_text_size = {
+            type = "range",
+            order = 7.191,
+            name = "Result text size",
+            desc = "Font size of the TWIST!/MISS popup.",
+            min = 12, max = 48, step = 1,
+            get = "getter",
+            set = function(_, value)
+                ST:get_class_table().practice_result_text_size = value
+                if st.practice_ui and type(st.practice_ui.update_result_font) == "function" then
+                    st.practice_ui.update_result_font(ST)
+                end
+            end,
+        },
+        practice_result_color_hit = {
+            order = 7.192,
+            type = "color",
+            name = "Twist text color",
+            desc = "Colour of the TWIST! popup on a successful twist.",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_hit or {0, 1, 0, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_hit = {r, g, b, a}
+            end,
+        },
+        practice_result_color_miss = {
+            order = 7.193,
+            type = "color",
+            name = "Miss text color",
+            desc = "Colour of the MISS popup on a failed twist.",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_miss or {1, 0.2, 0.2, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_miss = {r, g, b, a}
+            end,
+        },
+        practice_panel_x = {
+            type = "input",
+            order = 7.194,
+            name = "Panel X position",
+            desc = "Horizontal offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_x or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_x = n
+                end
+            end,
+        },
+        practice_panel_y = {
+            type = "input",
+            order = 7.195,
+            name = "Panel Y position",
+            desc = "Vertical offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_y or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_y = n
+                end
+            end,
+        },
+        practice_reset_position = {
+            type = "execute",
+            order = 7.196,
+            name = "Reset panel position",
+            desc = "Move the practice panel back to its default spot beside the swing bar.",
+            func = function()
+                local db = ST:get_class_table()
+                db.practice_panel_x = 0
+                db.practice_panel_y = 0
+                -- Re-anchor through the panel's own position applier (practice_ui.lua
+                -- apply_settings re-reads the offsets above; combat-lockdown defers
+                -- it internally), mirroring the update_result_font seam above.
+                if st.practice_ui and type(st.practice_ui.apply_settings) == "function" then
+                    st.practice_ui.apply_settings(ST)
+                end
+            end,
+        },
 
         -- Next Action Guide (shared nextaction_ui frame; provider ST.DRUID.guide).
         nag_header = {
             type = "header",
-            order = 14.0,
+            order = 7.95,
             name = "Next Action Guide",
         },
         nag_desc = {
             type = "description",
-            order = 14.05,
-            name = "On-screen rotation prompt (off by default): the next ability to press "..
+            order = 7.951,
+            name = "On-screen rotation prompt (on by default): the next ability to press "..
                 "in bear (Maul / Mangle) or cat form (Rip, Rake, Mangle, Ferocious Bite, "..
                 "Shred) with the RIDE cue while a Maul is queued. Drag the frame while it "..
                 "is unlocked to position it.",
         },
         nextaction_enabled = {
             type = "toggle",
-            order = 14.1,
+            order = 7.952,
             name = "Enable",
             desc = "Show the next action guide.",
             get = "getter",
@@ -3803,15 +5319,15 @@ function ST.class_opts_funcs.DRUID(self)
         },
         nextaction_locked = {
             type = "toggle",
-            order = 14.11,
-            name = "Lock frame",
+            order = 7.953,
+            name = "Lock guide frame",
             desc = "Prevent dragging the guide frame.",
             get = "getter",
             set = "setter",
         },
         nextaction_visibility_key = {
             type = "select",
-            order = 14.12,
+            order = 7.954,
             name = "Show guide",
             desc = "When the guide is visible.",
             values = { always = "Always", in_combat = "In combat" },
@@ -3820,7 +5336,7 @@ function ST.class_opts_funcs.DRUID(self)
         },
         nextaction_icon_size = {
             type = "range",
-            order = 14.13,
+            order = 7.955,
             name = "Icon size",
             desc = "Guide icon size in pixels.",
             min = 20, max = 80, step = 1,
@@ -3829,7 +5345,7 @@ function ST.class_opts_funcs.DRUID(self)
         },
         nextaction_x = {
             type = "input",
-            order = 14.14,
+            order = 7.956,
             name = "X position",
             desc = "Horizontal screen position (dragging the frame also updates this).",
             get = function()
@@ -3844,7 +5360,7 @@ function ST.class_opts_funcs.DRUID(self)
         },
         nextaction_y = {
             type = "input",
-            order = 14.15,
+            order = 7.957,
             name = "Y position",
             desc = "Vertical screen position (dragging the frame also updates this).",
             get = function()
@@ -3859,7 +5375,7 @@ function ST.class_opts_funcs.DRUID(self)
         },
         guide_rip_refresh = {
             type = "range",
-            order = 14.16,
+            order = 7.958,
             name = "Rip refresh (s)",
             desc = "Suggest Rip while the target's Rip is missing or has this many "..
                 "seconds or fewer remaining.",
@@ -3869,11 +5385,25 @@ function ST.class_opts_funcs.DRUID(self)
         },
         guide_rake_refresh = {
             type = "range",
-            order = 14.17,
+            order = 7.959,
             name = "Rake refresh (s)",
             desc = "Suggest Rake while the target's Rake is missing or has this many "..
                 "seconds or fewer remaining.",
             min = 0, max = 10, step = 0.5,
+            get = "getter",
+            set = "setter",
+        },
+        -- TBC Rip combo-point floor (the gather feeds db.guide_rip_min_cp raw at
+        -- classes/druid.lua:1707; the engine clamps 2-5 and defaults nil to the
+        -- frozen RIP_MIN_CP_TBC = 4 at druid_guide.lua:515-520). Ships 4, so a
+        -- fresh profile renders the archived behaviour, never an empty slider.
+        guide_rip_min_cp = {
+            type = "range",
+            order = 7.960,
+            name = "Rip combo points",
+            desc = "Suggest Rip once this many combo points are banked (TBC). "..
+                "2 finishes early, 5 pools to full; 4 matches the sim default.",
+            min = 2, max = 5, step = 1,
             get = "getter",
             set = "setter",
         },
@@ -3889,6 +5419,10 @@ function ST.class_opts_funcs.DRUID(self)
         { key = "hud_show_rake", name = "Rake", desc = "Show the Rake icon (with its GCD swipe)." },
         { key = "hud_show_bite", name = "Ferocious Bite", desc = "Show the Ferocious Bite icon (with its GCD swipe)." },
         { key = "hud_show_shred", name = "Shred", desc = "Show the Shred icon (with its GCD swipe)." },
+        -- D-1 Claw mirror (bench/hud_parity_2026-10-19.md D-1): consumer
+        -- classes/druid.lua:1979 HUD_SLOTS + :2217-2222 provider (== true shows,
+        -- nil = off). Ship false = hidden (no default-visible change).
+        { key = "hud_show_claw", name = "Claw", desc = "Show the Claw icon (with its GCD swipe)." },
         { key = "hud_show_tf", name = "Tiger's Fury", desc = "Show the Tiger's Fury icon (glows in combat once it is ready)." },
         { key = "hud_show_berserk", name = "Berserk", desc = "Show the Berserk icon (glows in combat once it is ready)." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
@@ -3900,9 +5434,39 @@ function ST.class_opts_funcs.DRUID(self)
             "once they are ready. Unlock the frame to drag it into place.",
         "Tiger's Fury and Berserk glow in combat once they are ready, both only while "..
             "the toggle is on. No other icon glows.",
-        "What the label says: the rotation alone, with a prefix, its steps, or both.")) do
+        "What the label says: the rotation alone, with a prefix, its steps, or both.",
+        { key = "Rip", labelled = "Rotation: Rip", steps = "Mangle, Rip, Rake", both = "Rip  -  Mangle, Rip, Rake" })) do
         opts_group[k] = v
     end
+    -- Sim reference (wowsims): text-only, no clickability (WoW cannot open
+    -- external links, so the URLs below are display text, not buttons).
+    -- The Next Action Guide practices the sim rotation in-game: Tiger's Fury
+    -- lines, Rip/Rake expiry and the Forever 50 ceiling follow the sim numbers
+    -- where sourced (see bench/druid_rotation_audit_2026-10-19.md).
+    opts_group.wowsims_header = {
+        type = "header",
+        order = 10.0,
+        name = "Sim Reference",
+    }
+    opts_group.wowsims_desc = {
+        order = 10.01,
+        type = "description",
+        name = "Rotation numbers follow the wowsims sims: https://github.com/wowsims/classic, "..
+            "https://github.com/wowsims/sod, https://github.com/wowsims/tbc-new, "..
+            "https://github.com/wowsims/wotlk, https://github.com/wowsims/forever. "..
+            "Practice the sim in-game: enable the guide above and run its prompts "..
+            "against the sim rotation.",
+    }
+    -- Layout template (bench/hud_templates_2026-10-19.md §7): curated sets
+    -- from ST.DRUID.HUD_TEMPLATES, applied on explicit pick only
+    -- (nil = Custom, writes nothing).
+    -- Gallery shortlist 3: Core rows are the Luxthos Era-line visual-check target.
+    opts_group.hud_template = hud_template_widget("DRUID", {
+        custom = "Custom",
+        bleed_core = "D-T1 Bleed Core",
+        full_feral = "D-T2 Full Feral + Pops",
+        bear_guard = "D-T3 Bear Guard",
+    })
     return opts_group
 
 end
@@ -3944,7 +5508,7 @@ function ST.class_opts_funcs.SHAMAN(self)
         weave_enabled = {
             type = "toggle",
             order = 1.1,
-            name = "Enable",
+            name = "Enable spell weaving",
             desc = "Show the spell weaving breakpoint marker and cast spark on the mainhand bar.",
             get = "getter",
             set = "setter",
@@ -3998,7 +5562,7 @@ function ST.class_opts_funcs.SHAMAN(self)
             type = "toggle",
             order = 1.3,
             name = "Maelstrom Weapon",
-            desc = "Reduce the effective cast time by 20% per Maelstrom Weapon stack; 5 stacks are instant.",
+            desc = "Count Maelstrom Weapon stacks toward the cast time (20% per stack; 5 stacks are instant).",
             get = "getter",
             set = "setter",
             disabled = function() return ST:get_class_table().weave_enabled == false end,
@@ -4088,7 +5652,7 @@ function ST.class_opts_funcs.SHAMAN(self)
         show_shaman_cooldown_badges = {
             type = "toggle",
             order = 2.4,
-            name = "Stormstrike / Shamanistic Rage badges",
+            name = "Stormstrike + Shamanistic Rage badges",
             desc = "Show the Stormstrike cooldown (SS) and the Shamanistic Rage timer (SR) "..
                 "beside the mainhand bar.",
             get = "getter",
@@ -4105,12 +5669,17 @@ function ST.class_opts_funcs.SHAMAN(self)
         },
         show_shaman_stormstrike_bar = {
             type = "toggle",
-            order = 2.6,
+            order = 2.31,
             name = "Stormstrike bar",
             desc = "Show the target's Stormstrike nature-vulnerability remaining time "..
                 "above the Flame Shock bar, with a glow in the last 4 seconds.",
             get = "getter",
             set = "setter",
+        },
+        badges_header = {
+            type = "header",
+            order = 2.65,
+            name = "Bar Badges",
         },
         show_shaman_wf_hold_tint = {
             type = "toggle",
@@ -4132,7 +5701,7 @@ function ST.class_opts_funcs.SHAMAN(self)
         show_shaman_spell_positions = {
             type = "toggle",
             order = 2.9,
-            name = "Spell position row",
+            name = "Safe-cast position row",
             desc = "Show the cast-start zone, the per-spell icons at their latest safe "..
                 "starts and the effective cast times above the bar.",
             get = "getter",
@@ -4141,11 +5710,180 @@ function ST.class_opts_funcs.SHAMAN(self)
         show_shaman_dw_sync = {
             type = "toggle",
             order = 2.91,
-            name = "DW sync / Flurry readout",
+            name = "Dual-wield sync / Flurry readout",
             desc = "Show the dual-wield sync readout and the live Flurry proc countdown "..
                 "beside the bar.",
             get = "getter",
             set = "setter",
+        },
+        show_shaman_lust_status = {
+            type = "toggle",
+            order = 2.92,
+            name = "Lust status badge",
+            desc = "Show the Bloodlust / Heroism remaining time beside the bar (\"BL ?\" "..
+                "while the aura list may be restricted and the read is inconclusive; "..
+                "hidden while no lust is up).",
+            get = "getter",
+            set = "setter",
+        },
+
+        -- Practice (the archive's Guides & Practice page shape, shaman entry):
+        -- the same session every class shares, started both ways (this toggle or
+        -- /st practice), plus the shaman weave drill. The session panel icons cast
+        -- simulated spells; the drill grades simulated Lightning Bolt / Chain
+        -- Lightning starts by margin before the weave marker through the practice
+        -- harness. No new db keys: every widget reads nil-safe with the shipped
+        -- paladin defaults below, and the drill stays hidden until opened
+        -- (nil = off).
+        practice_header = {
+            type = "header",
+            order = 5.0,
+            name = "Weave Practice",
+        },
+        practice_desc = {
+            order = 5.05,
+            type = "description",
+            name = "Practice drill: simulate weave-timing casts against a drill swing, "..
+                "without attacking anything. The panel's Lightning Bolt / Chain Lightning icons cast "..
+                "simulated spells (left click); the toggle below (or /st practice) starts and stops "..
+                "the session. Only weapon speed, result styling and panel position ship as options.",
+        },
+        practice_toggle = {
+            type = "execute",
+            order = 5.1,
+            name = function()
+                if st.practice_ui and type(st.practice_ui.is_active) == "function"
+                    and st.practice_ui.is_active() then
+                    return "Stop Practice"
+                end
+                return "Start Practice"
+            end,
+            desc = "Toggle the practice session. A session can only be started out of combat.",
+            func = function()
+                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST)
+                end
+            end,
+        },
+        practice_weapon_speed = {
+            type = "range",
+            order = 5.2,
+            name = "Weapon speed override (s)",
+            desc = "0 uses the equipped weapon speed.",
+            min = 0, max = 4, step = 0.1,
+            get = function()
+                return ST:get_class_table().practice_weapon_speed or 0
+            end,
+            set = "setter",
+        },
+        -- Practice result feedback and panel placement. Every widget reads the
+        -- archived practice_result_* / practice_panel_* keys nil-safe (the
+        -- paladin defaults stand in until set); the session UI (practice_ui.lua)
+        -- owns the same fallbacks, so the options and the panel round-trip in
+        -- both directions. The two result colours are stored in the 0-1 range
+        -- the result popup paints with (SetTextColor), NOT the shared 0-255
+        -- convention, so they use direct get/set functions.
+        practice_result_duration = {
+            type = "range",
+            order = 5.3,
+            name = "Result text duration (s)",
+            desc = "How long the grade popup stays on screen.",
+            min = 0.3, max = 3.0, step = 0.1,
+            get = function()
+                return ST:get_class_table().practice_result_duration or 0.8
+            end,
+            set = "setter",
+        },
+        practice_result_text_size = {
+            type = "range",
+            order = 5.31,
+            name = "Result text size",
+            desc = "Font size of the grade popup.",
+            min = 12, max = 48, step = 1,
+            get = function()
+                return ST:get_class_table().practice_result_text_size or 28
+            end,
+            set = function(_, value)
+                ST:get_class_table().practice_result_text_size = value
+                if st.practice_ui and type(st.practice_ui.update_result_font) == "function" then
+                    st.practice_ui.update_result_font(ST)
+                end
+            end,
+        },
+        practice_result_color_hit = {
+            order = 5.32,
+            type = "color",
+            name = "Hit text color",
+            desc = "Colour of the grade popup on a tight weave (S/A/B/C).",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_hit or {0, 1, 0, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_hit = {r, g, b, a}
+            end,
+        },
+        practice_result_color_miss = {
+            order = 5.33,
+            type = "color",
+            name = "Miss text color",
+            desc = "Colour of the grade popup on a late or clipped weave (D/F).",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_miss or {1, 0.2, 0.2, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_miss = {r, g, b, a}
+            end,
+        },
+        practice_panel_x = {
+            type = "input",
+            order = 5.34,
+            name = "Panel X position",
+            desc = "Horizontal offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_x or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_x = n
+                end
+            end,
+        },
+        practice_panel_y = {
+            type = "input",
+            order = 5.35,
+            name = "Panel Y position",
+            desc = "Vertical offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_y or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_y = n
+                end
+            end,
+        },
+        practice_reset_position = {
+            type = "execute",
+            order = 5.36,
+            name = "Reset panel position",
+            desc = "Move the practice panel back to its default spot beside the swing bar.",
+            func = function()
+                local db = ST:get_class_table()
+                db.practice_panel_x = 0
+                db.practice_panel_y = 0
+                -- Re-anchor through the panel's own position applier (practice_ui.lua
+                -- apply_settings re-reads the offsets above; combat-lockdown defers
+                -- it internally), mirroring the update_result_font seam above.
+                if st.practice_ui and type(st.practice_ui.apply_settings) == "function" then
+                    st.practice_ui.apply_settings(ST)
+                end
+            end,
         },
 
         -- Next Action Guide (shared nextaction_ui frame; provider ST.SHAMAN.guide).
@@ -4157,7 +5895,7 @@ function ST.class_opts_funcs.SHAMAN(self)
         nag_desc = {
             type = "description",
             order = 3.05,
-            name = "On-screen rotation prompt (off by default): the next ability to press "..
+            name = "On-screen rotation prompt (on by default): the next ability to press "..
                 "(Stormstrike, Flame Shock, or the weave cast once Maelstrom Weapon has "..
                 "stacked) with the RIDE cue while a cast is in flight. Drag the frame "..
                 "while it is unlocked to position it.",
@@ -4173,7 +5911,7 @@ function ST.class_opts_funcs.SHAMAN(self)
         nextaction_locked = {
             type = "toggle",
             order = 3.11,
-            name = "Lock frame",
+            name = "Lock guide frame",
             desc = "Prevent dragging the guide frame.",
             get = "getter",
             set = "setter",
@@ -4228,11 +5966,33 @@ function ST.class_opts_funcs.SHAMAN(self)
         },
         guide_flameshock_refresh = {
             type = "range",
-            order = 3.16,
+            order = 3.101,
             name = "Flame Shock refresh (s)",
             desc = "Suggest Flame Shock while the target's Flame Shock is missing or has "..
                 "this many seconds or fewer remaining.",
             min = 0, max = 10, step = 0.5,
+            get = "getter",
+            set = "setter",
+        },
+        -- The TBC APL's "Filler Shock" choice (the Shocks group picks ONE filler):
+        -- the valueVariables default is Earth Shock (the group's row 3, 25454 r8) and
+        -- the ALTERNATIVE is Frost Shock (the group's row 2, 25464 r5). The class
+        -- reads this key and states the choice to the frozen engine's `filler_shock`
+        -- input (classes/shaman.lua's gather), so the engine's rule 13b answers only
+        -- when Frost Shock is picked; every other value - and a missing one - reads
+        -- as the APL's default. Ships the APL's default (Earth Shock), so a fresh
+        -- profile behaves exactly as before.
+        guide_filler_shock = {
+            type = "select",
+            order = 3.102,
+            name = "Shock filler",
+            desc = "Which shock the guide suggests as the TBC filler: Earth Shock (the "..
+                "APL's default) or Frost Shock. Frost Shock replaces the Earth Shock "..
+                "filler entirely while it is picked.",
+            values = {
+                earth = "Earth Shock",
+                frost = "Frost Shock",
+            },
             get = "getter",
             set = "setter",
         },
@@ -4247,18 +6007,96 @@ function ST.class_opts_funcs.SHAMAN(self)
         { key = "hud_show_firenova", name = "Fire Nova Totem", desc = "Show the Fire Nova Totem icon." },
         { key = "hud_show_earthshock", name = "Earth Shock", desc = "Show the Earth Shock icon (with its GCD swipe)." },
         { key = "hud_show_twist", name = "Windfury Totem", desc = "Show the Windfury Totem icon (with its GCD swipe)." },
+        -- The two maintain mirrors (bench/shaman_slots_2026-10-19.md §2): the live
+        -- consumer is classes/shaman.lua - ST.SHAMAN.HUD_SLOTS declares the
+        -- "lightningshield" and "searing" descriptors, and ST.SHAMAN.get_hud_state
+        -- reads hud_db["hud_show_" .. slot.key] == true (nil = off; the provider-level
+        -- hide is the no-default-visible gate). Both ship false = hidden, the druid
+        -- Claw mirror's shape. They stay before the trinkets so the row's order
+        -- mirrors ST.SHAMAN.HUD_SLOTS.
+        { key = "hud_show_lightningshield", name = "Lightning Shield", desc = "Show the Lightning Shield icon (glows in combat while no shield aura is up)." },
+        { key = "hud_show_searing", name = "Searing Totem", desc = "Show the Searing Totem icon (glows in combat while the fire totem slot is empty)." },
+        -- The third maintain mirror (S-20 / U-10): the Call of the Elements water
+        -- clock. The same live consumer - classes/shaman.lua ST.SHAMAN.HUD_SLOTS
+        -- declares the "coe" descriptor and ST.SHAMAN.get_hud_state reads
+        -- hud_db["hud_show_coe"] == true (nil = off; the provider-level hide is the
+        -- no-default-visible gate). It ships false = hidden, like the two above,
+        -- and it sits before the trinkets so the row's order mirrors
+        -- ST.SHAMAN.HUD_SLOTS.
+        { key = "hud_show_coe", name = "Call of the Elements", desc = "Show the Call of the Elements icon (glows in combat while the water totem has under 20 s left)." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
     },
         "A row of ability icons with cooldown swipes and remaining-time text. Icons grey out "..
             "while on cooldown, tint blue without mana and red out of range. Stormstrike glows "..
             "once it is ready in combat. Unlock the frame to drag it into place.",
-        "Stormstrike glows once it is ready in combat, only while the toggle is on. No other "..
+        "Stormstrike glows once it is ready in combat, only while the toggle is on. The "..
+            "Lightning Shield, Searing Totem and Call of the Elements mirrors glow while "..
+            "their upkeep is due (no shield aura up / the fire totem slot empty / the "..
+            "water totem under 20 s), each only while its own toggle is on. No other "..
             "icon glows.",
-        "What the label says: the rotation alone, with a prefix, its steps, or both.")) do
+        "What the label says: the rotation alone, with a prefix, its steps, or both.",
+        { key = "Stormstrike", labelled = "Rotation: Stormstrike", steps = "SS, FS, LB", both = "Stormstrike  -  SS, FS, LB" })) do
         opts_group[k] = v
     end
+    -- Sim reference (wowsims): text-only, no clickability (WoW cannot open
+    -- external links, so the URLs below are display text, not buttons).
+    -- The Next Action Guide practices the sim rotation in-game: Stormstrike
+    -- on cooldown, Flame Shock expiry-only and the Windfury ICD follow the sim
+    -- numbers where sourced (see bench/shaman_rotation_audit_2026-10-19.md).
+    opts_group.wowsims_header = {
+        type = "header",
+        order = 10.0,
+        name = "Sim Reference",
+    }
+    opts_group.wowsims_desc = {
+        order = 10.01,
+        type = "description",
+        name = "Rotation numbers follow the wowsims sims: https://github.com/wowsims/classic, "..
+            "https://github.com/wowsims/sod, https://github.com/wowsims/tbc-new, "..
+            "https://github.com/wowsims/forever (Wrath has no in-scope sim; that "..
+            "row is guide-derived). Practice the sim in-game: enable the guide "..
+            "above and run its prompts against the sim rotation.",
+    }
+    -- Layout template (bench/hud_templates_2026-10-19.md §7): curated sets
+    -- from ST.SHAMAN.HUD_TEMPLATES, applied on explicit pick only
+    -- (nil = Custom, writes nothing).
+    -- Gallery shortlist 2/6/7: Sabimaru visual-check for S-T1/S-T2; bar-side
+    -- borrows out of scope here (UNCONFIRMED); D2/D3 WOTLK items excluded.
+    opts_group.hud_template = hud_template_widget("SHAMAN", {
+        custom = "Custom",
+        twist_core = "S-T1 Twist Core",
+        full_weave = "S-T2 Full Enhance + Weave",
+        minimal = "S-T3 Minimal",
+    })
     return opts_group
+end
+
+-- Rogue guide thresholds: the db value wins; nil falls back to the pure engine's
+-- default constant (with the shipped literal as a last resort), so a range never
+-- renders empty in a profile that predates the key.
+local function rogue_threshold_get(db_key, constant, fallback)
+    local value = ST:get_class_table()[db_key]
+    if type(value) == "number" then
+        return value
+    end
+    local rg = st.rogue_guide
+    local engine = rg and rg[constant]
+    if type(engine) == "number" then
+        return engine
+    end
+    return fallback
+end
+
+-- One inline setter per threshold (no bar reconfigure chain: guide thresholds do
+-- not touch the bars).
+local function rogue_threshold_set(db_key)
+    return function(_, value)
+        local n = tonumber(value)
+        if n then
+            ST:get_class_table()[db_key] = n
+        end
+    end
 end
 
 function ST.class_opts_funcs.ROGUE(self)
@@ -4271,11 +6109,10 @@ function ST.class_opts_funcs.ROGUE(self)
         energy_desc = {
             order = 1.02,
             type = "description",
-            name = "Energy-tick and pooling cues (the controls ship now, the visuals land "..
-                "with the energy slice). Pooling bands are shown as energy thresholds: do "..
-                "not pool above the pre-tick / post-tick line. Both cues hide while the tick "..
-                "prediction is unknown (energy procs, missing reads) instead of drawing a "..
-                "guessed tick.",
+            name = "Energy-tick spark and pooling tint on the mainhand bar. Pooling bands "..
+                "are energy thresholds: do not pool above the pre-tick / post-tick line. "..
+                "Both cues hide while the tick prediction is unknown (energy procs, missing "..
+                "reads) instead of drawing a guessed tick.",
         },
         show_rogue_energy_tick = {
             type = "toggle",
@@ -4320,7 +6157,7 @@ function ST.class_opts_funcs.ROGUE(self)
         rogue_pool_band_pre = {
             type = "range",
             order = 1.3,
-            name = "Pre-tick band",
+            name = "Pool: don't spend below (pre-tick)",
             desc = "Energy threshold at or above which the next tick would cap the bar.",
             min = 0, max = 100, step = 5,
             get = "getter",
@@ -4329,145 +6166,224 @@ function ST.class_opts_funcs.ROGUE(self)
         rogue_pool_band_post = {
             type = "range",
             order = 1.31,
-            name = "Post-tick band",
+            name = "Pool: don't spend below (post-tick)",
             desc = "Energy threshold to respect immediately after a tick.",
             min = 0, max = 100, step = 5,
             get = "getter",
             set = "setter",
         },
 
-        cues_header = {
+        duty_header = {
             type = "header",
             order = 2.01,
-            name = "Finisher / Upkeep Cues",
+            name = "Upkeep Duty",
         },
-        cues_desc = {
+        duty_desc = {
             order = 2.02,
             type = "description",
-            name = "Slice and Dice, Rupture, Expose Armor, Shiv and Thistle Tea cues. "..
-                "Each toggle is nil-safe: with the key absent (or false) the cue stays off. "..
-                "A cue hides while its aura or combo-point read is unknown instead of "..
-                "showing a guessed state; the Classic Era SS-after-swing window appears "..
-                "only on Era clients with a readable mainhand swing record.",
+            name = "Who keeps the target's armor debuff up. The upkeep states themselves "..
+                "already render in the Cooldown HUD (Slice and Dice, Rupture, Expose "..
+                "Armor, Thistle Tea) and the Next Action Guide (Expose Armor, Shiv, "..
+                "Thistle Tea), so no separate bar cues ship.",
         },
-        show_rogue_snd_cue = {
+        rogue_ea_duty = {
             type = "toggle",
-            order = 2.1,
-            name = "Slice and Dice",
-            desc = "Show the Slice and Dice upkeep cue.",
-            get = "getter",
-            set = "setter",
-        },
-        rogue_snd_color = {
-            order = 2.11,
-            type = "color",
-            name = "Slice and Dice color",
-            desc = "Color of the Slice and Dice cue.",
-            hasAlpha = true,
-            get = "color_getter",
-            set = "color_setter",
-            disabled = function()
-                return not ST:get_class_table().show_rogue_snd_cue
-            end,
-        },
-        show_rogue_rupture_cue = {
-            type = "toggle",
-            order = 2.2,
-            name = "Rupture",
-            desc = "Show the Rupture upkeep cue.",
-            get = "getter",
-            set = "setter",
-        },
-        rogue_rupture_color = {
-            order = 2.21,
-            type = "color",
-            name = "Rupture color",
-            desc = "Color of the Rupture cue.",
-            hasAlpha = true,
-            get = "color_getter",
-            set = "color_setter",
-            disabled = function()
-                return not ST:get_class_table().show_rogue_rupture_cue
-            end,
-        },
-        show_rogue_ea_cue = {
-            type = "toggle",
-            order = 2.3,
+            order = 2.03,
             name = "Expose Armor duty",
-            desc = "Show the Expose Armor upkeep cue while the duty is active.",
+            desc = "Treat keeping Expose Armor on the target as your job (Improved "..
+                "Expose Armor): the guide suggests it while the debuff is missing or "..
+                "inside the refresh window. Leave off when someone else handles the "..
+                "armor debuff. Off by default; the guide never suggests Expose Armor while off.",
             get = "getter",
             set = "setter",
         },
-        rogue_ea_color = {
-            order = 2.31,
+        thresholds_header = {
+            type = "header",
+            order = 2.7,
+            name = "Guide Thresholds",
+        },
+        thresholds_desc = {
+            type = "description",
+            order = 2.705,
+            name = "Tuning for the upkeep and finisher suggestions. Each range shows the "..
+                "effective value, including the shipped default for a profile that "..
+                "predates the key.",
+        },
+        rogue_rupture_refresh = {
+            type = "range",
+            order = 2.71,
+            name = "Rupture refresh (s)",
+            desc = "Suggest Rupture while the target's Rupture is missing or has this "..
+                "many seconds or fewer remaining.",
+            min = 0, max = 10, step = 0.5,
+            get = function()
+                return rogue_threshold_get("rogue_rupture_refresh", "RUPTURE_REFRESH_DEFAULT", 4)
+            end,
+            set = rogue_threshold_set("rogue_rupture_refresh"),
+        },
+        rogue_rupture_min_ttd = {
+            type = "range",
+            order = 2.72,
+            name = "Rupture skip-if-dying-within (s)",
+            desc = "Dump Eviscerate instead of starting a Rupture when the target is "..
+                "estimated to die inside this many seconds (the addon's own health-"..
+                "velocity estimate; an unknown time-to-die never suggests a finisher "..
+                "on a guess).",
+            min = 0, max = 30, step = 1,
+            get = function()
+                return rogue_threshold_get("rogue_rupture_min_ttd", "RUPTURE_MIN_TTD_DEFAULT", 8)
+            end,
+            set = rogue_threshold_set("rogue_rupture_min_ttd"),
+        },
+        rogue_finisher_min_cp = {
+            type = "range",
+            order = 2.73,
+            name = "Finisher min combo points",
+            desc = "Only plan finishers at this many combo points or more.",
+            min = 0, max = 5, step = 1,
+            get = function()
+                return rogue_threshold_get("rogue_finisher_min_cp", "FINISHER_MIN_CP_DEFAULT", 5)
+            end,
+            set = rogue_threshold_set("rogue_finisher_min_cp"),
+        },
+        rogue_ea_refresh = {
+            type = "range",
+            order = 2.74,
+            name = "Expose Armor refresh (s)",
+            desc = "With the duty toggle on, suggest Expose Armor while the target's "..
+                "debuff is missing or has this many seconds or fewer remaining.",
+            min = 0, max = 10, step = 0.5,
+            get = function()
+                return rogue_threshold_get("rogue_ea_refresh", "EA_REFRESH_DEFAULT", 3)
+            end,
+            set = rogue_threshold_set("rogue_ea_refresh"),
+        },
+        rogue_shiv_refresh = {
+            type = "range",
+            order = 2.75,
+            name = "Shiv refresh (s)",
+            desc = "Suggest Shiv before Deadly Poison falls off the target: refresh "..
+                "while it has this many seconds or fewer remaining.",
+            min = 0, max = 10, step = 0.5,
+            get = function()
+                return rogue_threshold_get("rogue_shiv_refresh", "SHIV_REFRESH_DEFAULT", 2)
+            end,
+            set = rogue_threshold_set("rogue_shiv_refresh"),
+        },
+        rogue_tea_energy_max = {
+            type = "range",
+            order = 2.76,
+            name = "Thistle Tea drink-at energy",
+            desc = "Suggest Thistle Tea while energy is at or below this.",
+            min = 0, max = 100, step = 5,
+            get = function()
+                return rogue_threshold_get("rogue_tea_energy_max", "TEA_ENERGY_MAX_DEFAULT", 40)
+            end,
+            set = rogue_threshold_set("rogue_tea_energy_max"),
+        },
+
+        postswing_header = {
+            type = "header",
+            order = 3.01,
+            name = "Post-swing & Weapon Cues",
+        },
+        postswing_desc = {
+            type = "description",
+            order = 3.02,
+            name = "Post-swing cues on the mainhand bar. Sinister Strike window: "..
+                "Classic Era only, and only with a readable sword mainhand - strike "..
+                "in the 0.1-0.2 s after the swing lands. The window ships red and "..
+                "visible by default (owner order 2026-10-19); turn the toggle off "..
+                "to hide it. Weapon-swap band: Era, TBC "..
+                "and WoW Forever (Wrath stays off pending in-client confirmation, "..
+                "and Retail has no swing reset to time); its caption carries the "..
+                "cost (GCD + swing reset). Poison reminder: flags a missing mainhand "..
+                "or offhand poison (no charge counts). A cue hides while the swing "..
+                "or weapon reads are unknown.",
+        },
+        show_rogue_ss_window = {
+            type = "toggle",
+            order = 3.1,
+            name = "Sinister Strike window",
+            desc = "Show the red post-swing Sinister Strike window (Classic Era, sword "..
+                "mainhand only). On by default per owner order 2026-10-19; hidden "..
+                "while the swing or weapon reads are unknown.",
+            get = "getter",
+            set = "setter",
+        },
+        rogue_ss_color = {
+            order = 3.11,
             type = "color",
-            name = "Expose Armor color",
-            desc = "Color of the Expose Armor cue.",
+            name = "Sinister Strike window color",
+            desc = "Color of the Sinister Strike window band.",
             hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
             disabled = function()
-                return not ST:get_class_table().show_rogue_ea_cue
+                return not ST:get_class_table().show_rogue_ss_window
             end,
         },
-        show_rogue_shiv_cue = {
+        show_rogue_swap_cue = {
             type = "toggle",
-            order = 2.4,
-            name = "Shiv",
-            desc = "Show the Shiv Deadly-poison upkeep cue.",
+            order = 3.2,
+            name = "Weapon-swap window",
+            desc = "Show the weapon-swap window band after a swing (Era, TBC and "..
+                "WoW Forever; the caption carries the swap cost).",
             get = "getter",
             set = "setter",
         },
-        rogue_shiv_color = {
-            order = 2.41,
+        rogue_swap_color = {
+            order = 3.21,
             type = "color",
-            name = "Shiv color",
-            desc = "Color of the Shiv cue.",
+            name = "Weapon-swap color",
+            desc = "Color of the weapon-swap window band.",
             hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
             disabled = function()
-                return not ST:get_class_table().show_rogue_shiv_cue
+                return not ST:get_class_table().show_rogue_swap_cue
             end,
         },
-        show_rogue_tea_cue = {
+        show_rogue_poison_cue = {
             type = "toggle",
-            order = 2.5,
-            name = "Thistle Tea",
-            desc = "Show the Thistle Tea energy-deficit cue.",
+            order = 3.3,
+            name = "Poison reminder",
+            desc = "Show a reminder when the mainhand or offhand weapon has no "..
+                "poison. Hidden while the weapon buffs cannot be read.",
             get = "getter",
             set = "setter",
         },
-        rogue_tea_color = {
-            order = 2.51,
+        rogue_poison_color = {
+            order = 3.31,
             type = "color",
-            name = "Thistle Tea color",
-            desc = "Color of the Thistle Tea cue.",
+            name = "Poison reminder color",
+            desc = "Color of the poison reminder text.",
             hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
             disabled = function()
-                return not ST:get_class_table().show_rogue_tea_cue
+                return not ST:get_class_table().show_rogue_poison_cue
             end,
         },
 
         -- Next Action Guide (shared nextaction_ui frame; provider ST.ROGUE.guide).
         nag_header = {
             type = "header",
-            order = 3.0,
+            order = 4.0,
             name = "Next Action Guide",
         },
         nag_desc = {
             type = "description",
-            order = 3.05,
-            name = "On-screen rotation prompt (off by default). When the swing, energy or "..
-                "combo-point reads cannot be trusted the guide shows \"…\" instead of "..
-                "advice - no guessed prompt. Drag the frame while it is unlocked to "..
-                "position it.",
+            order = 4.05,
+            name = "On-screen rotation prompt (on by default): the ability to press "..
+                "next, with a POOL hold while the energy tick is close and a NOW label "..
+                "once the action is rideable. When the swing, energy, combo-point or "..
+                "aura reads cannot be trusted the guide shows \"…\" instead of advice - "..
+                "no guessed prompt. Drag the frame while it is unlocked to position it.",
         },
         nextaction_enabled = {
             type = "toggle",
-            order = 3.1,
+            order = 4.1,
             name = "Enable",
             desc = "Show the next action guide.",
             get = "getter",
@@ -4475,15 +6391,15 @@ function ST.class_opts_funcs.ROGUE(self)
         },
         nextaction_locked = {
             type = "toggle",
-            order = 3.11,
-            name = "Lock frame",
+            order = 4.11,
+            name = "Lock guide frame",
             desc = "Prevent dragging the guide frame.",
             get = "getter",
             set = "setter",
         },
         nextaction_visibility_key = {
             type = "select",
-            order = 3.12,
+            order = 4.12,
             name = "Show guide",
             desc = "When the guide is visible.",
             values = { always = "Always", in_combat = "In combat" },
@@ -4492,7 +6408,7 @@ function ST.class_opts_funcs.ROGUE(self)
         },
         nextaction_icon_size = {
             type = "range",
-            order = 3.13,
+            order = 4.13,
             name = "Icon size",
             desc = "Guide icon size in pixels.",
             min = 20, max = 80, step = 1,
@@ -4501,7 +6417,7 @@ function ST.class_opts_funcs.ROGUE(self)
         },
         nextaction_x = {
             type = "input",
-            order = 3.14,
+            order = 4.14,
             name = "X position",
             desc = "Horizontal screen position (dragging the frame also updates this).",
             get = function()
@@ -4516,7 +6432,7 @@ function ST.class_opts_funcs.ROGUE(self)
         },
         nextaction_y = {
             type = "input",
-            order = 3.15,
+            order = 4.15,
             name = "Y position",
             desc = "Vertical screen position (dragging the frame also updates this).",
             get = function()
@@ -4529,10 +6445,175 @@ function ST.class_opts_funcs.ROGUE(self)
                 end
             end,
         },
+        -- Practice (shared session, rogue drills): the options Start/Stop toggle below
+        -- starts the same session /st practice toggles (practice_ui.toggle) - panel
+        -- icons cast simulated spells, the Start Fight button runs the fight, keybinds
+        -- work as in game. Rogue drill grading (energy-pool timing, Era
+        -- SS-after-swing) scores through the practice registry (classes/rogue.lua
+        -- seam) and hides while its reads are unknown. Every widget below reads the
+        -- same class-table keys the shared session already consumes, so no new
+        -- defaults ship; each get falls back to the shipped shared timing.
+        practice_header = {
+            type = "header",
+            order = 7.0,
+            name = "Practice",
+        },
+        practice_desc = {
+            order = 7.05,
+            type = "description",
+            name = "Practice session with simulated spells: the panel icons cast "..
+                "simulated spells (left click), the Start Fight button runs the fight, "..
+                "and keybinds work as in game. /st practice toggles the same session. "..
+                "Rogue drill grading (energy-pool timing and the Era SS-after-swing "..
+                "window) scores through the practice registry and hides while its "..
+                "reads are unknown.",
+        },
+        practice_toggle = {
+            type = "execute",
+            order = 7.1,
+            name = function()
+                if st.practice_ui and type(st.practice_ui.is_active) == "function"
+                    and st.practice_ui.is_active() then
+                    return "Stop Practice"
+                end
+                return "Start Practice"
+            end,
+            desc = "Toggle the practice session. A session can only be started out of combat.",
+            func = function()
+                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST)
+                end
+            end,
+        },
+        practice_weapon_speed = {
+            type = "range",
+            order = 7.2,
+            name = "Weapon speed override (s)",
+            desc = "0 uses the equipped weapon speed.",
+            min = 0, max = 4, step = 0.1,
+            get = function()
+                -- Consumer: resolve_base_speed (practice_ui.lua) reads this key.
+                return ST:get_class_table().practice_weapon_speed or 0
+            end,
+            set = function(_, value)
+                ST:get_class_table().practice_weapon_speed = value
+            end,
+        },
+        -- Practice result feedback and panel placement. Every widget edits the keys
+        -- the shared session UI (practice_ui.lua) already reads, so the shipped
+        -- shared timing applies until the rogue profile writes its own. The two
+        -- result colours are stored in the 0-1 range the result popup paints with,
+        -- NOT the shared 0-255 convention. Fallbacks cite the shipped shared
+        -- defaults (config_presets.lua practice_result_*).
+        practice_result_duration = {
+            type = "range",
+            order = 7.3,
+            name = "Result text duration (s)",
+            desc = "How long the result popup stays on screen.",
+            min = 0.3, max = 3.0, step = 0.1,
+            get = function()
+                return ST:get_class_table().practice_result_duration or 0.8
+            end,
+            set = function(_, value)
+                ST:get_class_table().practice_result_duration = value
+            end,
+        },
+        practice_result_text_size = {
+            type = "range",
+            order = 7.31,
+            name = "Result text size",
+            desc = "Font size of the result popup.",
+            min = 12, max = 48, step = 1,
+            get = function()
+                return ST:get_class_table().practice_result_text_size or 28
+            end,
+            set = function(_, value)
+                ST:get_class_table().practice_result_text_size = value
+                if st.practice_ui and type(st.practice_ui.update_result_font) == "function" then
+                    st.practice_ui.update_result_font(ST)
+                end
+            end,
+        },
+        practice_result_color_hit = {
+            order = 7.32,
+            type = "color",
+            name = "Hit text color",
+            desc = "Colour of the result popup on a scored attempt.",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_hit or {0, 1, 0, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_hit = {r, g, b, a}
+            end,
+        },
+        practice_result_color_miss = {
+            order = 7.33,
+            type = "color",
+            name = "Miss text color",
+            desc = "Colour of the result popup on a failed attempt.",
+            hasAlpha = false,
+            get = function()
+                local c = ST:get_class_table().practice_result_color_miss or {1, 0.2, 0.2, 1}
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            set = function(_, r, g, b, a)
+                ST:get_class_table().practice_result_color_miss = {r, g, b, a}
+            end,
+        },
+        practice_panel_x = {
+            type = "input",
+            order = 7.34,
+            name = "Panel X position",
+            desc = "Horizontal offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_x or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_x = n
+                end
+            end,
+        },
+        practice_panel_y = {
+            type = "input",
+            order = 7.35,
+            name = "Panel Y position",
+            desc = "Vertical offset of the practice panel from its anchor (dragging the panel also updates this).",
+            get = function()
+                return tostring(ST:get_class_table().practice_panel_y or 0)
+            end,
+            set = function(_, value)
+                local n = tonumber(value)
+                if n then
+                    ST:get_class_table().practice_panel_y = n
+                end
+            end,
+        },
+        practice_reset_position = {
+            type = "execute",
+            order = 7.36,
+            name = "Reset panel position",
+            desc = "Move the practice panel back to its default spot beside the swing bar.",
+            func = function()
+                local db = ST:get_class_table()
+                db.practice_panel_x = 0
+                db.practice_panel_y = 0
+                -- Re-anchor through the panel's own position applier (practice_ui.lua
+                -- apply_settings re-reads the offsets above).
+                if st.practice_ui and type(st.practice_ui.apply_settings) == "function" then
+                    st.practice_ui.apply_settings(ST)
+                end
+            end,
+        },
     }
     -- Cooldown HUD + Rotation Text (shared hud_rotation_widgets builder: the same
     -- 8.x/9.x structure as the other class sections; the slot toggles mirror
-    -- ST.ROGUE.HUD_SLOTS). Slice A ships no glow cue or rotation source yet.
+    -- ST.ROGUE.HUD_SLOTS). Slice and Dice, Rupture and Expose Armor glow in their
+    -- final 3 seconds; the rotation label reads ST.ROGUE.get_rotation_key (the
+    -- guide's own decision: POOL, NOW, or the localized action name).
     for k, v in pairs(hud_rotation_widgets({
         { key = "hud_show_snd", name = "Slice and Dice", desc = "Show the Slice and Dice icon." },
         { key = "hud_show_rupture", name = "Rupture", desc = "Show the Rupture icon." },
@@ -4541,16 +6622,58 @@ function ST.class_opts_funcs.ROGUE(self)
         { key = "hud_show_bf", name = "Blade Flurry", desc = "Show the Blade Flurry icon." },
         { key = "hud_show_tea", name = "Thistle Tea", desc = "Show the Thistle Tea icon." },
         { key = "hud_show_kick", name = "Kick", desc = "Show the Kick icon." },
+        -- R-M1 short-CD row (bench/settings_audit_2026-10-19.md R-M1): consumers
+        -- classes/rogue.lua:442 shortcd_wanted (== true shows, nil = off) +
+        -- :1047-1049 HUD_SLOTS + :1268-1332 provider. Ship false = hidden
+        -- (no default-visible change; R-T3 template turns them on).
+        { key = "hud_show_kidney", name = "Kidney Shot", desc = "Show the Kidney Shot icon." },
+        { key = "hud_show_restealth", name = "Re-stealth", desc = "Show the Re-stealth icon." },
+        { key = "hud_show_bandage", name = "Bandage", desc = "Show the Bandage icon." },
+        { key = "hud_show_coldblood", name = "Cold Blood", desc = "Show the Cold Blood icon." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
     },
         "A row of ability icons with cooldown swipes and remaining-time text. Icons grey out "..
-            "while on cooldown and tint blue without energy or red out of range. Unlock the "..
-            "frame to drag it into place.",
-        "Slice A ships no rogue glow cue; the toggle applies once a later slice wires one.",
-        "What the label says: the rotation alone, with a prefix, its steps, or both.")) do
+            "while on cooldown, tint blue without energy and red out of range. Slice and Dice, "..
+            "Rupture and Expose Armor glow in their final seconds. Unlock the frame to drag it "..
+            "into place.",
+        "Slice and Dice, Rupture and Expose Armor glow in their final 3 seconds, only while "..
+            "the toggle is on. No other icon glows.",
+        "What the label says: the rotation alone, with a prefix, its steps, or both.",
+        { key = "Rupture", labelled = "Rotation: Rupture", steps = "SS, Rupture, Eviscerate", both = "Rupture  -  SS, Rupture, Eviscerate" })) do
         opts_group[k] = v
     end
+    -- Sim reference (wowsims): text-only, no clickability (WoW cannot open
+    -- external links, so the URLs below are display text, not buttons).
+    -- The Next Action Guide practices the sim rotation in-game: pooling bands,
+    -- Expose Armor windows, Thistle Tea lines and finisher floors follow the
+    -- sim numbers where sourced (see bench/rogue_rotation_audit_2026-10-19.md).
+    opts_group.wowsims_header = {
+        type = "header",
+        order = 10.0,
+        name = "Sim Reference",
+    }
+    opts_group.wowsims_desc = {
+        order = 10.01,
+        type = "description",
+        name = "Rotation numbers follow the wowsims sims: https://github.com/wowsims/classic, "..
+            "https://github.com/wowsims/sod, https://github.com/wowsims/tbc-new, "..
+            "https://github.com/wowsims/wotlk, https://github.com/wowsims/forever "..
+            "(Retail has no sim repo in scope). Practice the sim in-game: enable "..
+            "the guide above and run its prompts against the sim APL.",
+    }
+    -- Layout template (bench/hud_templates_2026-10-19.md §7): curated sets
+    -- from ST.ROGUE.HUD_TEMPLATES, applied on explicit pick only
+    -- (nil = Custom, writes nothing). R-T3 is the provisional PvP set (its
+    -- kidney/restealth/bandage keys now have widgets above; the pick still writes
+    -- them, nil-safe via the provider gate).
+    -- Gallery shortlist 1: R-T1 UxkIny-style Core is the anchor (no change).
+    opts_group.hud_template = hud_template_widget("ROGUE", {
+        custom = "Custom",
+        core = "R-T1 UxkIny-style Core",
+        full_cds = "R-T2 Full + CDs + Trinkets",
+        pvp_utility = "R-T3 PvP Utility (provisional)",
+    })
     return opts_group
 end
 

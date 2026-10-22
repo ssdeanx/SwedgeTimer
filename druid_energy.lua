@@ -73,6 +73,32 @@ function st.druid_energy.is_natural_gain(delta)
         and delta <= st.druid_energy.ENERGY_GAIN_MAX
 end
 
+-- Pure: the proc-adjusted power delta for the D2 proc-aware tick clock
+-- (bench/competitor_gaps_2026-10-19.md §Druid D2: Combat-Potency-style grants must
+-- not re-anchor). A known proc grant observed since the last sample (SoD
+-- King-of-the-Jungle Tiger's Fury +60, docs/research/rotations_sod.md - SoD-only)
+-- is removed before the tick classifier runs, so a tick landing in the proc frame
+-- still re-anchors (delta 80 - 60 = 20) and a capped proc partial (delta 20 with
+-- no tick) never forges one. Anything unreadable reads nil; a missing, zero or
+-- non-number proc grant degrades to the raw delta (the legacy path, unchanged).
+function st.druid_energy.adjust_gain_for_procs(delta, proc_gain)
+    if type(delta) ~= "number" or delta ~= delta then
+        return nil
+    end
+    if type(proc_gain) ~= "number" or proc_gain ~= proc_gain or proc_gain == 0 then
+        return delta
+    end
+    return delta - proc_gain
+end
+
+-- Pure: proc-aware natural-tick classifier. A nil/zero/unreadable proc grant runs
+-- the legacy 19-22 window verbatim (is_natural_gain above); otherwise the adjusted
+-- delta decides. Only numbers can qualify, so a secret reading is never a tick.
+function st.druid_energy.is_tick_gain(delta, proc_gain)
+    return st.druid_energy.is_natural_gain(
+        st.druid_energy.adjust_gain_for_procs(delta, proc_gain))
+end
+
 -- Pure: the bar label for a UnitPowerType reading: 3 (energy) -> Cat, 1 (rage) -> Bear,
 -- anything else (mana) -> Caster (reference GetDruidFormLabel,
 -- SuperSwingTimer_ClassMods.lua:4530-4538).
@@ -156,6 +182,17 @@ function st.druid_energy.get_time_to_die(hp, hp_velocity)
     return hp / hp_velocity
 end
 
+-- Pure: the D1 time-to-die readout text ("TTD 8s"), or nil when the estimate is
+-- unknown - the caller hides the readout then, never guessing a number. Rounds to
+-- the nearest whole second (the badge/countdown quantise idiom); a zero estimate
+-- (already dead) reads "TTD 0s", never nil.
+function st.druid_energy.format_time_to_die(ttd_seconds)
+    if type(ttd_seconds) ~= "number" or ttd_seconds ~= ttd_seconds or ttd_seconds < 0 then
+        return nil
+    end
+    return "TTD " .. tostring(math.floor(ttd_seconds + 0.5)) .. "s"
+end
+
 -- Pure: seconds until the energy cycle has paid `cost` from `energy`, given the same
 -- cycle anchor the tick bar maintains (the D5 "Shred in Xs" countdown). ticks =
 -- ceil(deficit / gain); the wait is the time to the next tick boundary plus the
@@ -218,6 +255,41 @@ function st.druid_energy.get_gcd_tick_fraction(anchor_time, now, gcd_remaining, 
         return 1
     end
     return fraction
+end
+
+-- Pure: seconds to the next energy tick from the same anchor the tick bar
+-- maintains (the trick/pooling groundwork: the sims' ShredTrick/RipTrick windows,
+-- the TBC MangleTrick/RakeTrick/BiteTrick windows and the Forever 2 s/1 s pooling
+-- horizons all read time-to-next-tick). Duration fallback mirrors
+-- get_energy_tick_fraction above. Unreadable anchor/clock reads nil (the caller
+-- treats that as unknown, never a guessed window); a future anchor (reload or a
+-- clock-domain mismatch) reads the full duration.
+function st.druid_energy.get_tick_remaining(anchor_time, now, cycle)
+    if type(anchor_time) ~= "number" or type(now) ~= "number"
+        or anchor_time ~= anchor_time or now ~= now then
+        return nil
+    end
+    local duration = cycle
+    if type(duration) ~= "number" or duration <= 0 or duration ~= duration then
+        duration = st.druid_energy.ENERGY_TICK_SECONDS
+    end
+    local elapsed = now - anchor_time
+    if elapsed < 0 then
+        elapsed = 0
+    end
+    local since_tick = elapsed % duration
+    return duration - since_tick
+end
+
+-- Pure: is an energy reading inside a trick window [low, high] (both ends
+-- inclusive; the sims' [biteCost,39] and [biteCost,mangleCost) bands)? Only
+-- numbers can qualify, so an unreadable energy or bound never opens a window.
+-- NaN-safe: every comparison is false for NaN.
+function st.druid_energy.is_energy_in_window(energy, low, high)
+    if type(energy) ~= "number" or type(low) ~= "number" or type(high) ~= "number" then
+        return false
+    end
+    return energy >= low and energy <= high
 end
 
 -- Helpers above are reachable via st.druid_energy and pure (no WoW globals).

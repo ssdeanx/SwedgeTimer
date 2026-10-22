@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T20:15:00Z",
+  "run_id": "audit-fixes-2026-10-19",
+  "agent_name": "audit-fixes",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the audit's file:line rows before touching anything kept the fixes minimal and in-scope; wiring F2 to the existing offhand-presence probe (check_weapons) instead of deleting the handler gave a real production path; moving both ends of the offhand cycle (start + ends_at) avoided introducing a negative bar span; the mutation harness on /tmp/opencode copies proved every fix is held by a pin (10/10 killed, each by a named check).",
+    "what_was_hard": "The audit's F2 note named the flag but not the class dimension: a paladin or druid has an offhand weapon and NO offhand bar, so wiring has_oh alone would have made the handler touch frames that were never created (and AceDB's '**' metatable would have synthesised the missing hand table). That needed a new ST:has_hand() helper and a class-parameterised test fixture.",
+    "skill_gap": "The first F3 mutation was killed by a Lua syntax error rather than by a pin - a mutant that fails to parse proves nothing about the pin. Every mutation now has to fail on a named check, not on a load error."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

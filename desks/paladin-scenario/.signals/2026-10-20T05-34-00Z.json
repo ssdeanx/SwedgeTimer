@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T05:34:00Z",
+  "run_id": "paladin-scenario-2026-10-20",
+  "agent_name": "paladin-scenario",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The root cause of F1 was the class's own ctx builder shadowing the shared engine's gather-based fallback: fixing it CLASS-SIDE (the live gather's inputs, the rogue/hunter discipline) left the sibling lane's practice_ui.lua/practice.lua untouched and made the sim-shaped twist path bit-identical. The 200-local Lua 5.1 ceiling in classes/paladin.lua forced the new state and helpers onto the module table - that was a real constraint, not a style choice, and it is documented in the code.",
+    "what_was_hard": "Deciding where the WotLK APL's two missing rows belong. The guide declares exactly ten slots (a pinned contract in tests/guide_contract.lua), so the engine cannot press Hand of Reckoning or the WotLK Hammer of Wrath without a display - a prompt would light no icon and read as a hold. Keeping the engine's FCFS orders untouched (no default-visible change) and carrying the two rows as cited, family-gated rows in the rotation table (the APL layer, HU-12's ruling) was the only shape that satisfies the brief inside its scope.",
+    "skill_gap": "Judging when an APL row is a table row versus an engine row needs the display contract read FIRST (the slot budget, the out channels), not the sim APL alone."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

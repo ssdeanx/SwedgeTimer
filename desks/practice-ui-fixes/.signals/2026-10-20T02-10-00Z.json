@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T02:10:00Z",
+  "run_id": "practice-ui-fixes-2026-10-20",
+  "agent_name": "practice-ui-fixes",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Each finding was re-verified against the code before it was touched: F9 turned out to be the paladin's and the rogue's counters keyed on the addon object (ctx.session / ctx.session_id missing), F2's pick channel turned out to need the class's ACTION vocabulary in the practice row (a drill key is not an action key, so a drill-key pick could never grade), and F10's rule reached further than the class routes (the twist sim is the paladin's, so a class with no practice of its own is refused). The mutation script on disposable copies killed 8/8, including the two the brief named (a press without a pick, a silent cast).",
+    "what_was_hard": "The audit report was NOT on disk (the scenario-100-audit lane is still queued in the central ledger), so the brief was the spec. F2 was the hard one: five classes' graders read ctx.last_action as 'the action the player pressed', and the drill-list panel only ever offered drill buttons - a drill key is not an action key, so the pick had to come from the class's own action vocabulary (the same source the scenario row uses). The Lua 5.1 local/upvalue limits in practice_ui.lua forced several helpers to be inlined.",
+    "skill_gap": "Reading a defect report whose file is missing: I had to reconstruct the finding list from the dispatch brief and re-derive the evidence from the code, which cost context. Next time I would ask the orchestrator for the audit artifact before dispatch, or write it to the bench before the fix lane starts."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

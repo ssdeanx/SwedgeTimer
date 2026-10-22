@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T13:52:00Z",
+  "run_id": "druid-hold-ride-2026-10-20",
+  "agent_name": "druid-hold-ride",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The brief's own instruction - distinguish a press-nothing hold from a spell-naming hold - was implemented as ONE vocabulary split in the class layer, beside the mapping that was already there: ST.DRUID.PRACTICE_HOLD_KEYS (the nine spell-naming holds -> the key to press) and ST.DRUID.PRACTICE_HOLD_PRESSES_NOTHING (the one press-nothing hold, RIDE). druid_expected answers a press-nothing hold with no action and the guide's own caption; the scenario step states { action = nil, hold = true, reason = \"RIDE\" }; the priority drill skips the step (nil -> UNKNOWN -> no attempt). The guide itself needed no behaviour change - it already said 'no action' - only the comment that RIDE is the press-nothing hold. The pins go through the SHARED ENGINE rather than the class alone (H.practice_scenario_step keeps the hold statement; H.rotation_run_decide proves the three states: a cast during the hold is illegal_cast/F/an attempt, doing nothing is hold_ok with NO attempt, an unknown step stays unknown), so the contract is proven where it is enforced. The guide suite owns the vocabulary closure (the hold texts are read out of druid_guide.lua's source and must each be covered by exactly one of the two tables), so a future guide hold text fails the suite instead of being graded by a guessed slug. Harness 41/0, luacheck 2/0 (the floor), 5/5 mutants killed, CRLF/LF preserved, and the diff touches only the four files the brief named.",
+    "what_was_hard": "The audit's citation of the defect was right, but the PRIOR bench claim it rested on was not: bench/class_hold_statements_2026-10-20.md states that the druid has NO hold concept and that 'the bear's RIDE = the queued Maul' is a spell to press - that claim IS the defect (the queued Maul is already going, so the player presses nothing). The class-hold lane had strengthened the WRONG pin on purpose ('the queued Maul states no hold either'), so the fix had to re-cut a pin that a sibling lane had deliberately installed. The slug fallback in druid_expected also masks a removed spell-naming entry ('TIGER'S FURY' slugs to the same key), so the 'spell-naming hold lost' mutant had to be written against the hold-kind branch, not against the table. Two more things needed care: the panel's button vocabulary comes from the published rotation slice plus the keys the class asks for, so the 'no ride button' pin had to cover both (no family slice carries a ride key, and the class never asks for one) - the BEAR slice still carries a ride row, which is the guide's rule description and is never published; and a sibling lane was writing practice_ui.lua, tests/secret_guard_state.lua and desks/journal.md during this lane, so the final harness run was re-verified against that moving tree.",
+    "skill_gap": "A hold_text vocabulary is a two-kind thing and a single mapping table hides the difference: as long as the class kept ONE table (hold text -> key), every hold was structurally an action, and the only way to see the defect was to read the guide's rule semantics. The next classes' hold work should start by classifying each guide hold text as press-nothing or spell-naming BEFORE it is mapped to a key, and the classification should live beside the mapping, not in the guide's rule comment."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

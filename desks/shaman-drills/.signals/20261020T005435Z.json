@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T00:54:35Z",
+  "run_id": "shaman-drills-2026-10-19",
+  "agent_name": "shaman-drills",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The audit's §2.6 gave the whole spine (the sim priority, the four drill specs, the expected-sequence comparison), and the shared engine's contract was already in the tree, so the class hooks could be coded straight against it. Splitting the work pure-half (shaman_guide.lua) / class-half (classes/shaman.lua) kept the frozen guide contract byte-identical and made both halves offline-testable. The D-S2 drill reading weave.lua's own marker/clip maths (instead of copying it) means the drill grades the real window the assist draws. 18/18 mutations killed on /tmp/opencode copies.",
+    "what_was_hard": "The contract's ctx has no slot for 'the action the player pressed' - the drill graders read it from ctx.last_action (with action/pick/pressed/choice as aliases), which is a coordination point with the shared-engine lane. The engine's class lookup resolves the module from the addon NAMESPACE while the class tables live on the AceAddon table, so the class hooks were invisible to the engine; the class-side half is done (a namespace mirror in classes/shaman.lua) and the central fix is filed as hands-up HU-7. Two drill semantics were underspecified in the audit and were resolved with the engine's own rules: a hold is not a press (nil), and a session band belongs to the shared engine's ROTATION_RUN_BANDS (the per-decision grade is S/F).",
+    "skill_gap": "Reading the S-23 audit row closely enough to notice that the Stormstrike cooldown fallback is never drawn (both consumers drop the full length when the ability is ready) turned a 'fix the number' task into a filing with evidence - worth checking whether a fallback is reachable before wiring a value to it."
+  },
+  "escalation": {
+    "reason": "HU-7: the shared engine resolves the class module from the addon namespace (st[class_key]) while the class tables live on the AceAddon table - as shipped, every class's scenario and drills are invisible to the engine. The shaman half is fixed in-lane (a namespace mirror in classes/shaman.lua, pinned); the central fix (one mirror for all six classes in main.lua, or an engine that resolves the AceAddon table) is the orchestrator's call.",
+    "blocked_on": "the orchestrator's ruling on hands-up.md HU-7",
+    "recommendation": "Have the engine lane (or main.lua) resolve the class module from the AceAddon table, or mirror the six class tables onto the namespace once - then drop the per-class mirror in classes/shaman.lua so there is a single source for the shape."
+  }
+}

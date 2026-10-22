@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T16:07:36Z",
+  "run_id": "hunter-steady-family-b2-2026-10-20",
+  "agent_name": "hunter-steady-family",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "One per-family id table (steady_id_by_family) behind BOTH the guide slot and the HUD slot, so the two surfaces cannot disagree; the HUD re-point mirrors the Aimed Shot mirror that already existed; the strict HU-13 sweep immediately exposed 46 rotation rows that declared no engine flag at all - the truthiness test had been certifying them as engine-facing since the utility lane landed.",
+    "what_was_hard": "The Era client: the shipped tree drops the Steady SLOT on Era while the gather's range probe reads 56641 there - the two statements contradict each other and the corpus only makes a bench claim (no client read). Resolved by keeping the Era behaviour byte-identical (the probe still reads 56641) and filing the question with the observation that settles it (GetSpellInfo(56641) on 1.15.9). The CATA/MISTS/RETAIL Steady id (49052) has no client citation - marked CLIENT-UNCONFIRMED in the code comment, and the runtime resolution replaces it with the client's own rank.",
+    "skill_gap": "The Era Steady Shot question could not be settled from the corpus alone; a corpus-vs-tree contradiction needs a client read, not another bench claim. Also: the hunter was the only class whose rotation rows omitted the engine flag, which the truthiness pins hid - the other five classes already declared both flags, so the house convention was there to copy."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

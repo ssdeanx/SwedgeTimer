@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T20:57:41Z",
+  "run_id": "hud-sod-font-crash-2026-10-19",
+  "agent_name": "hud",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "SoD-faithful stubs (SetText throws without font) turned the whole existing suite into a creation pin; fallback-chain builds (nil LSM/throwing LSM/nil STANDARD) each isolate one guard, so all three mutants die distinctly.",
+    "what_was_hard": "Counting SetFont sites: the type-guard line also contains the substring, so the pin counts pcall(text.SetFont (2) plus asserts no unguarded text:SetFont survives.",
+    "skill_gap": "Offline harness cannot reproduce the live SoD client throw; in-client shaman login stays UNCONFIRMED until the owner test session."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/hud/journal.md \u00a7 2026-10-19 SoD live crash fix executed"
+}

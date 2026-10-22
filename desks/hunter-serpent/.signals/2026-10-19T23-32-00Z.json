@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T23:40:00Z",
+  "run_id": "bs3-hunter-serpent-2026-10-19",
+  "agent_name": "hunter-serpent",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "The enabler's own contract (scan_unit_aura returns nil,nil for BOTH 'not found' and 'could not be read') forced the lane to name the trust rule explicitly instead of guessing: no target -> unknown, secret-aura regime -> unknown, otherwise an honest 'down'. The guard matrix in hunter_guide.lua stayed byte-identical, so the 'unknown never withholds' property was preserved by construction and pinned twice (engine-level + full-loop gather->engine).",
+    "what_was_hard": "Row-level secretness is unobservable from a class: the shipped api.UnitAura wrapper degrades a whole restricted entry to nil, so 'hidden row' and 'no row' are indistinguishable without the regime probe (the house M5 shape). The spec's 'false (the scan ran)' therefore needed a decision the spec did not spell out; it is documented in the code, the bench artifact and the pins. Separately, the sibling BS-4 lane had classes/shaman.lua mid-edit for ~15 minutes, which made the tree-wide harness red for reasons outside this lane.",
+    "skill_gap": "Proving that a secret row cannot be mistaken for a missing row needs a client-side probe that does not exist; the addon can only reason about the regime, and that limit should be stated wherever a secret row is claimed to be handled."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Validation owner: orchestrator. Scope landed: classes/hunter.lua, hunter_guide.lua, tests/hunter_state.lua (1060 checks PASS), tests/hunter_guide_state.lua (1407 checks PASS), luacheck 0/0 on the four files, both required mutants killed (1 and 21 failing pins). The full harness is 41 steps / 3 failed, and every failing check is a SHAMAN pin in a shared suite (guide_contract 5/1041, hud_state 3/674, shaman_guide_state 3/1388) from the concurrent BS-4 lane's CoE slot + water_remaining work - proven not this lane's with a control copy that reproduces byte-identical failures with this lane's feed reverted. Re-run the harness after BS-4 lands."
+  }
+}

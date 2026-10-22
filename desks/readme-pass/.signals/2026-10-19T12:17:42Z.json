@@ -1,0 +1,13 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T12:17:42Z",
+  "agent_name": "readme-pass",
+  "self_assessment": {"intent": 5, "confidence": 4, "accuracy": 4, "completeness": 5},
+  "patterns": {
+    "what_worked": "pins-first rewrite; every claim traced to toc/TESTING/config/rogue.lua or marked UNCONFIRMED",
+    "what_was_hard": "keeping six class tours short without inventing defaults",
+    "skill_gap": "none"
+  },
+  "escalation": {"reason": null, "blocked_on": null, "recommendation": null}
+}

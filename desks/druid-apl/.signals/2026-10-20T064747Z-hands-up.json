@@ -1,0 +1,23 @@
+{
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-20T06:47:47Z",
+  "run_id": "druid-apl-2026-10-20",
+  "agent_name": "druid-apl",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The external facts settle the citation (the Forever repo has no Mangle and no mangleNow), so the row's citation and id were corrected in place; the BEHAVIOUR question (the engine's FOREVER F5 rule always answers mangle on a client that has no Mangle, so the F6/F7 branches are unreachable there) is the operator's call, not this lane's.",
+    "what_was_hard": "Deciding where the lane's boundary sits: fixing the shipped engine's Forever chain is a behaviour change to a shipped guide, and this lane's brief was the APL utility layer - so the finding is raised, not quietly fixed.",
+    "skill_gap": "None material in this round; the evidence trail (the sim's generated spell table, the missing per-ability file, the APL's own builders) carried the finding on its own."
+  },
+  "escalation": {
+    "reason": "The shipped FOREVER slice and the engine's FOREVER F5 rule name a Mangle the Forever client does not have, so the F6 (Ferocious Bite) and F7 (Shred builder) branches are unreachable on that family. The APL's own builder row is the Claw (9850), but the read that decides 'the Shred cannot land' does not exist yet (can_shred is RESERVED), so the fix cannot be built honestly in this lane.",
+    "blocked_on": "the operator's ruling on who owns the Forever chain fix and on the Claw line's read (api.IsSpellUsable's energy-cost semantics on the classic clients are in-client UNCONFIRMED)",
+    "recommendation": "Open a small druid lane (or extend the next druid one) that (a) resolves the Claw builder's read on the Forever client and (b) replaces the FOREVER F5 'mangle' branch with the APL's builder (Shred, else Claw when the Shred cannot be cast), keeping the hold-overlay convention. Until then the FOREVER chain keeps prompting a spell the client has never heard of."
+  }
+}

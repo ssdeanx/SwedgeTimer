@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-21T22:37:45Z",
+  "run_id": "range-engine-tbc-2026-10-21",
+  "agent_name": "range-engine-tbc",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Modelling the failing client instead of the intended one: the new suite makes CheckInteractDistance a recording thrower and loads the real vendored LibRangeCheck as shipped, so the zero-call pin and the empty-list getRange pin are executable, not static-only. Splitting the LRC flag in two (lrc_unavailable = init deadline for /st diag, rf_disabled = poll dead-man) kept the diag line truthful without making range state depend on the library. The mutation run (9/9, each failing on a named check, byte-identical restores) proved every new guard and boundary is load-bearing.",
+    "what_was_hard": "The harness moved under the lane: a first run failed 2/44 on crossfire owned by the compat lane (secret_guard_state still pinned the removed api.CheckInteractDistance; toc_check lacked the two new suite registrations), and by landing time both were resolved externally (46/46 green, secret_guard_state rewritten to assert the wrapper is absent at 432 checks). Also the first mutation draft silently failed to apply M6/M7/M9 because multi-line old strings used LF against CRLF files; the CRLF-aware Python runner replaced it so those mutants actually mutated.",
+    "skill_gap": "No client was loaded, so the protected-call removal and the helper's live show/hide remain UNCONFIRMED until the operator runs the §8 checklist. The 10 yd sweet-spot band is sourced from the brief's statement about the reference's index-3 band; the reference addon source is not in this repo, so its exact file:line is not independently verified."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Operator: run the in-client checklist in bench/range_engine_tbc_2026-10-21.md §8 on TBC Anniversary (hunter, Steady Shot, target at 7/20/40 yd) - specifically that no ADDON_ACTION_BLOCKED check_interact_distance appears and the cast bar survives past 25 frames. No code item is open; tests/run.sh:94 already carries the new suite."
+  },
+  "journal_marker": "desks/range-engine-tbc/journal.md § 2026-10-21 Landed (R1–R4)"
+}

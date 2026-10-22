@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T09:40:00Z",
+  "run_id": "paladin-hud-band-2026-10-20",
+  "agent_name": "paladin-hud-band",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The APL lane filed the WotLK HUD mirror as out-of-scope work, so this lane took it end to end: two descriptors (hor 67485, how_wrath 48806 - the APL's own ids, the same pair the guide's band slots carry), a provider gate with three gates in order (option: hud_show_<key> exactly true, nil = off, the druid-Claw shape; family: Wrath only; spell book: unknown hides) placed BEFORE any read so a hidden slot performs no read, a name-based cooldown read (rank-agnostic, the client's own duration drives the swipe - no hardcoded number) and the execute-phase desaturation for how_wrath (the sim's own IsExecutePhase20() gate, the same 20 the engine arms on). Neither slot was filed: both carry a REAL cooldown, proved from the sims' own files (hand_of_reckoning.go:29 CD 6 s with the Turalyon's 2pc else 8 s; hammer_of_wrath.go:28 CD 6 s). The census re-cut in tests/hud_state.lua: 12 -> 14 slots, the two ids, the mirror keys, the icon/frame counts (14 / +59), the option-gate key list, the Era count, the paladin reflow provider counts (10 -> 12), plus the TBC family-gate pins and a new Wrath sandbox section. Harness 41/0, luacheck 2/0 (the floor), 9/9 mutations killed, CRLF/LF preserved, and the diff against the APL lane's own snapshot touches only the paladin regions - no other class's census moved.",
+    "what_was_hard": "Three of the first mutation drafts SURVIVED and every one was a real pin gap, not a script bug: the option gate and the family gate were both masked by the spell-book gate (the sandbox answered 'unknown' for both spells, so a broken gate still hid the slot), and the execute-phase pin was masked by the on-cooldown grey (the shared path sets desaturate while the spell is on cooldown). The pins now isolate one gate each: the book's answer is set first, and the execute pin runs with the spell READY. The census also moved in a place the brief did not name: hud.lua treats a NIL hud_show_<key> as WANTED (icon_should_show hides only on == false), so a mirror without a default still gets its provider called on every tick - the paladin reflow provider counts went 10 -> 12 while the row still shows seven icons. And the bench file's own citation was off: bench/paladin_apl_utility_build_2026-10-20.md cites hammer_of_wrath.go:18 for ExtraCastCondition, but the fetched file has it at :31-32 (:18 is the ManaCost line); the code cites the verified lines and nextaction.lua (out of scope) carries the same off-by-13 citation.",
+    "skill_gap": "A display-only mirror with NO default (because config_presets.lua is out of the lane's scope) is not the same shape as the druid's Claw, which ships hud_show_claw = false AND the provider gate: without the default the HUD still calls the provider every tick for that slot, which shows up in every provider-count census. The next lanes that add mirrors must expect the provider-call census to grow by one per new slot, and must decide explicitly whether the default key lands in the same lane (the druid's shape) or in the options pass (the shape this lane shipped)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

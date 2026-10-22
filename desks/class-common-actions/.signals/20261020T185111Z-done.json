@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T18:51:11Z",
+  "run_id": "class-common-actions-2026-10-20",
+  "agent_name": "class-common-actions",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The shaman's apply_family_slots precedent (re-point guide.slots AFTER the guide frame built its icons) is the seam that carries the common abilities into the practice panel without touching the live guide - it needed no change to the practice engine and left every other lane's suite (guide_contract's slot-count pins, paladin_state) untouched. Resolving the abilities by the client's English spell NAME (the rogue's resolve_named_spell rule) made the per-family id split unnecessary at runtime while the cited ids stay the citation and the locale fallback.",
+    "what_was_hard": "The panel's ability list is only reachable through module.guide.slots and practice_rotation_for - both of which other lanes pin (guide_contract's 12-slot paladin pin, the class suites' rotation slices). The closed-list contract also forced a definition of 'rotation action' vs 'panel entry', and the engine's family-scoped neutral publish reads st.family only - so the SoD build (which shares the Era family token with the Era build) cannot have a neutral key that is a rotation action on the Era build.",
+    "skill_gap": "The id sourcing needed a corpus with NAMES (the local wow.export CSVs carry no spell-name column), so every id had to be paired with a name lookup on the operator-provided spell pages - a scripted one-line-per-id loop was worth building early."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

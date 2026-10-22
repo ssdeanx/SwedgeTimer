@@ -1,0 +1,51 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T17:20:00Z",
+  "run_id": "prepull-contract-2026-10-20",
+  "agent_name": "prepull-contract",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The relationship, not the data: a GRADED table's drill must change its verdict when that table is mutated and must NOT change when ANOTHER class's table is mutated (the cross-isolation half). The plans (the due opener, the pull moments, the press) are computed ONCE from the pristine table, so a mutation changes the verdict instead of silently following the mutated data. The CITATION half is proved by a whole-tree symbol scan with comments AND string bodies blanked (a mention in prose is not a reader) plus the marker in the comment block above the declaration. Every scan carries a floor so an empty scan cannot pass as evidence.",
+    "what_was_hard": "The brief's paladin clause does not match the tree: `paladin_prepull` grades the class's own file-local per-order SEAL SPEC, not the published `ST.PALADIN.practice_prepull_rows` (which has no consumer anywhere). Rather than write a false assertion, the suite asserts the truth - the drill follows the class's own per-order spec (two orders with different seals grade differently) and the published rows table is the marked citation layer. Also: Lua 5.1 has no `__len`, so a read-trap cannot proxy an array - the lateness-band tables are proved by mutation instead of a proxy.",
+    "skill_gap": "A brief that lists four drill keys and then says 'a class with NO pre-pull drill must be marked citation-only' can be internally inconsistent; the resolution was to check the tree (whole-tree symbol scan) and then assert the tree's truth, filing the divergence as a residual for an operator ruling instead of bending a test to the prose."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "operator_ruling_needed": [
+      "Residual 1 (bench/prepull_contract_2026-10-20.md §6): the brief asks that paladin_prepull read 'that class's own pre-pull table', but the paladin's drill grades the class's own per-order seal spec and ST.PALADIN.practice_prepull_rows has no consumer anywhere in the tree. Making the drill grade the APL rows would be a behaviour change to classes/paladin.lua (whose own comment says the opposite today) - an operator ruling, not a test change.",
+      "The harness line for the new suite is NOT added: tests/run.sh is contested. The orchestrator must add: run \"lua5.1 tests/prepull_contract_state.lua\" lua5.1 tests/prepull_contract_state.lua"
+    ]
+  },
+  "files_changed": [
+    "tests/prepull_contract_state.lua",
+    "tests/paladin_state.lua",
+    "classes/druid.lua",
+    "CHANGELOG.md",
+    "bench/prepull_contract_2026-10-20.md",
+    "desks/prepull-contract/journal.md"
+  ],
+  "files_verified_not_changed": [
+    "tests/hunter_state.lua",
+    "tests/hunter_guide_state.lua",
+    "classes/shaman.lua",
+    "classes/paladin.lua",
+    "classes/rogue.lua",
+    "classes/warrior.lua",
+    "classes/hunter.lua",
+    "tests/run.sh"
+  ],
+  "verification": {
+    "harness": "bash tests/run.sh -> 42 steps, 0 failed (the new suite is not in the harness yet - run.sh is contested)",
+    "luacheck": "2 warnings / 0 errors in 85 files (the standing floor; the new suite is luacheck-clean)",
+    "new_suite": "lua5.1 tests/prepull_contract_state.lua -> PASS (124 checks)",
+    "paladin_suite": "lua5.1 tests/paladin_state.lua -> PASS (1041 checks)",
+    "mutations": "9 mutants on /tmp/opencode copies, 9/9 killed"
+  }
+}

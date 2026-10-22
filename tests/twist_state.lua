@@ -103,6 +103,53 @@ eq(twist.is_twist_impossible(true, 1.0, 1.0, 0, 1.4, 0, 0.4), false, "gcd == rem
 eq(twist.is_twist_impossible(true, -1.0, 9.0, 0, 1.4, 0, 0.4), false, "negative remaining clamps and reads as inside the window")
 check(twist.is_twist_impossible(true, 1.0, 1.0, 100, nil, 0, 0.4), "nil multiplier falls back to 1.4 (1.0+0.14 > 1.0)")
 
+-- P1: GCD-aware reseal marker fraction (SST 3.1.0 shape, offline-testable math)
+local rm = twist.get_reseal_marker_fraction
+check(type(rm) == "function", "get_reseal_marker_fraction exists")
+check(math.abs(rm(3.0, 3.0, 1.0) - 1 / 3) < 1e-9,
+    "fresh swing, 1 s GCD: marker at 1/3 (got " .. tostring(rm(3.0, 3.0, 1.0)) .. ")")
+eq(rm(3.0, 3.0, 3.0), 1.0, "GCD clearing exactly at the swing end reads 1.0")
+eq(rm(3.0, 2.0, 0.5), 0.5, "mid-swing GCD clear reads 0.5")
+eq(rm(3.0, 1.0, 1.0), 1.0, "GCD clearing with 1 s left reads 1.0")
+eq(rm(3.0, 4.0, 1.0), 0.0, "a GCD clearing at the swing start reads 0.0")
+eq(rm(3.0, 0.4, 0.5), nil, "a GCD outliving the swing hides (unknown-hides)")
+eq(rm(3.0, 3.0, 0), nil, "no running GCD hides (nothing to wait for)")
+eq(rm(3.0, 3.0, -1), nil, "a negative GCD hides")
+eq(rm(3.0, 3.0, nil), nil, "a missing GCD hides")
+eq(rm(3.0, 3.0, 0 / 0), nil, "a NaN GCD hides")
+eq(rm(3.0, nil, 1.0), nil, "a missing remaining hides")
+eq(rm(3.0, 0 / 0, 1.0), nil, "a NaN remaining hides")
+eq(rm(0, 1.0, 1.0), nil, "a zero swing duration hides")
+eq(rm(-3.0, 1.0, 1.0), nil, "a negative swing duration hides")
+eq(rm(nil, 1.0, 1.0), nil, "a missing swing duration hides")
+eq(rm(0 / 0, 1.0, 1.0), nil, "a NaN swing duration hides")
+eq(rm("3.0", 1.0, 1.0), nil, "a non-number duration hides")
+eq(rm(3.0, -1.0, 0.5), nil, "a landed swing (negative remaining) hides")
+eq(rm(3.0, 0, 0.5), nil, "a GCD clearing after a landed swing hides")
+
+-- SoD twist window (all SoD twist APLs twist inside 200 ms, not 400 ms)
+eq(twist.SOD_WINDOW_SECONDS, 0.2, "SOD_WINDOW_SECONDS == 0.2")
+eq(twist.narrow_window_for_sod(0.4, true), 0.2, "sod: the 0.4 baseline narrows to 0.2")
+check(math.abs(twist.narrow_window_for_sod(0.54, true) - 0.34) < 1e-9,
+    "sod: user padding rides on top of the narrowed baseline")
+eq(twist.narrow_window_for_sod(0.4, false), 0.4, "sod=false keeps the window")
+eq(twist.narrow_window_for_sod(0.4, nil), 0.4, "sod=nil keeps the window")
+eq(twist.narrow_window_for_sod(nil, true), nil, "sod: a nil window passes through")
+eq(twist.narrow_window_for_sod("0.4", true), "0.4", "sod: a non-number window passes through")
+eq(twist.narrow_window_for_sod(0.21, true), 0.2, "sod: the narrowed window floors at 0.2")
+
+-- PPM/ICD attempt discipline (both sims: 7 PPM, 1 s ICD, white hits only)
+eq(twist.SOC_PROC_ICD_SECONDS, 1, "SOC_PROC_ICD_SECONDS == 1")
+check(twist.is_proc_icd_clear(100, nil), "icd: no proc yet => the swing may proc")
+eq(twist.is_proc_icd_clear(100.5, 100), false, "icd: half a second after the proc => no attempt")
+eq(twist.is_proc_icd_clear(100.9, 100), false, "icd: still inside the window => no attempt")
+check(twist.is_proc_icd_clear(101, 100), "icd: the boundary clears (strict <)")
+check(twist.is_proc_icd_clear(103, 100), "icd: well past the window => the swing may proc")
+check(twist.is_proc_icd_clear(nil, 100), "icd: an unusable clock degrades to the archived attempt")
+check(twist.is_proc_icd_clear(0 / 0, 100), "icd: a NaN clock degrades to the archived attempt")
+check(twist.is_proc_icd_clear(103, nil), "icd: an unusable stamp degrades to the archived attempt")
+check(twist.is_proc_icd_clear(103, 0 / 0), "icd: a NaN stamp degrades to the archived attempt")
+
 if failures == 0 then
     print("PASS  twist_state.lua (" .. tostring(checks) .. " checks)")
 else

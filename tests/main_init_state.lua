@@ -72,6 +72,13 @@ local function contains(text, needle, label)
     check(type(text) == "string" and text:find(needle, 1, true) ~= nil,
         label .. "  (expected '" .. tostring(needle) .. "' in '" .. tostring(text) .. "')")
 end
+-- Reads a repo file as text (the static pins read main.lua itself).
+local function read(path)
+    local f = assert(io.open(ROOT .. path, "r"))
+    local text = f:read("*a")
+    f:close()
+    return text
+end
 -- Positional argument capture (Lua 5.1 has no table.pack; main.lua defines its own).
 local function capture_args(...)
     return { n = select("#", ...), ... }
@@ -96,14 +103,27 @@ local HOOK_NAMES = {
 --   project      WOW_PROJECT_ID (default 11 = Wrath)
 --   interface    GetBuildInfo's toc (default 38002)
 --   report_login false skips the LibGlobalCooldown PLAYER_LOGIN report in boot()
+--   class        the class token the client plays (default PALADIN). F2: a class
+--                whose class_hands list holds "offhand" (WARRIOR, ROGUE, HUNTER,
+--                SHAMAN) is needed to exercise the offhand bar paths - a paladin
+--                or a druid has an offhand weapon but no offhand bar.
+--   use_offhand  true makes UnitAttackSpeed report an offhand speed, i.e. the
+--                player has an offhand weapon (the probe check_weapons reads).
 local function build(opts)
     opts = opts or {}
     local engine_mode = opts.engine or "vendored"
+    local class_token = opts.class or "PALADIN"
+    local class_pretty = class_token:sub(1, 1):upper() .. class_token:sub(2):lower()
 
     local sb = {
         clock = 100,
         notices = {},        -- self:Print captures (the init_libs notices)
         chatter = {},        -- DEFAULT_CHAT_FRAME:AddMessage captures
+        -- Every call that reaches the CLIENT's global print (not the addon's chat path)
+        -- lands here. The sandbox has no global print of its own, so this spy is what
+        -- turns "the module printed through the global" into an assertion instead of
+        -- stray console output - see section 18.
+        raw_prints = {},
         after = {},          -- captured C_Timer.After timers
         new_timers = {},     -- captured C_Timer.NewTimer timers
         events = {},         -- RegisterEvent captures
@@ -120,12 +140,16 @@ local function build(opts)
         touches = {},        -- every frame-method call, in order
         hooks = {},          -- class hook call counts
         hook_args = {},      -- class hook argument captures
+        hook_order = {},     -- activation vs class post_init, in call order
+        class_loaded = 0,    -- the class loader's call count
         counts = {},         -- fixture-level counters
         lrc_stats = { harm_max = 0, harm_min = 0, range = 0 },
         checker_calls = 0,
         in_melee = true,     -- what the LRC checker stub answers
-        use_offhand = false,
-        diag = { calls = 0, verbose_calls = 0 },
+        target_yards = 12,   -- exact yards api.UnitDistance reports (nil = unknown)
+        unit_distance_calls = 0,
+        use_offhand = opts.use_offhand == true,
+        diag = { calls = 0, verbose_calls = 0, installs = 0, uninstalls = 0 },
         engine_mode = engine_mode,
     }
     local function bump(key)
@@ -251,8 +275,8 @@ local function build(opts)
         latency_scale_factor = 1,
         latency_linear_offset = 0,
         gcd_marker_offset_mode = "Off",
-        PALADIN = class_db,
     }
+    profile[class_token] = class_db
     sb.db = { profile = profile, profilename = "Default" }
     sb.profile = profile
     sb.class_db = class_db
@@ -284,9 +308,30 @@ local function build(opts)
     env.table = setmetatable({}, { __index = _G.table })
     env.GetTime = function() return sb.clock end
     env.GetTimePreciseSec = function() return sb.clock end
+    -- Exact target distance (compat.api.UnitDistance's source; R1). The flag is the
+    -- client's "the reading was actually checked" bit: false (or nil yards) = unknown.
+    env.UnitDistanceSquared = function(unit)
+        sb.unit_distance_calls = sb.unit_distance_calls + 1
+        if sb.target_yards == nil then
+            return 0, false
+        end
+        return sb.target_yards * sb.target_yards, true
+    end
+    -- The live pull clock's source (BS-8 item 2): the player's target casting (the
+    -- pre-pull projection reads the cast's end), and the two guards a pull needs -
+    -- a group and an instance. opts.target_casting / cast_end_ms script the cast;
+    -- opts.in_group / opts.in_instance script the guards.
+    env.UnitCastingInfo = function(unit)
+        if unit ~= "target" or not opts.target_casting then
+            return nil
+        end
+        return "Some Boss Spell", nil, nil, 0, opts.cast_end_ms or 0, false, nil, false, 1234
+    end
+    env.IsInGroup = function() return opts.in_group ~= false end
+    env.IsInInstance = function() return opts.in_instance ~= false end
     env.GetBuildInfo = function() return "3.3.5", "12340", "today", opts.interface or 38002 end
     env.floor = math.floor
-    env.UnitClass = function() return "Paladin", "PALADIN" end
+    env.UnitClass = function() return class_pretty, class_token end
     env.UnitGUID = function() return "Player-0000-0001" end
     env.UnitExists = function() return false end
     env.UnitCanAttack = function() return false end
@@ -301,6 +346,13 @@ local function build(opts)
     env.DEFAULT_CHAT_FRAME = {
         AddMessage = function(_, msg) sb.chatter[#sb.chatter + 1] = tostring(msg) end,
     }
+    -- The client's global print, spied. The addon's chat path is st.utils.print_msg
+    -- (utils.lua -> DEFAULT_CHAT_FRAME:AddMessage), so a module that reaches the global
+    -- instead shows up here - and never as stray console output.
+    env.print = function(...)
+        local first = select(1, ...)
+        sb.raw_prints[#sb.raw_prints + 1] = tostring(first)
+    end
     env.C_Timer = {
         After = function(delay, fn) sb.after[#sb.after + 1] = { delay = delay, cb = fn } end,
         NewTimer = function(delay, fn)
@@ -363,6 +415,24 @@ local function build(opts)
     setfenv(utils, env)
     utils("SwedgeTimer", st)
 
+    -- The house error contract (guard.lua) loads BEFORE main.lua in every TOC, so
+    -- the sandbox mirrors that order: main.lua's logout flush runs under the real
+    -- guard, and a failure lands in the counter /st diag reads.
+    local guard = assert(loadfile(ROOT .. "guard.lua"))
+    setfenv(guard, env)
+    local ok_guard, err_guard = pcall(guard, "SwedgeTimer", st)
+    check(ok_guard, "guard.lua loads under the sandbox (" .. tostring(err_guard) .. ")")
+    check(type(st.guard) == "table" and type(st.guard.run) == "function",
+        "the house error contract is available to main.lua")
+
+    -- The module-parse trailers are st.debug-gated, and utils.lua sets that switch to
+    -- false as it loads. opts.debug flips it back on AFTER utils.lua has loaded (so
+    -- utils.lua's own trailer stays silent) but BEFORE main.lua loads, so main.lua's
+    -- trailer is reachable and its output path is observable. Section 18 uses it.
+    if opts.debug then
+        st.debug = true
+    end
+
     -- The namespace contents main.lua's load reads beyond compat/utils. The Forever
     -- swing source only exists where the real swing_source.lua would have set it; the
     -- diagnostic module is stubbed (diag.lua loads earlier in the real TOC; here only
@@ -375,6 +445,15 @@ local function build(opts)
             sb.diag.calls = sb.diag.calls + 1
             if verbose then sb.diag.verbose_calls = sb.diag.verbose_calls + 1 end
             sb.diag.last_self = self
+        end,
+        -- F1: the chained error handler's install/uninstall calls are observable.
+        install_error_handler = function()
+            sb.diag.installs = sb.diag.installs + 1
+            return true
+        end,
+        uninstall_error_handler = function()
+            sb.diag.uninstalls = sb.diag.uninstalls + 1
+            return true
         end,
     }
 
@@ -404,25 +483,43 @@ local function build(opts)
     ST.on_gcd_length_change = function() bump("gcd_length_change") end
     ST.set_bar_color = function() bump("bar_color") end
 
-    ST.PALADIN = ST.PALADIN or {}
-    for i = 1, #HOOK_NAMES do
-        local name = HOOK_NAMES[i]
-        sb.hooks[name] = 0
-        ST.PALADIN[name] = function(...)
-            sb.hooks[name] = sb.hooks[name] + 1
-            sb.hook_args[name] = capture_args(...)
+    -- The class loader the real classes/<class>.lua registers (operator order
+    -- 2026-10-21: only the SELECTED class's module executes). main.lua activates the
+    -- selected loader during init, so the hooks live INSIDE this loader: their absence
+    -- before activation is the order proof, exactly as the real class body installs its
+    -- hooks only when its loader runs.
+    st.class_loaders = st.class_loaders or {}
+    st.class_loaders[class_token] = function()
+        sb.class_loaded = sb.class_loaded + 1
+        sb.hook_order[#sb.hook_order + 1] = "activate"
+        ST[class_token] = ST[class_token] or {}
+        for i = 1, #HOOK_NAMES do
+            local name = HOOK_NAMES[i]
+            sb.hooks[name] = sb.hooks[name] or 0
+            ST[class_token][name] = function(...)
+                if name == "post_init" then
+                    sb.hook_order[#sb.hook_order + 1] = "post_init"
+                end
+                sb.hooks[name] = sb.hooks[name] + 1
+                sb.hook_args[name] = capture_args(...)
+            end
         end
     end
 
     -- The hand containers exist on ST (main.lua built them); the anchor frames are
-    -- normally created by bars.lua. Only the hands a paladin iterates need one.
-    ST.mainhand.anchor_frame = make_frame("mainhand.anchor")
-    local anchor = ST.mainhand.anchor_frame
-    anchor.hiding_anchor_frame = make_frame("mainhand.hiding")
-    anchor.bar_frame = make_frame("mainhand.bar")
-    anchor.bar_frame.visuals_frame = make_frame("mainhand.visuals")
-    anchor.bar_frame.visuals_frame.gcd_bar = make_frame("mainhand.gcd_bar")
-    ST.mainhand.onupdate = function() end
+    -- normally created by bars.lua - one per hand of the class (the class hands
+    -- list is the authority, the same one main.lua's iter_hands() walks).
+    local hands = ST.class_hands[class_token] or { "mainhand" }
+    for i = 1, #hands do
+        local hand = hands[i]
+        ST[hand].anchor_frame = make_frame(hand .. ".anchor")
+        local anchor = ST[hand].anchor_frame
+        anchor.hiding_anchor_frame = make_frame(hand .. ".hiding")
+        anchor.bar_frame = make_frame(hand .. ".bar")
+        anchor.bar_frame.visuals_frame = make_frame(hand .. ".visuals")
+        anchor.bar_frame.visuals_frame.gcd_bar = make_frame(hand .. ".gcd_bar")
+        ST[hand].onupdate = function() end
+    end
 
     sb.ST = ST
     sb.st = st
@@ -540,19 +637,22 @@ do
     fire_deadline(b)
     eq(T.init_deadline_fired, true, "the deadline records that it fired")
     eq(T.lrc_unavailable, true, "the deadline flips lrc_unavailable")
-    eq(T.lrc_ready, true, "the deadline treats LRC as settled (disabled for the session)")
+    eq(T.lrc_ready, true, "the deadline treats LRC as settled")
     eq(T.interfaces_are_initialised, true, "initialisation proceeds after the deadline")
 
-    -- Exactly one notice: the range-checking disable (no welcome, engine available).
-    eq(#F.notices, 1, "the deadline rescue prints exactly one notice")
-    eq(F.notices[1], "Range checking is unavailable on this client; the range display is disabled.",
-        "the notice is the range-checking disable")
+    -- No notice: range state no longer depends on LibRangeCheck (R1, 2026-10-21), so a
+    -- missing library is a /st diag fact, not a disabled feature.
+    eq(#F.notices, 0, "the deadline rescue prints no range-disable notice")
 
-    -- Range finders skipped entirely: nothing was requested from the library, and the
-    -- retry loop did not start.
-    eq(F.lrc_stats.harm_max, 0, "no harm checker was requested while LRC is disabled")
-    eq(F.lrc_stats.range, 0, "no range read while LRC is disabled")
-    eq(T.rangefinder_interval, nil, "init_range_finders did not start")
+    -- Range finders start anyway and read exact yards; the library is untouched.
+    eq(F.lrc_stats.harm_max, 0, "no harm checker is requested without LRC")
+    eq(F.lrc_stats.range, 0, "no LRC range read without LRC")
+    eq(T.rangefinder_interval, 0.05, "init_range_finders starts without LRC")
+    eq(T.target_distance, 12, "the exact-yards probe answers")
+    eq(T.in_melee_range, false, "12 yd is outside the 5 yd melee band")
+    eq(T.in_ranged_range, true, "12 yd is inside the 30 yd ranged band")
+    eq(T.target_min_range, 12, "the text min is the floor of the exact reading")
+    eq(T.target_max_range, 12, "the text max is the ceil of the exact reading")
 
     --  and init ran exactly once.
     eq(F.counts.init_visuals, 1, "the visual template is initialised once")
@@ -564,7 +664,7 @@ do
     -- The deadline callback is idempotent once init has run.
     fire_deadline(b)
     eq(F.hooks.post_init, 1, "re-firing the deadline does not re-run init")
-    eq(#F.notices, 1, "re-firing the deadline does not re-print the notice")
+    eq(#F.notices, 0, "re-firing the deadline does not re-print a notice")
     eq(F.diag.calls, 1, "re-firing the deadline does not re-report diag")
 end
 
@@ -579,11 +679,9 @@ do
     eq(T.stl_ready, true, "the deadline settles the engine flag")
     eq(T.swing_engine, "inert-standin", "a never-ready engine is replaced by the inert stand-in")
     eq(T.interfaces_are_initialised, true, "init proceeds once the deadline settles both sides")
-    eq(#F.notices, 2, "the rescue prints both unavailability notices")
+    eq(#F.notices, 1, "the rescue prints only the engine notice (range no longer depends on LRC)")
     eq(F.notices[1], "Swing timer bars are unavailable on this client; range and GCD features remain active.",
-        "the engine loss is reported first")
-    eq(F.notices[2], "Range checking is unavailable on this client; the range display is disabled.",
-        "the range loss is reported second")
+        "the engine loss is the only notice")
     eq(T.mainhand.speed, nil, "init_timers reads the replacement stub's unknown shape (no fake cycle)")
     eq(T.mainhand.ends_at, nil, "the stand-in has no invented expiration")
     eq(T.mainhand.engine_dead, true, "the stand-in marks the hand engine_dead for the bar render")
@@ -591,11 +689,11 @@ do
     -- A late report from the engine that never made it changes nothing now.
     fire_stl_ready(b)
     eq(F.hooks.post_init, 1, "a late engine report does not re-run init")
-    eq(#F.notices, 2, "a late engine report does not re-print the notices")
+    eq(#F.notices, 1, "a late engine report does not re-print the notices")
 end
 
 --=========================================================================================
--- 2) Late-library recovery: checkers arrive after the deadline
+-- 2) Late-library recovery: LRC reports after the deadline
 --=========================================================================================
 do
     local b = boot()
@@ -604,35 +702,37 @@ do
     fire_deadline(b)
     local notices_after_deadline = #F.notices
     local post_init_calls = F.hooks.post_init
+    local diag_calls = F.diag.calls
 
-    -- The callback lifts the disable and brings range checking up through
-    -- init_range_finders, without a second initialisation.
+    -- The callback lifts the fallback flag so /st diag stops reporting lrc=fallback.
+    -- It must not look like a second initialisation: range state already runs from
+    -- exact yards and never consulted the library (R1, 2026-10-21).
     fire_lrc_checkers(b)
-    eq(T.lrc_unavailable, false, "a late CHECKERS_CHANGED lifts the disable")
-    eq(T.rangefinder_interval, 0.05, "the range finder interval is set on recovery")
-    check(type(T.melee_range_checker_func) == "function", "the melee checker is resolved on recovery")
-    check(type(T.ranged_range_checker_func) == "function", "the ranged checker is resolved on recovery")
-    eq(F.lrc_stats.harm_max, 2, "recovery requests both checkers (melee + ranged)")
-    eq(F.checker_calls, 2, "the first range poll ran both checkers once")
-    eq(T.in_melee_range, true, "the first poll stores the checker's melee reading")
-    eq(T.in_ranged_range, false, "an in-melee target is not also ranged")
-    eq(F.lrc_stats.range, 1, "the first poll reads the target range once")
+    eq(T.lrc_ready, true, "a late CHECKERS_CHANGED marks LRC ready")
+    eq(T.lrc_unavailable, false, "a late CHECKERS_CHANGED lifts the lrc=fallback flag")
+    eq(T.rangefinder_interval, 0.05, "the range finder interval is unchanged by recovery")
+    eq(T.target_distance, 12, "the exact-yards reading survives the late report")
+    eq(T.in_ranged_range, true, "the range state survives the late report")
+    eq(F.lrc_stats.harm_max, 0, "recovery requests no LRC checker")
+    eq(F.checker_calls, 0, "recovery runs no checker")
+    eq(F.lrc_stats.range, 0, "recovery reads no LRC range")
 
     -- The poll loop is alive: the first poll re-armed a fresh interval timer, and firing
-    -- it reads the checkers again and arms the next interval.
+    -- it reads the exact distance again and arms the next interval.
     local poll = find_timer(b, 0.05)
     check(poll ~= nil, "the range poll re-arms itself")
+    local polls_before = F.unit_distance_calls
     local timers_before = #F.after
     if poll then
         poll.cb()
     end
     eq(#F.after, timers_before + 1, "the followed-up poll arms the next interval")
-    eq(F.checker_calls, 4, "the followed-up poll reads both checkers again")
+    eq(F.unit_distance_calls, polls_before + 1, "the followed-up poll probes the distance once")
 
     -- Recovery must not look like a second initialisation.
     eq(F.hooks.post_init, post_init_calls, "recovery does not re-run post_init")
     eq(#F.notices, notices_after_deadline, "recovery does not re-print the notice")
-    eq(F.diag.calls, 1, "recovery does not re-report diag")
+    eq(F.diag.calls, diag_calls, "recovery does not re-report diag")
 end
 
 --=========================================================================================
@@ -649,7 +749,10 @@ do
     eq(#F.notices, 0, "a healthy init prints no notices")
     eq(F.hooks.post_init, 1, "post_init ran once")
     eq(F.diag.calls, 1, "diag ran once")
-    eq(F.lrc_stats.harm_max, 2, "both checkers were requested")
+    eq(F.lrc_stats.harm_max, 0, "no LRC checker was requested (exact-yards source)")
+    eq(F.checker_calls, 0, "no checker ran")
+    eq(T.target_distance, 12, "the exact-yards probe answered")
+    eq(T.in_ranged_range, true, "12 yd is inside the ranged band")
     near(T.mainhand.speed, 2.6, "the vendored engine's speed was read")
     eq(F.counts.stl_info, 1, "SwingTimerInfo was read once (one hand)")
 
@@ -790,7 +893,9 @@ end
 do
     local b = build({ report_login = false })
     local T, F = b.ST, b.sb
-    T.has_oh = true -- defeat PLAYER_TARGET_SET_ATTACKING's secondary has_oh guard
+    -- F2: the suite no longer hand-sets has_oh to defeat the offhand guard - the
+    -- flag is derived by check_weapons (see section 15). Here the init guard alone
+    -- has to stop the handler.
     local PRE = {
         { "UNIT_POWER_FREQUENT", { "UNIT_POWER_FREQUENT", "player", "RAGE" } },
         { "UNIT_SPELLCAST_SUCCEEDED", { "UNIT_SPELLCAST_SUCCEEDED", "player", "cast-1", 48996 } },
@@ -826,7 +931,6 @@ end
 do
     local b = boot()
     local T, F = b.ST, b.sb
-    T.has_oh = true
     T.gcd.expires = 123
     local PRE = {
         { "UNIT_POWER_FREQUENT", { "UNIT_POWER_FREQUENT", "player", "RAGE" } },
@@ -907,12 +1011,14 @@ do
     T:UNIT_SPELLCAST_CHANNEL_STOP("UNIT_SPELLCAST_CHANNEL_STOP", "player", "cast-10", nil)
     eq(F.hooks.on_spellcast_event, 2, "post-init CHANNEL_STOP reaches the lifecycle class hook")
 
-    T.has_oh = true
+    -- F2: a paladin has an offhand weapon but no offhand bar, so the offhand
+    -- re-sync must leave the offhand alone (the positive path lives in section 15,
+    -- on a class that has an offhand bar).
     T.offhand.speed = 3.6
     T.offhand.start = 0
     T:PLAYER_TARGET_SET_ATTACKING("PLAYER_TARGET_SET_ATTACKING")
-    eq(F.counts.bar_color, 1, "the offhand recolour runs post-init")
-    near(T.offhand.start, F.clock - 3.6, "the offhand timer is snapped to now minus speed")
+    eq(T.offhand.start, 0, "a class without an offhand bar leaves the offhand timer alone")
+    eq(F.counts.bar_color, nil, "a class without an offhand bar does not recolour")
 end
 
 --=========================================================================================
@@ -1109,57 +1215,56 @@ do
     check(T.interfaces_are_initialised, "the deadline rescue completed")
     eq(F.hooks.post_init, 1, "the rescued init ran post_init once")
     near(T.gcd.gcd1_phys_time_before_swing, 1.5, "the rescued init keeps the 1.5 default")
-    eq(#F.notices, 2, "the rescued init still prints its two unavailability notices")
+    eq(#F.notices, 1, "the rescued init prints only the engine notice (range is exact-yards)")
+    eq(F.notices[1], "Swing timer bars are unavailable on this client; range and GCD features remain active.",
+        "range is never reported as unavailable for a missing library")
 end
 
 --=========================================================================================
--- 10) rf_update dead-man: a throwing LRC poll disables range checking, never errors
+-- 10) rf_update dead-man: a throwing distance probe disables range checking, never errors
 --=========================================================================================
--- The vendored LibRangeCheck-2.0 is maintained for classic-line clients; the
--- IsEventValid event guards let its internals run on Retail/WoW Forever for the first
--- time, where a classic-only global can still make a poll throw. rf_update must catch
--- that, disable range checking through the same state + one-time notice as the init
--- deadline, and stop the retry loop - while a healthy poll stays byte-identical.
+-- The exact-yards probe itself is pcall-wrapped in compat, but the state writes around
+-- it are not allowed to kill the poll loop either. A transient throw retries with
+-- bounded backoff; three consecutive throws disable the session through ONE one-time
+-- notice; a nil reading is the honest "unknown" answer, never a failure.
 do
     local b = boot()
     local T, F = b.ST, b.sb
     fire_stl_ready(b)
     fire_lrc_checkers(b)
 
-    -- Healthy baseline: the init poll wrote the same state and re-armed the interval.
-    eq(F.lrc_stats.range, 1, "the healthy init poll read the range once")
-    eq(F.checker_calls, 2, "the healthy init poll called both checkers once")
-    eq(T.in_melee_range, true, "the healthy poll stored the melee reading")
-    eq(T.in_ranged_range, false, "the healthy poll derived ranged from melee")
-    eq(T.target_min_range, 0, "the healthy poll stored the min range")
-    eq(T.target_max_range, 8, "the healthy poll stored the max range")
+    -- Healthy baseline: the init poll wrote the exact-yards state and re-armed.
+    eq(T.target_distance, 12, "the healthy init poll read exact yards")
+    eq(T.in_melee_range, false, "12 yd is outside melee")
+    eq(T.in_ranged_range, true, "12 yd is inside ranged")
+    eq(T.target_min_range, 12, "the min text is the floor")
+    eq(T.target_max_range, 12, "the max text is the ceil")
     check(find_timer(b, 0.05) ~= nil, "the healthy poll armed the next interval")
     eq(#F.notices, 0, "the healthy poll printed nothing")
 
-    -- The checker call explodes: bounded retry with backoff (M1), then session-disable.
-    local range_before = F.lrc_stats.range
-    local timers_before = #F.after
+    -- The probe explodes: bounded retry with backoff (M1), then session-disable.
+    local healthy_probe = b.st.api.UnitDistance
     local touches_before = #F.touches
-    T.melee_range_checker_func = function() error("LRC checker exploded") end
+    local timers_before = #F.after
+    b.st.api.UnitDistance = function() error("distance probe exploded") end
+
     local ok, err = pcall(T.rf_update, T)
-    check(ok, "a throwing checker poll does not error (" .. tostring(err) .. ")")
-    eq(T.lrc_unavailable, false, "the first throw retries instead of disabling")
+    check(ok, "a throwing probe does not error (" .. tostring(err) .. ")")
+    eq(T.rf_disabled, nil, "the first throw retries instead of disabling")
     eq(T.rf_failure_count, 1, "the first throw is counted")
     eq(#F.notices, 0, "the retry path prints nothing yet")
-    eq(F.lrc_stats.range, range_before, "the throwing poll never reached the range read")
     eq(#F.after, timers_before + 1, "the first throw arms a backoff retry")
     eq(F.after[#F.after].delay, 0.05, "the first retry uses the base interval")
 
     -- Second consecutive throw: longer backoff, still no disable.
     F.after[#F.after].cb()
-    eq(T.lrc_unavailable, false, "the second throw still retries")
+    eq(T.rf_disabled, nil, "the second throw still retries")
     eq(T.rf_failure_count, 2, "the second throw is counted")
-    eq(#F.after, timers_before + 2, "the second throw arms another retry")
     eq(F.after[#F.after].delay, 0.1, "the retry backs off exponentially (0.1 s)")
 
     -- Third consecutive throw: the bounded retry exhausts and disables the session.
     F.after[#F.after].cb()
-    eq(T.lrc_unavailable, true, "the third consecutive throw disables range checking")
+    eq(T.rf_disabled, true, "the third consecutive throw disables range checking")
     eq(T.rf_failure_count, 3, "the exhausted retry keeps its count")
     eq(T.rf_disabled_after_failures, true, "the failure path records its terminal state")
     eq(#F.notices, 1, "the exhausted retry prints exactly one notice")
@@ -1168,13 +1273,14 @@ do
     eq(#F.after, timers_before + 2, "the terminal failure does not arm another retry")
     eq(#F.touches, touches_before, "the retry path touches no frames")
 
-    -- Every later poll stops immediately: no library reads, no second notice.
-    local calls_after_failure = F.checker_calls
+    -- Every later poll stops immediately: no probe, no second notice.
+    local probes = F.unit_distance_calls
     ok = pcall(T.rf_update, T)
     check(ok, "a poll after the disable still does not error")
-    eq(F.checker_calls, calls_after_failure, "a disabled poll never calls a checker")
+    eq(F.unit_distance_calls, probes, "a disabled poll never probes")
     eq(#F.after, timers_before + 2, "a disabled poll never reschedules")
     eq(#F.notices, 1, "the notice stays one-time")
+    b.st.api.UnitDistance = healthy_probe
 end
 do
     -- A successful poll between throws resets the consecutive counter.
@@ -1182,67 +1288,56 @@ do
     local T, F = b.ST, b.sb
     fire_stl_ready(b)
     fire_lrc_checkers(b)
-    local checker = T.melee_range_checker_func
-    T.melee_range_checker_func = function() error("transient") end
+    local healthy_probe = b.st.api.UnitDistance
+    b.st.api.UnitDistance = function() error("transient") end
     T.rf_update(T)
     eq(T.rf_failure_count, 1, "the transient throw starts the streak")
-    T.melee_range_checker_func = checker
+    b.st.api.UnitDistance = healthy_probe
     F.after[#F.after].cb() -- retry succeeds
     eq(T.rf_failure_count, 0, "a successful retry resets the consecutive counter")
-    eq(T.lrc_unavailable, false, "range checking stays alive after a recovered poll")
+    eq(T.rf_disabled, nil, "range checking stays alive after a recovered poll")
+    eq(T.in_ranged_range, true, "the recovered poll rewrote the state")
 end
 do
-    -- The range read itself throws (the lib's GetRange internals).
+    -- Unknown is NOT a failure: the client not answering must not burn the retry budget
+    -- or the session, and must clear both text fields (never a guess).
     local b = boot()
     local T, F = b.ST, b.sb
     fire_stl_ready(b)
     fire_lrc_checkers(b)
-    F.LRC.GetRange = function() error("LRC GetRange exploded") end
+    F.target_yards = nil
     local timers_before = #F.after
     local ok, err = pcall(T.rf_update, T)
-    check(ok, "a throwing GetRange poll does not error (" .. tostring(err) .. ")")
-    eq(T.lrc_unavailable, false, "a GetRange throw retries first")
-    F.after[#F.after].cb()
-    F.after[#F.after].cb()
-    eq(T.lrc_unavailable, true, "a sustained GetRange throw disables range checking")
-    eq(#F.notices, 1, "a sustained GetRange throw prints the one-time notice")
-    eq(#F.after, timers_before + 2, "the terminal failure stops the retry loop")
+    check(ok, "an unknown reading does not error (" .. tostring(err) .. ")")
+    eq(T.rf_failure_count, 0, "a nil reading is not counted as a failure")
+    eq(T.rf_disabled, nil, "a nil reading never disables range checking")
+    eq(T.target_distance, nil, "the unknown distance is published as nil")
+    eq(T.in_melee_range, false, "unknown is not melee")
+    eq(T.in_ranged_range, false, "unknown is not ranged")
+    eq(T.target_min_range, nil, "unknown clears the min text")
+    eq(T.target_max_range, nil, "unknown clears the max text")
+    eq(#F.after, timers_before + 1, "the loop keeps polling after an unknown")
+    eq(F.after[#F.after].delay, 0.05, "the next poll keeps the base interval")
 end
 do
-    -- The same failure inside the init poll: the disable lands before post_init, so the
-    -- notice must be printed exactly once through the shared path (never twice).
+    -- The same failure inside the init poll: init still completes, the disable lands
+    -- before post_init, and the notice is printed exactly once through the shared path.
     local b = boot()
     local T, F = b.ST, b.sb
     fire_stl_ready(b)
-    F.LRC.GetHarmMaxChecker = function() return function() error("init poll exploded") end end
+    b.st.api.UnitDistance = function() error("init poll exploded") end
     fire_lrc_checkers(b)
     check(T.interfaces_are_initialised, "init completes despite the throwing first poll")
-    eq(T.lrc_unavailable, false, "the init poll retries first")
+    eq(T.rf_disabled, nil, "the init poll retries first")
+    eq(T.rf_failure_count, 1, "the init poll counts its first throw")
     check(find_timer(b, 0.05) ~= nil, "the failing init poll arms its retry")
     F.after[#F.after].cb()
     F.after[#F.after].cb()
-    eq(T.lrc_unavailable, true, "the sustained init-poll failure disables range checking")
+    eq(T.rf_disabled, true, "the sustained init-poll failure disables range checking")
     eq(#F.notices, 1, "the init poll failure prints the notice exactly once")
     eq(F.notices[1], "Range checking is unavailable on this client; the range display is disabled.",
         "the init poll notice is the range-checking disable")
     eq(F.hooks.post_init, 1, "post_init still runs after the disable")
-end
-do
-    -- M2: a checker that never resolves is capped instead of re-arming forever.
-    local b = boot()
-    local T, F = b.ST, b.sb
-    fire_stl_ready(b)
-    fire_lrc_checkers(b)
-    T.melee_range_checker_func = nil
-    T.rf_checker_laps = 99
-    local timers_before = #F.after
-    local ok, err = pcall(T.rf_update, T)
-    check(ok, "the capped checker loop does not error (" .. tostring(err) .. ")")
-    eq(T.rf_checker_laps, 100, "the checker loop counts its laps")
-    eq(T.rf_checker_exhausted, true, "reaching the cap records the terminal state")
-    eq(T.lrc_unavailable, true, "the cap folds into the range-disable state")
-    eq(#F.notices, 1, "the cap prints the shared one-time notice")
-    eq(#F.after, timers_before, "the cap arms no further checker lap")
 end
 
 --=========================================================================================
@@ -1374,6 +1469,787 @@ do
     local ok_aura, err_aura = pcall(T.UNIT_AURA, T, "UNIT_AURA", "player")
     check(ok_aura, "an init-window UNIT_AURA does not error (" .. tostring(err_aura) .. ")")
     hooks_unchanged(b, before, "an init-window UNIT_AURA never reaches the class hook either")
+end
+do
+    -- 12) Combat-enter resets the hunter shot log (H2 fight-scoping): entering combat
+    -- on a hunter clears the rolling log so the post-fight report covers the new
+    -- fight only; any other class (or a missing HUNTER module) leaves it alone.
+    local b = boot()
+    local T = b.ST
+    local resets = 0
+    T.player_class = "HUNTER"
+    T.HUNTER = {
+        reset_shot_log = function(self)
+            resets = resets + 1
+        end,
+    }
+    local ok, err = pcall(T.PLAYER_REGEN_DISABLED, T)
+    check(ok, "combat-enter does not error on a hunter (" .. tostring(err) .. ")")
+    eq(T.in_combat, true, "combat-enter marks in_combat")
+    eq(resets, 1, "combat-enter resets the hunter shot log once")
+
+    -- A second fight-start resets again (no one-shot latch).
+    local ok2, err2 = pcall(T.PLAYER_REGEN_DISABLED, T)
+    check(ok2, "a second combat-enter does not error (" .. tostring(err2) .. ")")
+    eq(resets, 2, "each combat-enter resets the hunter shot log")
+
+    -- Non-hunters never touch the log: the seeded HUNTER table carries no hook.
+    local c = boot()
+    local U = c.ST
+    eq(U.player_class, "PALADIN", "the guard fixture runs a paladin")
+    eq(U.HUNTER.reset_shot_log, nil, "the guard fixture wires no hunter reset hook")
+    local ok3, err3 = pcall(U.PLAYER_REGEN_DISABLED, U)
+    check(ok3, "combat-enter does not error on a non-hunter (" .. tostring(err3) .. ")")
+    eq(U.in_combat, true, "combat-enter marks in_combat on a non-hunter too")
+    eq(U.HUNTER.reset_shot_log, nil, "combat-enter adds no reset hook on a non-hunter")
+end
+
+--=========================================================================================
+-- 13) Retail stub classes: MONK / DEMONHUNTER / EVOKER never nil-index a dispatch
+--=========================================================================================
+-- Hunter resweep ses_eaaf2f3b7ffeuygfA6RMet8AyF (HIGH, CONFIRMED): a Retail login for a
+-- class with no class module used to nil-index at the unguarded dispatch sites (the
+-- post_init guard, the rage/spellcast forwarders, the class_on_* wrappers, and the
+-- bars set_bar_color guard). main.lua now ships inert ST.MONK / ST.DEMONHUNTER /
+-- ST.EVOKER stub tables in token order, so every site resolves to a table and skips
+-- its absent hook. In-game the AceDB ['**'] wildcard (config.lua) seeds the per-class
+-- profile table and get_class_hands falls back to {}, so no class_hands or db change
+-- is needed; this section seeds the same shape explicitly, then drives the login,
+-- aura, cast, rage and swing dispatches for all 13 classes. CLEU is excluded by
+-- construction: it is only registered for PALADIN/WARRIOR on classic-line clients,
+-- where the three stub classes do not exist.
+do
+    local ALL_CLASSES = {
+        "DEATHKNIGHT", "DEMONHUNTER", "DRUID", "EVOKER", "HUNTER", "MAGE",
+        "MONK", "PALADIN", "PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR",
+    }
+    local b = boot()
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+
+    -- Stub presence: every class token resolves to a table (the three new stubs are
+    -- the pin; the rest guards against a future stub going missing the same way).
+    for i = 1, #ALL_CLASSES do
+        eq(type(T[ALL_CLASSES[i]]), "table", "ST." .. ALL_CLASSES[i] .. " exists for the dispatch sites")
+    end
+
+    -- Mirror the in-game shape the login path expects: the AceDB ['**'] seed for the
+    -- profile table, and the anchor frames bars.lua builds for every hand.
+    for i = 1, #ALL_CLASSES do
+        if F.profile[ALL_CLASSES[i]] == nil then
+            F.profile[ALL_CLASSES[i]] = F.class_db
+        end
+    end
+    for _, hand in ipairs({ "mainhand", "offhand", "ranged" }) do
+        local anchor = F.make_frame(hand .. ".anchor")
+        anchor.hiding_anchor_frame = F.make_frame(hand .. ".hiding")
+        anchor.bar_frame = F.make_frame(hand .. ".bar")
+        anchor.bar_frame.visuals_frame = F.make_frame(hand .. ".visuals")
+        anchor.bar_frame.visuals_frame.gcd_bar = F.make_frame(hand .. ".gcd_bar")
+        T[hand].anchor_frame = anchor
+        T[hand].onupdate = function() end
+    end
+
+    local before = hook_snapshot(b)
+    for i = 1, #ALL_CLASSES do
+        local cls = ALL_CLASSES[i]
+        T.player_class = cls
+        local function trial(name, fn, ...)
+            local ok, err = pcall(fn, ...)
+            check(ok, cls .. " " .. name .. " does not error (" .. tostring(err) .. ")")
+        end
+        trial("login (post_init)", T.post_init, T)
+        trial("aura", T.UNIT_AURA, T, "UNIT_AURA", "player")
+        trial("cast succeeded", T.UNIT_SPELLCAST_SUCCEEDED, T, "UNIT_SPELLCAST_SUCCEEDED", "player", "cast-1", 403)
+        trial("cast failed-quiet", T.UNIT_SPELLCAST_FAILED_QUIET, T, "UNIT_SPELLCAST_FAILED_QUIET", "player", "cast-1", 403)
+        trial("lifecycle START", T.UNIT_SPELLCAST_START, T, "UNIT_SPELLCAST_START", "player", "cast-1", 403)
+        trial("lifecycle DELAYED", T.UNIT_SPELLCAST_DELAYED, T, "UNIT_SPELLCAST_DELAYED", "player", "cast-1", 403)
+        trial("lifecycle STOP", T.UNIT_SPELLCAST_STOP, T, "UNIT_SPELLCAST_STOP", "player", "cast-1", nil)
+        trial("lifecycle INTERRUPTED", T.UNIT_SPELLCAST_INTERRUPTED, T, "UNIT_SPELLCAST_INTERRUPTED", "player", "cast-1", 403)
+        trial("lifecycle FAILED", T.UNIT_SPELLCAST_FAILED, T, "UNIT_SPELLCAST_FAILED", "player", "cast-1", 403)
+        trial("lifecycle CHANNEL_START", T.UNIT_SPELLCAST_CHANNEL_START, T, "UNIT_SPELLCAST_CHANNEL_START", "player", "cast-1", 403)
+        trial("lifecycle CHANNEL_STOP", T.UNIT_SPELLCAST_CHANNEL_STOP, T, "UNIT_SPELLCAST_CHANNEL_STOP", "player", "cast-1", nil)
+        trial("cast-queue change", T.CURRENT_SPELL_CAST_CHANGED, T, "CURRENT_SPELL_CAST_CHANGED", false)
+        trial("rage update", T.UNIT_POWER_FREQUENT, T, "UNIT_POWER_FREQUENT", "player", "RAGE")
+        trial("non-rage power", T.UNIT_POWER_FREQUENT, T, "UNIT_POWER_FREQUENT", "player", "MANA")
+        trial("equipment change", T.PLAYER_EQUIPMENT_CHANGED, T, "PLAYER_EQUIPMENT_CHANGED", 16, true)
+        trial("cooldown update", T.SPELL_UPDATE_COOLDOWN, T)
+        trial("autorepeat start", T.START_AUTOREPEAT_SPELL, T)
+        trial("autorepeat stop", T.STOP_AUTOREPEAT_SPELL, T)
+        trial("talent group", T.ACTIVE_TALENT_GROUP_CHANGED, T, "ACTIVE_TALENT_GROUP_CHANGED", 1)
+        trial("talent points", T.CHARACTER_POINTS_CHANGED, T, "CHARACTER_POINTS_CHANGED")
+        trial("swing start", T.SWING_TIMER_START, T, "SWING_TIMER_START", 2.6, F.clock + 2.6, "mainhand")
+        trial("swing update", T.SWING_TIMER_UPDATE, T, "SWING_TIMER_UPDATE", 2.6, F.clock + 2.6, "mainhand")
+        trial("swing stop", T.SWING_TIMER_STOP, T, "SWING_TIMER_STOP", "mainhand")
+        trial("combat exit", T.PLAYER_REGEN_ENABLED, T)
+        trial("combat enter", T.PLAYER_REGEN_DISABLED, T)
+    end
+
+    -- The wired class reached its hooks exactly once per dispatch; every other class
+    -- (stubs included) stayed silent, so the stubs are inert.
+    eq(F.hooks.post_init, before.post_init + 1, "the login dispatch reached the wired post_init once")
+    eq(F.hooks.on_aura_change, before.on_aura_change + 1, "the aura dispatch reached the wired hook once")
+    eq(F.hooks.on_spellcast_succeeded, before.on_spellcast_succeeded + 1, "the succeeded dispatch reached the wired hook once")
+    eq(F.hooks.on_spellcast_failed_quiet, before.on_spellcast_failed_quiet + 1, "the failed-quiet dispatch reached the wired hook once")
+    eq(F.hooks.on_spellcast_event, before.on_spellcast_event + 7, "the seven lifecycle dispatches reached the wired hook")
+    eq(F.hooks.on_current_spell_cast_changed, before.on_current_spell_cast_changed + 1, "the cast-queue dispatch reached the wired hook once")
+    eq(F.hooks.on_rage_update, before.on_rage_update + 1, "the rage dispatch reached the wired hook once")
+    eq(F.hooks.on_cooldown_update, before.on_cooldown_update + 1, "the cooldown dispatch reached the wired hook once")
+    eq(F.hooks.on_autorrepeat_event, before.on_autorrepeat_event + 2, "both autorepeat dispatches reached the wired hook")
+    eq(F.hooks.on_talents_changed, before.on_talents_changed + 2, "both talent dispatches reached the wired hook")
+    eq(F.hooks.on_combat_exit, before.on_combat_exit + 1, "the combat-exit dispatch reached the wired hook once")
+end
+
+--=========================================================================================
+-- 14) SWING_TIMER_* nil-bar guards: an unknown hand never errors, notices once
+--=========================================================================================
+-- Live errors (operator screenshot): SWING_TIMER_START indexed a nil self[hand] and the
+-- SWING_TIMER_STOP deferred callback touched a bar that was gone. Every guarded handler
+-- takes the same shape -- local bar, one-time notice, return -- and the STOP callback
+-- re-checks the bar at fire time.
+do
+    -- Each guarded handler prints the one-time notice on its own first unknown
+    -- hand: a fresh boot per handler, so stripping any single notice fails.
+    local cases = {
+        { "START", "SWING_TIMER_START", function(T, clock)
+            return pcall(T.SWING_TIMER_START, T, "SWING_TIMER_START", 2.6, clock + 2.6, "bogus")
+        end },
+        { "STOP", "SWING_TIMER_STOP", function(T)
+            return pcall(T.SWING_TIMER_STOP, T, "SWING_TIMER_STOP", "bogus")
+        end },
+        { "UPDATE", "SWING_TIMER_UPDATE", function(T, clock)
+            return pcall(T.SWING_TIMER_UPDATE, T, "SWING_TIMER_UPDATE", 2.6, clock + 2.6, "bogus")
+        end },
+        { "PAUSED", "SWING_TIMER_PAUSED", function(T)
+            return pcall(T.SWING_TIMER_PAUSED, T, "SWING_TIMER_PAUSED", "bogus")
+        end },
+    }
+    for i = 1, #cases do
+        local b = boot()
+        local T, F = b.ST, b.sb
+        fire_stl_ready(b)
+        fire_lrc_checkers(b)
+        local notices_before = #F.notices
+        local ok, err = cases[i][3](T, F.clock)
+        check(ok, "unknown-hand " .. cases[i][1] .. " does not error (" .. tostring(err) .. ")")
+        eq(#F.notices, notices_before + 1, "the first unknown hand prints exactly one notice (" .. cases[i][2] .. ")")
+        contains(F.notices[#F.notices], "bogus", "the unknown-hand notice names the hand (" .. cases[i][2] .. ")")
+    end
+end
+do
+    local b = boot()
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    local notices_before = #F.notices
+
+    -- Unknown hands on all four guarded handlers: no error, no state.
+    local ok_start, err_start = pcall(T.SWING_TIMER_START, T, "SWING_TIMER_START", 2.6, F.clock + 2.6, "bogus")
+    check(ok_start, "unknown-hand START does not error (" .. tostring(err_start) .. ")")
+    local ok_stop, err_stop = pcall(T.SWING_TIMER_STOP, T, "SWING_TIMER_STOP", "bogus")
+    check(ok_stop, "unknown-hand STOP does not error (" .. tostring(err_stop) .. ")")
+    local ok_update, err_update = pcall(T.SWING_TIMER_UPDATE, T, "SWING_TIMER_UPDATE", 2.6, F.clock + 2.6, "bogus")
+    check(ok_update, "unknown-hand UPDATE does not error (" .. tostring(err_update) .. ")")
+    local ok_paused, err_paused = pcall(T.SWING_TIMER_PAUSED, T, "SWING_TIMER_PAUSED", "bogus")
+    check(ok_paused, "unknown-hand PAUSED does not error (" .. tostring(err_paused) .. ")")
+    eq(#F.notices, notices_before + 1, "four unknown hands still print exactly one notice")
+    eq(#F.new_timers, 0, "an unknown-hand STOP arms no deferred timer")
+    near(T.mainhand.speed, 2.6, "an unknown-hand START leaves the real bar alone")
+
+    -- A second unknown hand (different name): still no error, still one notice.
+    local ok_again, err_again = pcall(T.SWING_TIMER_START, T, "SWING_TIMER_START", 2.6, F.clock + 2.6, "nope")
+    check(ok_again, "a second unknown hand still does not error (" .. tostring(err_again) .. ")")
+    eq(#F.notices, notices_before + 1, "later unknown hands do not re-print the notice")
+
+    -- Valid hands still work after the guards tripped.
+    local ok_valid, err_valid = pcall(T.SWING_TIMER_START, T, "SWING_TIMER_START", 3.0, F.clock + 3.0, "mainhand")
+    check(ok_valid, "a valid START still runs (" .. tostring(err_valid) .. ")")
+    near(T.mainhand.speed, 3.0, "a valid START writes the bar speed")
+    near(T.mainhand.ends_at, F.clock + 3.0, "a valid START writes the bar expiry")
+    T:SWING_TIMER_PAUSED("SWING_TIMER_PAUSED", "mainhand")
+    eq(T.mainhand.is_paused, true, "a valid PAUSED pauses the bar")
+    T:SWING_TIMER_UPDATE("SWING_TIMER_UPDATE", 3.0, F.clock + 3.0, "mainhand")
+    eq(T.mainhand.is_paused, false, "a valid UPDATE unpauses the bar")
+    near(T.mainhand.speed, 3.0, "a valid UPDATE writes the bar speed")
+    local timers_before = #F.new_timers
+    T:SWING_TIMER_STOP("SWING_TIMER_STOP", "mainhand")
+    eq(#F.new_timers, timers_before + 1, "a valid STOP arms the deferred timer")
+    F.new_timers[#F.new_timers].cb()
+    eq(T.mainhand.is_full, true, "the fired STOP timer marks the bar full")
+
+    -- The bar vanishes between arm and fire: the deferred callback stays silent.
+    T:SWING_TIMER_STOP("SWING_TIMER_STOP", "mainhand")
+    local deferred = F.new_timers[#F.new_timers].cb
+    local saved = T.mainhand
+    T.mainhand = nil
+    local ok_gone, err_gone = pcall(deferred)
+    check(ok_gone, "a STOP timer firing after the bar is gone does not error (" .. tostring(err_gone) .. ")")
+    eq(#F.notices, notices_before + 1, "the vanished-bar fire adds no second notice")
+    T.mainhand = saved
+    T:SWING_TIMER_START("SWING_TIMER_START", 2.6, F.clock + 2.6, "mainhand")
+    near(T.mainhand.speed, 2.6, "the restored bar takes swings again")
+end
+
+--=========================================================================================
+-- 14b) Swing-engine wire shapes: the dispatcher drops the classic unit-id lead
+--=========================================================================================
+-- TBC hunter ranged bar, 2026-10-21: the vendored classic library re-fires its
+-- UNIT_SWING_TIMER_* events as SWING_TIMER_* WITH the unit id leading
+-- (Fire(legacy, unitId, speed, ...)), while swing_source fires speed-first; the
+-- app's handlers take speed-first. Without the dispatcher's normalisation the
+-- classic payloads misalign by one argument (bar.speed becomes "player", a STOP
+-- names a hand that is really an expiry timestamp) and the bars render their
+-- init seed once, then freeze - with no error, because nothing throws. These
+-- pins drive T.callback_event_handler with both engines' exact wire shapes.
+do
+    local b = boot({ class = "HUNTER", engine = "vendored", interface = 20506, project = 5 })
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    check(T.interfaces_are_initialised, "wire: the TBC hunter fixture reached a full init")
+
+    -- Classic wire (vendored lib): the unit id leads. The dispatcher strips it,
+    -- so the ranged bar takes the cycle and the wire counters record receipt.
+    T.callback_event_handler("SWING_TIMER_START", "player", 3.1, F.clock + 3.1, "ranged")
+    eq(type(T.ranged.speed), "number", "wire: a classic START writes a numeric speed")
+    near(T.ranged.speed, 3.1, "wire: a classic START writes the bar speed")
+    near(T.ranged.ends_at, F.clock + 3.1, "wire: a classic START writes the bar expiry")
+    eq(T.swing_wire_counts.ranged.start, 1, "wire: a classic START is counted")
+
+    T.callback_event_handler("SWING_TIMER_UPDATE", "player", 3.1, F.clock + 3.1, "ranged")
+    near(T.ranged.speed, 3.1, "wire: a classic UPDATE writes the bar speed")
+    eq(T.swing_wire_counts.ranged.update, 1, "wire: a classic UPDATE is counted")
+
+    local timers_before = #F.new_timers
+    T.callback_event_handler("SWING_TIMER_STOP", "player", "ranged")
+    eq(#F.new_timers, timers_before + 1, "wire: a classic STOP arms the deferred timer")
+    eq(T.swing_wire_counts.ranged.stop, 1, "wire: a classic STOP is counted")
+
+    -- Forever wire (swing_source): speed leads, no unit id. The dispatcher leaves
+    -- it untouched - stripping here would eat the speed itself.
+    T.callback_event_handler("SWING_TIMER_START", 2.4, F.clock + 2.4, "ranged")
+    near(T.ranged.speed, 2.4, "wire: a Forever START writes the bar speed")
+    eq(T.swing_wire_counts.ranged.start, 2, "wire: a Forever START is counted")
+
+    -- A non-swing callback keeps its exact args through the same dispatcher.
+    T.callback_event_handler("GCD_STARTED", 1.2, 101.2)
+    near(T.gcd.duration, 1.2, "wire: a plain GCD_STARTED keeps its args")
+    eq(T.swing_wire_counts.ranged.start, 2, "wire: a GCD callback touches no wire count")
+
+    -- A Forever STOP (hand only, no unit id) must survive the strip: the hand
+    -- itself is a string, so the normalisation keys on the unit-id tokens,
+    -- never on "any leading string".
+    local timers_before_2 = #F.new_timers
+    T.callback_event_handler("SWING_TIMER_STOP", "ranged")
+    eq(#F.new_timers, timers_before_2 + 1, "wire: a Forever STOP arms the deferred timer")
+    eq(T.swing_wire_counts.ranged.stop, 2, "wire: a Forever STOP is counted")
+
+    -- The diag runtime line exposes the wire.
+    local notices_before = #F.notices
+    b.env.LE_EXPANSION_LEVEL_CURRENT = 1
+    T:print_runtime_diag()
+    eq(#F.notices, notices_before + 1, "wire: the diag line prints")
+    contains(F.notices[#F.notices], "swing_ranged=2/1/2", "wire: the diag line carries the ranged counts")
+    contains(F.notices[#F.notices], "swing_last=STOP:ranged", "wire: the diag line carries the last cycle event")
+    contains(F.notices[#F.notices], "proj=5", "wire: the diag line carries the project id")
+    contains(F.notices[#F.notices], "exp=1", "wire: the diag line carries the expansion level")
+    contains(F.notices[#F.notices], "bcc=5", "wire: the diag line carries the BCC project constant")
+end
+
+--=========================================================================================
+-- 15) F2: the PLAYER_TARGET_SET_ATTACKING guard has a real production path
+--=========================================================================================
+-- Deep audit (bench/deep_audit_2026-10-19.md, F2): the event was registered on every
+-- classic-line client, but self.has_oh was initialised false and never set again, so
+-- the handler body always returned at its guard - a registered dead event. The suite
+-- used to defeat the guard by hand (T.has_oh = true), which is exactly what hid the
+-- defect. These pins drive the production path instead: check_weapons derives has_oh
+-- from the offhand-presence probe (api.UnitAttackSpeed's offhand speed), and the
+-- guard opens on its own.
+do
+    -- A warrior with an offhand weapon: the class has an offhand bar and the probe
+    -- reports an offhand speed.
+    local b = boot({ class = "WARRIOR", use_offhand = true })
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    check(T.interfaces_are_initialised, "F2: the fixture reached a full init")
+    eq(T.player_class, "WARRIOR", "F2: the fixture plays a warrior")
+    eq(T.offhand.has_weapon, true, "F2: check_weapons detects the offhand weapon")
+    eq(T.has_oh, true, "F2: has_oh is derived from the offhand probe, not hand-set")
+    eq(T:has_hand("offhand"), true, "F2: a warrior has an offhand bar")
+
+    -- The guard opens on its own: an overdue offhand cycle is re-synced.
+    T.offhand.speed = 3.6
+    T.offhand.start = 0
+    T:PLAYER_TARGET_SET_ATTACKING("PLAYER_TARGET_SET_ATTACKING")
+    eq(F.counts.bar_color, 1, "F2: the offhand recolour runs on the production path")
+    near(T.offhand.start, F.clock - 3.6, "F2: the offhand timer is snapped to now minus speed")
+    near(T.offhand.ends_at, F.clock, "F2: the offhand cycle end moves with the start")
+
+    -- A cycle that is not overdue is left alone (no false re-sync).
+    T.offhand.start = F.clock
+    T.offhand.ends_at = F.clock + 3.6
+    T:PLAYER_TARGET_SET_ATTACKING("PLAYER_TARGET_SET_ATTACKING")
+    eq(F.counts.bar_color, 1, "F2: a live offhand cycle is not re-synced")
+    near(T.offhand.start, F.clock, "F2: a live offhand cycle keeps its start")
+
+    -- Before the first swing (and on the inert stand-in) the cycle fields are nil:
+    -- there is nothing to re-sync, and the handler must not error.
+    T.offhand.speed = nil
+    T.offhand.start = nil
+    local ok_nil, err_nil = pcall(T.PLAYER_TARGET_SET_ATTACKING, T, "PLAYER_TARGET_SET_ATTACKING")
+    check(ok_nil, "F2: a nil offhand cycle does not error (" .. tostring(err_nil) .. ")")
+    eq(F.counts.bar_color, 1, "F2: a nil offhand cycle triggers no recolour")
+
+    -- A zero-length cycle would divide by zero in the bar's progress maths.
+    T.offhand.speed = 0
+    T.offhand.start = 0
+    local ok_zero, err_zero = pcall(T.PLAYER_TARGET_SET_ATTACKING, T, "PLAYER_TARGET_SET_ATTACKING")
+    check(ok_zero, "F2: a zero-length offhand cycle does not error (" .. tostring(err_zero) .. ")")
+    eq(T.offhand.start, 0, "F2: a zero-length offhand cycle is left alone")
+end
+
+do
+    -- No offhand weapon: the guard stays shut, and the handler does nothing.
+    local b = boot({ class = "WARRIOR" })
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    eq(T.offhand.has_weapon, false, "F2: a two-hander has no offhand weapon")
+    eq(T.has_oh, false, "F2: without an offhand weapon the guard stays shut")
+    T.offhand.speed = 3.6
+    T.offhand.start = 0
+    T:PLAYER_TARGET_SET_ATTACKING("PLAYER_TARGET_SET_ATTACKING")
+    eq(T.offhand.start, 0, "F2: without an offhand weapon the offhand timer is untouched")
+    eq(F.counts.bar_color, nil, "F2: without an offhand weapon nothing is recoloured")
+
+    -- Equipping and unequipping an offhand weapon opens and closes the guard
+    -- through the same production path (PLAYER_EQUIPMENT_CHANGED -> check_weapons).
+    F.use_offhand = true
+    T:PLAYER_EQUIPMENT_CHANGED("PLAYER_EQUIPMENT_CHANGED", 17, true)
+    eq(T.has_oh, true, "F2: equipping an offhand weapon opens the guard")
+    eq(T.offhand.has_weapon, true, "F2: the offhand weapon state follows the equip")
+    F.use_offhand = false
+    T:PLAYER_EQUIPMENT_CHANGED("PLAYER_EQUIPMENT_CHANGED", 17, true)
+    eq(T.has_oh, false, "F2: unequipping the offhand weapon closes the guard again")
+end
+
+do
+    -- A paladin has an offhand weapon but no offhand bar: the recolour would touch
+    -- frames that were never created, so the handler must leave the offhand alone.
+    local b = boot({ class = "PALADIN", use_offhand = true })
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    eq(T.has_oh, true, "F2: the paladin fixture detects the offhand weapon")
+    eq(T:has_hand("offhand"), false, "F2: a paladin has no offhand bar")
+    T.offhand.speed = 3.6
+    T.offhand.start = 0
+    local ok, err = pcall(T.PLAYER_TARGET_SET_ATTACKING, T, "PLAYER_TARGET_SET_ATTACKING")
+    check(ok, "F2: a class without an offhand bar does not error (" .. tostring(err) .. ")")
+    eq(T.offhand.start, 0, "F2: a class without an offhand bar leaves the offhand timer alone")
+    eq(F.counts.bar_color, nil, "F2: a class without an offhand bar does not recolour")
+end
+
+--=========================================================================================
+-- 16) F1: the chained error handler is installed at init and removed at logout
+--=========================================================================================
+-- Deep audit (bench/deep_audit_2026-10-19.md, F1): install_error_handler had no
+-- caller in the whole tree, so the ring was never written and /st diag printed
+-- "errors none" as a fact when nothing could have been observed.
+do
+    local b = boot()
+    local T, F = b.ST, b.sb
+    eq(F.diag.installs, 0, "F1: the chain is not installed before the init")
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    eq(F.diag.installs, 1, "F1: init installs the chained error handler once")
+    check(F.events["PLAYER_LOGOUT"] ~= nil, "F1: PLAYER_LOGOUT is registered")
+
+    -- Idempotence: a late library report must not install a second chain.
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    eq(F.diag.installs, 1, "F1: a repeated init report does not install the chain twice")
+
+    -- The session's end removes the chain again.
+    T:PLAYER_LOGOUT()
+    eq(F.diag.uninstalls, 1, "F1: PLAYER_LOGOUT removes the chained error handler")
+    T:PLAYER_LOGOUT()
+    eq(F.diag.uninstalls, 2, "F1: the removal is unconditional (a second logout repeats it)")
+end
+
+--=========================================================================================
+-- 16b) H2: the logout flushes the practice progression session
+--=========================================================================================
+-- Deep audit (2026-10-20, H2): the progression session's completion bonus, its daily
+-- streak, its run, its time active and its bounded history row were written by ONE
+-- caller - the practice session's stop. A player who practised and then logged out
+-- (or reloaded) kept the per-attempt XP and lost everything else, with no error and
+-- no notice. The logout handler must call the flush, and the flush must be reached
+-- even when the practice module is not loaded at all.
+do
+    local b = boot()
+    local T, F = b.ST, b.sb
+    local calls, seen_self = 0, nil
+    F.st.practice_ui = {
+        flush_progress_session = function(self)
+            calls = calls + 1
+            seen_self = self
+            return true
+        end,
+    }
+    T:PLAYER_LOGOUT()
+    eq(calls, 1, "H2: the logout handler flushes the practice progression session")
+    eq(seen_self, T, "H2: the flush receives the addon object")
+
+    -- A second logout (the client can fire it twice) flushes again - the flush
+    -- itself is idempotent, the handler is unconditional.
+    T:PLAYER_LOGOUT()
+    eq(calls, 2, "H2: the logout handler flushes unconditionally")
+
+    -- Without the practice module the handler still runs cleanly.
+    F.st.practice_ui = nil
+    local ok, err = pcall(function() T:PLAYER_LOGOUT() end)
+    check(ok, "H2: the logout handler survives a missing practice UI module (" .. tostring(err) .. ")")
+end
+
+--=========================================================================================
+-- 16c) M1: the logout flush's failure is COUNTED, not swallowed (re-audit 2026-10-20)
+--=========================================================================================
+-- The flush used to run under a bare pcall and the error was thrown away - the very
+-- data class H2 was filed for (the completion bonus, the daily streak, the run, the
+-- time active and the history row) went silent again, with no counter and no notice.
+-- The house contract (st.guard.run) counts the failure, reports the FIRST one once
+-- (never a chat flood) and shows the count in /st diag's bar_hook_errors line.
+do
+    local b = boot()
+    local T, F = b.ST, b.sb
+    local thrown = 0
+    F.st.practice_ui = {
+        flush_progress_session = function()
+            thrown = thrown + 1
+            error("flush boom")
+        end,
+    }
+    local ok, err = pcall(function() T:PLAYER_LOGOUT() end)
+    check(ok, "M1: the logout handler survives a throwing flush (" .. tostring(err) .. ")")
+    eq(thrown, 1, "M1: the throwing flush is called once")
+    check(type(T.bar_hook_errors) == "table", "M1: the failure leaves a counter behind")
+    eq(type(T.bar_hook_errors) == "table" and T.bar_hook_errors.by_site["practice:logout"] or nil, 1,
+        "M1: the counter names the logout flush site")
+    eq(type(T.bar_hook_errors) == "table" and T.bar_hook_errors.count or nil, 1,
+        "M1: the failure is counted once")
+    -- The first failure of the site is announced once, through the addon's own chat path.
+    local function announcements()
+        local n = 0
+        for _, notice in ipairs(F.notices) do
+            if notice:find("practice:logout", 1, true) then n = n + 1 end
+        end
+        return n
+    end
+    eq(announcements(), 1, "M1: the first failure is announced once")
+    -- A second logout counts again and does NOT announce again.
+    pcall(function() T:PLAYER_LOGOUT() end)
+    eq(T.bar_hook_errors.by_site["practice:logout"], 2, "M1: every failure keeps counting")
+    eq(announcements(), 1, "M1: the site is announced once, not per failure")
+    -- The /st diag runtime line is the reader of that counter.
+    run_cmd(b, "st", "diag")
+    contains(F.notices[#F.notices], "bar_hook_errors=2",
+        "M1: the diag runtime line shows the counted failure")
+end
+
+--=========================================================================================
+-- 17) F5 / F7 / F11: the runtime diag line, the dead helper, the tautology asserts
+--=========================================================================================
+do
+    -- F5: the HUD's combat-log registration counter was write-only - hud.lua's
+    -- comment named a /st diag reader that did not exist. The runtime line is it.
+    local b = boot()
+    local F = b.sb
+    F.st.hud = { cleu_register_errors = 3 }
+    run_cmd(b, "st", "diag")
+    contains(F.notices[#F.notices], "hud_cleu_register_errors=3",
+        "F5: the runtime diag line reads the HUD's combat-log registration counter")
+    F.st.hud = nil
+    run_cmd(b, "st", "diag")
+    contains(F.notices[#F.notices], "hud_cleu_register_errors=0",
+        "F5: without the HUD module the counter renders zero")
+end
+
+do
+    -- F7: needs_gcd had no callers, and its per-hand table reads auto-created
+    -- synthetic AceDB tables - a future caller would have read a plausible
+    -- non-real table. The helper is gone.
+    local main_src = read("main.lua")
+    check(main_src:find("needs_gcd", 1, true) == nil,
+        "F7: the dead needs_gcd helper is gone from main.lua")
+
+    -- F11: the "assert(event == event)" tautologies were runtime asserts doing a
+    -- linter's job. The handlers name their unused arguments instead.
+    local code_only = {}
+    for line in main_src:gmatch("[^\r\n]+") do
+        if not line:match("^%s*%-%-") then
+            code_only[#code_only + 1] = line
+        end
+    end
+    local main_code = table.concat(code_only, "\n")
+    check(main_code:find("assert(event", 1, true) == nil,
+        "F11: main.lua has no unused-argument tautology asserts")
+    local handlers = {
+        "ST:CURRENT_SPELL_CAST_CHANGED(_event, is_cancelled)",
+        "ST:PLAYER_ENTERING_WORLD(_event, _is_initial_login, _is_reloading_ui)",
+        "ST:PLAYER_EQUIPMENT_CHANGED(_event, slot, _has_current)",
+        "ST:UNIT_AURA(_event, unit_id, _is_full_update, _updated_auras)",
+        "ST:UNIT_POWER_FREQUENT(_event, unit_id, powerType)",
+        "ST:UNIT_SPELLCAST_FAILED_QUIET(_event, unit_id, cast_guid, spell_id)",
+        "ST:UNIT_SPELLCAST_SUCCEEDED(_event, unit_id, cast_guid, spell_id)",
+    }
+    for i = 1, #handlers do
+        check(main_src:find("function " .. handlers[i], 1, true) ~= nil,
+            "F11: " .. handlers[i] .. " names its unused arguments")
+    end
+end
+
+--=========================================================================================
+-- 18) Output policy: main.lua reaches the chat path, never the client's global print
+--=========================================================================================
+-- The bars lane (bench/bars_print_policy_2026-10-19.md) removed the
+-- `local print = st.utils.print_msg` alias from bars.lua and routed its module-parse
+-- trailer through st.utils.print_msg explicitly. main.lua carried the same alias shape
+-- and the same bare global print in its trailer; the policy that replaced it is pinned
+-- here:
+--   - no bare print call survives anywhere in main.lua (source scan, comments included),
+--   - main.lua defines no print alias (the ambiguous identifier is gone),
+--   - the module-parse trailer reaches the chat frame when the debug switch is on,
+--   - the client's global print is never called.
+do
+    -- The source scan: "st.utils.print_msg(" never contains "print(", so every hit here
+    -- is a bare call to the client's global print - live code or a commented-out debug
+    -- line alike.
+    local src_file = io.open(ROOT .. "main.lua", "r")
+    local src = src_file and src_file:read("*a") or nil
+    if src_file then src_file:close() end
+    check(src ~= nil, "output policy: main.lua is readable")
+    local bare = 0
+    if src then
+        for line in src:gmatch("[^\n]+") do
+            if line:find("print%(") then
+                bare = bare + 1
+            end
+        end
+    end
+    eq(bare, 0, "output policy: main.lua calls no bare print (chat output is st.utils.print_msg)")
+    check(src ~= nil and src:find("\nlocal print =", 1, true) == nil,
+        "output policy: main.lua defines no print alias")
+
+    -- The trailer itself: with st.debug on, main.lua's module-parse line must arrive
+    -- through the chat frame and never through the client's global print.
+    local b = build({ debug = true })
+    local F = b.sb
+    eq(#F.raw_prints, 0,
+        "output policy: the client's global print is never called by main.lua")
+    local reported = false
+    for i = 1, #F.chatter do
+        if F.chatter[i]:find("Parsed main1.lua module correctly", 1, true) then
+            reported = true
+        end
+    end
+    check(reported, "output policy: main.lua's module trailer reaches the chat frame")
+end
+
+--=========================================================================================
+-- 19) BS-8 item 1: the paladin's LCD.Register degrade is visible on the runtime line
+--=========================================================================================
+-- JE-1 (deep audit 2026-10-19): the class counted every failed LibClassicDurations
+-- registration (ST.PALADIN.lcd_register_errors) and NOTHING read it, so a degraded
+-- guide frame showed no diagnostic at all. The runtime diag line is that reader, in
+-- the same shape as the HUD's counter.
+do
+    local b = boot()
+    local F = b.sb
+    b.ST.PALADIN.lcd_register_errors = 2
+    run_cmd(b, "st", "diag")
+    contains(F.notices[#F.notices], "paladin_lcd_register_errors=2",
+        "JE-1: the runtime diag line reads the paladin's LCD registration counter")
+    b.ST.PALADIN.lcd_register_errors = nil
+    run_cmd(b, "st", "diag")
+    contains(F.notices[#F.notices], "paladin_lcd_register_errors=0",
+        "JE-1: without a counter the line renders zero")
+end
+
+--=========================================================================================
+-- 20) BS-8 item 2: the live pull clock
+--=========================================================================================
+-- The prepull rule needs a pull countdown (nextaction.lua's
+-- PREPULL_SEAL_LEAD_SECONDS / out.prepull_ready read inputs.time_to_pull_seconds).
+-- The shipped clients have no pull-timer API, so main.lua publishes the addon's own
+-- clock: a TIMESTAMP the guide can read, armed by the pull moments the client
+-- reports.
+do
+    local b = boot()
+    local T, F = b.ST, b.sb
+    -- Unknown by default: the clock is never a guess.
+    eq(T.pull_at, nil, "the pull clock starts unknown")
+    eq(T:pull_in_seconds(F.clock), nil, "an unknown pull reads no countdown")
+    -- Arming it: the absolute moment and the relative one.
+    T:set_pull_at(120)
+    eq(T.pull_at, 120, "the clock keeps the absolute pull moment")
+    eq(T:pull_in_seconds(100), 20, "the countdown is the distance to the pull")
+    eq(T:pull_in_seconds(130), -10, "the countdown is negative after the pull")
+    T:set_pull_in(5)
+    eq(T.pull_at, F.clock + 5, "the relative arming counts from now")
+    T:set_pull_at(nil)
+    eq(T.pull_at, nil, "the clock disarms")
+    eq(T:pull_in_seconds(F.clock), nil, "a disarmed clock reads no countdown")
+    -- A non-number is ignored (the clock is never a guess).
+    T:set_pull_at("soon")
+    eq(T.pull_at, nil, "a non-numeric pull moment is ignored")
+    -- The fight's own pull: combat enter stamps it, combat exit clears it.
+    T:PLAYER_REGEN_DISABLED()
+    eq(T.pull_at, F.clock, "combat enter stamps the pull")
+    eq(T:pull_in_seconds(F.clock), 0, "the pull reads zero once it happened")
+    T:PLAYER_REGEN_ENABLED()
+    eq(T.pull_at, nil, "combat exit clears the clock (the next pull is unknown)")
+end
+
+do
+    -- The pre-pull projection: the player's target starts a cast out of combat, so
+    -- the pull is that cast's end. The cast's own times come from the client.
+    local b = boot({ target_casting = true, cast_end_ms = 102000 })
+    local T = b.ST
+    T:update_pull_clock("target")
+    eq(T.pull_at, 102, "the target's cast end is the projected pull")
+    eq(T:pull_in_seconds(100), 2, "the countdown shrinks towards the pull")
+    -- A cast by anybody else never arms the clock (a pull is the boss's cast).
+    T:set_pull_at(nil)
+    T:update_pull_clock("player")
+    eq(T.pull_at, nil, "the player's own cast never arms the pull clock")
+    -- In combat the projection is refused (the pull already happened).
+    T.in_combat = true
+    T:update_pull_clock("target")
+    eq(T.pull_at, nil, "in combat the pull clock is not armed")
+end
+
+do
+    -- The source's guards: a pull is a group event inside an instance, so neither a
+    -- solo player nor a player in the open world arms the clock.
+    local solo = boot({ in_group = false })
+    solo.ST:update_pull_clock("target")
+    eq(solo.ST.pull_at, nil, "a solo player never arms the pull clock")
+    local open_world = boot({ in_instance = false })
+    open_world.ST:update_pull_clock("target")
+    eq(open_world.ST.pull_at, nil, "outside an instance the pull clock stays unknown")
+end
+
+--=========================================================================================
+-- 7c) Class activation (operator order 2026-10-21): only the selected module runs
+--=========================================================================================
+-- The class files register their body as a loader at load; main.lua activates the
+-- SELECTED loader in init_libs. The order is the contract: activation must precede the
+-- class post_init hook (which is what brings up the practice panel and the HUD), and
+-- the fail-closed paths must never abort init or leave a half-populated class table.
+do
+    -- Auto (the default): the PLAYING class's loader runs, once, before post_init.
+    local b = boot()
+    local T, F = b.ST, b.sb
+    eq(F.class_loaded, 0, "the class loader is not run at load - the SavedVariables are not readable yet")
+    eq(#F.hook_order, 0, "no class hook exists before activation")
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    eq(F.class_loaded, 1, "Auto activates the playing class's loader exactly once")
+    eq(F.hooks.post_init, 1, "the class post_init hook ran once")
+    eq(#F.hook_order, 2, "activation then post_init - nothing else in the order")
+    eq(F.hook_order[1], "activate", "activation comes FIRST")
+    eq(F.hook_order[2], "post_init", "the class post_init hook comes after activation")
+    eq(T.interfaces_are_initialised, true, "a healthy activation lets init complete")
+    eq(#F.notices, 0, "Auto prints no activation notice")
+    eq(T.active_class, T.player_class,
+        "Auto records the playing class as the ACTIVE class (the shared layer's fact)")
+
+    -- Idempotence: a late library report cannot re-run the loader.
+    fire_lrc_checkers(b)
+    eq(F.class_loaded, 1, "a late report does not re-activate the class")
+    eq(F.hooks.post_init, 1, "a late report does not re-run post_init")
+end
+
+do
+    -- An explicit pick activates THAT class's loader instead of the playing class's.
+    local b = build({ report_login = false })
+    b.sb.class_db.class_activation = "ROGUE"
+    b.st.class_loaders["ROGUE"] = function()
+        b.ST.ROGUE.test_marker = true
+    end
+    b.ST:OnInitialize()
+    report_login(b)
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    eq(b.sb.class_loaded, 0, "the playing class's loader did NOT run when another class is selected")
+    eq(b.ST.ROGUE.test_marker, true, "the selected class's loader ran")
+    eq(b.sb.hooks.post_init, nil, "the unselected playing class has no post_init hook to run")
+    eq(b.ST.interfaces_are_initialised, true, "init still completes under an explicit selection")
+    eq(#b.sb.notices, 0, "a resolvable explicit selection prints no notice")
+    eq(b.ST.active_class, "ROGUE",
+        "an explicit pick records THAT class as the ACTIVE class")
+end
+
+do
+    -- Fail closed: an explicit class with no module -> one clear line, no crash, no
+    -- half-state. Init (and the shared layer) still completes.
+    local b = build({ report_login = false })
+    b.sb.class_db.class_activation = "WARRIOR"
+    b.ST:OnInitialize()
+    report_login(b)
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    eq(b.ST.interfaces_are_initialised, true, "a missing module does not abort init")
+    eq(b.sb.class_loaded, 0, "the playing class's loader did not run")
+    eq(b.sb.hooks.post_init, nil, "no class post_init hook ran for the missing class")
+    eq(#b.sb.notices, 1, "the missing module prints exactly one notice")
+    contains(b.sb.notices[1], "no class module is available for WARRIOR",
+        "the notice names the missing class")
+    check(next(b.ST.WARRIOR) == nil, "the missing class table stays empty (no half-state)")
+    eq(b.ST.active_class, nil, "no loader -> no ACTIVE class (the shared layer degrades)")
+    eq(b.sb.diag.calls, 1, "init's own self-report still ran")
+end
+
+do
+    -- Fail closed: a loader that throws -> one clear line, no crash, and the class
+    -- table is reset so a half-populated module cannot survive.
+    local b = build({ report_login = false })
+    b.st.class_loaders["PALADIN"] = function()
+        b.ST.PALADIN.partial = true
+        error("loader exploded")
+    end
+    b.ST:OnInitialize()
+    report_login(b)
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    eq(b.ST.interfaces_are_initialised, true, "a throwing loader does not abort init")
+    eq(#b.sb.notices, 1, "the throwing loader prints exactly one notice")
+    contains(b.sb.notices[1], "PALADIN class module failed to load",
+        "the notice names the failing class")
+    contains(b.sb.notices[1], "loader exploded", "the notice carries the error")
+    check(next(b.ST.PALADIN) == nil, "the half-populated class table was rolled back")
+    eq(b.ST.active_class, nil, "a throwing loader -> no ACTIVE class (fail closed)")
+    eq(b.sb.hooks.post_init, nil, "the throwing loader never reached the post_init hook")
+    eq(b.sb.diag.calls, 1, "init's own self-report still ran")
+end
+
+do
+    -- Auto on a class with no module (an unsupported class, or a pre-loader class
+    -- file in the A1/A2 transition) stays silent: that is today's unsupported-class
+    -- path, and a notice there would be a user-visible change unrelated to the order.
+    local b = build({ report_login = false })
+    b.st.class_loaders["PALADIN"] = nil
+    b.ST:OnInitialize()
+    report_login(b)
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    eq(b.ST.interfaces_are_initialised, true, "init completes without any class module")
+    eq(#b.sb.notices, 0, "Auto without a module prints no notice")
+    eq(b.sb.hooks.post_init, nil, "no class post_init hook ran")
 end
 
 if failures == 0 then

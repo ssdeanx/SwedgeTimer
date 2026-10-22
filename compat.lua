@@ -177,39 +177,123 @@ end
 
 -- Spell knowledge ------------------------------------------------------------------------
 -- Whether the player knows a spell, used to resolve the highest known rank of a tracked
--- spell family. The probes exist on different client families; the first one that returns
--- a value wins, and a client with none of them reports "unknown" instead of erroring.
+-- spell family. The probes exist on different client families; the first one that ANSWERS
+-- wins (a probe that returns nil declines, and the chain moves on to the next probe).
+--
+-- CONTRACT (binary, never nil): api.is_spell_known answers true or false and nothing else.
+--   true  = a probe answered "the player knows this spell".
+--   false = a probe answered "the player does not know it" OR no probe could answer at all
+--           (no probe on this client, or every probe declined).
+-- A false is therefore NOT the claim "the client says the player does not know the spell":
+-- on a client that cannot answer it is the fail-closed answer, not a fact about the player.
+-- Every caller in the tree treats only true as affirmative knowledge (== true / ~= true),
+-- so a false never turns a row on.
+--
+-- The two cases ARE told apart by api.is_spell_known_state below - the same shape as
+-- api.get_family_spell_id_state (the answer first, the state string second): a caller that
+-- must not guess (a row that hides when the client cannot answer) reads the state, never
+-- the boolean alone.
+--
+-- Client note (wow-ui-source, per branch): C_SpellBook.IsSpellKnown is documented on every
+-- targeted family (classic_era, classic_anniversary, classic_titan, forever, live) and
+-- returns a bool; the classic global IsSpellKnown is Blizzard's deprecated shim over
+-- C_SpellBook (Blizzard_DeprecatedSpellBook/Deprecated_SpellBook.lua) and exists only while
+-- the loadDeprecationFallbacks CVar is on. So no targeted client is probe-less - the
+-- no-probe branch below is the defensive path, not a shape the shipped matrix reaches.
 
 local spell_known_probes = {}
-if C_Spell and C_Spell.IsSpellKnownOrOverridesKnown then
-	spell_known_probes[#spell_known_probes + 1] = C_Spell.IsSpellKnownOrOverridesKnown
-end
 -- IsSpellKnown is deprecated on modern clients, so resolve it dynamically; this both
 -- dodges the deprecation annotation and tolerates clients that removed the global.
 local classic_is_spell_known = rawget(_G, "IsSpellKnown")
-if C_Spell and C_Spell.IsSpellKnown then
-	spell_known_probes[#spell_known_probes + 1] = C_Spell.IsSpellKnown
-elseif classic_is_spell_known then
+if classic_is_spell_known then
 	spell_known_probes[#spell_known_probes + 1] = classic_is_spell_known
 end
--- C_SpellBook.IsSpellKnown (documented in SpellBookDocumentation.lua: "Returns true if a
--- player knows a spell") is the probe on the Mainline-code clients, where every probe
--- above is absent. Appended after them on purpose: a client whose chain already answers
--- (the classic clients, with Blizzard's deprecation fallbacks loaded) keeps the exact
--- same answer source, so nothing changes there.
+-- C_SpellBook.IsSpellKnown (SpellBookDocumentation.lua: "Returns true if a player knows
+-- a spell"; sibling IsSpellKnownOrInSpellBook beside it) is the probe on the
+-- Mainline-code clients, where the global above is absent. NOTE: C_Spell.IsSpellKnown*
+-- exists on NO client (absent on era/anniversary/titan/forever/live alike) - the live
+-- namespace is C_SpellBook, so nothing probes C_Spell here. Appended after the global
+-- on purpose: a client whose chain already answers (the classic clients, with
+-- Blizzard's deprecation fallbacks loaded) keeps the exact same answer source, so
+-- nothing changes there.
 local spell_book_api = rawget(_G, "C_SpellBook")
-if spell_book_api and spell_book_api.IsSpellKnown then
-	spell_known_probes[#spell_known_probes + 1] = spell_book_api.IsSpellKnown
+if spell_book_api then
+	if spell_book_api.IsSpellKnown then
+		spell_known_probes[#spell_known_probes + 1] = spell_book_api.IsSpellKnown
+	end
+	if spell_book_api.IsSpellKnownOrInSpellBook then
+		spell_known_probes[#spell_known_probes + 1] = spell_book_api.IsSpellKnownOrInSpellBook
+	end
 end
 
-function api.is_spell_known(spell_id)
+-- A spell NAME is not a probe argument on the modern clients. TBC Anniversary's
+-- IsSpellKnown global is Blizzard's deprecated shim
+-- (Blizzard_DeprecatedSpellBook/Deprecated_SpellBook.lua), which forwards its argument
+-- to C_SpellBook.IsSpellInSpellBook - an id-only API that throws on a string:
+-- "bad argument #1 to 'IsSpellInSpellBook' (outside of expected range ...)",
+-- operator in-client BugGrabber evidence 2026-10-21 (hunter post_init, "Kill Shot").
+-- The caller's token is therefore probed AS GIVEN first: on the clients where a name is
+-- the query form (operator-confirmed name-vs-id rule) that keeps the exact answer source.
+-- Only a THROWING probe triggers the one-time name -> id resolution through the ONE compat
+-- spell-info path above (api.GetSpellInfo; its 7th return is the id) - no second
+-- resolution path - after which the same probe is retried with the id. A name that
+-- resolves to nothing is "unknown": never a guess, never a throw.
+local function spell_known_name_id(spell_name)
+	if type(spell_name) ~= "string" then
+		return nil
+	end
+	local ok, _, _, _, _, _, _, id = pcall(api.GetSpellInfo, spell_name)
+	if not ok or is_secret(id) or type(id) ~= "number" then
+		return nil
+	end
+	return id
+end
+
+-- The state variant of the probe - the tri-state the boolean above folds away:
+--   true,  "known"      a probe answered true
+--   false, "not_known"  a probe answered false
+--   false, "unknown"    no probe answered - the client cannot answer the question,
+--                       or the token did not resolve to a spell id at all
+-- Same contract as api.get_family_spell_id_state: the answer first, the state second.
+-- Every probe call is pcall-wrapped: a probe that throws is "no answer" (the chain
+-- moves on), so a client-side throw costs the answer, never the caller's init. The
+-- probe order is unchanged (classic global first, C_SpellBook probes after it).
+function api.is_spell_known_state(spell_id)
+	-- Neither a spell id nor a spell name can be a probe argument: fail closed before any
+	-- client call. pcall would contain the throw, but there is nothing to resolve either.
+	if type(spell_id) ~= "number" and type(spell_id) ~= "string" then
+		return false, "unknown"
+	end
+	local fallback_id
+	local fallback_ready = false
 	for i = 1, #spell_known_probes do
-		local known = spell_known_probes[i](spell_id)
-		if known ~= nil then
-			return known == true
+		local ok, known = pcall(spell_known_probes[i], spell_id)
+		if not ok then
+			if not fallback_ready then
+				fallback_id = spell_known_name_id(spell_id)
+				fallback_ready = true
+			end
+			if fallback_id ~= nil then
+				ok, known = pcall(spell_known_probes[i], fallback_id)
+			end
+		end
+		if ok and not is_secret(known) then
+			if known == true then
+				return true, "known"
+			end
+			if known ~= nil then
+				return false, "not_known"
+			end
 		end
 	end
-	return false
+	return false, "unknown"
+end
+
+-- The boolean form: the answer half of the state above, unchanged for every caller
+-- (true / false, never nil).
+function api.is_spell_known(spell_id)
+	local known = api.is_spell_known_state(spell_id)
+	return known
 end
 
 -- Spell cooldowns ------------------------------------------------------------------------
@@ -539,6 +623,67 @@ function api.scan_player_aura(predicate)
 	return nil, nil
 end
 
+-- Unit aura scan: the player scan above, generalised to any unit and to either
+--   aura list. duration_remaining_seconds, stacks = api.scan_unit_aura(unit, predicate, filter)
+-- CONTRACT (the same three-way contract as the player scan above - a caller
+-- reads nil as "unknown", never as "absent"):
+--   * predicate(spell_id, name, stacks) returns truthy for a match; the first
+--     match wins. The arguments are exactly the ones the player scan hands
+--     over, in the same order: spell_id can be nil on a client without numeric
+--     ids (an id comparison already treats that safely - compare the name
+--     first when a client resolves by name), and the third argument is the raw
+--     count on the wrapper's convention.
+--   * filter selects the aura list: "HARMFUL" (the default - a debuff scan) or
+--     "HELPFUL" (a buff scan). Any other value falls back to the debuff
+--     filter, so a typo can never silently scan the wrong list.
+--   * returns nil, nil when not found, when the unit carries no readable aura,
+--     when no aura API exists on the client, when the unit is not a usable
+--     unit string, or when the predicate is not a function. Callers must treat
+--     nil as "unknown", never as "absent" - a target debuff that could not be
+--     read is not a target without that debuff.
+--   * the row cap, the no-early-break rule, the api.get_time() axis and the
+--     whole-entry secret degrade are the player scan's, unchanged: a restricted
+--     row reads absent and the walk continues past it, so a restricted list
+--     still reports the match that sits below it.
+-- Family paths, all through this file's own wrappers: the classic global on
+-- Era/TBC/Wrath and the C_UnitAuras read on the Mainline-code clients.
+function api.scan_unit_aura(unit, predicate, filter)
+	if type(predicate) ~= "function" then
+		return nil, nil
+	end
+	if type(unit) ~= "string" or unit == "" then
+		return nil, nil
+	end
+	if filter ~= "HELPFUL" then
+		filter = "HARMFUL"
+	end
+	local now = api.get_time()
+	for index = 1, scan_player_aura_index_max do
+		local name, _, count, _, _, expiration, _, _, _, spell_id = api.UnitAura(
+			unit, index, filter)
+		-- No early break (R2), same as the player scan above: nil is simply no
+		-- match at this index. The 40-row cap bounds the walk, so the worst-case
+		-- cost is the same 40 UnitAura calls as the player scan.
+		if name ~= nil then
+			if predicate(spell_id, name, count) then
+				local remaining
+				if type(expiration) == "number" then
+					remaining = expiration - now
+					if remaining < 0 then
+						remaining = 0
+					end
+				end
+				local stacks
+				if type(count) == "number" and count > 1 then
+					stacks = count
+				end
+				return remaining, stacks
+			end
+		end
+	end
+	return nil, nil
+end
+
 -- Secret-value regime observability (M5): can restricted (secret) AURA rows be
 -- hidden from every aura consumer right now? The whole-entry degrade above stays
 -- exactly as it is (E2: one secret field -> the entry reads absent); this probe
@@ -728,14 +873,15 @@ api.GetActiveTalentGroup = getActiveTalentGroup
 -- per-family data with the class modules.
 
 -- Read through _G: the global is not in the annotation set of Mainline-code clients, where
--- naming it directly would be an undefined-global reference.
+-- naming it directly would be an undefined-global reference. NOTE: there is no
+-- C_ShapeshiftForm namespace on any client (absent on era/anniversary/titan/forever/live
+-- alike), so no C_ branch is probed here: the bare global answers on the classic-line
+-- clients (engine-provided there - RestrictedEnvironment.lua allowlists it on
+-- era/anniversary/titan), and every other client reports 0 (unknown form).
 local get_shapeshift_form = _G.GetShapeshiftForm
-local shapeshift_form_api = _G.C_ShapeshiftForm
 
 if get_shapeshift_form then
 	api.GetShapeshiftForm = get_shapeshift_form
-elseif shapeshift_form_api and shapeshift_form_api.GetShapeshiftForm then
-	api.GetShapeshiftForm = shapeshift_form_api.GetShapeshiftForm
 else
 	api.GetShapeshiftForm = function()
 		return 0
@@ -839,33 +985,33 @@ function api.IsSpellInRange(spell, unit)
 	return nil
 end
 
--- Interaction distance: CheckInteractDistance(unit, index) answers whether the unit is
--- inside one of the classic interaction bands. Index 3 is the band SuperSwingTimer uses
--- as the hunter "sweet spot" (HUNTER_SWEET_SPOT_INTERACT_INDEX, see
--- SuperSwingTimer_ClassMods.lua:5533, where the range-helper state ladder tests it
--- between melee and ranged); the exact in-game band still needs in-client confirmation
--- on each family. Returns true/1 in band, false/0 outside, nil when the client has no
--- global at all. Read through _G for the same undefined-global reason as above.
-local check_interact_distance = rawget(_G, "CheckInteractDistance")
-
-if check_interact_distance then
-	api.CheckInteractDistance = function(unit, index)
-		local in_band = check_interact_distance(unit, index)
-		if is_secret(in_band) then
-			return nil
-		end
-		return in_band
-	end
-else
-	api.CheckInteractDistance = function()
-		return nil
-	end
-end
+-- Interaction distance: REMOVED, deliberately.
+-- The client's interaction-distance checker is a protected function on TBC Anniversary
+-- 2.5.x: every call raises ADDON_ACTION_BLOCKED (operator in-client BugGrabber evidence,
+-- 2026-10-21, hunter range helper on every frame - the error took the whole class hook
+-- down through guard.run's quarantine). The standing operator policy is ZERO client
+-- range calls on every family, so this module exposes no interaction-distance wrapper
+-- at all - not even a nil-returning stub, which would hide why the call is gone.
+-- api.UnitDistance below is the only distance source: exact yards, pcall-wrapped,
+-- probed per family, nil when the client cannot answer.
+--
+-- Provenance (wow-ui-source branch classic_anniversary): the only Blizzard caller is
+-- secure popup code (Interface/AddOns/Blizzard_UnitPopupShared/UnitPopupSharedUtils.lua:194);
+-- the generated API doc
+-- (Blizzard_APIDocumentationGenerated/PlayerScriptDocumentation.lua:101) lists the function
+-- with NO protection marker, so the protection is runtime/client-side and the in-client log
+-- above - not the doc - is the authority. The addon-callable source is UnitDistanceSquared,
+-- called from ordinary insecure unit-frame Lua
+-- (Interface/AddOns/Blizzard_UnitFrame/Shared/CompactUnitFrame.lua:1069) and trusted only
+-- when checkedDistance is true; api.UnitDistance below normalises exactly that.
+-- Evidence: bench/compat_tbc_defects_2026-10-21.md.
 
 -- Unit distance (exact) ------------------------------------------------------------------
 -- UnitDistanceSquared(unit) returns the distance in squared yards plus a boolean saying
 -- whether the distance was actually checked; Blizzard's own consumer
--- (CompactUnitFrame_UpdateDistance) only trusts the reading when that flag is true.
+-- (Interface/AddOns/Blizzard_UnitFrame/Shared/CompactUnitFrame.lua:1069,
+-- classic_anniversary) only trusts the reading when checkedDistance is true - and it calls
+-- this from ordinary insecure unit-frame Lua, which is what makes it addon-callable.
 -- Present on Era 1.15, TBC Anniversary 2.5, Titanforge 3.80, Mists, Retail and WoW
 -- Forever 1.60; clients without the global report nil (unknown).
 -- The wrapper normalises to exact yards (sqrt of the squared reading). A client without
@@ -890,6 +1036,51 @@ function api.UnitDistance(unit)
 		return nil
 	end
 	return math.sqrt(squared)
+end
+
+-- Movement speed and motion (hunter melee-weave prog) ------------------------------------
+-- GetUnitSpeed(unit) answers the unit's current movement speed in yards per second as its
+-- first return (current, run, flight, swim on every family that exposes the global; the
+-- classic-era PaperDoll stat frame destructures the same four returns). Read through _G:
+-- the global is absent from some clients' annotation sets, where naming it directly would
+-- be an undefined-global reference. A client without the global, a throwing call, a
+-- non-number / NaN / infinite / negative reading and a restricted (secret) reading all
+-- report nil; callers must treat nil as unknown speed, never as standing still.
+local get_unit_speed = rawget(_G, "GetUnitSpeed")
+
+function api.GetUnitSpeed(unit)
+	if not get_unit_speed then
+		return nil
+	end
+	local ok, current = pcall(get_unit_speed, unit)
+	if not ok or is_secret(current) then
+		return nil
+	end
+	if type(current) ~= "number" or current ~= current or current < 0
+		or current == math.huge then
+		return nil
+	end
+	return current
+end
+
+-- IsPlayerMoving() answers whether the player is moving (the WA prog's motion leg;
+-- present on every supported family). Read through _G for the same undefined-global
+-- reason. No probe, a throwing call, a non-boolean or a restricted (secret) reading all
+-- report nil; callers must treat nil as unknown motion, never as standing still.
+local is_player_moving = rawget(_G, "IsPlayerMoving")
+
+function api.IsPlayerMoving()
+	if not is_player_moving then
+		return nil
+	end
+	local ok, moving = pcall(is_player_moving)
+	if not ok or is_secret(moving) then
+		return nil
+	end
+	if type(moving) ~= "boolean" then
+		return nil
+	end
+	return moving
 end
 
 -- Combat ratings -------------------------------------------------------------------------
@@ -982,6 +1173,63 @@ function api.GetInventoryItemCooldown(slot)
 	return start_time or 0, duration or 0, enabled or 0
 end
 
+-- Equipped-item probe: does the player wear a given item id right now?
+--   equipped = api.is_item_equipped(item_id)
+-- CONTRACT (tri-state, because "unknown" is not "not equipped"):
+--   * true  - an equipped slot holds exactly that item id.
+--   * false - the equipment read worked and no equipped slot holds that id.
+--   * nil   - the read is unavailable (no GetInventoryItemID on this client) or
+--     secret (a restricted reading), or the client does not define the
+--     INVSLOT_* slot range, or the id is not a number. Unknown is never
+--     reported as false: a caller that read false as "not equipped" would act
+--     on a guess about the player's gear.
+-- The read goes through api.GetInventoryItemID above, so the unit fix ("player"),
+-- the absent-global guard and the secret degrade are the wrapper's, not this
+-- function's. An empty slot reads nil in that wrapper (the client's own code
+-- reads it the same way - Blizzard_FrameXML/Wrath/EquipmentManager.lua:172,
+-- "Slot was empty already"), so a slot that holds nothing is not evidence of
+-- anything.
+--
+-- The slot range is the client's own: INVSLOT_FIRST_EQUIPPED ..
+-- INVSLOT_LAST_EQUIPPED is 1..19 (INVSLOT_HEAD .. INVSLOT_TABARD) on every
+-- client family - classic_era / classic_anniversary / classic_titan
+-- :Interface/AddOns/Blizzard_FrameXMLBase/Classic/Constants.lua:173,192,
+-- origin/forever :Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua:136,155,
+-- live :Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua:153,172. They are
+-- read through _G: they are not in the annotation set of Mainline-code clients,
+-- where naming them directly would be an undefined-global reference, and a
+-- client that does not define them reports nil (unknown), never false.
+function api.is_item_equipped(item_id)
+	if type(item_id) ~= "number" then
+		return nil
+	end
+	local first_slot = rawget(_G, "INVSLOT_FIRST_EQUIPPED")
+	local last_slot = rawget(_G, "INVSLOT_LAST_EQUIPPED")
+	if type(first_slot) ~= "number" or type(last_slot) ~= "number" then
+		return nil
+	end
+	if last_slot < first_slot then
+		return nil
+	end
+	-- One readable slot is what makes the read "readable": a slot that holds
+	-- nothing and a restricted reading are both nil, so a client that reports
+	-- no equipped id at all answers "unknown" instead of guessing "not equipped".
+	local readable = false
+	for slot = first_slot, last_slot do
+		local equipped_id = api.GetInventoryItemID(slot)
+		if equipped_id ~= nil then
+			readable = true
+			if equipped_id == item_id then
+				return true
+			end
+		end
+	end
+	if not readable then
+		return nil
+	end
+	return false
+end
+
 -- Combat log (classic-line clients only) -------------------------------------------------
 -- CombatLogGetCurrentEventInfo() reads the current COMBAT_LOG_EVENT_UNFILTERED payload.
 -- Mainline-code clients (Retail, WoW Forever) have no classic combat log, so the wrapper
@@ -1000,24 +1248,36 @@ end
 -- Classic combat-log availability (R3): the paladin twist attempt/success chain
 -- and the warrior Overpower dodge window arm only where the classic combat log
 -- exists. Probed from the same CombatLogGetCurrentEventInfo global the wrapper
--- above reads: classic-line clients expose it, Mainline-code clients (Retail,
--- WoW Forever) do not. Consumers gate on this flag, never on st.is_mainline
+-- above reads, AND gated on the family: Blizzard's deprecation shim
+-- (Blizzard_DeprecatedCombatLog/Deprecated_CombatLog.lua, loadDeprecationFallbacks-gated,
+-- identical on every family) can define that global on Mainline-code clients too, where
+-- no classic combat log runs behind it - presence alone would arm the chains on
+-- Retail/WoW Forever. Consumers gate on this flag, never on st.is_mainline
 -- alone (Forever runs Mainline code but keeps its own swing engine).
-st.cleu_supported = get_combat_log_event_info ~= nil
+st.cleu_supported = get_combat_log_event_info ~= nil and not st.is_mainline
 
 -- Totems -----------------------------------------------------------------------------------
 -- GetTotemInfo(slot) reports the totem in a slot:
 --   haveTotem, totemName, startTime, duration, icon, modRate, spellID
 -- or nothing at all when the slot holds no totem (MayReturnNothing). Slots are
--- 1=Fire, 2=Earth, 3=Water, 4=Air (Blizzard_FrameXMLBase/Constants.lua:239-244); the
--- startTime is on the GetTime() axis, the same domain api.get_time() reports, so a
--- caller can adopt it as a drop stamp directly. On Mainline-code clients the slot
--- can be secret (SecretWhenTotemSlotSecret): one restricted field degrades the whole
--- read to nil (absent), the shape every caller already handles - the same whole-or-
--- nothing rule as the aura entries above. A client without the global, a throwing
--- call and a bad slot all report nil; callers must treat nil as unknown, never as
--- "no totem". Read through _G and pcall-wrapped: the global is absent on some
--- clients and MayReturnNothing means any slot can come back empty.
+-- 1=Fire, 2=Earth, 3=Water, 4=Air (the client's own slot constants: on the classic-line
+-- families Interface/AddOns/Blizzard_FrameXMLBase/Classic/Constants.lua:286-289,
+-- origin/forever Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua:226-229,
+-- live Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua:241-244 - FIRE_TOTEM_SLOT = 1;
+-- EARTH_TOTEM_SLOT = 2; WATER_TOTEM_SLOT = 3; AIR_TOTEM_SLOT = 4; identical values on every
+-- branch). Those constants are EVIDENCE only, never a runtime dependency: the addon
+-- hard-codes 1/2/3/4 (classes/shaman.lua:226-231), and on WoW Forever they are not even
+-- defined as globals - that branch loads its Constants.lua only for the mainline game type
+-- (Blizzard_FrameXMLBase.toc:18), and the camelot game type loads Camelot/Constants.lua
+-- (toc:16), which defines no totem slots. The startTime is on the GetTime() axis, the
+-- same domain api.get_time() reports, so a caller can adopt it as a drop stamp directly.
+-- On Mainline-code clients the slot can be secret (SecretWhenTotemSlotSecret - the
+-- annotation is on origin/forever and live, not on the classic-line branches): one
+-- restricted field degrades the whole read to nil (absent), the shape every caller
+-- already handles - the same whole-or-nothing rule as the aura entries above. A client
+-- without the global, a throwing call and a bad slot all report nil; callers must treat
+-- nil as unknown, never as "no totem". Read through _G and pcall-wrapped: the global is
+-- absent on some clients and MayReturnNothing means any slot can come back empty.
 
 local get_totem_info = rawget(_G, "GetTotemInfo")
 
@@ -1039,6 +1299,150 @@ function api.GetTotemInfo(slot)
 		return nil
 	end
 	return have_totem, totem_name, start_time, duration, icon, mod_rate, spell_id
+end
+
+-- Item probes (items, Thistle Tea) --------------------------------------------------------
+-- The classic globals and the C_Item namespace document the same shapes on every supported
+-- family (ItemDocumentation.lua: C_Item.GetItemInfo returns the classic multi-return;
+-- C_Item.GetItemCount / C_Item.GetItemCooldown the classic count and cooldown triple), so
+-- the C_Item form is preferred where it is callable and the global is the fallback - a
+-- modern client whose deprecated globals are not loaded still answers. All reads are
+-- pcall-wrapped (a cold item database can throw) and a restricted (secret) reading
+-- degrades to the documented "unknown" shape; callers must never read unknown as a real
+-- item reading.
+
+local item_info_probe, item_count_probe, item_cooldown_probe
+do
+	local c_item = rawget(_G, "C_Item")
+	if type(c_item) == "table" then
+		if type(c_item.GetItemInfo) == "function" then
+			item_info_probe = c_item.GetItemInfo
+		end
+		if type(c_item.GetItemCount) == "function" then
+			item_count_probe = c_item.GetItemCount
+		end
+		if type(c_item.GetItemCooldown) == "function" then
+			item_cooldown_probe = c_item.GetItemCooldown
+		end
+	end
+	item_info_probe = item_info_probe or rawget(_G, "GetItemInfo")
+	item_count_probe = item_count_probe or rawget(_G, "GetItemCount")
+	item_cooldown_probe = item_cooldown_probe or rawget(_G, "GetItemCooldown")
+end
+
+-- Item info: the classic leading block (name, link, quality, level, minLevel, and the
+-- item's type and subtype).
+--
+-- CONTRACT (one shape, whatever probe answered): api.GetItemInfo returns
+--   name, link, quality, level, min_level, item_type, item_sub_type
+-- where position 6 is the item's TYPE string and position 7 the item's SUBTYPE string.
+-- The two probe shapes put the same two strings in those positions but NAME them
+-- differently, so this wrapper normalises the names:
+--   * the preferred probe C_Item.GetItemInfo returns them as itemType / itemSubType
+--     (ItemDocumentation.lua:621-622 on live, :409-410 on the classic-line branches,
+--     :643-644 on origin/forever; the same multi-return is visible in Blizzard's own
+--     code at Interface/AddOns/Blizzard_ItemButton/Shared/ItemButtonTemplate.lua:187 on
+--     all five branches);
+--   * the classic global GetItemInfo (the fallback) calls the same two values class and
+--     subclass - the classic C API, which has no Lua definition and no FrameXML call
+--     site on any branch, so that naming is the addon's own recorded model.
+-- A table-shaped read (defensive; the documented clients return the multi-return) is
+-- unfolded to the same positions. No probe, a throwing call, a missing name and any
+-- secret field all report nil - callers must treat nil as "cannot tell", never as "not a
+-- weapon".
+function api.GetItemInfo(item)
+	if not item_info_probe then
+		return nil
+	end
+	local ok, name, link, quality, level, min_level, item_type, item_sub_type =
+		pcall(item_info_probe, item)
+	if not ok or name == nil or is_secret(name) then
+		return nil
+	end
+	if type(name) == "table" then
+		local info = name
+		if is_secret(info.itemName) or is_secret(info.itemType)
+			or is_secret(info.itemSubType) then
+			return nil
+		end
+		return info.itemName, info.itemLink, info.itemQuality, info.itemLevel,
+			info.itemMinLevel, info.itemType, info.itemSubType
+	end
+	if is_secret(link) or is_secret(quality) or is_secret(level) or is_secret(min_level)
+		or is_secret(item_type) or is_secret(item_sub_type) then
+		return nil
+	end
+	return name, link, quality, level, min_level, item_type, item_sub_type
+end
+
+-- Item count: the classic count, or nil when the client cannot answer (no probe, a
+-- throwing call, a restricted reading). Callers must treat nil as unknown, never zero.
+function api.GetItemCount(item)
+	if not item_count_probe then
+		return nil
+	end
+	local ok, count = pcall(item_count_probe, item)
+	if not ok or is_secret(count) or type(count) ~= "number" then
+		return nil
+	end
+	return count
+end
+
+-- Item cooldown, normalised to the classic (start, duration, enabled) triple. A client
+-- without the probe and a restricted reading both report the idle shape (0, 0, 0) - the
+-- shape every consumer already treats as "no cooldown".
+function api.GetItemCooldown(item)
+	if not item_cooldown_probe then
+		return 0, 0, 0
+	end
+	local ok, start_time, duration, enabled = pcall(item_cooldown_probe, item)
+	if not ok or is_secret(start_time) or is_secret(duration) or is_secret(enabled) then
+		return 0, 0, 0
+	end
+	return start_time or 0, duration or 0, enabled or 0
+end
+
+-- Weapon enchant presence (poison reminder) ----------------------------------------------
+-- GetWeaponEnchantInfo() reports four values per weapon slot:
+--   hasMainHandEnchant, mainHandExpiration, mainHandCharges, mainHandEnchantID,
+--   hasOffHandEnchant, ... (Blizzard's own consumers read hasOffHandEnchant at position 5:
+-- SecureGroupHeaders.lua; groups of four: BuffFrame.lua RETURNS_PER_ITEM and the retail
+-- Deprecated_12_1_0 shim). The wrapper normalises every family to the two presence
+-- booleans a caller needs - has_mainhand, has_offhand. No probe, a throwing call, a
+-- non-boolean presence and any restricted (secret) field all report nil, nil - callers
+-- must treat nil as unknown, never as "no poison".
+local get_weapon_enchant_info = rawget(_G, "GetWeaponEnchantInfo")
+
+function api.GetWeaponEnchantInfo()
+	if not get_weapon_enchant_info then
+		return nil, nil
+	end
+	local ok, has_main, _, _, _, has_off = pcall(get_weapon_enchant_info)
+	if not ok or is_secret(has_main) or is_secret(has_off) then
+		return nil, nil
+	end
+	if type(has_main) ~= "boolean" or type(has_off) ~= "boolean" then
+		return nil, nil
+	end
+	return has_main, has_off
+end
+
+-- Unit identity --------------------------------------------------------------------------
+-- UnitGUID(unit) exists on every supported client; read through _G for the same
+-- undefined-global reason as above. No probe, a throwing call, a restricted (secret)
+-- reading and a non-string value all report nil (unknown identity) - callers must treat
+-- nil as "no unit", never as a stable identity to baseline against.
+local legacy_unit_guid = rawget(_G, "UnitGUID")
+
+function api.UnitGUID(unit)
+	if not legacy_unit_guid then
+		return nil
+	end
+	local ok, guid = pcall(legacy_unit_guid, unit)
+	if not ok or is_secret(guid) or type(guid) ~= "string" then
+		return nil
+	end
+	return guid
 end
 
 --------------------------------------------------------------------------------
@@ -1079,13 +1483,125 @@ end
 -- Per-family spell data helpers
 --------------------------------------------------------------------------------
 
+-- The client's own name for a spell id.
+--
+-- Name-vs-id rule (operator-confirmed 2026-10-19; bench/lessons.md:29-32): the TBC
+-- Anniversary client resolves spells by NAME, never by a bare id; Classic Era resolves
+-- by id. The name for a candidate id therefore has to come out of the client's own
+-- spell data first, because the id form is exactly the form the TBC client does not
+-- answer. Two sources, in order:
+--
+--  1. The native global's id form. On the classic-line clients the global returns the
+--     spell name as its first value, and Blizzard's own code reads it that way:
+--     classic_anniversary:Interface/AddOns/Blizzard_ObjectAPI/Classic/Spell.lua:39
+--     ("return (GetSpellInfo(self:GetSpellID()))" - the spell book's canonical name
+--     accessor, loaded through Blizzard_ObjectAPI_Classic.toc, which carries
+--     "## AllowLoadGameType: classic").
+--  2. The C_Spell namespace, which accepts a spell ID on EVERY branch:
+--     classic_era / classic_anniversary / classic_titan
+--     :Interface/AddOns/Blizzard_APIDocumentationGenerated/SpellDocumentation.lua:190-197,
+--     origin/forever :...:416-424, live :...:375-383 - the argument is documented as
+--     "Spell ID, name, name(subtext), or link" and the answer is a SpellInfo structure
+--     whose `name` field is a non-nilable string (.../SpellDocumentation.lua:782-786 on
+--     the three classic branches, :1183-1187 on forever, :1109-1113 on live). This is
+--     the source that still answers when the global only answers names.
+--
+-- Both sources read the client's SPELL DATABASE, not the player's spell book - the
+-- client documents that split itself: "Returns true if the spell exists, regardless of
+-- whether the player has learned it" (DoesSpellExist,
+-- classic_anniversary / classic_era :.../SpellDocumentation.lua:21-23). That is why a
+-- rank resolved here cannot be lost to a cold book: the answer never depended on the
+-- book in the first place.
+--
+-- Return shape: the name (string) when the client knows the id, nil when it cannot
+-- name it (no such spell on this client, or a client that cannot answer).
+local function client_spell_name(id)
+	local ok, name = pcall(api.GetSpellInfo, id)
+	if not ok or is_secret(name) then
+		return nil -- the client could not answer, or the answer is restricted
+	end
+	if type(name) == "string" then
+		return name
+	end
+	if spell_api and spell_api.GetSpellInfo then
+		local bridge_ok, info = pcall(spell_api.GetSpellInfo, id)
+		if not bridge_ok or is_secret(info) then
+			return nil
+		end
+		if type(info) == "table" and type(info.name) == "string" and not is_secret(info.name) then
+			return info.name
+		end
+	end
+	return nil
+end
+
+-- One spell-data answer, reduced to what the walk needs:
+--   true  - the client answered with this spell's data
+--   false - the client answered "not found"
+--   nil   - the call threw, or the answer was restricted (secret): a restricted
+--           value is never compared, because comparison with one raises in-client.
+local function spell_data_present(ok, value)
+	if not ok or is_secret(value) then
+		return nil
+	end
+	if value == nil then
+		return false
+	end
+	return true
+end
+
+-- Family-correct existence probe for one candidate id.
+--   true  - the client confirmed the spell exists on this client
+--   false - the client's own spell data refutes it (definitive absence)
+--   nil   - the client could not answer either way (cold or unreadable client)
+local function family_spell_exists(id)
+	if st.family ~= "TBC" then
+		local ok, info = pcall(api.GetSpellInfo, id)
+		return spell_data_present(ok, info)
+	end
+	-- TBC: the name path is the query form (operator rule). The name comes from the
+	-- client's own data; a name the client does not index falls back to the id form,
+	-- so a client whose global answers ids still resolves here too.
+	local name = client_spell_name(id)
+	local query = api.get_spell_query(name, id) or id
+	local ok, info = pcall(api.GetSpellInfo, query)
+	local present = spell_data_present(ok, info)
+	if present == true then
+		return true
+	end
+	if present == nil then
+		return nil
+	end
+	if query ~= id then
+		local id_ok, id_info = pcall(api.GetSpellInfo, id)
+		local id_present = spell_data_present(id_ok, id_info)
+		if id_present == true then
+			return true
+		end
+		if id_present == nil then
+			return nil
+		end
+	end
+	return false
+end
+
 -- Resolves the candidate rank ids of a spell (mixed across expansions) down to the id
 -- that exists on the running client, i.e. the current rank for this game family. Ids
 -- from other expansions are absent from the client's spell data. Accepts either a
 -- lookup table (st.utils.convert_lookup_table) or a plain list of ids; order does not
 -- matter. Returns nil when none of the ids exist on this client.
-function api.get_family_spell_id(id_table)
+--
+-- Name-vs-id rule: on TBC the walk asks the client by NAME (the id form is what that
+-- client does not answer - bench/lessons.md:29-32), so a rank the client knows
+-- resolves there exactly as it does on Era. The state variant below tells "the client
+-- says this spell is not here" apart from "the client could not answer", so a caller
+-- that latches a negative can tell the two apart and retry instead of caching a false
+-- negative.
+function api.get_family_spell_id_state(id_table)
 	local best
+	local refuted = false
+	local unknown = false
+	local candidates = 0
 	for key, value in pairs(id_table) do
 		local id
 		if type(value) == "number" then
@@ -1093,9 +1609,46 @@ function api.get_family_spell_id(id_table)
 		else
 			id = key -- lookup table keyed by id
 		end
-		if api.GetSpellInfo(id) and (not best or id > best) then
-			best = id
+		if type(id) == "number" then
+			candidates = candidates + 1
+			local exists = family_spell_exists(id)
+			if exists == true then
+				if not best or id > best then
+					best = id
+				end
+			elseif exists == false then
+				refuted = true
+			else
+				unknown = true
+			end
 		end
 	end
-	return best
+	if best then
+		return best, "resolved"
+	end
+	if unknown then
+		return nil, "unresolved"
+	end
+	if refuted or candidates == 0 then
+		return nil, "absent"
+	end
+	return nil, "unresolved"
+end
+
+function api.get_family_spell_id(id_table)
+	local id = api.get_family_spell_id_state(id_table)
+	return id
+end
+
+-- Spell query (name-vs-id rule, operator-confirmed 2026-10-19): TBC Anniversary
+-- takes spell NAMES, never bare ids; Classic Era needs ids. Returns the
+-- family-correct query for GetSpellCooldown / is_spell_known / IsSpellUsable /
+-- aura matching: the English name on TBC, the numeric id elsewhere. Callers pass
+-- both from their resolved entry; the helper picks. No new client probe, family
+-- branching only.
+function api.get_spell_query(name, id)
+	if st.family == "TBC" then
+		return name
+	end
+	return id
 end

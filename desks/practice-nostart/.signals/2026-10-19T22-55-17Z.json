@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T22:55:17Z",
+  "agent_name": "practice-nostart",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "per-gate distinct messages + diag counter; closure-pcall keeps wiring literals; sandbox weave load makes marker gate testable",
+    "what_was_hard": "wiring_check/rogue_state source-string pins forbid pcall(FN) form; ST-qualified closure calls satisfy both safety and attribution",
+    "skill_gap": "live client behavior (SoD shaman) still UNCONFIRMED offline"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

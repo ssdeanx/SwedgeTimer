@@ -87,9 +87,12 @@ local SECRET_INVENTORY_ID = secret(900110)
 local SECRET_INVENTORY_TEXTURE = secret("SECRET_ICON")
 local SECRET_INVENTORY_START = secret(900120)
 local SECRET_INVENTORY_DURATION = secret(900121)
-local SECRET_CHECK_DISTANCE = secret(900130)
 local SECRET_RATING = secret({})               -- opaque table: arithmetic errors on it
 local SECRET_RATING_BONUS = secret({})
+local SECRET_ITEM_NAME = secret("SECRET_ITEM")
+local SECRET_ITEM_CLASS = secret("SECRET_CLASS")
+local SECRET_ITEM_SUBCLASS = secret("SECRET_SUBCLASS")
+local SECRET_SPELL_NAME = secret("SECRET_SPELL_NAME")
 
 local function probe_is_secret(value)
     return SECRETS[value] == true
@@ -166,6 +169,9 @@ local function build(opts)
     -- Classic-family stubs (present unless a specific profile omits them).
     if not opts.retail then
         env.GetSpellInfo = function(id)
+            sb.spell_queries = sb.spell_queries or {}
+            sb.spell_queries[#sb.spell_queries + 1] = id
+            if sb.spell_info_throws then error("restricted") end
             local info = sb.spell_info[id]
             if info then
                 return info.name, nil, info.icon or 1, info.cast_ms or 0, 0, 0, id
@@ -182,10 +188,25 @@ local function build(opts)
             if sb.power_cost == nil then return nil end
             return { { cost = sb.power_cost } }
         end
-        env.IsSpellKnown = function(id) return sb.known[id] == true end
+        -- A probe that DECLINES (returns nil) instead of answering: the knowledge chain
+        -- must move on to the next probe. Opt-in, so the default profile keeps proving
+        -- the answering shape.
+        env.IsSpellKnown = function(id)
+            if opts.known_declines then
+                return nil
+            end
+            return sb.known[id] == true
+        end
         env.IsSpellUsable = function() return sb.usable, sb.insufficient end
         env.IsSpellInRange = function() return sb.spell_in_range end
-        env.CheckInteractDistance = function() return sb.check_distance end
+        -- Optional movement probes (the hunter weave-prog lane): installed only on
+        -- demand, so the default profile keeps proving the absent-probe shape.
+        if opts.unit_speed then
+            env.GetUnitSpeed = opts.unit_speed
+        end
+        if opts.player_moving then
+            env.IsPlayerMoving = opts.player_moving
+        end
         env.UnitPower = function() return sb.power end
         env.UnitPowerMax = function() return sb.power_max end
         env.UnitPowerType = function() return sb.power_type, sb.power_token end
@@ -232,6 +253,52 @@ local function build(opts)
             if not p then return nil end
             return p.name, nil, nil, p.start_ms, p.end_ms, false, false, p.spell_id
         end
+        -- Optional classic combat-log getter (the shared trinket-ICD path):
+        -- installed before compat loads so the wrapper captures it; absent by
+        -- default (nil reads as no combat log, the Mainline-code shape).
+        if opts.combat_log then
+            env.CombatLogGetCurrentEventInfo = function()
+                return sb.combat_log_payload()
+            end
+        end
+        -- Item probes, weapon enchant and unit identity (the rogue compat wrappers).
+        -- Absent on demand (opts.omit_compat_probes) to prove the no-probe shapes.
+        if not opts.omit_compat_probes then
+            env.GetItemInfo = function(item)
+                if sb.item_info_throws then error("restricted") end
+                local info = sb.item_info and sb.item_info[item]
+                if not info then return nil end
+                if sb.item_info_table then
+                    return {
+                        itemName = info.name or "Table Item", itemLink = "table:link",
+                        itemQuality = 2, itemLevel = 1, itemMinLevel = 1,
+                        itemType = info.class or "Weapon", itemSubType = info.subclass,
+                    }
+                end
+                return info.name or "Test Item", "item:link", 2, 1, 1,
+                    info.class or "Weapon", info.subclass
+            end
+            env.GetItemCount = function()
+                if sb.item_count_throws then error("restricted") end
+                return sb.item_count
+            end
+            env.GetItemCooldown = function()
+                if sb.item_cd_throws then error("restricted") end
+                return sb.item_cd_start, sb.item_cd_duration, sb.item_cd_enabled
+            end
+            env.GetWeaponEnchantInfo = function()
+                if sb.weapon_enchant_throws then error("restricted") end
+                local w = sb.weapon_enchant
+                if not w then
+                    return false, nil, nil, nil, false
+                end
+                return w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8]
+            end
+            env.UnitGUID = function(unit)
+                if sb.unit_guid_throws then error("restricted") end
+                return sb.unit_guid and sb.unit_guid[unit] or nil
+            end
+        end
     else
         -- Mainline-code profile: the C_* namespaces replace the classic globals.
         env.C_Spell = {
@@ -242,9 +309,36 @@ local function build(opts)
             end,
             IsSpellInRange = function() return sb.c_spell_range end,
         }
+        -- Fictional C_Spell knowledge probes (no client ships C_Spell.IsSpellKnown*):
+        -- installed on demand so the suite can pin that compat never consults them.
+        if opts.c_spell_known then
+            env.C_Spell.IsSpellKnown = function() return true end
+            env.C_Spell.IsSpellKnownOrOverridesKnown = function() return true end
+        end
         env.C_UnitAuras = {
             GetAuraDataByIndex = function()
                 return sb.aura_table
+            end,
+        }
+    end
+
+    -- Optional C_Item namespace (modern clients): answers even where the deprecated
+    -- globals are not loaded. Separate from the classic block so a build can show both
+    -- the preference (both sources present) and the fallback (C_Item alone).
+    if opts.c_item then
+        env.C_Item = {
+            GetItemInfo = function(item)
+                if sb.c_item_info_throws then error("restricted") end
+                local info = sb.c_item_info and sb.c_item_info[item]
+                if not info then return nil end
+                return info.name or "C Item", "c:link", 2, 1, 1,
+                    info.class or "Weapon", info.subclass
+            end,
+            GetItemCount = function()
+                return sb.c_item_count
+            end,
+            GetItemCooldown = function()
+                return sb.c_item_cd_start, sb.c_item_cd_duration, sb.c_item_cd_enabled
             end,
         }
     end
@@ -321,6 +415,16 @@ local function build(opts)
             end,
         }
     end
+    -- Sibling-only profile: where IsSpellKnown is absent, IsSpellKnownOrInSpellBook
+    -- answers instead.
+    if opts.c_spellbook_in_book then
+        env.C_SpellBook = {
+            IsSpellKnownOrInSpellBook = function(id)
+                sb.spellbook_calls = (sb.spellbook_calls or 0) + 1
+                return sb.spellbook_in_book and sb.spellbook_in_book[id] == true
+            end,
+        }
+    end
 
     local st = {}
     local modules = opts.modules or { "compat.lua" }
@@ -331,6 +435,14 @@ local function build(opts)
         if not ok then
             failures = failures + 1
             print("FAIL  loading " .. modules[i] .. ": " .. tostring(err))
+        end
+        -- Class files register their body as a loader (operator order 2026-10-21:
+        -- only the selected class executes). This sandbox activates every class it
+        -- loads, as the shipped init does for the selected one.
+        local class = modules[i]:match("classes/(%a+)%.lua")
+        if class and type(st.class_loaders) == "table"
+            and type(st.class_loaders[class:upper()]) == "function" then
+            st.class_loaders[class:upper()]()
         end
     end
 
@@ -784,17 +896,17 @@ do
     local ok, err = pcall(ST.WARRIOR.on_aura_change, ST)
     check(ok, "warrior aura control does not throw (" .. tostring(err) .. ")")
     eq(ST.has_bloodsurge, true, "warrior aura control: the buff is detected")
-    eq(sb.aura_calls, 2, "warrior aura control: the scan walks past the entry to the empty slot")
+    eq(sb.aura_calls, 40, "warrior aura control: the scan walks the capped list (H1: no early break)")
     eq(sb.glow_starts, 1, "warrior aura control: the glow starts")
 
-    -- Secret field: the entry is invisible, the scan stops at it, no glow.
+    -- Secret field: the entry is invisible, the scan walks past it, no glow.
     ST.bloodsurge_glow_active = false
     sb.aura_rows = { [1] = { name = "Blood Surge", duration = SECRET_AURA_DURATION, spell_id = 46916 } }
     sb.aura_calls = 0
     ok = pcall(ST.WARRIOR.on_aura_change, ST)
     check(ok, "warrior aura with a secret field does not throw")
     eq(ST.has_bloodsurge, false, "warrior aura: a secret aura is treated as absent")
-    eq(sb.aura_calls, 1, "warrior aura: the scan stops at the secret row")
+    eq(sb.aura_calls, 40, "warrior aura: the scan walks past the secret row to the cap (H1)")
     eq(sb.glow_starts, 1, "warrior aura: no glow from a secret aura")
 end
 
@@ -988,6 +1100,9 @@ do
     sb.spellbook_calls = 0
     eq(sb.st.api.is_spell_known(78), true, "R7 order: the classic global keeps answering")
     eq(sb.spellbook_calls, 0, "R7 order: C_SpellBook is not consulted when the chain answers")
+    local order_flag, order_state = sb.st.api.is_spell_known_state(78)
+    eq(order_flag, true, "R7 state: an answering probe reads true")
+    eq(order_state, "known", "R7 state: an answering probe reads the 'known' state")
 
     -- On a Mainline client the classic global is gone: C_SpellBook answers.
     local sb2 = build({ retail = true, project = 1, interface = 120100, c_spellbook = true })
@@ -996,10 +1111,158 @@ do
     eq(sb2.st.api.is_spell_known(78), true, "R7 probe: C_SpellBook answers known spells")
     eq(sb2.st.api.is_spell_known(999), false, "R7 probe: C_SpellBook answers unknown spells")
     check(sb2.spellbook_calls >= 2, "R7 probe: the calls went to C_SpellBook")
+    local probe_flag, probe_state = sb2.st.api.is_spell_known_state(78)
+    eq(probe_flag, true, "R7 state: C_SpellBook reads true for a known spell")
+    eq(probe_state, "known", "R7 state: C_SpellBook reads the 'known' state")
+    local absent_flag, absent_state = sb2.st.api.is_spell_known_state(999)
+    eq(absent_flag, false, "R7 state: C_SpellBook reads false for an unknown spell")
+    eq(absent_state, "not_known", "R7 state: an answered 'no' reads the 'not_known' state")
 
-    -- No probe at all: unknown, never an error.
+    -- No probe at all: the boolean answer is false (fail-closed), and the state says WHY:
+    -- the client could not answer, so this is NOT the claim "the player does not know it".
     local sb3 = build({ retail = true, project = 1, interface = 120100 })
-    eq(sb3.st.api.is_spell_known(78), false, "R7 no probe: reports unknown (false)")
+    eq(sb3.st.api.is_spell_known(78), false, "R7 no probe: the boolean answers false (fail-closed)")
+    local no_probe_flag, no_probe_state = sb3.st.api.is_spell_known_state(78)
+    eq(no_probe_flag, false, "R7 no probe: the state answer is false as well")
+    eq(no_probe_state, "unknown", "R7 no probe: the state says unknown - the client cannot answer")
+
+    -- The C_Spell namespace is never consulted for knowledge (C_Spell.IsSpellKnown*
+    -- exists on no client): even probes answering true there must not decide.
+    local sb4 = build({ retail = true, project = 1, interface = 120100, c_spell_known = true })
+    eq(sb4.st.api.is_spell_known(78), false, "R7 namespace: C_Spell knowledge probes are ignored")
+    local ns_flag, ns_state = sb4.st.api.is_spell_known_state(78)
+    eq(ns_flag, false, "R7 namespace: the ignored namespace decides nothing")
+    eq(ns_state, "unknown", "R7 namespace: with no usable probe the state is unknown")
+
+    -- The sibling probe: where only IsSpellKnownOrInSpellBook exists, it answers.
+    local sb5 = build({ retail = true, project = 1, interface = 120100, c_spellbook_in_book = true })
+    sb5.spellbook_in_book = { [78] = true, [999] = false }
+    sb5.spellbook_calls = 0
+    eq(sb5.st.api.is_spell_known(78), true, "R7 sibling: IsSpellKnownOrInSpellBook answers known spells")
+    eq(sb5.st.api.is_spell_known(999), false, "R7 sibling: IsSpellKnownOrInSpellBook answers unknown spells")
+    check(sb5.spellbook_calls >= 2, "R7 sibling: the calls went to C_SpellBook")
+    local sib_flag, sib_state = sb5.st.api.is_spell_known_state(78)
+    eq(sib_flag, true, "R7 state: the sibling probe reads true for a known spell")
+    eq(sib_state, "known", "R7 state: the sibling probe reads the 'known' state")
+
+    -- A probe that DECLINES (returns nil) does not decide: the chain moves on to the next
+    -- probe. This is the difference between "no probe answered" and "the client says no".
+    local sb6 = build({ c_spellbook = true, known_declines = true })
+    sb6.spellbook_known = { [78] = true, [999] = false }
+    local decline_flag, decline_state = sb6.st.api.is_spell_known_state(78)
+    eq(decline_flag, true, "R7 decline: the next probe answers after a declining probe")
+    eq(decline_state, "known", "R7 decline: the state is the answering probe's state")
+    local decline2_flag, decline2_state = sb6.st.api.is_spell_known_state(999)
+    eq(decline2_flag, false, "R7 decline: the next probe's 'no' answers false")
+    eq(decline2_state, "not_known", "R7 decline: the next probe's 'no' reads the 'not_known' state")
+
+    -- Every probe declines: the client still cannot answer, so the state is unknown.
+    local sb7 = build({ known_declines = true })
+    local all_flag, all_state = sb7.st.api.is_spell_known_state(78)
+    eq(all_flag, false, "R7 decline-only: the boolean answers false (fail-closed)")
+    eq(all_state, "unknown", "R7 decline-only: no probe answered, so the state is unknown")
+
+    -- The boolean is BOOLEAN in every profile - it never answers nil. The consumers below
+    -- depend on it: the rogue guide reads the raw return and tests it against false, and
+    -- the diag readout renders a non-boolean as "?" instead of "false".
+    eq(type(sb.st.api.is_spell_known(78)), "boolean", "R7 type: an answering profile returns a boolean")
+    eq(type(sb2.st.api.is_spell_known(78)), "boolean", "R7 type: the C_SpellBook profile returns a boolean")
+    eq(type(sb3.st.api.is_spell_known(78)), "boolean", "R7 type: the probe-less profile returns a boolean")
+    eq(type(sb4.st.api.is_spell_known(78)), "boolean", "R7 type: the ignored-namespace profile returns a boolean")
+    eq(type(sb5.st.api.is_spell_known(78)), "boolean", "R7 type: the sibling-probe profile returns a boolean")
+    eq(type(sb6.st.api.is_spell_known(78)), "boolean", "R7 type: the declining-probe profile returns a boolean")
+    eq(type(sb7.st.api.is_spell_known(78)), "boolean", "R7 type: the decline-only profile returns a boolean")
+end
+
+--=========================================================================================
+-- 10b. M3: the spell-knowledge contract (the comment, the code and the callers agree)
+--=========================================================================================
+-- The deep audit's M3: the spell-knowledge comment claimed a client with none of the
+-- probes "reports 'unknown'", while the code answered false. The behaviour was safe
+-- (every caller treats false as fail-closed) but the CONTRACT was wrong, and a future
+-- row that must hide when the client cannot answer had no way to tell "no probe
+-- answered" from "the player does not know the spell".
+--
+-- The contract, pinned here:
+--   api.is_spell_known is BINARY (true / false, never nil) - the two raw consumers in the
+--   tree (rogue_guide.lua's "args.ar_known == false" and diag.lua's "type(known) ==
+--   'boolean'") would both change behaviour on a nil, so the boolean may not fold the
+--   third state into itself.
+--   api.is_spell_known_state carries the third state (known / not_known / unknown) - the
+--   same shape as api.get_family_spell_id_state - so the distinction is observable
+--   through the API without touching a single caller.
+--   The comment next to the wrapper must state exactly that, or the mismatch is back.
+do
+    local f = assert(io.open(ROOT .. "compat.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local start_at = src:find("-- Spell knowledge", 1, true)
+    local stop_at = src:find("-- Spell cooldowns", 1, true)
+    check(start_at ~= nil, "M3 setup: the spell-knowledge section exists in compat.lua")
+    check(stop_at ~= nil and start_at ~= nil and stop_at > start_at,
+        "M3 setup: the spell-knowledge section is bounded by the next section")
+    local block = src:sub(start_at or 1, (stop_at or 1) - 1)
+
+    -- The COMMENT half of the section (the code half is pinned by the behavioural checks
+    -- above). A comment pin must not be satisfied by the code's own string literals.
+    local comment_text = {}
+    for line in (block .. "\n"):gmatch("([^\n]*)\n") do
+        local stripped = line:match("^%s*(%-%-.*)$")
+        if stripped then
+            comment_text[#comment_text + 1] = stripped
+        end
+    end
+    comment_text = table.concat(comment_text, "\n")
+
+    -- The stale claim is gone: the code never answered "unknown" there, it answered false.
+    check(comment_text:find('reports "unknown"', 1, true) == nil,
+        "M3 contract: the stale 'reports unknown' claim is gone from the spell-knowledge comment")
+    -- The contract the code implements is stated in the same comment.
+    check(comment_text:find("binary", 1, true) ~= nil,
+        "M3 contract: the comment states the binary contract")
+    check(comment_text:find("never nil", 1, true) ~= nil,
+        "M3 contract: the comment states that the answer is never nil")
+    check(comment_text:find("not_known", 1, true) ~= nil,
+        "M3 contract: the comment names the 'not_known' state")
+    check(comment_text:find('"unknown"', 1, true) ~= nil,
+        "M3 contract: the comment names the 'unknown' state")
+    check(block:find("function api.is_spell_known_state", 1, true) ~= nil,
+        "M3 contract: the state accessor lives in the documented section")
+
+    -- The binary contract is load-bearing for the two raw consumers: pin their shapes, so
+    -- a future edit that folds the third state into the boolean has to touch these pins.
+    local rogue_f = assert(io.open(ROOT .. "classes/rogue.lua", "r"))
+    local rogue_src = rogue_f:read("*a")
+    rogue_f:close()
+    local guide_f = assert(io.open(ROOT .. "rogue_guide.lua", "r"))
+    local guide_src = guide_f:read("*a")
+    guide_f:close()
+    local diag_f = assert(io.open(ROOT .. "diag.lua", "r"))
+    local diag_src = diag_f:read("*a")
+    diag_f:close()
+    -- The rogue provider feeds the RAW return (not a normalised boolean) into
+    -- inputs.ar_known: the line must match exactly, so a normalisation there is noticed
+    -- (it would silently drop the raw consumer this contract's justification rests on).
+    local ar_raw, ar_normalised = 0, 0
+    for line in rogue_src:gmatch("([^\n]*)\n") do
+        local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if trimmed:find("inputs.ar_known", 1, true) and trimmed:find("api.is_spell_known", 1, true) then
+            if trimmed == "inputs.ar_known = api.is_spell_known(ar_query)" then
+                ar_raw = ar_raw + 1
+            else
+                ar_normalised = ar_normalised + 1
+            end
+        end
+    end
+    check(ar_raw == 1,
+        "M3 contract: the rogue provider feeds the raw return into inputs.ar_known")
+    check(ar_normalised == 0,
+        "M3 contract: no normalisation sneaks into the rogue's ar_known feed")
+    check(guide_src:find("args.ar_known == false", 1, true) ~= nil,
+        "M3 contract: the rogue guide tests the raw return against false - nil would flip it")
+    check(diag_src:find('type(known) == "boolean"', 1, true) ~= nil,
+        "M3 contract: the diag readout renders a non-boolean as '?' - nil would change it")
 end
 
 --=========================================================================================
@@ -1144,10 +1407,8 @@ do
     a, b, c = api.GetInventoryItemCooldown(13)
     check(a == 0 and b == 0 and c == 0, "R10 secret: inventory cooldown reports the idle shape")
 
-    sb.check_distance = true
-    eq(api.CheckInteractDistance("target", 3), true, "R10 control: CheckInteractDistance passes through")
-    sb.check_distance = SECRET_CHECK_DISTANCE
-    eq(api.CheckInteractDistance("target", 3), nil, "R10 secret: CheckInteractDistance reports unknown (nil)")
+    check(api.CheckInteractDistance == nil,
+        "R10: the protected CheckInteractDistance wrapper is gone (exact yards only)")
 
     sb.usable = true
     sb.insufficient = false
@@ -1244,6 +1505,394 @@ do
 end
 
 --=========================================================================================
+-- 13c. Item probes / weapon enchant / unit identity (rogue compat move)
+--=========================================================================================
+do
+    -- Classic globals answer (the pre-C_Item clients): every wrapper passes through.
+    local sb = build()
+    local api = sb.st.api
+
+    sb.item_info = { [90001] = { name = "Test Blade", class = "Weapon", subclass = "Sword" } }
+    local name, link, quality, level, min_level, item_type, item_sub_type = api.GetItemInfo(90001)
+    eq(name, "Test Blade", "item info control: name passes through")
+    eq(link, "item:link", "item info control: link passes through")
+    eq(quality, 2, "item info control: quality passes through")
+    eq(level, 1, "item info control: level passes through")
+    eq(min_level, 1, "item info control: minLevel passes through")
+    eq(item_type, "Weapon", "item info control: the item type is the 6th return")
+    eq(item_sub_type, "Sword", "item info control: the item subtype is the 7th return")
+
+    sb.item_info = nil
+    eq(api.GetItemInfo(90001), nil, "item info: an unknown item reports nil")
+
+    sb.item_info = { [90001] = { class = SECRET_ITEM_CLASS, subclass = "Sword" } }
+    eq(api.GetItemInfo(90001), nil, "item info secret item type: the whole read reports nil")
+
+    sb.item_info = { [90001] = { class = "Weapon", subclass = SECRET_ITEM_SUBCLASS } }
+    eq(api.GetItemInfo(90001), nil, "item info secret item subtype: the whole read reports nil")
+
+    sb.item_info = { [90001] = { name = SECRET_ITEM_NAME, subclass = "Sword" } }
+    eq(api.GetItemInfo(90001), nil, "item info secret name: the whole read reports nil")
+
+    sb.item_info = { [90001] = { subclass = "Sword" } }
+    sb.item_info_throws = true
+    eq(api.GetItemInfo(90001), nil, "item info: a throwing probe reports nil")
+    sb.item_info_throws = false
+
+    -- Table-shaped read (defensive path): unfolded to the classic positions.
+    sb.item_info_table = true
+    name, link, quality, level, min_level, item_type, item_sub_type = api.GetItemInfo(90001)
+    eq(name, "Table Item", "item info table control: the table name is unfolded")
+    eq(link, "table:link", "item info table control: itemLink is unfolded")
+    eq(quality, 2, "item info table control: itemQuality is unfolded")
+    eq(level, 1, "item info table control: itemLevel is unfolded")
+    eq(min_level, 1, "item info table control: itemMinLevel is unfolded")
+    eq(item_type, "Weapon", "item info table control: itemType lands at the item-type position")
+    eq(item_sub_type, "Sword", "item info table control: itemSubType lands at the item-subtype position")
+    sb.item_info = { [90001] = { class = "Weapon", subclass = SECRET_ITEM_SUBCLASS } }
+    eq(api.GetItemInfo(90001), nil, "item info secret table subtype: reports nil")
+    sb.item_info_table = nil
+    sb.item_info = nil
+
+    -- Item count.
+    sb.item_count = 3
+    eq(api.GetItemCount("Thistle Tea"), 3, "item count control: the count passes through")
+    sb.item_count = nil
+    eq(api.GetItemCount("Thistle Tea"), nil, "item count: no reading reports nil")
+    sb.item_count = SECRET_USABLE
+    eq(api.GetItemCount("Thistle Tea"), nil, "item count secret: reports unknown (nil)")
+    sb.item_count = 3
+    sb.item_count_throws = true
+    eq(api.GetItemCount("Thistle Tea"), nil, "item count: a throwing probe reports nil")
+    sb.item_count_throws = false
+    sb.item_count = nil
+    sb.item_count = "3"
+    eq(api.GetItemCount("Thistle Tea"), nil, "item count: a non-number reading reports nil")
+    sb.item_count = nil
+
+    -- Item cooldown: normalised (start, duration, enabled); idle shape on every unknown.
+    sb.item_cd_start, sb.item_cd_duration, sb.item_cd_enabled = 5, 300, 1
+    local a, b, c = api.GetItemCooldown("Thistle Tea")
+    check(a == 5 and b == 300 and c == 1,
+        "item cooldown control: the triple passes through")
+    sb.item_cd_start, sb.item_cd_duration, sb.item_cd_enabled =
+        SECRET_INVENTORY_START, SECRET_INVENTORY_DURATION, 1
+    a, b, c = api.GetItemCooldown("Thistle Tea")
+    check(a == 0 and b == 0 and c == 0, "item cooldown secret: reports the idle shape")
+    sb.item_cd_start, sb.item_cd_duration, sb.item_cd_enabled = nil, nil, nil
+    a, b, c = api.GetItemCooldown("Thistle Tea")
+    check(a == 0 and b == 0 and c == 0, "item cooldown: a blank read is the idle shape")
+    sb.item_cd_throws = true
+    a, b, c = api.GetItemCooldown("Thistle Tea")
+    check(a == 0 and b == 0 and c == 0, "item cooldown: a throwing probe is the idle shape")
+    sb.item_cd_throws = false
+
+    -- Weapon enchant presence: four values per weapon slot; the OFFHAND presence is the
+    -- 5th return (the 4th is the mainhand enchant id). A wrapper reading the 4th would
+    -- misreport the position-pin payloads below.
+    local has_mh, has_oh = api.GetWeaponEnchantInfo()
+    eq(has_mh, false, "weapon enchant control: the default read reports no enchant")
+    eq(has_oh, false, "weapon enchant control: the default OH read reports no enchant")
+
+    sb.weapon_enchant = { true, 3600, nil, true, false, nil, nil, nil }
+    has_mh, has_oh = api.GetWeaponEnchantInfo()
+    eq(has_mh, true, "weapon enchant pin: MH true passes through")
+    eq(has_oh, false, "weapon enchant pin: OH presence is the 5th value, never the 4th")
+
+    sb.weapon_enchant = { false, nil, nil, nil, true, 3600, nil, nil }
+    has_mh, has_oh = api.GetWeaponEnchantInfo()
+    eq(has_mh, false, "weapon enchant pin: MH false passes through")
+    eq(has_oh, true, "weapon enchant pin: OH true comes from the 5th value")
+
+    sb.weapon_enchant = { SECRET_USABLE, 3600, nil, nil, false, nil, nil, nil }
+    has_mh, has_oh = api.GetWeaponEnchantInfo()
+    eq(has_mh, nil, "weapon enchant secret MH: reads unknown (nil)")
+    eq(has_oh, nil, "weapon enchant secret MH: OH degrades with the read")
+
+    sb.weapon_enchant = { true, 3600, nil, nil, SECRET_USABLE, nil, nil, nil }
+    has_mh, has_oh = api.GetWeaponEnchantInfo()
+    eq(has_mh, nil, "weapon enchant secret OH: MH degrades with the read")
+    eq(has_oh, nil, "weapon enchant secret OH: reads unknown (nil)")
+
+    sb.weapon_enchant = { true, 3600, nil, nil, 12345, nil, nil, nil }
+    has_mh, has_oh = api.GetWeaponEnchantInfo()
+    eq(has_mh, nil, "weapon enchant non-boolean OH: reads unknown (nil)")
+    eq(has_oh, nil, "weapon enchant non-boolean OH: never claims a presence")
+
+    sb.weapon_enchant_throws = true
+    has_mh, has_oh = api.GetWeaponEnchantInfo()
+    eq(has_mh, nil, "weapon enchant: a throwing probe reads unknown (MH)")
+    eq(has_oh, nil, "weapon enchant: a throwing probe reads unknown (OH)")
+    sb.weapon_enchant_throws = false
+    sb.weapon_enchant = nil
+
+    -- Unit identity.
+    sb.unit_guid = { target = "Creature-0-1-2-3" }
+    eq(api.UnitGUID("target"), "Creature-0-1-2-3", "unit guid control: the guid passes through")
+    sb.unit_guid.target = nil
+    eq(api.UnitGUID("target"), nil, "unit guid: no unit reports nil")
+    sb.unit_guid = { target = SECRET_ITEM_NAME }
+    eq(api.UnitGUID("target"), nil, "unit guid secret: reports unknown (nil)")
+    sb.unit_guid = { target = 12345 }
+    eq(api.UnitGUID("target"), nil, "unit guid: a non-string reading reports nil")
+    sb.unit_guid = nil
+    sb.unit_guid_throws = true
+    eq(api.UnitGUID("target"), nil, "unit guid: a throwing probe reports nil")
+    sb.unit_guid_throws = false
+end
+
+do
+    -- C_Item is preferred where it is callable; the classic globals are the fallback.
+    local sb = build({ c_item = true })
+    local api = sb.st.api
+
+    sb.c_item_info = { [90001] = { name = "C Blade", class = "Weapon", subclass = "Sword" } }
+    sb.item_info = { [90001] = { name = "Global Blade", class = "Weapon", subclass = "Dagger" } }
+    local name, _, _, _, _, _, item_sub_type = api.GetItemInfo(90001)
+    eq(name, "C Blade", "C_Item preference: the C_Item read wins when callable")
+    eq(item_sub_type, "Sword", "C_Item preference: the C_Item item subtype answers")
+
+    sb.c_item_count = 2
+    sb.item_count = 7
+    eq(api.GetItemCount("Thistle Tea"), 2, "C_Item count preference: the C_Item read wins")
+
+    sb.c_item_cd_start, sb.c_item_cd_duration, sb.c_item_cd_enabled = 9, 60, 1
+    sb.item_cd_start, sb.item_cd_duration, sb.item_cd_enabled = 1, 2, 1
+    local a, b = api.GetItemCooldown("Thistle Tea")
+    check(a == 9 and b == 60, "C_Item cooldown preference: the C_Item read wins")
+end
+
+do
+    -- A modern client whose deprecated globals are not loaded: C_Item alone answers.
+    local sb = build({ c_item = true, omit_compat_probes = true })
+    local api = sb.st.api
+
+    sb.c_item_info = { [90001] = { class = "Weapon", subclass = "Sword" } }
+    local _, _, _, _, _, item_type, item_sub_type = api.GetItemInfo(90001)
+    eq(item_type, "Weapon", "C_Item fallback: item info answers without the globals")
+    eq(item_sub_type, "Sword", "C_Item fallback: the item subtype answers without the globals")
+    sb.c_item_count = 4
+    eq(api.GetItemCount("Thistle Tea"), 4, "C_Item fallback: count answers without the globals")
+    sb.c_item_cd_start, sb.c_item_cd_duration, sb.c_item_cd_enabled = 9, 60, 1
+    local a, b, c = api.GetItemCooldown("Thistle Tea")
+    check(a == 9 and b == 60 and c == 1,
+        "C_Item fallback: cooldown answers without the globals")
+    -- UnitGUID and GetWeaponEnchantInfo have no C_Item twin: still the unknown shapes.
+    local has_mh, has_oh = api.GetWeaponEnchantInfo()
+    eq(has_mh, nil, "C_Item fallback: weapon enchant still reads unknown (nil)")
+    eq(has_oh, nil, "C_Item fallback: weapon enchant OH still reads unknown (nil)")
+    eq(api.UnitGUID("target"), nil, "C_Item fallback: unit guid still reads nil")
+end
+
+do
+    -- Nothing at all answers (absent globals and namespace): the documented unknown shapes.
+    local sb = build({ omit_compat_probes = true })
+    local api = sb.st.api
+
+    eq(api.GetItemInfo(90001), nil, "absent probes: item info reports nil")
+    eq(api.GetItemCount("Thistle Tea"), nil, "absent probes: item count reports nil")
+    local a, b, c = api.GetItemCooldown("Thistle Tea")
+    check(a == 0 and b == 0 and c == 0, "absent probes: item cooldown reports the idle shape")
+    local has_mh, has_oh = api.GetWeaponEnchantInfo()
+    eq(has_mh, nil, "absent probes: weapon enchant reports unknown (nil)")
+    eq(has_oh, nil, "absent probes: weapon enchant OH reports unknown (nil)")
+    eq(api.UnitGUID("target"), nil, "absent probes: unit guid reports nil")
+end
+
+--=========================================================================================
+-- 13c-bis. The item-info contract (L4): one normalised shape, whatever probe answered
+--=========================================================================================
+-- The publish-gate re-audit's L4: compat.lua's GetItemInfo wrapper named its 6th/7th
+-- returns "class, subclass" - the CLASSIC GLOBAL's naming - while the PREFERRED probe
+-- (C_Item.GetItemInfo) returns them as itemType / itemSubType on every branch
+-- (ItemDocumentation.lua:621-622 live, :409-410 classic-line, :643-644 origin/forever;
+-- the same multi-return in Blizzard's own code at
+-- Blizzard_ItemButton/Shared/ItemButtonTemplate.lua:187 on all five branches).
+-- The VALUES were always right - position 7 is the item's subtype string in both shapes
+-- (the behavioural pins above prove it) - but the NAMES were not honest about which probe
+-- answered, and the classic global's own naming is not citable from the reference tree at
+-- all (a native C API with no Lua definition and no FrameXML call site on any branch).
+--
+-- The contract pinned here:
+--   api.GetItemInfo returns name, link, quality, level, min_level, item_type, item_sub_type
+--   - position 6 is the item's TYPE string and position 7 the item's SUBTYPE string,
+--     whichever probe answered (C_Item names them itemType / itemSubType, the classic
+--     global names them class / subclass).
+--   The wrapper's locals carry the normalised names, the comment states the contract, and
+--   the rogue's only consumer (classes/rogue.lua item_subclass) reads the same positions.
+do
+    local f = assert(io.open(ROOT .. "compat.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local start_at = src:find("-- Item info:", 1, true)
+    local stop_at = src:find("-- Item count:", 1, true)
+    check(start_at ~= nil, "L4 setup: the item-info section exists in compat.lua")
+    check(stop_at ~= nil and start_at ~= nil and stop_at > start_at,
+        "L4 setup: the item-info section is bounded by the next section")
+    local block = src:sub(start_at or 1, (stop_at or 1) - 1)
+
+    -- The COMMENT half of the section (the code half is pinned by the behavioural checks
+    -- above). A comment pin must not be satisfied by the code's own string literals.
+    local comment_text = {}
+    for line in (block .. "\n"):gmatch("([^\n]*)\n") do
+        local stripped = line:match("^%s*(%-%-.*)$")
+        if stripped then
+            comment_text[#comment_text + 1] = stripped
+        end
+    end
+    comment_text = table.concat(comment_text, "\n")
+
+    -- The contract the code implements is stated in the same comment.
+    check(comment_text:find("CONTRACT", 1, true) ~= nil,
+        "L4 contract: the comment states the contract")
+    check(comment_text:find("item_type", 1, true) ~= nil,
+        "L4 contract: the comment names the 6th return item_type")
+    check(comment_text:find("item_sub_type", 1, true) ~= nil,
+        "L4 contract: the comment names the 7th return item_sub_type")
+    check(comment_text:find("TYPE", 1, true) ~= nil,
+        "L4 contract: the comment says position 6 is the item's type")
+    check(comment_text:find("SUBTYPE", 1, true) ~= nil,
+        "L4 contract: the comment says position 7 is the item's subtype")
+    -- The stale names must not come back as the CONTRACT's names. They may still be named
+    -- as the CLASSIC GLOBAL's names (that is the fact being normalised away).
+    check(comment_text:find("class, subclass", 1, true) == nil,
+        "L4 contract: the old 'class, subclass' contract naming is gone from the comment")
+    check(comment_text:find("itemType", 1, true) ~= nil,
+        "L4 contract: the comment records the C_Item probe's own field names")
+    check(comment_text:find("itemSubType", 1, true) ~= nil,
+        "L4 contract: the comment records the C_Item probe's own field names")
+
+    -- The wrapper's locals carry the normalised names (the shape the rogue consumer reads).
+    check(block:find("min_level, item_type, item_sub_type =", 1, true) ~= nil,
+        "L4 contract: the wrapper's 6th/7th locals are item_type / item_sub_type")
+    check(block:find("level, min_level, item_type, item_sub_type", 1, true) ~= nil,
+        "L4 contract: the wrapper returns the normalised shape")
+    check(block:find("min_level, class, subclass", 1, true) == nil,
+        "L4 contract: the old 'class, subclass' locals are gone from the wrapper")
+
+    -- The rogue's only consumer reads the same two positions under the same names.
+    local rogue_f = assert(io.open(ROOT .. "classes/rogue.lua", "r"))
+    local rogue_src = rogue_f:read("*a")
+    rogue_f:close()
+    local rogue_start = rogue_src:find("local function item_subclass", 1, true)
+    local rogue_stop = rogue_src:find("\nend", rogue_start or 1, true)
+    check(rogue_start ~= nil and rogue_stop ~= nil,
+        "L4 contract: the rogue's item_subclass helper exists")
+    local rogue_block = rogue_src:sub(rogue_start or 1, (rogue_stop or 1) + 3)
+    check(rogue_block:find("item_type, item_sub_type = api.GetItemInfo", 1, true) ~= nil,
+        "L4 contract: the rogue reads the normalised 6th/7th positions")
+    check(rogue_block:find("_, _, _, _, _, class, subclass", 1, true) == nil,
+        "L4 contract: the old 'class, subclass' read is gone from the rogue")
+end
+
+--=========================================================================================
+-- 13c-ter. The totem-slot citation (L2): the client's own constants, per branch
+--=========================================================================================
+-- The publish-gate re-audit's L2: the compat.lua totem comment cited
+-- "Blizzard_FrameXMLBase/Constants.lua:239-244" for the 1=Fire / 2=Earth / 3=Water /
+-- 4=Air slot map. The real per-branch truth (verified against the reference repo,
+-- bench/perclient_api_truth_2026-10-20.md):
+--   classic-line : Interface/AddOns/Blizzard_FrameXMLBase/Classic/Constants.lua:286-289
+--   origin/forever: Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua:226-229
+--   live          : Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua:241-244
+-- The un-suffixed Constants.lua does not exist on the classic-line branches at all, and
+-- 239-244 is not the block on any branch.
+do
+    local f = assert(io.open(ROOT .. "compat.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local start_at = src:find("-- Totems ---", 1, true)
+    local stop_at = src:find("-- Item probes", 1, true)
+    check(start_at ~= nil, "L2 setup: the totem section exists in compat.lua")
+    check(stop_at ~= nil and start_at ~= nil and stop_at > start_at,
+        "L2 setup: the totem section is bounded by the next section")
+    local block = src:sub(start_at or 1, (stop_at or 1) - 1)
+
+    local comment_text = {}
+    for line in (block .. "\n"):gmatch("([^\n]*)\n") do
+        local stripped = line:match("^%s*(%-%-.*)$")
+        if stripped then
+            comment_text[#comment_text + 1] = stripped
+        end
+    end
+    comment_text = table.concat(comment_text, "\n")
+
+    check(comment_text:find("Classic/Constants.lua:286-289", 1, true) ~= nil,
+        "L2 citation: the classic-line totem constants cite Classic/Constants.lua:286-289")
+    check(comment_text:find("Blizzard_FrameXMLBase/Constants.lua:226-229", 1, true) ~= nil,
+        "L2 citation: the forever totem constants cite Constants.lua:226-229")
+    check(comment_text:find("Blizzard_FrameXMLBase/Constants.lua:241-244", 1, true) ~= nil,
+        "L2 citation: the live totem constants cite Constants.lua:241-244")
+    check(comment_text:find("Constants.lua:239-244", 1, true) == nil,
+        "L2 citation: the wrong 239-244 citation is gone")
+    -- The slot constants are EVIDENCE, never a runtime dependency: the addon hard-codes
+    -- 1/2/3/4, so the comment must say so (otherwise a reader assumes the globals exist).
+    check(comment_text:find("hard-codes", 1, true) ~= nil,
+        "L2 citation: the comment says the slot numbers are hard-coded, not read")
+end
+
+--=========================================================================================
+-- 13d. S1 lust-consumer reads: scan_player_aura over the Bloodlust shape
+--=========================================================================================
+-- The shaman S1 lust badge (classes/shaman.lua update_lust_state) depends on exactly
+-- two compat behaviours: the player-aura scan reports a matching lust aura's
+-- remaining time (nil, nil on a miss), and an absent row above the buff never
+-- truncates the walk (the R2 rule at the scan level). The ids themselves
+-- (2825 / 32182) stay owned by the class module - this pins the probe shape only.
+do
+    local sb = build()
+    local api = sb.st.api
+    local function lust_predicate(spell_id, name)
+        return (spell_id and (spell_id == 2825 or spell_id == 32182))
+            or name == "Bloodlust" or name == "Heroism"
+    end
+
+    sb.clock = 100
+    sb.aura_rows = {
+        { name = "Bloodlust", spell_id = 2825, expiration = 130 },
+    }
+    local remaining = api.scan_player_aura(lust_predicate)
+    eq(remaining, 30, "S1 scan: a live Bloodlust reads its remaining time")
+
+    sb.aura_rows = {}
+    local miss_remaining, miss_stacks = api.scan_player_aura(lust_predicate)
+    eq(miss_remaining, nil, "S1 scan: a miss reads nil remaining")
+    eq(miss_stacks, nil, "S1 scan: a miss reads nil stacks")
+
+    -- A nil row above the buff does not truncate the walk.
+    sb.aura_rows = {
+        [2] = { name = "Heroism", spell_id = 32182, expiration = 140 },
+    }
+    remaining = api.scan_player_aura(lust_predicate)
+    eq(remaining, 40, "S1 scan: the walk continues past an absent row")
+end
+
+--=========================================================================================
+-- 13e. X1 trinket-ICD hook: the combat-log getter probe pair
+--=========================================================================================
+-- The shared trinket row (hud.lua) arms its reversed ICD swipe from
+-- SPELL_AURA_APPLIED through api.CombatLogGetCurrentEventInfo, and stays silent
+-- where the classic combat log does not exist (the Mainline-code shape). This
+-- pins the probe pair only: the payload passes through where present, nil where
+-- absent - the HUD-level absent behaviour is pinned in hud_state section 11.
+do
+    local sb = build({ combat_log = true })
+    sb.combat_log_payload = function()
+        return 1, "SPELL_AURA_APPLIED", false, "Player-1", "Player", 0, 0,
+            "Player-1", "Player", 0, 0, 34775, "Lust for Battle", 1, "BUFF"
+    end
+    local timestamp, subevent = sb.st.api.CombatLogGetCurrentEventInfo()
+    eq(timestamp, 1, "CLEU control: the payload passes through")
+    eq(subevent, "SPELL_AURA_APPLIED", "CLEU control: the subevent passes through")
+
+    local bare = build()
+    eq(bare.st.api.CombatLogGetCurrentEventInfo(), nil,
+        "CLEU absent: no combat log reads as no payload")
+end
+
+--=========================================================================================
 -- 14. Static pin: the vendored LibRangeCheck-2.0 guard (with an in-suite bite-proof)
 --=========================================================================================
 local function rangecheck_guard_failures(src)
@@ -1289,6 +1938,162 @@ do
     local mutated = src:sub(1, (at or 1) - 1) .. src:sub((at or 1) + #guard_line)
     check(rangecheck_guard_failures(mutated) > 0,
         "LibRangeCheck bite-proof: the guard-stripped copy fails the pin")
+end
+
+--=========================================================================================
+-- 15. Name-vs-id helper (operator 2026-10-19): TBC by NAME, Era by id
+--=========================================================================================
+do
+    -- TBC Anniversary: the helper returns the NAME (never a bare id).
+    local tbc = build({ project = 5, interface = 20506 })
+    check(type(tbc.st.api.get_spell_query) == "function",
+        "name-vs-id: the shared helper exists")
+    eq(tbc.st.api.get_spell_query("Bloodlust", 2825), "Bloodlust",
+        "name-vs-id TBC: Bloodlust resolves by NAME")
+    eq(tbc.st.api.get_spell_query("Kick", 107), "Kick",
+        "name-vs-id TBC: Kick resolves by NAME")
+
+    -- Era: the helper returns the numeric ID.
+    local era = build({ project = 2, interface = 11509 })
+    eq(era.st.api.get_spell_query("Bloodlust", 2825), 2825,
+        "name-vs-id Era: Bloodlust resolves by ID")
+    eq(era.st.api.get_spell_query("Kick", 107), 107,
+        "name-vs-id Era: Kick resolves by ID")
+
+    -- Non-TBC families (Wrath) follow the Era shape (id-only, never NAME-only).
+    local wrath = build({ project = 11, interface = 38002 })
+    eq(wrath.st.api.get_spell_query("Kick", 107), 107,
+        "name-vs-id Wrath: non-TBC resolves by ID")
+
+    -- Nil-safety: a missing name on TBC degrades to nil (unknown-hides);
+    -- a missing id elsewhere degrades the same way.
+    eq(tbc.st.api.get_spell_query(nil, 2825), nil,
+        "name-vs-id TBC: a missing name is unknown (never a bare id)")
+    eq(era.st.api.get_spell_query("Kick", nil), nil,
+        "name-vs-id Era: a missing id is unknown")
+end
+
+--=========================================================================================
+-- 15b. The family rank walk follows the same rule (audit F4): TBC asks the
+-- client by NAME, Era by ID, and "not here" stays apart from "could not
+-- answer" so a caller never latches a false negative.
+--=========================================================================================
+do
+    -- TBC: the client indexes names, so the walk resolves through the name path.
+    local tbc_walk = build({ project = 5, interface = 20506 })
+    tbc_walk.spell_info[29707] = { name = "Heroic Strike" }
+    tbc_walk.spell_info["Heroic Strike"] = { name = "Heroic Strike" }
+    eq(tbc_walk.st.api.get_family_spell_id({47450, 30324, 29707, 25286, 78}), 29707,
+        "name-vs-id TBC: the rank walk resolves through the NAME path")
+    local tbc_id, tbc_state = tbc_walk.st.api.get_family_spell_id_state({47450, 30324, 29707, 25286, 78})
+    eq(tbc_id, 29707, "name-vs-id TBC: the state variant resolves the same rank")
+    eq(tbc_state, "resolved", "name-vs-id TBC: the state variant reports 'resolved'")
+
+    -- Era: the same table resolves through the id path.
+    local era_walk = build({ project = 2, interface = 11509 })
+    era_walk.spell_info[29707] = { name = "Heroic Strike" }
+    eq(era_walk.st.api.get_family_spell_id({47450, 30324, 29707, 25286, 78}), 29707,
+        "name-vs-id Era: the rank walk resolves through the ID path")
+    local era_id, era_state = era_walk.st.api.get_family_spell_id_state({47450, 30324, 29707, 25286, 78})
+    eq(era_id, 29707, "name-vs-id Era: the state variant resolves the same rank")
+    eq(era_state, "resolved", "name-vs-id Era: the state variant reports 'resolved'")
+
+    -- "Not here" (the client answered: no such spell) and "could not answer" (the
+    -- client could not be read) must stay apart - the second is retryable, the
+    -- first is final.
+    local absent_id, absent_state = era_walk.st.api.get_family_spell_id_state({48480, 47450})
+    eq(absent_id, nil, "name-vs-id: a rank the client does not have resolves nil")
+    eq(absent_state, "absent", "name-vs-id: a rank the client does not have reports 'absent'")
+
+    local unreadable = build({ project = 5, interface = 20506 })
+    unreadable.spell_info_throws = true
+    local unknown_id, unknown_state = unreadable.st.api.get_family_spell_id_state({29707, 78})
+    eq(unknown_id, nil, "name-vs-id: an unreadable client resolves no rank")
+    eq(unknown_state, "unresolved", "name-vs-id: an unreadable client reports 'unresolved'")
+    eq(unreadable.st.api.get_family_spell_id({29707, 78}), nil,
+        "name-vs-id: an unreadable client never claims a rank")
+
+    -- A restricted (secret) spell name is never used as a query and never
+    -- compared: the walk reports "unresolved" and claims no rank.
+    local restricted = build({ project = 5, interface = 20506 })
+    restricted.spell_info[29707] = { name = SECRET_SPELL_NAME }
+    local restricted_id, restricted_state = restricted.st.api.get_family_spell_id_state({29707, 78})
+    eq(restricted_id, nil, "name-vs-id: a restricted spell name resolves no rank")
+    eq(restricted_state, "unresolved", "name-vs-id: a restricted spell name reports 'unresolved'")
+    local leaked = false
+    for i = 1, #(restricted.spell_queries or {}) do
+        if restricted.spell_queries[i] == SECRET_SPELL_NAME then leaked = true end
+    end
+    check(not leaked, "name-vs-id: a restricted spell name never leaves as a query")
+end
+
+--=========================================================================================
+-- 16. R11: movement probes (hunter weave-prog): GetUnitSpeed + IsPlayerMoving
+--=========================================================================================
+do
+    -- Absent probes (every profile by default): unknown, never a reading.
+    local sb = build()
+    eq(sb.st.api.GetUnitSpeed("player"), nil, "R11 absent: GetUnitSpeed is unknown (nil)")
+    eq(sb.st.api.IsPlayerMoving(), nil, "R11 absent: IsPlayerMoving is unknown (nil)")
+
+    -- Retail profile: also absent (no probe installed there either).
+    local rsb = build({ retail = true, project = 1, interface = 120100 })
+    eq(rsb.st.api.GetUnitSpeed("player"), nil, "R11 retail absent: GetUnitSpeed is unknown")
+    eq(rsb.st.api.IsPlayerMoving(), nil, "R11 retail absent: IsPlayerMoving is unknown")
+end
+
+do
+    -- Holder tables (declared before the build: an opts closure cannot see the
+    -- `local sb` being assigned, so it reads these instead).
+    local speeds = { player = 6, target = nil }
+    local motion = { moving = true }
+    local sb = build({
+        unit_speed = function(unit) return speeds[unit] end,
+        player_moving = function() return motion.moving end,
+    })
+    local api = sb.st.api
+
+    eq(api.GetUnitSpeed("player"), 6, "R11 control: current speed passes through")
+    eq(api.IsPlayerMoving(), true, "R11 control: moving passes through")
+    speeds.player = 0
+    motion.moving = false
+    eq(api.GetUnitSpeed("player"), 0, "R11 control: standing still reads 0")
+    eq(api.IsPlayerMoving(), false, "R11 control: still reads false")
+    speeds.target = 3
+    eq(api.GetUnitSpeed("target"), 3, "R11 control: target speed reads per unit")
+    speeds.target = nil
+    eq(api.GetUnitSpeed("target"), nil, "R11 control: no target reading is unknown")
+
+    -- Secret regime: restricted readings degrade to unknown, never a comparison.
+    -- (6 is the control speed: the suite flags 7 as SECRET_CD_ENABLED.)
+    speeds.player = SECRET_SPEED
+    eq(api.GetUnitSpeed("player"), nil, "R11 secret: speed reports unknown (nil)")
+    motion.moving = SECRET_RANGE_BOOL
+    eq(api.IsPlayerMoving(), nil, "R11 secret: motion reports unknown (nil)")
+
+    -- Degenerate readings: NaN / negative / infinite / non-number speed is unknown.
+    speeds.player = 0 / 0
+    eq(api.GetUnitSpeed("player"), nil, "R11 degenerate: NaN speed is unknown")
+    speeds.player = -1
+    eq(api.GetUnitSpeed("player"), nil, "R11 degenerate: negative speed is unknown")
+    speeds.player = math.huge
+    eq(api.GetUnitSpeed("player"), nil, "R11 degenerate: infinite speed is unknown")
+    speeds.player = "fast"
+    eq(api.GetUnitSpeed("player"), nil, "R11 degenerate: non-number speed is unknown")
+
+    -- A non-boolean motion reading is unknown.
+    motion.moving = "yes"
+    eq(api.IsPlayerMoving(), nil, "R11 degenerate: non-boolean motion is unknown")
+end
+
+do
+    -- Throwing probes degrade to unknown instead of erroring.
+    local sb = build({
+        unit_speed = function() error("restricted") end,
+        player_moving = function() error("restricted") end,
+    })
+    eq(sb.st.api.GetUnitSpeed("player"), nil, "R11 throwing: speed is unknown")
+    eq(sb.st.api.IsPlayerMoving(), nil, "R11 throwing: motion is unknown")
 end
 
 --=========================================================================================

@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T23:05:00Z",
+  "run_id": "paladin-bs5-2026-10-19",
+  "agent_name": "paladin-forever-ids",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Making the NAME the key and the id only a confirmation (one helper: the confirmed id whose own client-resolved name is the expected name) is what makes 'a wrong id degrades to unknown' provable rather than asserted: a wrong id makes the client answer a different spell's name, so the latch stays unknown and the archived seal input stands. Re-reading the tree before writing showed the SoD hard-wait render was ALREADY in nextaction_ui.lua, so that file needed no change - and the one defensive edit I tried was reverted because the engine only publishes the wait together with a hold (dead code, no killable pin). Seven mutations on a /tmp/opencode copy killed every new pin.",
+    "what_was_hard": "The client API shape for a name-anchored id is not knowable offline: the classic global and C_Spell differ per family, and the id->name direction is the one that answers on the classic path. Anchoring on the client-resolved name of the id (not on a name->id lookup) keeps the discipline working on the client where the spell exists and inert everywhere else. The anchors are English, so a localized client stays unknown until its names are added - a deliberate, documented limit, not an oversight.",
+    "skill_gap": "The offline harness cannot prove the 1.60.x GetSpellInfo for 1311703 / 1311704 / 10333, so the ids stay web-confirmed and client-unconfirmed; the operator's session is the only closure. The runtime-diag reader for the new counter lives in main.lua, which this lane does not own."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/paladin-forever-ids/journal.md § 2026-10-19 BS-5 landed"
+}

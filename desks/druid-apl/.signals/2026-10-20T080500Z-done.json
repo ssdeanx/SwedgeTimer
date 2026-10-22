@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T08:05:00Z",
+  "run_id": "druid-apl-residuals-2026-10-20",
+  "agent_name": "druid-apl",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The dispatch's ownership question (HU-14: who owns the Forever chain fix) was answered by the dispatch itself, so the lane could act instead of escalating. The APL's own files settled the fix: the Forever APL's slot where the Mangle row stood is EMPTY (its builders are 9830 Shred and 9850 Claw), so deleting the branch is the honest change - not inventing a substitute spell. The gate the utility lane said was missing for the Cat Form turned out to be a spec READ, not a setting: the class's own Feral-tree talent probe (api.is_spell_known on 17392 / 27011 / 17007) answers 'is this a feral druid' on every family the row belongs to.",
+    "what_was_hard": "Two judgement calls that a reviewer should look at: (1) the same defect class also existed in the BEAR chain's fallback on the same client (rule 3 named a Mangle on a client with no Mangle) - HU-14 only named the cat chain, and I closed it anyway on the 'never a wrong action' rule, stated plainly in the bench file. (2) the Cat Form arm adds one HOLD to the guide's own surface, and the guide ships enabled - so a Feral-tree druid proven out of the cat form now sees the call. No options widget was added (option_tables.lua is out of scope), and the KNOWN LIMIT (a Feral-tree bear tank out of the bear form can still be told to shift - no cat-vs-bear talent read exists outside WotLK) is written into the row's own gate text rather than hidden.",
+    "skill_gap": "The `live` flag's definition is still unsettled cross-class (HU-13 is open): this lane now reads it as the bench's own prose ('the read exists AND the line can be evaluated from it'), which flipped the Bloodlust row to live = false. If the operator rules the other way (the hunter's 'the read exists' reading), that one flag has to flip back - the engine flag and the needs text do not move."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Reconcile: (a) close HU-14 (the FOREVER F5 Mangle branch and the FOREVER Mangle rotation row are gone; the Bite and the builder are reachable again on that client); (b) the three filed follow-ups in bench/druid_apl_residuals_2026-10-20.md section 7 - the SoD Mangle-rune case (the same defect class on a family HU-14 does not cover), the cat-vs-bear spec read, and the Bloodlust option; (c) the lane row for this desk in desks/journal.md is the orchestrator's to write (no session id was handed to the desk). Validation owner: the orchestrator."
+  }
+}

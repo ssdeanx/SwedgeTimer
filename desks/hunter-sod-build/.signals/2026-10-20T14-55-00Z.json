@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T14:55:00Z",
+  "run_id": "hunter-sod-build-2026-10-20",
+  "agent_name": "hunter-sod-build",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The client's own spell data settled the ids the bench could not: the operator's local wow.export dump (the 1.15.9 SoD client - it carries 19574 as a Beast Mastery ability) and warcraftdb's per-expansion domains (each client's own table; a miss is a 'Not Found' page). The wowsims repo the previous lane cited is 404 for every branch, so its citations were re-sourced from the clients instead. ONE decision (the class's own SoD rune probe) now drives both surfaces, so the guide and the HUD cannot disagree about the running build.",
+    "what_was_hard": "The Mists client's Raptor Strike id could not be sourced - its own table carries no rank this tree knows - so the slot is filtered with the reason recorded rather than guessed, which rippled into a new Mists guide slot set and the per-family counts. The bench's premise that the Era-base client lacks the Bestial Wrath turned out to be false (the same client HAS it): the shipped behaviour follows the brief, but the finding is filed for the operator. The file sits at Lua 5.1's 60-upvalue ceiling (resolve_guide_icons now has 59).",
+    "skill_gap": "Re-verifying a bench citation needs a client-side source, not a sim repository: a sim repo's ids can be the wrong CLIENT's ids (the Cata cell was the retail Cata sim's 48996, not the Cata Classic client's 2973)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

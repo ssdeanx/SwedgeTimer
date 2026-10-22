@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T21:40:00Z",
+  "run_id": "rogue-drills-2026-10-19",
+  "agent_name": "rogue-drills",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Fetching the wowsims wotlk APLs LIVE (raw.githubusercontent) instead of trusting the audit's paraphrases: the Hunger for Blood rule (auraRemainingTime <= 1s) was confirmed verbatim, while the audit's 'Killing Spree (51690)' and 'Cut to the Chase 57934' ids were wrong (54758 and 57934=Tricks) - no id reaches our tables (the addon resolves every spell by name), so it was a documentation fix, not a code fix. Aligning with the house pattern the SHARED engine already reads (practice_rotation_for / practice_rotation_family / practice_context, the entry fields action/label/kind/description/source, the st.<CLASS> namespace mirror for HU-7) turned an integration guess into a contract.",
+    "what_was_hard": "The orchestrator's contract fixed three names, but the shipped engine reads more of the class side than the contract names - and it had already landed (practice.lua's H.practice_class_module, practice_ui's rotation-slice reader, the sibling lanes' shaman/druid/paladin class sides). My first pass guessed the rotation-entry shape (sim/reason) and the POOL verdict (action='pool'); both would have been silently wrong against the shipped engine. Reading the engine BEFORE writing the class side was the fix.",
+    "skill_gap": "I wrote the class-side contract before reading the shared engine's lookup path, and shipped a first pass that the engine would have ignored (the rotation table's fields, the hold verdict). The habit to build: grep the CONSUMER for every field name it reads before defining the producer's shape."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

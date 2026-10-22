@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-20T13:50:31Z",
+  "run_id": "compat-m3-contract-2026-10-20",
+  "agent_name": "compat-m3",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The caller census is what made the reading decidable instead of arguable: 64 matched lines (59 real consumer lines) across the tree, of which exactly two consume the RAW return in a way that distinguishes false from nil (classes/rogue.lua:1263 -> rogue_guide.lua:1614 'args.ar_known == false', and diag.lua:506 -> diag.lua:482 'type(known) == \"boolean\"'). Both files belong to sibling lanes, so reading (a) could not be made behaviour-neutral from inside compat.lua - the answer had to be (b) plus an additive state accessor, which is the pattern the repo already ships for the same problem (api.get_family_spell_id_state, compat-f4 lane). Proving the 'no behaviour change' claim with a paired baseline-vs-current equivalence run (8 client profiles x 4 ids, 150 checks) instead of asserting it is what turned the claim into evidence; the mutation proofs (10/10) then showed every new pin is load-bearing, and the first pass found three pins that were NOT (a substring pin satisfied by the code's own string literals, and two consumer pins that a reworded consumer slipped past).",
+    "what_was_hard": "Two traps. First, the obvious textual pins are weaker than they look: 'never nil' and 'not_known' appear in the code half of the section too, so a pin that searched the whole block was satisfied by the implementation, not the documentation - the comment pins now scan comment lines only. Second, the tree was moving under the lane: an early full-harness run showed two red checks in tests/druid_state.lua whose labels did not exist in the file on disk any more, because a druid lane rewrote it mid-run - the failure looked like mine and was not, and believing it would have sent the lane chasing a phantom.",
+    "skill_gap": "Pinning a contract across files needs the pin to be about the CONSUMER SHAPE, not the exact text of a file another lane owns, and that tension has no free answer: the current pins read three exact lines in classes/rogue.lua, rogue_guide.lua and diag.lua, so a legitimate rewrite by an owning lane turns this suite red. The pin is the intended signal (the justification for the binary contract changed and must be re-decided), but it is a cross-lane coupling that has to be declared rather than buried - hence HU-15 and the bench artifact's section 6."
+  },
+  "escalation": {
+    "reason": "HU-15: the state accessor api.is_spell_known_state is additive and inert today - no caller needs it yet, while the brief said to add a tri-state only where a caller needs it. The operator rules whether it stays (the contract is then complete for the next unknown-hides row) or goes (a small deletion, nothing else in the lane moves).",
+    "blocked_on": null,
+    "recommendation": "Keep it: it is the repo's own compat-f4 pattern, it makes the distinction observable without touching a single caller, and it is the difference between 'the comment says unknown' and 'the API says unknown'. Not blocking - the lane is landed and green under either ruling."
+  }
+}

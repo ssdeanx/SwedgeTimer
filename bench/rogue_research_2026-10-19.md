@@ -193,6 +193,14 @@ CONFIRMED as guide claims: https://www.icy-veins.com/wow-forever/combat-rogue-me
   Eviscerate (or if SnD already up / target short-lived). Energy: constantly
   refilling bar — never sit at full. CP persist on target across swaps but do
   NOT transfer to a new target.
+  **NOTE added 2026-10-20 (desk `corpus-corrections`):** "Riposte" here is the
+  **guide's** word for the Forever β30 guide's rotation line — this file
+  attaches **no id** to it, and none should be inferred from it. The bench id
+  **1310703** (which the corpus once paired with "Riposte") is **Venom** on the
+  Forever client, not Riposte: `bench/rogue_apl_utility_build_2026-10-20.md`
+  §3.8; `bench/rotation_gap_vs_apl_2026-10-20.md` §0.0 **R7**. The
+  "Cloak of Shadows 31224" cited for WotLK in §1.4 is a different spell with
+  its own id and is unaffected by that correction.
 - Poisons: Instant on BOTH weapons at this stage; poisons have BOTH duration
   AND charges (running out of charges mid-fight is the common failure, not
   duration expiry). Watch both on the buff bar.

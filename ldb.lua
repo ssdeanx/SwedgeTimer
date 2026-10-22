@@ -213,11 +213,20 @@ function ldb.update(self, hand)
     ldb.last_update = now
 
     local d = self and self.mainhand
-    if type(d) ~= "table" then return end
-    local speed = d.speed
-    local ends_at = d.ends_at
-    -- No swing state yet (pre-init, or a client with no mainhand speed): stay quiet.
-    if type(speed) ~= "number" or type(ends_at) ~= "number" or speed <= 0 then return end
+    local speed = type(d) == "table" and d.speed or nil
+    local ends_at = type(d) == "table" and d.ends_at or nil
+    -- No swing state yet (pre-init, or a client with no mainhand speed): publish
+    -- the "--" sentinel (the tooltip's "Swing remaining: --" shape) instead of
+    -- leaving a stale number up. J2 (hunter-proctor-fixes): "--" is the unknown
+    -- contract - never 0.00, which would read as a landed swing; last_value
+    -- tracks it so the sentinel publishes exactly once per stateless run.
+    if type(speed) ~= "number" or type(ends_at) ~= "number" or speed <= 0 then
+        if ldb.last_value ~= "--" then
+            obj.value = "--"
+            ldb.last_value = "--"
+        end
+        return
+    end
     local remaining = ends_at - now
     if remaining < 0 then remaining = 0 end
 

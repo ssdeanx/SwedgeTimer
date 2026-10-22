@@ -1,0 +1,1 @@
+{"status":"done","desk":"rogue-erroraudit","verdict":"ADEQUATE","findings":8,"bench":"bench/rogue_erroraudit_2026-10-19.md","notes":"read-only; 1 orchestrator decision (F3), 4 low hardenings (F1 proven offline), 3 info/provisional; harness 37/0 + luacheck 2/0 re-verified"}

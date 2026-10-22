@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-19T20:20:00Z",
+  "agent_name": "class-f4-latch",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The three-valued verdict made the class-side fix a two-line shape: latch the id on 'resolved', latch false only on 'absent', latch nothing on 'unresolved'. Pinning it with a client profile that answers NO id (the name-only TBC fixture with the C_Spell id -> name bridge) proved the direction rather than asserting it: a resolved rank on that client can only come from the name path. The mutation battery caught its own false kills (two mutants were Lua 5.1 syntax errors - 'return' must end a block - so the battery now parse-checks every mutant with luac5.1 -p before running the suite).",
+    "what_was_hard": "Deciding the retry bound: the latch is also read from the per-frame gather_guide_inputs path, so an unbounded retry would re-walk the rank table every frame on a client that cannot answer. Mirroring the rogue lane's 5s per-table backoff fixed it without touching the resolved path.",
+    "skill_gap": "The bench artifact's first draft asserted the harness step-count delta without checking tests/run.sh's mtime; the sibling lane's edit was the cause and it was only verifiable after the fact. Verify the cause of a count change before writing it down."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}
