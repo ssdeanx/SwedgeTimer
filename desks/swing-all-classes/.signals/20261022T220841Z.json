@@ -1,0 +1,18 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "20261022T220841Z",
+  "agent_name": "swing-all-classes",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "hunter precedent gave an exact pattern to replicate; per-matcher /tmp mutations proved every new leg",
+    "what_was_hard": "rogue fixture by-name collision flipped unrelated legs; warrior 200-local ceiling forced matcher relocation; Lua 5.1 return-last rule broke two mutant scripts",
+    "skill_gap": "none"
+  },
+  "escalation": null
+}

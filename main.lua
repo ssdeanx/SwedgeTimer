@@ -1157,7 +1157,15 @@ function ST:GCD_OVER()
 	end
 	self.gcd.expires = nil
 	for hand in self:iter_hands() do
-		self:get_visuals_frame(hand).gcd_bar:Hide()
+		-- HU-22 lazy bars: an unbuilt hand has no anchor/visuals frames (they
+		-- are created once by ensure_bar), so skip it instead of indexing
+		-- through nil. gcd_bar is created unconditionally with the visuals
+		-- frame (bars.lua init_visuals_template), so a built hand always
+		-- carries one. The typeof guard mirrors bring_up_hand's seam guard:
+		-- bars.lua owns bar_is_built.
+		if type(self.bar_is_built) ~= "function" or self:bar_is_built(hand) then
+			self:get_visuals_frame(hand).gcd_bar:Hide()
+		end
 	end
 end
 

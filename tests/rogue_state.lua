@@ -240,6 +240,23 @@ local ROGUE_SPELLS_BY_ID = {
     [135] = { name = "Ghostly Strike", icon = "i_gs" },
     [137] = { name = "Hyperspeed Acceleration", icon = "i_hs" },
 }
+-- R1 name-shape legs: test-side pairings of the shipped utility probe ids
+-- with their APL-cited aura names (mechanism legs only - the tests model
+-- the client answering its own name for the probed id). Master of
+-- Subtlety (the SoD rune aura, classes/rogue.lua APL i=7), Ambush and
+-- Venom (the Forever opener rows, wowsims spelldata), Garrote (the
+-- spellCurrentCost row) and Adrenaline Rush (the APL buff disjunct).
+-- Kept OUT of ROGUE_SPELLS_BY_ID on purpose: those tables drive every
+-- name->id resolution in the suite, and duplicate names there would flip
+-- unrelated resolutions. The Wrath 58426 aura files NO pairing: its name is
+-- UNCONFIRMED in-repo, so only its id shape is pinned.
+local UTILITY_AURA_NAMES = {
+    [425096] = "Master of Subtlety",
+    [462707] = "Ambush",
+    [1310703] = "Venom",
+    [11290] = "Garrote",
+    [13750] = "Adrenaline Rush",
+}
 local ROGUE_SPELLS_BY_NAME = {}
 for id, entry in pairs(ROGUE_SPELLS_BY_ID) do
     ROGUE_SPELLS_BY_NAME[entry.name] = id
@@ -285,12 +302,18 @@ local function build(opts)
     end
     -- Real spell data by name: the module resolves every slot id through the client's
     -- own GetSpellInfo (names, never remembered ids), so the fixture answers both.
+    -- Numeric probes for the shipped utility-aura ids answer the test-side
+    -- pairing above (the client's own localized name for the probed id); every
+    -- other numeric probe answers only for a listed rank.
     env.GetSpellInfo = function(spell)
         if sb.missing_spells and sb.missing_spells[spell] then
             return nil
         end
         local id
         if type(spell) == "number" then
+            if UTILITY_AURA_NAMES[spell] then
+                return UTILITY_AURA_NAMES[spell], nil, "i_utility", 0, 0, 0, spell
+            end
             id = ROGUE_SPELLS_BY_ID[spell] and spell or nil
         else
             id = ROGUE_SPELLS_BY_NAME[spell]
@@ -2213,7 +2236,8 @@ do
     end
     eq(era_ar.remaining, 0, "Era: a NAME probe never fires (id-only)")
 
-    -- Auras: TBC matches the English name only; Era the numeric id only.
+    -- Auras: id primary, name secondary on every family (the hunter R1
+    -- discipline). Either shape lands the read on either client.
     tbc.auras = { player = { { name = "Slice and Dice", duration = 30,
         expiration = tbc.clock + 20, spell_id = 999999 } } }
     local tbc_snd = tbc.ST.ROGUE.get_hud_state(tbc.ST,
@@ -2223,7 +2247,7 @@ do
         expiration = tbc.clock + 20, spell_id = 101 } } }
     tbc_snd = tbc.ST.ROGUE.get_hud_state(tbc.ST,
         tbc.ST.ROGUE.HUD_SLOTS[1], tbc.clock)
-    eq(tbc_snd.remaining, 0, "TBC: a bare-id aura never matches (greyed, not found)")
+    eq(tbc_snd.remaining, 20, "TBC: the id arm lands a foreign-named aura")
     era.auras = { player = { { name = "WRONG NAME", duration = 30,
         expiration = era.clock + 20, spell_id = 101 } } }
     local era_snd
@@ -2242,9 +2266,10 @@ do
                 era.ST.ROGUE.HUD_SLOTS[i], era.clock)
         end
     end
-    eq(era_snd.remaining, 0, "Era: a NAME-only aura never matches")
+    eq(era_snd.remaining, 20, "Era: the name arm lands an id-less aura")
 
-    -- Lust canary: TBC matches the English name, non-TBC the numeric id.
+    -- Lust canary: id primary, name secondary on every family. Either shape
+    -- lands the read on either client.
     tbc.auras = { player = { { name = "Bloodlust", duration = 40,
         expiration = tbc.clock + 30, spell_id = 999999 } } }
     tbc.ST.rogue_lust_at = nil
@@ -2255,8 +2280,8 @@ do
         expiration = tbc.clock + 30, spell_id = 2825 } } }
     tbc.ST.rogue_lust_at = nil
     tbc.ST.ROGUE.update_lust_state(tbc.ST, tbc.clock)
-    eq(tbc.ST.rogue_lust_remaining, nil,
-        "TBC: a bare lust id never matches")
+    check(tbc.ST.rogue_lust_remaining ~= nil,
+        "TBC: a bare lust id still lands (Anniversary id shape)")
     tbc.auras = {}
     local wr = build({ project = 11 })
     wr.ST.ROGUE.post_init(wr.ST)
@@ -2287,6 +2312,11 @@ do
     end
     check(not tbc_bare, "TBC: no bare-id GetSpellInfo during the label")
     tbc.st.api.GetSpellInfo = real_tbc_info
+    -- The shared era build still files the synthetic name-only SnD row above,
+    -- which the new name arm reads as up: reset to a row both arms miss so the
+    -- engine recommends the builder, exactly the label's precondition.
+    era.auras = { player = { { name = "WRONG NAME", duration = 30,
+        expiration = era.clock + 20, spell_id = 999999 } } }
     era.power[3], era.power[4] = 90, 0
     eq(era.ST.ROGUE.get_rotation_key(era.ST), "Saber Slash",
         "Era: the label resolves through the ID (all known: Saber leads)")
@@ -3928,6 +3958,122 @@ do
     end
     check(src:find(":SetFont(", 1, true) == nil,
         "font: no direct SetFont call survives in classes/rogue.lua")
+end
+
+--=========================================================================================
+-- R1 name-carrying payloads: the aura matchers read id or name on every
+-- family (id primary, name secondary). Era rides numeric ids, TBC Anniversary
+-- can ride name-carrying/id-less rows (compat.lua); either shape lands the
+-- read on either client. A foreign aura changes nothing.
+--=========================================================================================
+do
+    -- Era: the id shape lands the Rupture guide read, and the name shape does too.
+    local sb = build({ project = 2 })
+    local RST = sb.ST
+    sb.auras = { target = { { name = "Rupture", duration = 16,
+        expiration = sb.clock + 9, spell_id = 102 } } }
+    local out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.rupture_remains, 9, "Era: the Rupture id lands the guide read")
+
+    sb.auras = { target = { { name = "Rupture", duration = 16,
+        expiration = sb.clock + 9, spell_id = nil } } }
+    out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.rupture_remains, 9, "Era: an id-less Rupture row lands the guide read too")
+end
+
+do
+    -- TBC Anniversary: the name shape lands the read, and so does the id shape -
+    -- including a localized-client-style row whose name differs from the
+    -- resolved English one.
+    local sb = build({ project = 5 })
+    local RST = sb.ST
+    sb.auras = { target = { { name = "Rupture", duration = 16,
+        expiration = sb.clock + 9, spell_id = nil } } }
+    local out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.rupture_remains, 9, "TBC: an id-less Rupture row lands the guide read")
+
+    sb.auras = { target = { { name = "Rupture", duration = 16,
+        expiration = sb.clock + 9, spell_id = 102 } } }
+    out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.rupture_remains, 9, "TBC: the Rupture id lands the guide read")
+
+    sb.auras = { target = { { name = "Ruptura", duration = 16,
+        expiration = sb.clock + 9, spell_id = 102 } } }
+    out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.rupture_remains, 9, "TBC: the id arm lands a foreign-named Rupture row")
+
+    -- A foreign aura changes nothing.
+    sb.auras = { target = { { name = "Scare Beast", duration = 16,
+        expiration = sb.clock + 9, spell_id = nil } } }
+    out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.rupture_remains, nil, "TBC: an unrelated aura leaves Rupture missing")
+end
+
+do
+    -- The utility presence read rides the same matcher on the Forever shapes:
+    -- Garrote by id and by name, Ambush by name, and a foreign aura reads down.
+    local sb = build()
+    sb.st.family = "FOREVER"
+    local RST = sb.ST
+    sb.auras = { target = { { name = "Garrote", duration = 12,
+        expiration = sb.clock + 7, spell_id = 11290 } } }
+    local out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.garrote_dot_active, true, "Forever: the Garrote id reads the dot up")
+
+    sb.auras = { target = { { name = "Garrote", duration = 12,
+        expiration = sb.clock + 7, spell_id = nil } } }
+    out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.garrote_dot_active, true, "Forever: an id-less Garrote row reads the dot up")
+
+    sb.auras = { player = { { name = "Ambush", duration = 10,
+        expiration = sb.clock + 5, spell_id = nil } } }
+    out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.ambush_cue_active, true, "Forever: an id-less Ambush row reads the cue up")
+
+    sb.auras = { target = { { name = "Scare Beast", duration = 12,
+        expiration = sb.clock + 7, spell_id = nil } } }
+    out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.garrote_dot_active, false, "Forever: an unrelated aura reads the dot down")
+end
+
+do
+    -- The SoD Master of Subtlety row reads by id and by name; the Wrath 58426
+    -- aura pins its id shape only (its name is UNCONFIRMED in-repo).
+    local sb = build()
+    sb.st.family = "ERA"
+    sb.ST.rogue_is_sod = true
+    local RST = sb.ST
+    sb.auras = { player = { { name = "Master of Subtlety", duration = 10,
+        expiration = sb.clock + 5, spell_id = 425096 } } }
+    local out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.master_of_subtlety_active, true, "SoD: the MoS id reads the aura up")
+
+    sb.auras = { player = { { name = "Master of Subtlety", duration = 10,
+        expiration = sb.clock + 5, spell_id = nil } } }
+    out = RST.ROGUE.gather_guide_inputs(RST, {})
+    eq(out.master_of_subtlety_active, true, "SoD: an id-less MoS row reads the aura up")
+
+    local wrath = build()
+    wrath.st.family = "WRATH"
+    sb.auras = nil
+    wrath.auras = { player = { { name = "Vanish", duration = 10,
+        expiration = wrath.clock + 5, spell_id = 58426 } } }
+    local wout = wrath.ST.ROGUE.gather_guide_inputs(wrath.ST, {})
+    eq(wout.vanished_active, true, "Wrath: the 58426 id reads the Vanish aura up")
+end
+
+do
+    -- Era and Anniversary (TBC) run no utility-aura rows: the presence inputs
+    -- stay nil there by construction, so no name-carrying row can misread.
+    local era = build({ project = 2 })
+    local eout = era.ST.ROGUE.gather_guide_inputs(era.ST, {})
+    eq(eout.ambush_cue_active, nil, "Era: no utility aura row is read")
+    eq(eout.garrote_dot_active, nil, "Era: no Garrote row is read")
+
+    local tbc = build({ project = 5 })
+    local tout = tbc.ST.ROGUE.gather_guide_inputs(tbc.ST, {})
+    eq(tout.ambush_cue_active, nil, "TBC: no utility aura row is read")
+    eq(tout.vanished_active, nil, "TBC: no Vanish row is read")
 end
 
 --=========================================================================================

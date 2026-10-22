@@ -51,6 +51,11 @@ local cleave_current_id
 -- here, with the other cached ranks, because the cast bar's fallback reads it.
 local slam_current_id
 
+-- Localized-name retry cadence on a mute client (up here with the other
+-- R1 name-set state: the SUCCEEDED / FAILED_QUIET clear matchers below read
+-- it, and a later local would be invisible to them).
+local WARRIOR_NAMES_RETRY_S = 5
+
 -- Blood Surge proc aura: 46916 is the WotLK talent proc, 413399 is the SoD
 -- Blood Surge rune aura (both SoD APLs gate Slam 11605 on auraIsActive 413399;
 -- the provider matched only 46916, so rule 3 never fired on SoD).
@@ -1037,13 +1042,115 @@ function ST.WARRIOR.on_rage_update(self)
     end
 end
 
+-- Queued-melee localized names (R1): the client's own names for every Heroic
+-- Strike / Cleave rank, resolved once through GetSpellInfo and retried at the
+-- shared throttled cadence while the client's spell data is not up yet (the
+-- debuff-name discipline). Anniversary (UNCONFIRMED) may send the spell name
+-- where classic sends the numeric id in the event payloads below (the
+-- interrupt clear and the SPELL_MISSED dodge branch). The per-ability sets
+-- serve the per-ability clear arms; the interrupt
+-- path keeps the combined read (it clears both flags together).
+local WARRIOR_HS_NAME = "Heroic Strike"
+local WARRIOR_CLEAVE_NAME = "Cleave"
+local hs_localized_names
+local cleave_localized_names
+local hs_cleave_names_retry_at = 0
+
+local function resolve_hs_cleave_names(now)
+    if (hs_localized_names == nil or cleave_localized_names == nil)
+        and now >= hs_cleave_names_retry_at then
+        local hs_names, cleave_names = {}, {}
+        for id in pairs(hs_ids) do
+            local name = api.GetSpellInfo(id)
+            if name then
+                hs_names[name] = true
+            end
+        end
+        for id in pairs(cleave_ids) do
+            local name = api.GetSpellInfo(id)
+            if name then
+                cleave_names[name] = true
+            end
+        end
+        if next(hs_names) ~= nil then
+            hs_localized_names = hs_names
+        end
+        if next(cleave_names) ~= nil then
+            cleave_localized_names = cleave_names
+        end
+        if next(hs_names) == nil and next(cleave_names) == nil then
+            hs_cleave_names_retry_at = now + WARRIOR_NAMES_RETRY_S
+        end
+    end
+end
+
+local function is_warrior_queued_melee_proc_name(name, now)
+    if name == WARRIOR_HS_NAME or name == WARRIOR_CLEAVE_NAME then
+        return true
+    end
+    resolve_hs_cleave_names(now)
+    return (hs_localized_names ~= nil and hs_localized_names[name] == true)
+        or (cleave_localized_names ~= nil and cleave_localized_names[name] == true)
+end
+
+-- Per-ability clear matchers for the SUCCEEDED / FAILED_QUIET hooks below: id
+-- primary, name secondary on every family (the hunter R1 discipline). The id
+-- table reads first (Era payloads, unchanged); a name token - the spell id
+-- slot or the guid slot carrying the localized name on a name-carrying
+-- Anniversary payload - matches the literal English fallback, then the
+-- client's own localized names for that ability's ranks. A cold spell cache
+-- reads nil and retries next event (rare event-path calls, never per-frame).
+-- Nil-safe: anything unmatchable reads false, never a guess.
+local function is_warrior_hs_token(token, now)
+    if token == nil then
+        return false
+    end
+    if hs_ids[token] ~= nil then
+        return true
+    end
+    if type(token) ~= "string" then
+        return false
+    end
+    if token == WARRIOR_HS_NAME then
+        return true
+    end
+    resolve_hs_cleave_names(now)
+    return hs_localized_names ~= nil and hs_localized_names[token] == true
+end
+
+local function is_warrior_cleave_token(token, now)
+    if token == nil then
+        return false
+    end
+    if cleave_ids[token] ~= nil then
+        return true
+    end
+    if type(token) ~= "string" then
+        return false
+    end
+    if token == WARRIOR_CLEAVE_NAME then
+        return true
+    end
+    resolve_hs_cleave_names(now)
+    return cleave_localized_names ~= nil and cleave_localized_names[token] == true
+end
+
 function ST.WARRIOR.on_spellcast_failed_quiet(self, unit_id, cast_guid, spell_id)
-    if hs_ids[spell_id] ~= nil then
+    -- R1 name-carrying payloads (Anniversary: the name rides the guid slot when
+    -- the id is absent) clear through the client's own localized names, exactly
+    -- like the INTERRUPTED/FAILED path; id-carrying payloads clear exactly as
+    -- before. The two arms stay separate: each clears only its own ability.
+    local token = spell_id
+    if token == nil then
+        token = cast_guid
+    end
+    local now = api.get_time()
+    if is_warrior_hs_token(token, now) then
         self.hs_queued = false
         self:set_bar_color("mainhand")
         return
     end
-    if cleave_ids[spell_id] ~= nil then
+    if is_warrior_cleave_token(token, now) then
         self.cleave_queued = false
         self:set_bar_color("mainhand")
         return
@@ -1060,12 +1167,19 @@ function ST.WARRIOR.on_spellcast_succeeded(self, unit_target, cast_guid, spell_i
         and self.WARRIOR.is_overpower_cast(spell_id, cast_guid, api.get_time()) then
         self.warrior_overpower_proc_until = nil
     end
-    if hs_ids[spell_id] ~= nil then
+    -- Same R1 name-carrying rule as the quiet path above: the landed queued
+    -- ability clears its tint whether the client reports the id or the name.
+    local token = spell_id
+    if token == nil then
+        token = cast_guid
+    end
+    local now = api.get_time()
+    if is_warrior_hs_token(token, now) then
         self.hs_queued = false
         self:set_bar_color("mainhand")
         return
     end
-    if cleave_ids[spell_id] ~= nil then
+    if is_warrior_cleave_token(token, now) then
         self.cleave_queued = false
         self:set_bar_color("mainhand")
         return
@@ -1536,7 +1650,6 @@ local WARRIOR_DEBUFF_HEIGHT = 6           -- all five reference debuff bars are 
 local WARRIOR_SHIELD_BLOCK_HEIGHT = 4     -- WARRIOR_SHIELD_BLOCK_BAR_HEIGHT (Constants.lua:166)
 local WARRIOR_SLAM_HEIGHT = 4             -- the reference slam bar is 4 px (ClassMods.lua:1935)
 local WARRIOR_GLOW_WINDOW = 4             -- glow inside the final 4 s (GLOW_WINDOW constants)
-local WARRIOR_NAMES_RETRY_S = 5           -- localized-name retry cadence on a mute client
 -- The HUD's and the BAR's own style constants ride the MODULE TABLE, not
 -- file-scope locals: this module sits at the Lua 5.1 ceiling for file-scope
 -- locals (200), so one more `local` here would be a LOAD FAILURE on every
@@ -2157,46 +2270,6 @@ local function is_warrior_slam_token(token, now)
     return slam_localized_names ~= nil and slam_localized_names[token] == true
 end
 
--- Queued-melee localized names (R1): the client's own names for every Heroic
--- Strike / Cleave rank, resolved once through GetSpellInfo and retried at the
--- shared throttled cadence while the client's spell data is not up yet (the
--- debuff-name discipline). Anniversary (UNCONFIRMED) may send the spell name
--- where classic sends the numeric id in the SPELL_MISSED dodge branch below.
-local WARRIOR_HS_NAME = "Heroic Strike"
-local WARRIOR_CLEAVE_NAME = "Cleave"
-local hs_cleave_localized_names
-local hs_cleave_names_retry_at = 0
-
-local function resolve_hs_cleave_names(now)
-    if hs_cleave_localized_names == nil and now >= hs_cleave_names_retry_at then
-        local names = {}
-        for id in pairs(hs_ids) do
-            local name = api.GetSpellInfo(id)
-            if name then
-                names[name] = true
-            end
-        end
-        for id in pairs(cleave_ids) do
-            local name = api.GetSpellInfo(id)
-            if name then
-                names[name] = true
-            end
-        end
-        if next(names) ~= nil then
-            hs_cleave_localized_names = names
-        else
-            hs_cleave_names_retry_at = now + WARRIOR_NAMES_RETRY_S
-        end
-    end
-end
-
-local function is_warrior_queued_melee_proc_name(name, now)
-    if name == WARRIOR_HS_NAME or name == WARRIOR_CLEAVE_NAME then
-        return true
-    end
-    resolve_hs_cleave_names(now)
-    return hs_cleave_localized_names ~= nil and hs_cleave_localized_names[name] == true
-end
 
 -- Fallback cast duration when the client has no live cast window: the resolved rank's
 -- cast time from the client's spell data, else the reference's 1.5 s default

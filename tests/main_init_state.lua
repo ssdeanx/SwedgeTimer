@@ -854,6 +854,38 @@ do
 end
 
 --=========================================================================================
+-- 4b-ii) HU-22 lazy bars: GCD_OVER skips hands with no visuals frame
+--=========================================================================================
+do
+    -- Three hands, one never built: the offhand anchor is torn down after the
+    -- init arc, which is exactly how bar_is_built reads an unbuilt hand (its
+    -- anchor frame was never created). The fixture does not load bars.lua, so
+    -- the leg wires the seam main.lua reads as the exact bars.lua mirror.
+    local b = boot({ class = "HUNTER" })
+    local T, F = b.ST, b.sb
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    T.bar_is_built = function(self, hand)
+        return self:get_anchor_frame(hand) ~= nil
+    end
+    T.offhand.anchor_frame = nil
+    check(not T:bar_is_built("offhand"), "fixture: the torn-down offhand reads unbuilt")
+    check(T:bar_is_built("mainhand"), "fixture: the mainhand still reads built")
+
+    F.lgc_cb["GCD_STARTED"]("GCD_STARTED", 1.2, 101.2)
+    local touches = #F.touches
+    local ok, err = pcall(T.GCD_OVER, T)
+    check(ok, "GCD_OVER with an unbuilt hand does not throw (" .. tostring(err) .. ")")
+    eq(T.gcd.expires, nil, "GCD_OVER still clears the expiry")
+    check(touched_since(b, touches, "mainhand.gcd_bar:Hide"),
+        "GCD_OVER still hides a built hand's gcd bar")
+    check(touched_since(b, touches, "ranged.gcd_bar:Hide"),
+        "GCD_OVER still hides the other built hand's gcd bar")
+    check(not touched_since(b, touches, "offhand.gcd_bar:Hide"),
+        "GCD_OVER never touches the unbuilt hand's gcd bar")
+end
+
+--=========================================================================================
 -- 4c) Callback fan-out isolation (H3): one throwing handler is contained and counted
 --=========================================================================================
 do

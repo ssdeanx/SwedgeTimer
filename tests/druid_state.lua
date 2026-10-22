@@ -4035,6 +4035,152 @@ do
         "comment: the FOR THE RECORD note states the name leg as conditional and UNCONFIRMED")
 end
 
+--=========================================================================================
+-- R1 name-carrying payloads: the Maul queue tint clears by id or by name on
+-- every family (id primary, name secondary). Era rides numeric ids, TBC
+-- Anniversary can ride the name in the guid slot with a nil id (compat.lua);
+-- either shape clears on either client. A foreign name changes nothing.
+--=========================================================================================
+do
+    -- Era: the numeric-id success clears, and the literal English name clears too.
+    local sb = build({ project = 2, known = { [9881] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_succeeded(ST, "target", "cast-1", 9881)
+    eq(ST.maul_queued, false, "Era: a numeric-id Maul success clears the tint")
+    eq(sb.bar_color_calls, 1, "Era: the id clear recolours once")
+
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_succeeded(ST, "target", "Maul", nil)
+    eq(ST.maul_queued, false, "Era: the English name clears the tint too")
+    eq(sb.bar_color_calls, 1, "Era: the name clear recolours once")
+
+    -- The client's own localized name clears through the resolved spell data.
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_succeeded(ST, "target", "Spell 9881", nil)
+    eq(ST.maul_queued, false, "Era: the localized name clears the tint too")
+    eq(sb.bar_color_calls, 1, "Era: the localized clear recolours once")
+
+    -- A foreign name must change nothing.
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_succeeded(ST, "target", "Scare Beast", nil)
+    eq(ST.maul_queued, true, "Era: an unrelated name leaves the tint alone")
+    eq(sb.bar_color_calls, 0, "Era: an unrelated name triggers no recolour")
+end
+
+do
+    -- TBC Anniversary: the name rides the guid slot with a nil id; a numeric
+    -- id still clears through the rank table.
+    local sb = build({ project = 5, name_only_client = true, known = { [26996] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_succeeded(ST, "target", "Maul", nil)
+    eq(ST.maul_queued, false, "TBC: a name-carrying Maul success clears the tint")
+    eq(sb.bar_color_calls, 1, "TBC: the name clear recolours once")
+
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_succeeded(ST, "target", "cast-2", 26996)
+    eq(ST.maul_queued, false, "TBC: a numeric id still clears the tint")
+    eq(sb.bar_color_calls, 1, "TBC: the id clear recolours once")
+
+    -- The quiet-failure and interrupt paths ride the same matcher.
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_failed_quiet(ST, "target", "Maul", nil)
+    eq(ST.maul_queued, false, "TBC: a name-carrying quiet failure clears the tint")
+    eq(sb.bar_color_calls, 1, "TBC: the quiet name clear recolours once")
+
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_event(ST, "UNIT_SPELLCAST_FAILED", "player", "Maul", nil)
+    eq(ST.maul_queued, false, "TBC: a name-carrying interrupt clears the tint")
+    eq(sb.bar_color_calls, 1, "TBC: the interrupt name clear recolours once")
+
+    -- A foreign name must change nothing.
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_succeeded(ST, "target", "Scare Beast", nil)
+    eq(ST.maul_queued, true, "TBC: an unrelated name leaves the tint alone")
+    eq(sb.bar_color_calls, 0, "TBC: an unrelated name triggers no recolour")
+end
+
+do
+    -- Era quiet-failure and interrupt paths ride the same matcher.
+    local sb = build({ project = 2, known = { [9881] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_failed_quiet(ST, "target", "cast-3", 9881)
+    eq(ST.maul_queued, false, "Era: a numeric-id quiet failure clears the tint")
+    eq(sb.bar_color_calls, 1, "Era: the quiet id clear recolours once")
+
+    ST.maul_queued = true
+    sb.bar_color_calls = 0
+    ST.DRUID.on_spellcast_event(ST, "UNIT_SPELLCAST_INTERRUPTED", "player", "cast-4", 9881)
+    eq(ST.maul_queued, false, "Era: a numeric-id interrupt clears the tint")
+    eq(sb.bar_color_calls, 1, "Era: the interrupt id clear recolours once")
+end
+
+--=========================================================================================
+-- Faerie Fire guide read: rank id, literal English names, or the client's own
+-- localized names land it on every family. A name-carrying/id-less Anniversary
+-- row still reports the debuff instead of staying unknown forever.
+--=========================================================================================
+do
+    -- Era: the rank id lands the read.
+    local sb = build({ project = 2, known = { [17392] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    sb.clock = 300
+    sb.target_auras = {
+        { name = "Faerie Fire", spell_id = 17392, source = "player", duration = 40, expiration = 330 },
+    }
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    local out = ST.DRUID.gather_guide_inputs(ST, {})
+    eq(out.ff_debuff_remaining, 30, "Era: the FF id lands the guide read")
+
+    -- The literal English name lands it without any id.
+    sb.clock = 301
+    sb.target_auras = {
+        { name = "Faerie Fire", spell_id = nil, source = "player", duration = 40, expiration = 331 },
+    }
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    out = ST.DRUID.gather_guide_inputs(ST, {})
+    eq(out.ff_debuff_remaining, 30, "Era: the FF name lands the guide read without an id")
+end
+
+do
+    -- TBC Anniversary: a name-carrying/id-less row lands the read.
+    local sb = build({ project = 5, name_only_client = true, known = { [27011] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    sb.clock = 400
+    sb.target_auras = {
+        { name = "Faerie Fire", spell_id = nil, source = "player", duration = 40, expiration = 430 },
+    }
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    local out = ST.DRUID.gather_guide_inputs(ST, {})
+    eq(out.ff_debuff_remaining, 30, "TBC: an id-less FF row lands the guide read")
+
+    -- No aura on the target: the walk answered, so the read is absent (false).
+    sb.clock = 401
+    sb.target_auras = {}
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    out = ST.DRUID.gather_guide_inputs(ST, {})
+    eq(out.ff_debuff_remaining, false, "TBC: no FF aura reads absent, not unknown")
+end
+
 if failures == 0 then
     print("PASS  druid_state.lua (" .. tostring(checks) .. " checks)")
 else

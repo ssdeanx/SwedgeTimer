@@ -1,0 +1,18 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "20261022T221142Z",
+  "agent_name": "swing-all-classes",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "bar_is_built predicate fit the loop exactly; per-hand labeled frame stubs made the skip precise",
+    "what_was_hard": "fixture does not load bars.lua, so the seam needed a mirror stub",
+    "skill_gap": null
+  },
+  "escalation": null
+}

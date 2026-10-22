@@ -827,3 +827,10 @@ No git. No lint-config changes. Warning wiring per wire-not-strip (trace → WIR
   re-run 48/0 + floor restored. Direct fix documented here per HU-26.
 - Lane's per-gap file:line detail preserved in its handoff + desk journal;
   no bench file from that lane (owed, lanes' workspace).
+
+## Hunter bars wave committed (2026-10-22, orchestrator)
+- Continuation forced the committed legs (were /tmp-only): hunter_state
+  +15, hunter_guide_state +6, mutations M1/M2 kill on exactly those legs.
+- Full suite BEFORE commit: 48/0, luacheck 2/0. Scope: hunter.lua +
+  two suites + bench/journals. U1-U3 in-client owed; C3 nextaction_ui
+  melee-gate noted for the handoff, not a ruling question.

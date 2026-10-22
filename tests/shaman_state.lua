@@ -3714,6 +3714,38 @@ do
         "comment: the resolver note says what the code does")
 end
 
+--=========================================================================================
+-- R1 name-carrying payloads: the weave family resolves by id or by name.
+-- lookup_weave_family already matches entry.spell_id or entry.name on every
+-- family (no change needed); these legs pin both shapes so the Anniversary
+-- name-carrying START/SUCCEEDED and the Era numeric-id path stay green
+-- together. A foreign name resolves nothing.
+--=========================================================================================
+do
+    ST.interfaces_are_initialised = true
+    clock = 600
+    casting_impl = function() return nil end
+    ST.SHAMAN.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "Lightning Bolt", nil)
+    eq(ST.weave_is_casting, true, "START with a name token begins the cast")
+    eq(ST.weave_family, "LB", "START resolves the family from the name token")
+    ST.SHAMAN.on_spellcast_succeeded(ST, "player", "Lightning Bolt", nil)
+    eq(ST.weave_is_casting, false, "SUCCEEDED ends the name-token cast")
+    eq(ST.weave_family, "LB", "SUCCEEDED keeps the name-resolved family")
+
+    -- The numeric-id shape resolves exactly as before.
+    ST.SHAMAN.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "cast-lb-id", 25449)
+    eq(ST.weave_is_casting, true, "START with a numeric id begins the cast")
+    eq(ST.weave_family, "LB", "START resolves the family from the numeric id")
+    ST.SHAMAN.on_spellcast_succeeded(ST, "player", "cast-lb-id", 25449)
+    eq(ST.weave_family, "LB", "SUCCEEDED keeps the id-resolved family")
+
+    -- A foreign name resolves nothing and changes nothing.
+    local before = ST.weave_family
+    ST.SHAMAN.on_spellcast_event(ST, "UNIT_SPELLCAST_START", "player", "Scare Beast", nil)
+    eq(ST.weave_is_casting, false, "START with a foreign name begins nothing")
+    eq(ST.weave_family, before, "a foreign name leaves the family alone")
+end
+
 if failures == 0 then
     print("PASS  shaman_state.lua (" .. tostring(checks) .. " checks)")
 else

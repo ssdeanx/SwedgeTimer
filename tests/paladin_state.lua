@@ -3611,6 +3611,60 @@ do
         "comment: the resolver note says what the code does")
 end
 
+--=========================================================================================
+-- R1 name-carrying payloads: a landed Exorcism arms the cooldown latch by id
+-- or by name on every family (id primary, name secondary). Exorcism is an
+-- instant, so SUCCEEDED is its only event; a TBC Anniversary payload carries
+-- the name in the guid slot with a nil id. A foreign name changes nothing.
+--=========================================================================================
+do
+    -- Era: the numeric id arms the latch, and the literal English name does too.
+    local b = build({ project = 2 })
+    local T = b.ST
+    T.exo_on_cooldown = false
+    T.PALADIN.on_spellcast_succeeded(T, "target", "cast-1", 879)
+    eq(T.exo_on_cooldown, true, "Era: a numeric-id Exorcism arms the latch")
+
+    T.exo_on_cooldown = false
+    b.timer_afters = {}
+    T.PALADIN.on_spellcast_succeeded(T, "target", "Exorcism", nil)
+    eq(T.exo_on_cooldown, true, "Era: the Exorcism name arms the latch too")
+
+    -- The client's own localized name arms it through the resolved spell data.
+    T.exo_on_cooldown = false
+    b.timer_afters = {}
+    b.spell_infos[879] = { name = "Exorcismo", icon = "icon_exo" }
+    T.PALADIN.on_spellcast_succeeded(T, "target", "Exorcismo", nil)
+    eq(T.exo_on_cooldown, true, "Era: the localized name arms the latch too")
+
+    -- A foreign name must change nothing.
+    T.exo_on_cooldown = false
+    b.timer_afters = {}
+    T.PALADIN.on_spellcast_succeeded(T, "target", "Scare Beast", nil)
+    eq(T.exo_on_cooldown, false, "Era: an unrelated name leaves the latch alone")
+end
+
+do
+    -- TBC Anniversary: the name rides the guid slot with a nil id; a numeric
+    -- id still arms the latch through the rank table.
+    local b = build({ project = 5 })
+    local T = b.ST
+    T.exo_on_cooldown = false
+    T.PALADIN.on_spellcast_succeeded(T, "target", "Exorcism", nil)
+    eq(T.exo_on_cooldown, true, "TBC: a name-carrying Exorcism arms the latch")
+
+    T.exo_on_cooldown = false
+    b.timer_afters = {}
+    T.PALADIN.on_spellcast_succeeded(T, "target", "cast-2", 27138)
+    eq(T.exo_on_cooldown, true, "TBC: a numeric TBC-rank id still arms the latch")
+
+    -- A foreign name must change nothing.
+    T.exo_on_cooldown = false
+    b.timer_afters = {}
+    T.PALADIN.on_spellcast_succeeded(T, "target", "Scare Beast", nil)
+    eq(T.exo_on_cooldown, false, "TBC: an unrelated name leaves the latch alone")
+end
+
 if failures == 0 then
     print("PASS  paladin_state.lua (" .. tostring(checks) .. " checks)")
 else

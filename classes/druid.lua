@@ -258,16 +258,44 @@ function ST.DRUID.on_rage_update(self)
     end
 end
 
--- Maul token match for the spellcast clear hooks: Era matches the rank-id
--- table; TBC matches the English name (never a bare id there). Nil-safe.
+-- Maul token match for the spellcast clear hooks (SUCCEEDED, FAILED_QUIET,
+-- INTERRUPTED/FAILED): id primary, name secondary on every family (the hunter
+-- R1 discipline). Era payloads ride numeric ids and TBC Anniversary payloads
+-- can ride name-carrying/id-less (compat.lua: the event token carries the name
+-- where the id is absent), but either shape can appear on either client, so the
+-- matcher reads the rank-id table first and falls back to the client's own
+-- localized names plus the literal English fallback. The localized set is
+-- cached once the spell data answers; a cold cache reads nil and retries next
+-- call instead of freezing empty (these are rare event-path calls, never
+-- per-frame, so no throttle is spent here). Nil-safe.
+local maul_cast_names
 local function is_maul_token(token)
     if token == nil then
         return false
     end
-    if st.family == "TBC" then
-        return token == MAUL_NAME
+    if maul_ids[token] ~= nil then
+        return true
     end
-    return maul_ids[token] ~= nil
+    if type(token) ~= "string" then
+        return false
+    end
+    if token == MAUL_NAME then
+        return true
+    end
+    if maul_cast_names == nil then
+        local names = {}
+        for spell_id in pairs(maul_ids) do
+            local name = api.GetSpellInfo(spell_id)
+            if type(name) == "string" then
+                names[name] = true
+            end
+        end
+        if next(names) == nil then
+            return false
+        end
+        maul_cast_names = names
+    end
+    return maul_cast_names[token] == true
 end
 
 function ST.DRUID.on_spellcast_failed_quiet(self, unit_id, cast_guid, spell_id)
@@ -286,8 +314,8 @@ end
 
 -- G1 (queued-melee tint clears, reference SuperSwingTimer_State.lua:1129-1149): an
 -- INTERRUPTED or FAILED cast clears the Maul queue tint when the token matches Maul
--- (Era id, TBC name via is_maul_token) or names nothing identifiable (nil token).
--- SUCCEEDED/FAILED_QUIET keep their own hooks; CURRENT_SPELL_CAST_CHANGED re-arms
+-- (id primary, name secondary on every family via is_maul_token) or names nothing
+-- identifiable (nil token). SUCCEEDED/FAILED_QUIET keep their own hooks; CURRENT_SPELL_CAST_CHANGED re-arms
 -- a genuinely live queue on its next probe, so this clear self-heals.
 function ST.DRUID.on_spellcast_event(self, event, unit, cast_guid, spell_id)
     if unit ~= "player" or not self.interfaces_are_initialised then
@@ -819,6 +847,34 @@ local function resolve_debuff_localized_names(def, now)
     end
 end
 
+-- The Faerie Fire localized-name set (the guide read's name fallback): the
+-- client's own names for every family's FF/Feral-FF rank, resolved once the
+-- spell data answers. A cold cache reads nil and retries next scan (throttled
+-- by the shared debuff retry cadence), never a frozen empty set.
+local druid_ff_localized_names
+local druid_ff_localized_retry_at = 0
+local function ff_localized_match(name, now)
+    if druid_ff_localized_names == nil and type(now) == "number"
+        and now >= druid_ff_localized_retry_at then
+        local names = {}
+        for _, ids in pairs(druid_ff_ids) do
+            for id in pairs(ids) do
+                local resolved = api.GetSpellInfo(id)
+                if type(resolved) == "string" then
+                    names[resolved] = true
+                end
+            end
+        end
+        if next(names) ~= nil then
+            druid_ff_localized_names = names
+        else
+            druid_ff_localized_retry_at = now + DRUID_DEBUFF_NAMES_RETRY_S
+        end
+    end
+    return druid_ff_localized_names ~= nil
+        and druid_ff_localized_names[name] == true
+end
+
 -- One throttled walk of the target's harmful auras feeds all three debuff bars (the
 -- reference walks once per bar, ClassMods.lua:4848-4866; one merged walk follows the
 -- shaman flame-shock scan). Each aura matches by rank id first, then by the localized
@@ -871,14 +927,24 @@ local function scan_target_druid_debuffs(now)
         -- No early break (R2): nil is simply no match at this index.
         if name ~= nil then
             if source == "player" or source == nil then
-                if ff_pending and not druid_ff_found
-                    and type(spell_id) == "number" and ff_ids[spell_id] then
-                    -- The guide's Faerie Fire read: the target carries the debuff.
-                    druid_ff_found = true
-                    druid_ff_duration = aura_duration
-                    druid_ff_expiration = aura_expiration
-                    ff_pending = false
-                    pending = pending - 1
+                if ff_pending and not druid_ff_found then
+                    -- Id primary, name secondary on every family (the hunter R1
+                    -- discipline): the rank-id table first, then the literal
+                    -- English names, then the client's own localized names. A
+                    -- name-carrying/id-less Anniversary row still lands the read.
+                    local ff_match = type(spell_id) == "number" and ff_ids[spell_id]
+                    if not ff_match and type(name) == "string" then
+                        ff_match = name == FF_NAME or name == FERAL_FF_NAME
+                            or ff_localized_match(name, now)
+                    end
+                    if ff_match then
+                        -- The guide's Faerie Fire read: the target carries the debuff.
+                        druid_ff_found = true
+                        druid_ff_duration = aura_duration
+                        druid_ff_expiration = aura_expiration
+                        ff_pending = false
+                        pending = pending - 1
+                    end
                 end
                 for i = 1, #druid_debuff_defs do
                     local def = druid_debuff_defs[i]

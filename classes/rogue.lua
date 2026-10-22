@@ -329,20 +329,19 @@ end
 -- Aura lookup on one unit: returns found, remaining (nil when the aura carries no
 -- expiration), duration and count. The 40-row walk never breaks early (R2): a secret row
 -- reads nil and the walk continues, so absence is only reported after the whole scan.
--- Name-vs-id rule (operator 2026-10-19): TBC matches the English name only (never
--- a bare id); every other family matches the numeric id only.
+-- Match shape is id primary, name secondary on every family (the hunter R1
+-- discipline): the rank id first, then the resolved English name. Either shape
+-- can ride a name-carrying/id-less Anniversary row, so the family no longer
+-- picks one shape; the two describe the same resolved spell, so matching both
+-- is behavior-neutral where the old branch matched.
 local function find_unit_aura(unit, filter, wanted_id, wanted_name, now)
-	local tbc = st.family == "TBC"
 	for index = 1, ROGUE_AURA_SCAN_LIMIT do
 		local name, _, count, _, duration, expiration, _, _, _, spell_id =
 			api.UnitAura(unit, index, filter)
 		local match = false
 		if name ~= nil then
-			if tbc then
-				match = wanted_name ~= nil and name == wanted_name
-			else
-				match = wanted_id ~= nil and spell_id == wanted_id
-			end
+			match = (wanted_id ~= nil and spell_id == wanted_id)
+				or (wanted_name ~= nil and name == wanted_name)
 		end
 		if match then
 			local remaining
@@ -423,12 +422,25 @@ end
 -- BOTH "not found" and "cannot read the list" - for the "the aura must be DOWN"
 -- gates that is the safe reading (the row stays quiet), and the secret regime
 -- is caught by the provider's own M6 bit (inputs_unknown).
+-- Match shape is id primary, name secondary (the hunter R1 discipline): the
+-- probed id first, then the client's own localized name for it. A
+-- name-carrying/id-less Anniversary row still lands the read; a cold spell
+-- cache reads id-only and retries the name next call.
+local utility_aura_names = {}
 local function utility_aura_present(unit, filter, spell_id)
 	if type(api.scan_unit_aura) ~= "function" then
 		return nil
 	end
-	local remaining = api.scan_unit_aura(unit, function(id)
-		return id == spell_id
+	local name = utility_aura_names[spell_id]
+	if name == nil then
+		local resolved = api.GetSpellInfo(spell_id)
+		if type(resolved) == "string" then
+			name = resolved
+			utility_aura_names[spell_id] = name
+		end
+	end
+	local remaining = api.scan_unit_aura(unit, function(id, aura_name)
+		return id == spell_id or (name ~= nil and aura_name == name)
 	end, filter)
 	if remaining == nil then
 		return false
@@ -839,18 +851,14 @@ function ST.ROGUE.update_lust_state(self, now)
 	self.rogue_lust_at = now
 	self.rogue_lust_remaining = nil
 	if st.lust_supported == true then
-		-- Name-vs-id rule (operator 2026-10-19): TBC matches the English name,
-		-- every other family matches the numeric id.
-		local remaining
-		if st.family == "TBC" then
-			remaining = api.scan_player_aura(function(spell_id, name)
-				return name ~= nil and ROGUE_LUST_NAMES[name] == true
-			end)
-		else
-			remaining = api.scan_player_aura(function(spell_id)
-				return spell_id ~= nil and ROGUE_LUST_IDS[spell_id] == true
-			end)
-		end
+		-- Id primary, name secondary on every family (the hunter R1
+		-- discipline): the rank id first, then the English lust names. A
+		-- name-carrying/id-less Anniversary row still lands the read on TBC,
+		-- and a numeric id still lands it there too.
+		local remaining = api.scan_player_aura(function(spell_id, name)
+			return (spell_id ~= nil and ROGUE_LUST_IDS[spell_id] == true)
+				or (name ~= nil and ROGUE_LUST_NAMES[name] == true)
+		end)
 		if type(remaining) == "number" and remaining > 0 then
 			self.rogue_lust_remaining = remaining
 		end

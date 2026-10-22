@@ -309,6 +309,45 @@ local exorcism_ids = get_tab({
     879, 5614, 5615, 10312, 10313, 10314, 27138, 48800, 48801
 })
 
+-- Exorcism SUCCEEDED matcher: id primary, name secondary on every family (the
+-- hunter R1 discipline). Exorcism is an instant, so SUCCEEDED is its only
+-- event; a name-carrying Anniversary payload (the name riding the guid slot
+-- with a nil id, per compat.lua) must arm the cooldown latch exactly like the
+-- numeric id does. The literal English name ("Exorcism", the HUD slot title
+-- and the APL's own tbc_name) always matches; the client's own localized
+-- names cover the other locales once the spell data answers. A cold cache
+-- reads nil and retries next event (rare event-path calls, never per-frame).
+local EXORCISM_NAME = "Exorcism"
+local exorcism_cast_names
+local function is_exorcism_token(token)
+    if token == nil then
+        return false
+    end
+    if exorcism_ids[token] ~= nil then
+        return true
+    end
+    if type(token) ~= "string" then
+        return false
+    end
+    if token == EXORCISM_NAME then
+        return true
+    end
+    if exorcism_cast_names == nil then
+        local names = {}
+        for spell_id in pairs(exorcism_ids) do
+            local name = api.GetSpellInfo(spell_id)
+            if type(name) == "string" then
+                names[name] = true
+            end
+        end
+        if next(names) == nil then
+            return false
+        end
+        exorcism_cast_names = names
+    end
+    return exorcism_cast_names[token] == true
+end
+
 function ST.PALADIN.post_init(self)
     self.exo_on_cooldown = false
     local exo_base = api.GetSpellBaseCooldown(879) / 1000
@@ -425,8 +464,13 @@ function ST.PALADIN.post_init(self)
 end
 
 function ST.PALADIN.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id)
-    -- Track exo casts
-    if exorcism_ids[spell_id] ~= nil then
+    -- Track exo casts (id primary, name secondary: a name-carrying Anniversary
+    -- payload carries the name where the id is absent).
+    local token = spell_id
+    if token == nil then
+        token = cast_guid
+    end
+    if is_exorcism_token(token) then
         self.exo_on_cooldown = true
         self.PALADIN.process_aow(self)
         C_Timer.After(self.exo_cooldown_time, function()

@@ -5671,6 +5671,109 @@ do
         "comment: the ability-list note points at the practice-panel ability list")
 end
 
+--=========================================================================================
+-- R1 name-carrying payloads: the HS / Cleave queue tints clear by id or by
+-- name on every family (id primary, name secondary). Era rides numeric ids,
+-- TBC Anniversary can ride the name in the guid slot (or the spell id slot)
+-- with a nil id; either shape clears its own ability only. A foreign name
+-- changes nothing.
+--=========================================================================================
+do
+    -- Era: the numeric-id success clears HS, and the literal name clears too.
+    local sb = build({ project = 2, known = { [25286] = true, [25231] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.hs_queued = true
+    ST.cleave_queued = false
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "cast-1", 25286)
+    eq(ST.hs_queued, false, "Era: a numeric-id HS success clears the HS tint")
+    eq(sb.bar_color_calls, 1, "Era: the HS id clear recolours once")
+
+    ST.hs_queued = true
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "Heroic Strike", nil)
+    eq(ST.hs_queued, false, "Era: the HS name clears the HS tint too")
+    eq(sb.bar_color_calls, 1, "Era: the HS name clear recolours once")
+
+    -- Cleave rides its own arm: the numeric id and the name both clear it.
+    ST.cleave_queued = true
+    ST.hs_queued = false
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "cast-2", 25231)
+    eq(ST.cleave_queued, false, "Era: a numeric-id Cleave success clears the Cleave tint")
+    eq(sb.bar_color_calls, 1, "Era: the Cleave id clear recolours once")
+
+    ST.cleave_queued = true
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "Cleave", nil)
+    eq(ST.cleave_queued, false, "Era: the Cleave name clears the Cleave tint too")
+    eq(sb.bar_color_calls, 1, "Era: the Cleave name clear recolours once")
+
+    -- A foreign name must change nothing.
+    ST.hs_queued = true
+    ST.cleave_queued = true
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "Scare Beast", nil)
+    eq(ST.hs_queued, true, "Era: an unrelated name leaves the HS tint alone")
+    eq(ST.cleave_queued, true, "Era: an unrelated name leaves the Cleave tint alone")
+    eq(sb.bar_color_calls, 0, "Era: an unrelated name triggers no recolour")
+end
+
+do
+    -- TBC Anniversary: the name rides the guid slot with a nil id, or the
+    -- spell id slot with a dummy guid; a numeric id still clears.
+    local sb = build({ project = 5, name_only_client = true,
+        known = { [29707] = true, [25231] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.hs_queued = true
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "Heroic Strike", nil)
+    eq(ST.hs_queued, false, "TBC: a name-carrying HS success clears the HS tint")
+    eq(sb.bar_color_calls, 1, "TBC: the HS name clear recolours once")
+
+    ST.cleave_queued = true
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "cast-guid", "Cleave")
+    eq(ST.cleave_queued, false, "TBC: a name-in-id-slot Cleave success clears the Cleave tint")
+    eq(sb.bar_color_calls, 1, "TBC: the Cleave name clear recolours once")
+
+    ST.hs_queued = true
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "cast-3", 29707)
+    eq(ST.hs_queued, false, "TBC: a numeric id still clears the HS tint")
+    eq(sb.bar_color_calls, 1, "TBC: the HS id clear recolours once")
+
+    -- The quiet-failure path rides the same matcher.
+    ST.hs_queued = true
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_failed_quiet(ST, "target", "Heroic Strike", nil)
+    eq(ST.hs_queued, false, "TBC: a name-carrying quiet HS failure clears the tint")
+    eq(sb.bar_color_calls, 1, "TBC: the quiet HS name clear recolours once")
+
+    -- A foreign name must change nothing.
+    ST.hs_queued = true
+    ST.cleave_queued = true
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_succeeded(ST, "target", "Scare Beast", nil)
+    eq(ST.hs_queued, true, "TBC: an unrelated name leaves the HS tint alone")
+    eq(ST.cleave_queued, true, "TBC: an unrelated name leaves the Cleave tint alone")
+    eq(sb.bar_color_calls, 0, "TBC: an unrelated name triggers no recolour")
+end
+
+do
+    -- Era quiet-failure path rides the same matcher.
+    local sb = build({ project = 2, known = { [25286] = true } })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.hs_queued = true
+    sb.bar_color_calls = 0
+    ST.WARRIOR.on_spellcast_failed_quiet(ST, "target", "cast-4", 25286)
+    eq(ST.hs_queued, false, "Era: a numeric-id quiet HS failure clears the tint")
+    eq(sb.bar_color_calls, 1, "Era: the quiet HS id clear recolours once")
+end
+
 if failures == 0 then
     print("PASS  warrior_state.lua (" .. tostring(checks) .. " checks)")
 else
