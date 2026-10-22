@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-22T22:15:00Z",
+  "agent_name": "swing-hunter-bars",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "legs committed to the suites that already owned the behavior (guide-state gather, hunter-state hooks/sampler); mutation re-proved red on the committed legs on fresh full-tree copies",
+    "what_was_hard": "one committed leg aborted instead of failing on the mutant; hardened with an or-{} guard",
+    "skill_gap": null
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator: full run.sh, then commit product + suite files together"
+  }
+}

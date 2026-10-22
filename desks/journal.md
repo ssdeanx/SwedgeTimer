@@ -819,3 +819,11 @@ No git. No lint-config changes. Warning wiring per wire-not-strip (trace → WIR
   explicit. Scope: G1 interrupt/fail queue-tint clears (warrior/hunter/
   druid) + G2 neutral-handling registration expansion with bars_state/
   main_init pin re-cuts. main.lua/bars/run.sh/TOCs vendored off-limits.
+
+## Wave committed (2026-10-22, orchestrator, operator order)
+- Full suite BEFORE commit: 48/0, luacheck 2/0. New 3rd warning (warrior
+  unused duration init) fixed directly (one-word, behavior-neutral, both
+  branches assign), file re-linted 0/0, real_wire re-run 882/0, full suite
+  re-run 48/0 + floor restored. Direct fix documented here per HU-26.
+- Lane's per-gap file:line detail preserved in its handoff + desk journal;
+  no bench file from that lane (owed, lanes' workspace).

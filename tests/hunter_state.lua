@@ -1261,6 +1261,35 @@ do
         eq(era_range[1], 56641, "Era: the range probe reads the steady rank id")
         eq(egathered.target_in_range, 1, "Era: the id range reading lands")
     end
+
+    -- R1 name-carrying payloads (TBC: the name rides the guid slot when the id
+    -- is absent): the landed shot and the quiet failure clear their queue tint
+    -- by name. Id-carrying payloads pin the same clears by id above.
+    do
+        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_info })
+        local sb, T = tbc, tbc.ST
+        T.steady_shot_queued = true
+        T.raptor_strike_queued = true
+        sb.bar_color_calls = 0
+        T.HUNTER.on_spellcast_succeeded(T, "player", "Steady Shot", nil)
+        eq(T.steady_shot_queued, false,
+            "TBC: a name-carrying Steady success clears the steady tint")
+        eq(T.raptor_strike_queued, true,
+            "TBC: a Steady success leaves the Raptor tint alone")
+        eq(sb.bar_color_calls, 1, "TBC: the name clear recolours once")
+        T.HUNTER.on_spellcast_failed_quiet(T, "player", "Raptor Strike", nil)
+        eq(T.raptor_strike_queued, false,
+            "TBC: a name-carrying quiet Raptor failure clears the raptor tint")
+        eq(T.steady_shot_queued, false,
+            "TBC: a Raptor failure leaves the steady tint down")
+        -- A foreign name must change nothing.
+        T.steady_shot_queued = true
+        sb.bar_color_calls = 0
+        T.HUNTER.on_spellcast_succeeded(T, "player", "Scare Beast", nil)
+        eq(T.steady_shot_queued, true,
+            "TBC: an unrelated name leaves the steady tint alone")
+        eq(sb.bar_color_calls, 0, "TBC: an unrelated name triggers no recolour")
+    end
 end
 
 --=========================================================================================
@@ -3175,6 +3204,51 @@ do
         eq(ST.hunter_shot_log[1].clipped, false, "H2: the safe cast is not a clip")
         eq(ST.hunter_shots_total, 1, "H2: the safe cast counts once")
         eq(ST.hunter_shots_clipped, nil, "H2: the safe cast clips nothing")
+    end
+
+    -- Id-less live Steady Shot (R1 name-carrying payloads): the sampler tracks the
+    -- cast through the client's own localized names, Era and TBC separately. The
+    -- numbers mirror the id-carrying safe cast above; only the payload shape differs.
+    for _, tc in ipairs({
+        { project = 2, fam = "Era", known = { [56641] = true }, name = "Spell 56641" },
+        { project = 5, fam = "TBC", known = { [34120] = true }, name = "Steady Shot",
+            spell_info = function(id)
+                if id == 34120 then
+                    return "Steady Shot", nil, "icon_steady", 1500, 0, 0, id
+                end
+                return nil
+            end },
+    }) do
+        local live = { active = false }
+        local opts = { project = tc.project, known = tc.known,
+            live_cast = function()
+                if not live.active then
+                    return nil
+                end
+                return tc.name, "", "icon", 1000, 2500, false, 1, false, nil
+            end,
+        }
+        if tc.spell_info ~= nil then
+            opts.GetSpellInfo = tc.spell_info
+        end
+        local sb = build(opts)
+        local ST = sb.ST
+        ST.ranged = { start = 0, speed = 3.0 }
+        sb.clock = 2.0
+        live.active = true
+        ST.HUNTER.track_live_cast(ST)
+        check(ST.hunter_live_cast ~= nil,
+            "H2 " .. tc.fam .. ": the id-less shot cast is tracked")
+        live.active = false
+        ST.HUNTER.track_live_cast(ST)
+        eq(ST.hunter_live_cast, nil, "H2 " .. tc.fam .. ": the finished id-less cast untracks")
+        -- The `or {}` keeps a red leg a FAIL instead of a hard abort: an
+        -- untracked cast never creates the log.
+        local samples = ST.hunter_shot_log or {}
+        eq(#samples, 1,
+            "H2 " .. tc.fam .. ": the id-less safe cast records one sample")
+        eq(samples[1] ~= nil and samples[1].clipped, false,
+            "H2 " .. tc.fam .. ": the id-less safe cast is not a clip")
     end
 
     -- An unsafe cast (remaining past ttl + grace - buffer) records clipped.

@@ -1919,6 +1919,44 @@ do
     eq(era_lnl.aura_queries, 0, "gather: an Era client spends no Lock and Load scan")
 end
 
+-- Id-less live Steady Shot (R1 name-carrying payloads): the gather detects the
+-- cast through the client's own localized names, Era and TBC separately, while
+-- a cold spell cache hides (unknown, never a guess).
+do
+    local era = build({ project = 2, spell_infos = {
+        [56641] = { name = "Steady Shot", icon = "icon_steady", cast_ms = 1500 },
+    } })
+    era.ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0 }
+    era.clock = 100
+    era.cast = { name = "Steady Shot", start = 99.5, ["end"] = 100.8 }
+    local era_gathered = era.ST.HUNTER.gather_guide_inputs(era.ST, {})
+    near(era_gathered.steady_remaining, 0.8, 1e-9,
+        "gather: an id-less Era Steady cast still reports its remaining seconds")
+    near(era_gathered.steady_duration, 1.3, 1e-9,
+        "gather: an id-less Era Steady cast still reports its full length")
+    local tbc = build({ project = 5, spell_infos = {
+        [34120] = { name = "Steady Shot", icon = "icon_steady", cast_ms = 1500 },
+    } })
+    tbc.ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0 }
+    tbc.clock = 100
+    tbc.cast = { name = "Steady Shot", start = 99.5, ["end"] = 100.8 }
+    local tbc_gathered = tbc.ST.HUNTER.gather_guide_inputs(tbc.ST, {})
+    near(tbc_gathered.steady_remaining, 0.8, 1e-9,
+        "gather: an id-less TBC Steady cast still reports its remaining seconds")
+    near(tbc_gathered.steady_duration, 1.3, 1e-9,
+        "gather: an id-less TBC Steady cast still reports its full length")
+    -- Cold spell cache: no name set can build, so the id-less cast hides.
+    local cold = build({ project = 5 })
+    cold.hide_spells = true
+    cold.ST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0 }
+    cold.clock = 100
+    cold.cast = { name = "Steady Shot", start = 99.5, ["end"] = 100.8 }
+    local cold_gathered = cold.ST.HUNTER.gather_guide_inputs(cold.ST, {})
+    eq(cold_gathered.casting, true, "gather: a cold cache still reports casting")
+    eq(cold_gathered.steady_remaining, nil,
+        "gather: a cold cache hides the id-less Steady cast (unknown, never a guess)")
+end
+
 -- The Serpent Sting target-debuff feed, end to end (BS-3): the gather's three-state
 -- scan reaches the naked-Chimera guard, and the guard's semantics are unchanged -
 -- only a KNOWN-down sting withholds the prompt, an unknown never does.

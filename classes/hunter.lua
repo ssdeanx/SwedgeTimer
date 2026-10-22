@@ -56,6 +56,77 @@ local function queue_tokens(id_table)
     return tokens
 end
 
+-- Live-cast name sets for the tick paths (gather + H2 sampler): the client's own
+-- localized names per rank table, cached once the spell data answers (the same
+-- retry discipline as multi_shot_names below: a cold cache reads nil and retries
+-- next call instead of freezing empty). Event paths keep the live-walking
+-- is_hunter_queued_melee_token below (rare calls, always fresh); tick paths must
+-- not spend a client query per id per frame, so they read through here.
+local shot_cast_names = {}
+
+local function shot_names_for(id_table)
+    local cached = shot_cast_names[id_table]
+    if cached ~= nil then
+        return cached
+    end
+    local names = {}
+    for spell_id in pairs(id_table) do
+        local name = api.GetSpellInfo(spell_id)
+        if type(name) == "string" then
+            names[name] = true
+        end
+    end
+    -- A cold spell cache contributes no name: stay uncached and retry next call
+    -- (a frozen empty set would blind the matcher for the session).
+    if next(names) == nil then
+        return nil
+    end
+    shot_cast_names[id_table] = names
+    return names
+end
+
+-- Id-primary, name-secondary live-cast match (R1 name-carrying payloads): a live
+-- cast carrying a numeric id matches exactly as before; a cast the client reports
+-- without an id (older classic payloads, compat.lua) matches through the client's
+-- own localized names for that rank table. Nil token or cold cache reads false,
+-- never a guess.
+local function is_hunter_live_cast(id_table, spell_id, cast_name)
+    if spell_id ~= nil and id_table[spell_id] ~= nil then
+        return true
+    end
+    if type(cast_name) ~= "string" then
+        return false
+    end
+    local names = shot_names_for(id_table)
+    if names == nil then
+        return false
+    end
+    return names[cast_name] == true
+end
+
+-- G1 (queued-melee tint clears, reference SuperSwingTimer_State.lua:1129-1149):
+-- the event-path token matcher (id direct, name through the client's own
+-- localized names for R1 name-carrying payloads). Declared beside the other
+-- matchers because its callers (FAILED_QUIET, SUCCEEDED, INTERRUPTED/FAILED)
+-- all precede the old site in source order. Logic unchanged.
+local function is_hunter_queued_melee_token(token, id_table)
+    if token == nil then
+        return false
+    end
+    if id_table[token] ~= nil then
+        return true
+    end
+    if type(token) ~= "string" then
+        return false
+    end
+    for _, name in ipairs(queue_tokens(id_table)) do
+        if type(name) == "string" and name == token then
+            return true
+        end
+    end
+    return false
+end
+
 --=========================================================================================
 -- Spell data
 --=========================================================================================
@@ -694,39 +765,21 @@ function ST.HUNTER.on_autorrepeat_event(self, is_start)
 end
 
 function ST.HUNTER.on_spellcast_failed_quiet(self, unit_id, cast_guid, spell_id)
-    if raptor_strike_ids[spell_id] ~= nil then
+    -- R1 name-carrying payloads (TBC: the name rides the guid slot when the id
+    -- is absent) match through the client's own localized names, exactly like
+    -- the INTERRUPTED/FAILED path; id-carrying payloads match exactly as before.
+    local token = spell_id
+    if token == nil then
+        token = cast_guid
+    end
+    if is_hunter_queued_melee_token(token, raptor_strike_ids) then
         self.raptor_strike_queued = false
         self:set_bar_color("mainhand")
     end
-    if steady_shot_ids[spell_id] ~= nil then
+    if is_hunter_queued_melee_token(token, steady_shot_ids) then
         self.steady_shot_queued = false
         self:set_bar_color("mainhand")
     end
-end
-
--- G1 (queued-melee tint clears, reference SuperSwingTimer_State.lua:1129-1149): an
--- INTERRUPTED or FAILED cast clears the Raptor/Steady queue tint when the token
--- matches the queued ability or names nothing identifiable (nil token). Event
--- payloads are numeric on every family; TBC name-carrying payloads (R1) match
--- through the client's own localized names (queue_tokens). SUCCEEDED/FAILED_QUIET
--- keep their own hooks; CURRENT_SPELL_CAST_CHANGED re-arms a genuinely live queue
--- on its next probe, so this clear self-heals.
-local function is_hunter_queued_melee_token(token, id_table)
-    if token == nil then
-        return false
-    end
-    if id_table[token] ~= nil then
-        return true
-    end
-    if type(token) ~= "string" then
-        return false
-    end
-    for _, name in ipairs(queue_tokens(id_table)) do
-        if type(name) == "string" and name == token then
-            return true
-        end
-    end
-    return false
 end
 
 function ST.HUNTER.on_spellcast_event(self, event, unit, cast_guid, spell_id)
@@ -769,11 +822,17 @@ function ST.HUNTER.on_spellcast_event(self, event, unit, cast_guid, spell_id)
 end
 
 function ST.HUNTER.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id)
-    if raptor_strike_ids[spell_id] ~= nil then
+    -- Same R1 name-carrying rule as the quiet path above: the landed shot clears
+    -- its queue tint whether the client reports the id or the localized name.
+    local token = spell_id
+    if token == nil then
+        token = cast_guid
+    end
+    if is_hunter_queued_melee_token(token, raptor_strike_ids) then
         self.raptor_strike_queued = false
         self:set_bar_color("mainhand")
     end
-    if steady_shot_ids[spell_id] ~= nil then
+    if is_hunter_queued_melee_token(token, steady_shot_ids) then
         self.steady_shot_queued = false
         self:set_bar_color("mainhand")
     end
@@ -1114,12 +1173,11 @@ end
 -- lane's scope.
 ST.HUNTER.SHOT_LOG_MAX = 200
 
-local function is_hunter_shot_cast(spell_id)
-    if spell_id == nil then
-        return false
-    end
-    return steady_shot_ids[spell_id] ~= nil or multi_shot_ids[spell_id] ~= nil
-        or aimed_shot_ids[spell_id] ~= nil or sniper_shot_ids[spell_id] ~= nil
+local function is_hunter_shot_cast(spell_id, cast_name)
+    return is_hunter_live_cast(steady_shot_ids, spell_id, cast_name)
+        or is_hunter_live_cast(multi_shot_ids, spell_id, cast_name)
+        or is_hunter_live_cast(aimed_shot_ids, spell_id, cast_name)
+        or is_hunter_live_cast(sniper_shot_ids, spell_id, cast_name)
 end
 
 -- One completed shot sample. clipped is truthy when any judged frame of the cast read
@@ -1163,7 +1221,8 @@ end
 
 -- Per-frame clip sampler, driven from on_bar_update on the ranged tick (the cast bar
 -- it grades only ticks there too). Tracks the live shot cast across frames by its
--- spell id plus cast bounds (chain-cast repeats of one spell still separate), OR-ing
+-- spell id (or its localized name, for the id-less payloads R1 names) plus cast
+-- bounds (chain-cast repeats of one spell still separate), OR-ing
 -- the unsafe verdict; when the cast is gone (or replaced by a foreign cast) the
 -- finished sample is recorded. Unknown frames (no numeric remaining, no readable
 -- swing cycle) judge nothing; a cast that never produces a judged frame drops its
@@ -1173,14 +1232,15 @@ function ST.HUNTER.track_live_cast(self)
         return
     end
     local cast_name, cast_spell_id, cast_start, cast_end = api.UnitCastingSpell("player")
-    local trackable = cast_name ~= nil and is_hunter_shot_cast(cast_spell_id)
+    local trackable = cast_name ~= nil and is_hunter_shot_cast(cast_spell_id, cast_name)
         and type(cast_start) == "number" and type(cast_end) == "number"
         and cast_end > cast_start
     local tracked = self.hunter_live_cast
     if not trackable then
         -- No live shot cast: a tracked one just finished (or was replaced by a
-        -- foreign cast, which carries a numeric id). A nil-id live cast holds the
-        -- track: it may be the same id-less cast, never a new judgement.
+        -- foreign cast carrying a numeric id, which can never be the tracked
+        -- id-less cast). An id-less live cast holds the track: it may be the
+        -- same id-less cast, never a new judgement.
         if type(tracked) == "table" and (cast_name == nil or cast_spell_id ~= nil) then
             self.hunter_live_cast = nil
             if tracked.judged then
@@ -1190,7 +1250,7 @@ function ST.HUNTER.track_live_cast(self)
         end
         return
     end
-    local key = cast_spell_id .. ":" .. cast_start .. ":" .. cast_end
+    local key = (cast_spell_id or cast_name) .. ":" .. cast_start .. ":" .. cast_end
     if type(tracked) ~= "table" or tracked.key ~= key then
         -- A judged track replaced by a new cast (chain-casting with no cast-free
         -- frame between) records first: the finished sample is never dropped.
@@ -2738,8 +2798,8 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     inputs.aimed_duration = nil
     inputs.sniper_remaining = nil
     inputs.sniper_duration = nil
-    if cast_name ~= nil and cast_spell_id ~= nil
-        and steady_shot_ids[cast_spell_id] ~= nil then
+    if cast_name ~= nil
+        and is_hunter_live_cast(steady_shot_ids, cast_spell_id, cast_name) then
         local remaining = 0
         if type(cast_end) == "number" then
             remaining = cast_end - now
@@ -2754,8 +2814,8 @@ function ST.HUNTER.gather_guide_inputs(self, out)
         end
         inputs.steady_remaining = remaining
         inputs.steady_duration = cast_seconds
-    elseif cast_name ~= nil and cast_spell_id ~= nil
-        and multi_shot_ids[cast_spell_id] ~= nil then
+    elseif cast_name ~= nil
+        and is_hunter_live_cast(multi_shot_ids, cast_spell_id, cast_name) then
         local remaining = 0
         if type(cast_end) == "number" then
             remaining = cast_end - now
@@ -2764,8 +2824,8 @@ function ST.HUNTER.gather_guide_inputs(self, out)
             end
         end
         inputs.multi_remaining = remaining
-    elseif is_era_guide and cast_name ~= nil and cast_spell_id ~= nil
-        and aimed_shot_ids[cast_spell_id] ~= nil then
+    elseif is_era_guide and cast_name ~= nil
+        and is_hunter_live_cast(aimed_shot_ids, cast_spell_id, cast_name) then
         -- Era only: a live Aimed Shot cast rides rule 1 (and feeds the aimed slot's
         -- swipe pair) instead of re-prompting itself from rule 6a. Off-Era clients
         -- never take this arm, so their live-cast behaviour is byte-identical.
@@ -2783,8 +2843,8 @@ function ST.HUNTER.gather_guide_inputs(self, out)
         end
         inputs.aimed_remaining = remaining
         inputs.aimed_duration = cast_seconds
-    elseif is_forever_guide and cast_name ~= nil and cast_spell_id ~= nil
-        and sniper_shot_ids[cast_spell_id] ~= nil then
+    elseif is_forever_guide and cast_name ~= nil
+        and is_hunter_live_cast(sniper_shot_ids, cast_spell_id, cast_name) then
         -- Forever only: a live Sniper Shot cast rides rule 1 (and feeds the
         -- sniper slot's swipe pair) instead of re-prompting itself from rule
         -- F2. The id table is empty until confirmed in-client, so this arm is

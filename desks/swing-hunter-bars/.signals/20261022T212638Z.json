@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-22T21:30:00Z",
+  "agent_name": "swing-hunter-bars",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "sandbox probes isolated both symptoms before any edit (cast bar innocent P1, gather hole P2, mh code-correct S2); strictly-additive fix kept 25 suites green",
+    "what_was_hard": "symptom-1 display ambiguity (cast bar vs guide vs tint) resolved only by probing every consumer of the shared live-cast state",
+    "skill_gap": "none"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "residual C3 (guide frame mainhand gate, nextaction_ui.lua) needs an operator call; U1-U3 need the in-client session"
+  }
+}
