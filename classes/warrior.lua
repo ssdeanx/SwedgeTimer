@@ -2268,11 +2268,154 @@ end
 -- that reaches it. The option gate comes first, so an option-off configuration performs
 -- no cast reads at all; the STOP family always clears, so a cast interrupted mid-flight
 -- can never leave the bar stuck.
+--
+-- G1 (queued-melee tint clears, reference SuperSwingTimer_State.lua:1129-1149): an
+-- INTERRUPTED or FAILED cast clears the HS/Cleave queue tint when the token matches
+-- the queued ability or names nothing identifiable (nil token). Cleared here, not on
+-- SUCCEEDED/FAILED_QUIET (those keep their own hooks). CURRENT_SPELL_CAST_CHANGED
+-- re-arms a genuinely live queue on its next probe, so this clear self-heals.
+local function is_warrior_queued_melee_id(token)
+    return type(token) == "number" and (hs_ids[token] ~= nil or cleave_ids[token] ~= nil)
+end
+
+local function clear_warrior_queue_on_interrupt(self, spell_id, cast_guid)
+    local token = spell_id
+    if token == nil then
+        token = cast_guid
+    end
+    local now = api.get_time()
+    local matched = token == nil
+        or is_warrior_queued_melee_id(token)
+        or is_warrior_queued_melee_proc_name(token, now)
+    if not matched then
+        return
+    end
+    if self.hs_queued == true or self.cleave_queued == true then
+        self.hs_queued = false
+        self.cleave_queued = false
+        self:set_bar_color("mainhand")
+    else
+        self.hs_queued = false
+        self.cleave_queued = false
+    end
+end
+
+-- G3 (Slam pause, our side; reference PAUSE_SWING_SPELLS + AdjustSwingTimesAfterPause
+-- in SuperSwingTimer_State.lua:855-872/1041-1043/1416-1418): on Era/BCC the lib's
+-- pause tables are empty (LibClassicSwingTimerAPI.lua Era:953 / BCC:1064), so a landed
+-- Slam resets the cycle where in-game it extends it (Wrath pauses natively,
+-- lib:1203-1210). Arming here at Slam START - seconds before any SUCCEEDED - keeps
+-- the consume in main.lua's SWING_TIMER_START order-proof against the lib/AceEvent
+-- SUCCEEDED dispatch order. Unconditional: swing behavior, never display.
+local function arm_warrior_slam_pause(self, spell_id, cast_guid)
+    if st.family ~= "ERA" and st.family ~= "TBC" then
+        return
+    end
+    if st.is_mainline then
+        return
+    end
+    local now = api.get_time()
+    if type(now) ~= "number" then
+        return
+    end
+    if not is_warrior_slam_token(spell_id, now) and not is_warrior_slam_token(cast_guid, now) then
+        return
+    end
+    -- Stale backstop: the live cast window when the client answers, else the rank
+    -- fallback (the same reads begin_warrior_slam_cast uses) plus margin. A pause
+    -- older than this never converts a later real swing.
+    local _, _, live_start, live_end = get_live_player_cast()
+    local duration
+    if type(live_start) == "number" and type(live_end) == "number" and live_end > live_start then
+        duration = live_end - live_start
+    else
+        duration = get_slam_fallback_duration()
+    end
+    local pause = { at = now, valid_until = now + duration + 2.0 }
+    local armed = false
+    for _, hand in ipairs({ "mainhand", "offhand" }) do
+        local bar = self[hand]
+        if type(bar) == "table" and type(bar.ends_at) == "number" then
+            local remaining = bar.ends_at - now
+            if remaining > 0 then
+                pause[hand .. "_rem"] = remaining
+                pause[hand .. "_end"] = bar.ends_at
+                bar.is_paused = true
+                armed = true
+            end
+        end
+    end
+    if armed then
+        self.warrior_slam_pause = pause
+    end
+end
+
+-- Clears the pause without extending: the cast never landed (STOP without success,
+-- or any path where INTERRUPTED/FAILED did not already extend-then-clear), so the
+-- frozen original cycle simply resumes.
+local function drop_warrior_slam_pause(self)
+    if self.warrior_slam_pause == nil then
+        return
+    end
+    self.warrior_slam_pause = nil
+    for _, hand in ipairs({ "mainhand", "offhand" }) do
+        local bar = self[hand]
+        if type(bar) == "table" then
+            bar.is_paused = false
+        end
+    end
+end
+
+-- INTERRUPTED/FAILED with a live pause: the reference shifts the cycle by the
+-- paused span on interrupt too (AdjustSwingTimesAfterPause on the interrupt path),
+-- so extend-then-clear here. Guards the recorded anchor: anything that re-anchored
+-- mid-cast (a haste UPDATE) voids the pause instead of shifting a moved bar.
+local function extend_warrior_slam_pause(self)
+    local pause = self.warrior_slam_pause
+    if type(pause) ~= "table" then
+        return
+    end
+    self.warrior_slam_pause = nil
+    local now = api.get_time()
+    if type(now) ~= "number" then
+        drop_warrior_slam_pause(self)
+        return
+    end
+    local offset = now - (pause.at or now)
+    if offset < 0 then
+        offset = 0
+    end
+    for _, hand in ipairs({ "mainhand", "offhand" }) do
+        local bar = self[hand]
+        if type(bar) == "table" then
+            bar.is_paused = false
+        end
+        if pause[hand .. "_rem"] ~= nil and type(bar) == "table"
+            and type(bar.ends_at) == "number" and bar.ends_at == pause[hand .. "_end"]
+            and type(bar.speed) == "number" and bar.speed > 0 then
+            bar.ends_at = bar.ends_at + offset
+            bar.start = bar.ends_at - bar.speed
+            if bar.is_full_timer ~= nil and type(bar.is_full_timer.Cancel) == "function" then
+                pcall(function() bar.is_full_timer:Cancel() end)
+            end
+            bar.is_full = false
+            self:on_bar_active(hand)
+        end
+    end
+end
+
 function ST.WARRIOR.on_spellcast_event(self, event, unit, cast_guid, spell_id)
     if unit ~= "player" or not self.interfaces_are_initialised then
         return
     end
+    if event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_FAILED" then
+        clear_warrior_queue_on_interrupt(self, spell_id, cast_guid)
+        extend_warrior_slam_pause(self)
+        end_warrior_slam_cast(self)
+        return
+    end
     if event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_DELAYED" then
+        arm_warrior_slam_pause(self, spell_id, cast_guid)
         if self:get_class_table().show_warrior_slam_cast_bar == false then
             return
         end
@@ -2286,6 +2429,7 @@ function ST.WARRIOR.on_spellcast_event(self, event, unit, cast_guid, spell_id)
     end
     if event == "UNIT_SPELLCAST_STOP" or event == "UNIT_SPELLCAST_INTERRUPTED"
         or event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_CHANNEL_STOP" then
+        drop_warrior_slam_pause(self)
         end_warrior_slam_cast(self)
     end
 end

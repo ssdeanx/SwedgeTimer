@@ -788,3 +788,34 @@ No git. No lint-config changes. Warning wiring per wire-not-strip (trace → WIR
   order (exclusions: .vscode/, luac.out, /tmp); committing is not a bench
   touch. Pending sequence (journal 2026-10-22): clock-lane reconcile → full
   suite → commit → CLEU-parity lane.
+
+## Wave committed, parity lane running (2026-10-22, orchestrator)
+- Clock lane reconciled (trail + signal + bench/clock_align_2026-10-22.md
+  verified; scope held; missing-skill reporting confirmed — seat lacks the
+  four skill IDs, manual equivalents ran). Full suite BEFORE commit:
+  48/0, luacheck 2/0.
+- Committed f142502 on main (60 files; excluded .vscode/settings.json +
+  luac.out). Already on main — no merge needed.
+- CLEU-parity lane ses_e9ad559f0ffe38c9yw4R6T0Hpa dispatched (desk
+  swing-cleu-parity), four skills explicit, lib-touch ban + HU-31 scope in
+  the prompt. Lane files its own bench artifacts (HU-32).
+
+## Standing preference (2026-10-22, operator)
+- IDE diagnostics stay ON (undefined-field/global, need-check-nil, etc.).
+  The operator uses them to catch what lanes miss. Pasted diagnostics are
+  review findings: verify each against the tree, fix if real, prove why if
+  noise. Never propose disabling them again.
+
+## Review finding triaged: hiding_anchor_frame type check (2026-10-22)
+- Copilot: ensure get_hiding_anchor_frame can't return a non-frame.
+- Verdict: NOT REAL, no change. Single writer (bars.lua:116, always a fresh
+  CreateFrame, no early return between anchor creation and assignment);
+  single reader path (bars.lua:243 + :500-506 nil-guard). Anchor exists
+  ⟹ property is a frame — the scenario needs a writer that does not exist.
+  A type check would be dead armor.
+
+## G1+G2 class lane dispatched (2026-10-22, orchestrator)
+- Lane ses_e9ac5b3f1ffeDW19XQj5tSNz34 (desk swing-class-gaps), four skills
+  explicit. Scope: G1 interrupt/fail queue-tint clears (warrior/hunter/
+  druid) + G2 neutral-handling registration expansion with bars_state/
+  main_init pin re-cuts. main.lua/bars/run.sh/TOCs vendored off-limits.

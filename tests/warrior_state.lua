@@ -1868,13 +1868,14 @@ do
             key .. " has a colour widget in the WARRIOR options section")
     end
 
-    -- The classic-line combat log gate covers PALADIN + WARRIOR and the handler keeps
-    -- both dispatch chains, with the init guard intact.
+    -- G2: the classic-line combat log gate covers every classic-line class (the
+    -- neutral extra-attack/parry pre-pass is class-independent) and the handler keeps
+    -- the paladin/warrior dispatch chains, with the init guard intact.
     local main_src = read("main.lua")
     local gate = main_src:match(
-        "if %(self%.player_class == \"PALADIN\" or self%.player_class == \"WARRIOR\"%)[^\n]*")
-    check(gate ~= nil and gate:find("not st%.is_mainline") ~= nil,
-        "the CLEU registration gate covers PALADIN + WARRIOR on the classic line only")
+        "if not st%.is_mainline then[^\n]*")
+    check(gate ~= nil,
+        "the CLEU registration gate covers the classic line (G2 all-class)")
 
     local handler_lines = {}
     local in_handler = false

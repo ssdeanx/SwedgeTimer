@@ -648,10 +648,16 @@ function ST:OnInitialize()
 	-- entire rage feature was unreachable.
 	self:RegisterEvent("UNIT_POWER_FREQUENT")
 	-- The classic combat log feeds the paladin twist state machine and the warrior
-	-- Overpower dodge-proc window (reference State.lua:1315-1321/1340-1349). Only the
+	-- Overpower dodge-proc window (reference State.lua:1315-1321/1340-1349), plus the
+	-- neutral pre-pass in ST:COMBAT_LOG_EVENT_UNFILTERED (extra-attack suppression
+	-- and incoming-parry haste, reference State.lua:1305-1328/1365-1369). Only the
 	-- classic client line has it; Mainline-code clients (Retail, Forever) have no
-	-- classic combat log, so no window can ever arm there.
-	if (self.player_class == "PALADIN" or self.player_class == "WARRIOR") and not st.is_mainline then
+	-- classic combat log, so no window can ever arm there. Every classic-line class
+	-- registers (G2: the neutral handling is class-independent - the pre-pass arms
+	-- suppression/parry for all hands on every class, and the class dispatch below
+	-- still forwards only to the modules that read the log); Mainline-code clients
+	-- never register.
+	if not st.is_mainline then
 		self:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 	end
 	self:RegisterEvent("UNIT_SPELLCAST_FAILED_QUIET")
@@ -998,11 +1004,72 @@ function ST:COMBAT_LOG_EVENT_UNFILTERED(event, ...)
 	if not self.interfaces_are_initialised then
 		return
 	end
+	-- Neutral pre-pass (all CLEU-registered classes): extra-attack and parry
+	-- handling the class modules do not own. Runs before the class dispatch and
+	-- never returns early, so the twist/Overpower paths below are unaffected.
+	-- The payload after the event name is the raw CombatLogGetCurrentEventInfo
+	-- tuple: (timestamp, subEvent, hideCaster, sourceGUID, ..., destGUID, ...,
+	-- arg12, arg13, ..., arg15, ...). Only the two subevents below are read.
+	self:note_extra_attack_or_parry(select(4, ...), select(8, ...), select(2, ...),
+		select(12, ...), select(15, ...))
 	if self.player_class == "PALADIN" then
 		self.PALADIN.on_combat_log_unfiltered(self, event, ...)
 	elseif self.player_class == "WARRIOR" then
 		self.WARRIOR.on_combat_log_unfiltered(self, event, ...)
 	end
+end
+
+-- Neutral CLEU pre-pass: SPELL_EXTRA_ATTACKS arms the swing-suppression counter
+-- the SWING_TIMER_START handler consumes (reference State.lua:1337-1339 followed
+-- by the 1308/1322 consume-or-start on every swing: an extra attack never resets
+-- the cycle), and an incoming PARRY (target == player) shortens the live mainhand
+-- cycle (reference State.lua:1365-1369 + ApplyParryHaste). Source/target gated on
+-- the player's own GUID; every other subevent is ignored here. State-only: the
+-- bar writes happen in the swing handlers, never on this path.
+function ST:note_extra_attack_or_parry(source_guid, dest_guid, sub_event, arg12, arg15)
+	if sub_event == "SPELL_EXTRA_ATTACKS" and source_guid == self.player_guid then
+		local amount = tonumber(arg15) or 1
+		if amount < 1 then
+			amount = 1
+		end
+		self.extra_attack_pending = (self.extra_attack_pending or 0) + amount
+	elseif sub_event == "SWING_MISSED" and dest_guid == self.player_guid
+		and arg12 == "PARRY" then
+		self:apply_parry_haste()
+	end
+end
+
+-- Incoming-parry haste (reference State.lua:1176-1194): the remaining mainhand
+-- time drops by 40% of the cycle, floored at 20%, by moving both ends together
+-- (the bar divides elapsed by ends_at - start, so one end alone would skew it).
+-- A nearly-ready cycle (at or under the floor) is left alone. No-op when no
+-- mainhand cycle is live.
+function ST:apply_parry_haste()
+	local bar = self.mainhand
+	if type(bar) ~= "table" then
+		return
+	end
+	local speed = bar.speed
+	local ends_at = bar.ends_at
+	if type(speed) ~= "number" or speed <= 0 or type(ends_at) ~= "number" then
+		return
+	end
+	local get_time = api and api.get_time
+	local now = (type(get_time) == "function") and get_time() or nil
+	if type(now) ~= "number" then
+		return
+	end
+	local remaining = ends_at - now
+	local floor = 0.2 * speed
+	if remaining <= floor then
+		return
+	end
+	local shortened = remaining - 0.4 * speed
+	if shortened < floor then
+		shortened = floor
+	end
+	bar.ends_at = now + shortened
+	bar.start = bar.ends_at - speed
 end
 
 function ST.callback_event_handler(event, ...)
@@ -1195,6 +1262,65 @@ end
 
 function ST:SWING_TIMER_START(_, speed, expiration_time, hand)
 	self:note_swing_wire(hand, "START")
+	-- Slam-pause conversion (G3, our side; reference PAUSE_SWING_SPELLS +
+	-- AdjustSwingTimesAfterPause in SuperSwingTimer_State.lua:855-872): on Era/BCC
+	-- the lib's pause tables are empty (LibClassicSwingTimerAPI.lua Era:953 /
+	-- BCC:1064), so a landed Slam resets the cycle where in-game it extends it
+	-- (Wrath pauses natively, lib:1203-1210 - never armed there). The warrior
+	-- module arms warrior_slam_pause at Slam START, seconds before any SUCCEEDED,
+	-- so this consume is order-proof against the lib/AceEvent SUCCEEDED dispatch
+	-- order. The reset START becomes the pause-extended anchor (remaining at the
+	-- pause resumes now) and falls through to the shared tail below; a stale arm
+	-- (interrupt cleared it, the backstop passed, or a mid-cast re-anchor moved
+	-- the bar) falls through untouched.
+	if (hand == "mainhand" or hand == "offhand") and self.player_class == "WARRIOR"
+		and not st.is_mainline and (st.family == "ERA" or st.family == "TBC") then
+		local pause = self.warrior_slam_pause
+		if type(pause) == "table" then
+			local rem = pause[hand .. "_rem"]
+			local bar0 = self[hand]
+			local now0 = api.get_time()
+			if type(rem) == "number" and rem > 0 and type(bar0) == "table"
+				and bar0.ends_at == pause[hand .. "_end"] and type(now0) == "number"
+				and now0 <= (pause.valid_until or 0) then
+				expiration_time = now0 + rem
+				pause[hand .. "_rem"] = nil
+				pause[hand .. "_end"] = nil
+				if pause.mainhand_rem == nil and pause.offhand_rem == nil then
+					self.warrior_slam_pause = nil
+				end
+			else
+				self.warrior_slam_pause = nil
+			end
+		end
+	end
+	-- Extra-attack suppression (reference State.lua:1308/1322: the pending count
+	-- is consumed INSTEAD of restarting). The lib has no SPELL_EXTRA_ATTACKS
+	-- handler, so without this every Sword Spec / Windfury / Thrash extra swing
+	-- re-anchors the bar. Suppression needs the armed flag (set by the
+	-- interrupted-cycle STOP below): a direct START with a stale pending count
+	-- and no STOP is a fresh cycle from a landed swing, not an extra, so it
+	-- restarts normally and clears the stale count instead of eating a real
+	-- swing. Ranged never suppresses (extras are melee-only). The wire count
+	-- above stays truthful.
+	if hand == "mainhand" or hand == "offhand" then
+		local armed = self.suppress_armed ~= nil and self.suppress_armed[hand] == true
+		if armed then
+			self.suppress_armed[hand] = nil
+			if (self.extra_attack_pending or 0) > 0 then
+				self.extra_attack_pending = self.extra_attack_pending - 1
+			end
+			self.suppress_next_stop = self.suppress_next_stop or {}
+			self.suppress_next_stop[hand] = true
+			return
+		end
+		if (self.extra_attack_pending or 0) > 0 then
+			self.extra_attack_pending = 0
+		end
+		if self.suppress_next_stop ~= nil then
+			self.suppress_next_stop[hand] = nil
+		end
+	end
 	local bar = self[hand]
 	if not bar then
 		if not self.swing_unknown_hand_notice_shown then
@@ -1233,6 +1359,28 @@ end
 
 function ST:SWING_TIMER_STOP(_, hand)
 	self:note_swing_wire(hand, "STOP")
+	-- Stop-pairing for a suppressed extra-attack cycle (see SWING_TIMER_START).
+	-- The lib cancels the live timer when the extra swing lands, so the
+	-- interrupted-cycle STOP arrives while the extra is still pending: it is
+	-- ignored and arms the suppression the extra's START consumes. The tail arm
+	-- covers the extra cycle's own STOP; a cancel-STOP for a FOLLOW-UP extra
+	-- re-arms through the tail branch (pending permitting), so multi-extra
+	-- chains stay suppressed. A normal START already cleared a stale tail.
+	if hand == "mainhand" or hand == "offhand" then
+		local tail = self.suppress_next_stop ~= nil
+			and self.suppress_next_stop[hand] == true
+		if tail then
+			self.suppress_next_stop[hand] = nil
+		end
+		if (self.extra_attack_pending or 0) > 0 then
+			self.suppress_armed = self.suppress_armed or {}
+			self.suppress_armed[hand] = true
+			return
+		end
+		if tail then
+			return
+		end
+	end
 	local bar = self[hand]
 	if not bar then
 		if not self.swing_unknown_hand_notice_shown then
@@ -1613,6 +1761,124 @@ function ST:UNIT_POWER_FREQUENT(_event, unit_id, powerType)
 	end
 end
 
+-- Utility-cast swing resets, our side (G4; reference RESET_SWING_SPELLS in
+-- SuperSwingTimer_Constants.lua:693-722, consumed in State.lua:1455-1466: a landed
+-- utility cast restarts mh + oh + ranged). The lib's explicit reset_swing_spells
+-- cover Repentance but none of the Hammer of Justice (853/5588/5589/10308) or Holy
+-- Wrath (2812/10318/27139) ranks on any classic table, and its generic
+-- (casting and not preventSwingReset) arm never fires for them either: instants fire
+-- no UNIT_SPELLCAST_START before their SUCCEEDED (the shaman twist commit notes the
+-- same shape), so unit.casting is false when they land. Where the lib already resets
+-- (Repentance, Ghost Wolf, Feign Death...), this re-anchor lands on the same tick in
+-- the same clock domain and converges to the identical anchor. Classic line only
+-- (HU-31): Retail/Forever stay on their own APIs.
+local SWING_RESET_SPELL_IDS = {
+    [16589] = true, -- Noggenfogger Elixir
+    [2645] = true, -- Ghost Wolf
+    [51533] = true, -- Feral Spirit
+    [2764] = true, -- Throw
+    [3018] = true, -- Shoot
+    [5384] = true, -- Feign Death
+    [5019] = true, -- Shoot Wand
+    [20066] = true, -- Repentance
+    [853] = true, [5588] = true, [5589] = true, [10308] = true, -- Hammer of Justice
+    [2812] = true, [10318] = true, [27139] = true, -- Holy Wrath
+}
+-- Literal English fallbacks for name-carrying payloads (Anniversary R1) and for a
+-- cold spell cache: the localized cache below wins whenever the client answers.
+local SWING_RESET_SPELL_NAMES = {
+    ["Hammer of Justice"] = true,
+    ["Holy Wrath"] = true,
+}
+local swing_reset_names
+
+local function is_swing_reset_token(token)
+    if token == nil then
+        return false
+    end
+    local id = tonumber(token)
+    if id ~= nil and SWING_RESET_SPELL_IDS[id] == true then
+        return true
+    end
+    if type(token) ~= "string" then
+        return false
+    end
+    if SWING_RESET_SPELL_NAMES[token] == true then
+        return true
+    end
+    if swing_reset_names == nil then
+        swing_reset_names = {}
+        for spell_id in pairs(SWING_RESET_SPELL_IDS) do
+            local ok, name = pcall(api.GetSpellInfo, spell_id)
+            if ok and type(name) == "string" then
+                swing_reset_names[name] = true
+            end
+        end
+    end
+    return swing_reset_names[token] == true
+end
+
+-- Restarts one hand's cycle now (the in-game reset semantic): same anchor writes
+-- as the SWING_TIMER_START tail (full-timer cancel, active mark, colour), without
+-- the engine wire count or the swing-start-only extras (guide count, form gate).
+local function restart_swing_for_reset(self, hand, now)
+    local bar = self[hand]
+    if type(bar) ~= "table" then
+        return
+    end
+    local speed
+    if hand == "ranged" then
+        speed = api.UnitRangedDamage("player")
+    else
+        local mh_speed, oh_speed = api.UnitAttackSpeed("player")
+        if hand == "offhand" then
+            speed = oh_speed
+        else
+            speed = mh_speed
+        end
+    end
+    if type(speed) ~= "number" or speed <= 0 then
+        return
+    end
+    if bar.is_full_timer ~= nil then
+        if type(bar.is_full_timer.Cancel) == "function" then
+            pcall(function() bar.is_full_timer:Cancel() end)
+        end
+        self:on_bar_active(hand)
+    elseif bar.is_full then
+        self:on_bar_active(hand)
+    end
+    bar.is_full = false
+    bar.is_paused = false
+    bar.engine_dead = false
+    bar.start = now
+    bar.speed = speed
+    bar.ends_at = now + speed
+    self:set_bar_color(hand)
+end
+
+local function maybe_reset_swing_on_utility_cast(self, spell_id, cast_guid)
+    if self.swing_engine ~= "vendored-lib" then
+        return
+    end
+    if st.is_mainline then
+        return
+    end
+    if not is_swing_reset_token(spell_id) and not is_swing_reset_token(cast_guid) then
+        return
+    end
+    local get_time = api and api.get_time
+    local now = (type(get_time) == "function") and get_time() or nil
+    if type(now) ~= "number" then
+        return
+    end
+    restart_swing_for_reset(self, "mainhand", now)
+    restart_swing_for_reset(self, "offhand", now)
+    if self:has_hand("ranged") then
+        restart_swing_for_reset(self, "ranged", now)
+    end
+end
+
 function ST:UNIT_SPELLCAST_FAILED_QUIET(_event, unit_id, cast_guid, spell_id)
 	if unit_id ~= "player" or (not self.interfaces_are_initialised) then
 		return
@@ -1633,6 +1899,10 @@ function ST:UNIT_SPELLCAST_SUCCEEDED(_event, unit_id, cast_guid, spell_id)
 	if self[self.player_class].on_spellcast_succeeded then
 		self[self.player_class].on_spellcast_succeeded(self, unit_id, cast_guid, spell_id)
 	end
+	-- Utility-cast swing resets (G4, our side): HoJ/Holy Wrath-style instants the
+	-- lib never resets (no explicit entry, no casting flag). Converges with the
+	-- lib where it already resets (same tick, same clock domain).
+	maybe_reset_swing_on_utility_cast(self, spell_id, cast_guid)
 	-- TBC ranged fallback: our own SUCCEEDED(75) driver when the vendored
 	-- lib's isBCC gate misses (see maybe_drive_ranged_fallback below).
 	self:maybe_drive_ranged_fallback(spell_id)
@@ -1824,6 +2094,16 @@ function ST:UPDATE_SHAPESHIFT_FORM()
 	-- in case of any snapshotting
 	self.recent_form_change = true
 	if self.interfaces_are_initialised then
+		-- A form change resets the melee cycle (reference State.lua:1356-1362:
+		-- SPELL_AURA_APPLIED on a druid form id resets the mh timer). The engine
+		-- reports the next swing on its own; until then the bar shows the full
+		-- face instead of the dead cycle. on_bar_inactive is built-guarded, so an
+		-- unbuilt hand stays silent.
+		local mh = self.mainhand
+		if type(mh) == "table" then
+			mh.is_full = true
+			self:on_bar_inactive("mainhand")
+		end
 		self:on_attack_speed_change("mainhand")
 		self:set_bar_color("mainhand")
 	end

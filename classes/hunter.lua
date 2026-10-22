@@ -704,6 +704,70 @@ function ST.HUNTER.on_spellcast_failed_quiet(self, unit_id, cast_guid, spell_id)
     end
 end
 
+-- G1 (queued-melee tint clears, reference SuperSwingTimer_State.lua:1129-1149): an
+-- INTERRUPTED or FAILED cast clears the Raptor/Steady queue tint when the token
+-- matches the queued ability or names nothing identifiable (nil token). Event
+-- payloads are numeric on every family; TBC name-carrying payloads (R1) match
+-- through the client's own localized names (queue_tokens). SUCCEEDED/FAILED_QUIET
+-- keep their own hooks; CURRENT_SPELL_CAST_CHANGED re-arms a genuinely live queue
+-- on its next probe, so this clear self-heals.
+local function is_hunter_queued_melee_token(token, id_table)
+    if token == nil then
+        return false
+    end
+    if id_table[token] ~= nil then
+        return true
+    end
+    if type(token) ~= "string" then
+        return false
+    end
+    for _, name in ipairs(queue_tokens(id_table)) do
+        if type(name) == "string" and name == token then
+            return true
+        end
+    end
+    return false
+end
+
+function ST.HUNTER.on_spellcast_event(self, event, unit, cast_guid, spell_id)
+    if unit ~= "player" or not self.interfaces_are_initialised then
+        return
+    end
+    if event ~= "UNIT_SPELLCAST_INTERRUPTED" and event ~= "UNIT_SPELLCAST_FAILED" then
+        return
+    end
+    local token = spell_id
+    if token == nil then
+        token = cast_guid
+    end
+    if token == nil then
+        if self.raptor_strike_queued == true or self.steady_shot_queued == true then
+            self.raptor_strike_queued = false
+            self.steady_shot_queued = false
+            self:set_bar_color("mainhand")
+        else
+            self.raptor_strike_queued = false
+            self.steady_shot_queued = false
+        end
+        return
+    end
+    if is_hunter_queued_melee_token(token, raptor_strike_ids) then
+        if self.raptor_strike_queued == true then
+            self.raptor_strike_queued = false
+            self:set_bar_color("mainhand")
+        else
+            self.raptor_strike_queued = false
+        end
+    elseif is_hunter_queued_melee_token(token, steady_shot_ids) then
+        if self.steady_shot_queued == true then
+            self.steady_shot_queued = false
+            self:set_bar_color("mainhand")
+        else
+            self.steady_shot_queued = false
+        end
+    end
+end
+
 function ST.HUNTER.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id)
     if raptor_strike_ids[spell_id] ~= nil then
         self.raptor_strike_queued = false

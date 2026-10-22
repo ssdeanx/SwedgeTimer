@@ -241,11 +241,13 @@ function ST:configure_bar_size_and_positions(hand)
 
     -- And also the hiding anchor frame.
     local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
-    hiding_anchor_frame:ClearAllPoints()
-    hiding_anchor_frame:SetPoint("CENTER")
-    hiding_anchor_frame:SetWidth(db.bar_width)
-    hiding_anchor_frame:SetHeight(db.bar_height)
-    hiding_anchor_frame:Show()
+    if hiding_anchor_frame then
+        hiding_anchor_frame:ClearAllPoints()
+        hiding_anchor_frame:SetPoint("CENTER")
+        hiding_anchor_frame:SetWidth(db.bar_width)
+        hiding_anchor_frame:SetHeight(db.bar_height)
+        hiding_anchor_frame:Show()
+    end
 
     -- Might need to set the width/height of the bar_frame too
     local bar_frame = self:get_bar_frame(hand)

@@ -1515,9 +1515,11 @@ end
 -- its absent hook. In-game the AceDB ['**'] wildcard (config.lua) seeds the per-class
 -- profile table and get_class_hands falls back to {}, so no class_hands or db change
 -- is needed; this section seeds the same shape explicitly, then drives the login,
--- aura, cast, rage and swing dispatches for all 13 classes. CLEU is excluded by
--- construction: it is only registered for PALADIN/WARRIOR on classic-line clients,
--- where the three stub classes do not exist.
+-- aura, cast, rage and swing dispatches for all 13 classes. CLEU registration is
+-- class-independent on the classic line (G2: every classic-line class registers for
+-- the neutral extra-attack/parry pre-pass; the class dispatch still forwards only to
+-- the paladin/warrior readers), so no CLEU leg is needed here - the matrix lives in
+-- bars_state §6 and the functional legs in real_wire_state.
 do
     local ALL_CLASSES = {
         "DEATHKNIGHT", "DEMONHUNTER", "DRUID", "EVOKER", "HUNTER", "MAGE",

@@ -699,6 +699,30 @@ end
 -- counter). skip_unit is for engines without the lib's legacy UNIT_ re-fire
 -- (swing_source fires SWING_TIMER_* directly, main.lua:964+ strips nothing
 -- from a speed-first payload).
+-- The app's own combat-log path (main.lua ST:COMBAT_LOG_EVENT_UNFILTERED): the
+-- sandbox event bus only counts app registrations, so these legs deliver the
+-- scripted CLEU tuple straight to the handler the client would call.
+local function app_cleu(b)
+    b.ST:COMBAT_LOG_EVENT_UNFILTERED("COMBAT_LOG_EVENT_UNFILTERED",
+        unpack(b.sb.cleu, 1, table.maxn(b.sb.cleu)))
+end
+
+-- App-side SPELL_EXTRA_ATTACKS (cleu index 12/13/14 = spell, name, school;
+-- index 15 = the extra-attack amount the neutral pre-pass reads).
+local function app_extra(b, amount)
+    b.sb.cleu = { b.sb.clock, "SPELL_EXTRA_ATTACKS", nil, "Player-0001", "Me", 0,
+        0, "Creature-09", "Target", 0, 0, 75, "Auto Shot", 1, amount or 1 }
+    app_cleu(b)
+end
+
+-- App-side incoming swing miss (the mob swings at the player): arg12 carries
+-- the miss type the parry-haste arm reads.
+local function app_incoming_miss(b, miss_type)
+    b.sb.cleu = { b.sb.clock, "SWING_MISSED", nil, "Creature-09", "Mob", 0,
+        0, "Player-0001", "Me", 0, 0, miss_type, false, nil, nil }
+    app_cleu(b)
+end
+
 local function assert_six_in_lib_registry(b, tag, skip_unit)
     for i = 1, #SIX do
         local event = SIX[i]
@@ -1726,6 +1750,547 @@ do
     eq(T.ranged.start, pre_start, "fb-gates: ranged stays anchored on a non-Auto-Shot id")
     eq(T.ranged.fallback_timer, nil, "fb-gates: no fallback timer is armed by a gated shot")
     eq(#F.cb_errors, 0, "fb-gates: no callback-bus error was swallowed")
+end
+
+--=========================================================================================
+-- CLEU-parity legs (app-side neutral handling, main.lua only - the lib is
+-- HU-29-ruled and untouched): extra-attack suppression + stop-pairing (Era),
+-- offhand + ranged gating (Era), incoming-parry haste + floor (Era), parry
+-- non-shapes ignored (Era), druid form-change reset (Era), class dispatch
+-- intact (Era). The lib-side px xfail legs above stand unchanged.
+--=========================================================================================
+do
+    -- Extra-attack suppression: the swing after SPELL_EXTRA_ATTACKS does not
+    -- re-anchor the bar, and the pending count is consumed instead.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "cleu-extra: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    eq(T.interfaces_are_initialised, true, "cleu-extra: init completes")
+    cleu_mh_swing(b)
+    local anchored = T.mainhand.start
+    check(anchored ~= nil, "cleu-extra: the live cycle anchors first")
+    app_extra(b, 1)
+    eq(T.extra_attack_pending, 1, "cleu-extra: SPELL_EXTRA_ATTACKS arms the pending count")
+    advance(b, 0.5)
+    cleu_mh_swing(b) -- the extra swing: the lib re-fires START, the app consumes it
+    eq(T.extra_attack_pending, 0, "cleu-extra: the suppressed START consumes the pending count")
+    eq(T.mainhand.start, anchored, "cleu-extra: the suppressed START does not re-anchor the bar")
+    advance(b, 0.5)
+    cleu_mh_swing(b) -- a real swing with nothing pending restarts normally
+    check(T.mainhand.start ~= anchored, "cleu-extra: the next real swing re-anchors the bar")
+    eq(#F.cb_errors, 0, "cleu-extra: no callback-bus error was swallowed")
+end
+
+do
+    -- Stop-pairing: the STOP belonging to a suppressed extra cycle does not
+    -- mark the live cycle full; the following real cycle stops normally.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "cleu-stop: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    app_extra(b, 1)
+    advance(b, 0.5)
+    cleu_mh_swing(b) -- suppressed; the lib rearmed its own timer on this swing
+    advance(b, 3.0) -- past the extra cycle's expiry: the lib fires its STOP
+    advance(b, 0.6) -- past the bar-full delay: a normal STOP would mark full
+    eq(T.mainhand.is_full, false, "cleu-stop: the suppressed cycle's STOP does not mark full")
+    advance(b, 0.5)
+    cleu_mh_swing(b) -- real swing restarts; its STOP marks full through the timer
+    advance(b, 3.0)
+    advance(b, 0.6)
+    eq(T.mainhand.is_full, true, "cleu-stop: the real cycle's STOP marks full")
+    eq(#F.cb_errors, 0, "cleu-stop: no callback-bus error was swallowed")
+end
+
+do
+    -- Hand gating: offhand suppresses like mainhand; ranged never suppresses
+    -- (extra attacks are melee-only) and never consumes the pending count.
+    local b = build({ profile = "era", off_speed = 1.8 })
+    assert(b ~= nil, "cleu-hands: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_oh_swing(b)
+    local oh_anchored = T.offhand.start
+    check(oh_anchored ~= nil, "cleu-hands: the offhand cycle anchors first")
+    app_extra(b, 1)
+    advance(b, 0.5)
+    cleu_oh_swing(b)
+    eq(T.extra_attack_pending, 0, "cleu-hands: the suppressed offhand START consumes the count")
+    eq(T.offhand.start, oh_anchored, "cleu-hands: the suppressed offhand START does not re-anchor")
+    local ranged_anchored = T.ranged.start
+    app_extra(b, 1)
+    advance(b, 0.5)
+    succeeded(b, 75) -- lib-driven ranged START while one extra is pending
+    eq(T.extra_attack_pending, 1, "cleu-hands: a ranged START never consumes the pending count")
+    check(T.ranged.start ~= ranged_anchored, "cleu-hands: a ranged START still re-anchors")
+    advance(b, 0.5)
+    cleu_mh_swing(b)
+    eq(T.extra_attack_pending, 0, "cleu-hands: the pending extra still suppresses the next melee swing")
+    eq(#F.cb_errors, 0, "cleu-hands: no callback-bus error was swallowed")
+end
+
+do
+    -- Incoming parry: the live mainhand cycle shortens by 40% of its speed
+    -- (reference ApplyParryHaste); a nearly-ready cycle is left alone.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "cleu-parry: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b) -- speed 2.6, ends_at = clock + 2.6
+    local exp_before = T.mainhand.ends_at
+    advance(b, 0.5)
+    app_incoming_miss(b, "PARRY")
+    near(T.mainhand.ends_at, exp_before - 0.4 * 2.6, "cleu-parry: the cycle shortens by 40% of its speed")
+    near(T.mainhand.start, T.mainhand.ends_at - 2.6, "cleu-parry: both ends move together")
+    -- Floor: 0.1 s left (under the 0.52 s floor) is untouched.
+    cleu_mh_swing(b)
+    local exp_full = T.mainhand.ends_at
+    advance(b, 2.5)
+    app_incoming_miss(b, "PARRY")
+    eq(T.mainhand.ends_at, exp_full, "cleu-parry: a nearly-ready cycle is left alone")
+    eq(#F.cb_errors, 0, "cleu-parry: no callback-bus error was swallowed")
+end
+
+do
+    -- Non-shapes: an outgoing PARRY (we parry nothing - the mob failed to
+    -- parry us) and an incoming DODGE leave the live cycle alone.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "cleu-parry-neg: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    local exp_before = T.mainhand.ends_at
+    local start_before = T.mainhand.start
+    advance(b, 0.5)
+    b.sb.cleu = { b.sb.clock, "SWING_MISSED", nil, "Player-0001", "Me", 0,
+        0, "Creature-09", "Target", 0, 0, "PARRY", false, nil, nil }
+    app_cleu(b) -- outgoing parry: target is the mob, not the player
+    eq(T.mainhand.ends_at, exp_before, "cleu-parry-neg: an outgoing PARRY shortens nothing")
+    app_incoming_miss(b, "DODGE") -- incoming, but not a parry
+    eq(T.mainhand.ends_at, exp_before, "cleu-parry-neg: an incoming DODGE shortens nothing")
+    eq(T.mainhand.start, start_before, "cleu-parry-neg: the anchor never moves on non-shapes")
+    eq(#F.cb_errors, 0, "cleu-parry-neg: no callback-bus error was swallowed")
+end
+
+do
+    -- Stale pending without a lib cycle (the lib-free fixture shape: the app
+    -- sees the EXTRA but no engine STOP/START pair follows). A later direct
+    -- START is a fresh cycle from a landed swing, not an extra: it restarts
+    -- normally and clears the stale count instead of eating a real swing.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "cleu-stale: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    local anchored = T.mainhand.start
+    app_extra(b, 1) -- no lib swing follows: the count goes stale
+    eq(T.extra_attack_pending, 1, "cleu-stale: the unmatched EXTRA still counts")
+    advance(b, 0.5)
+    T:SWING_TIMER_START("SWING_TIMER_START", 2.6, b.sb.clock + 2.6, "mainhand")
+    check(T.mainhand.start ~= anchored, "cleu-stale: a direct START restarts despite the stale count")
+    eq(T.extra_attack_pending, 0, "cleu-stale: the direct START clears the stale count")
+    advance(b, 3.0)
+    advance(b, 0.6)
+    eq(T.mainhand.is_full, true, "cleu-stale: the fresh cycle stops normally")
+    eq(#F.cb_errors, 0, "cleu-stale: no callback-bus error was swallowed")
+end
+
+do
+    -- Multi-extra chain (amount 2): both extra swings suppress, the
+    -- cancel-STOP between them re-arms through the tail branch, and the
+    -- following real cycle stops normally.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "cleu-chain: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    local anchored = T.mainhand.start
+    app_extra(b, 2)
+    advance(b, 0.5)
+    cleu_mh_swing(b) -- first extra: cancel-STOP arms, START suppresses
+    eq(T.extra_attack_pending, 1, "cleu-chain: the first extra consumes one")
+    eq(T.mainhand.start, anchored, "cleu-chain: the first extra does not re-anchor")
+    advance(b, 0.5)
+    cleu_mh_swing(b) -- second extra: re-arms through the tail branch
+    eq(T.extra_attack_pending, 0, "cleu-chain: the second extra consumes the last")
+    eq(T.mainhand.start, anchored, "cleu-chain: the second extra does not re-anchor")
+    advance(b, 3.0) -- past the second extra cycle's expiry
+    advance(b, 0.6) -- past the bar-full delay: normal STOPs would mark full
+    eq(T.mainhand.is_full, false, "cleu-chain: the chained STOPs never mark full")
+    advance(b, 0.5)
+    cleu_mh_swing(b)
+    advance(b, 3.0)
+    advance(b, 0.6)
+    eq(T.mainhand.is_full, true, "cleu-chain: the real cycle stops normally")
+    eq(#F.cb_errors, 0, "cleu-chain: no callback-bus error was swallowed")
+end
+
+do
+    -- Druid form change resets the mainhand cycle (reference
+    -- SPELL_AURA_APPLIED on a druid form id resets the mh timer): until the
+    -- engine reports the next swing the bar shows the full face.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "cleu-form: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    T.mainhand.is_full = false
+    T.player_class = "DRUID"
+    b.sb.db.profile.DRUID = b.sb.db.profile.HUNTER
+    T.form_index = 99 -- a stale stamp, so the live form (0) reads as changed
+    local inactive_before = (b.sb.counts["bar_inactive"] or 0)
+    T:UPDATE_SHAPESHIFT_FORM()
+    eq(T.form_index, 0, "cleu-form: the form stamp follows the client")
+    eq(T.mainhand.is_full, true, "cleu-form: the mainhand cycle resets to full")
+    eq((b.sb.counts["bar_inactive"] or 0), inactive_before + 1,
+        "cleu-form: the reset runs through the shared inactive path")
+    eq(#F.cb_errors, 0, "cleu-form: no callback-bus error was swallowed")
+end
+
+do
+    -- Class dispatch intact: the neutral pre-pass runs first and never eats
+    -- the event the class modules read.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "cleu-dispatch: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    local seen = 0
+    T.player_class = "WARRIOR"
+    T.WARRIOR.on_combat_log_unfiltered = function() seen = seen + 1 end
+    cleu_mh_swing(b)
+    b.sb.cleu = { b.sb.clock, "SWING_MISSED", nil, "Player-0001", "Me", 0,
+        0, "Creature-09", "Target", 0, 0, "DODGE", false, nil, nil }
+    app_cleu(b)
+    eq(seen, 1, "cleu-dispatch: the class hook still receives the combat-log event")
+    eq(T.extra_attack_pending, nil, "cleu-dispatch: a dodge arms no extra-attack count")
+    eq(#F.cb_errors, 0, "cleu-dispatch: no callback-bus error was swallowed")
+end
+
+--=========================================================================================
+-- G2/G3/G4 finish legs (desk swing-finish2): all-class CLEU registration +
+-- neutral handling (G2), Era/BCC Slam pause conversion (G3), utility-cast
+-- resets (G4). Era and Anniversary verdicts separately; Titanforge carries the
+-- Wrath-native behavior; Retail/Forever stay on their own APIs (HU-31).
+--=========================================================================================
+do
+    -- G2 registration: every classic-line hunter registers the CLEU (the neutral
+    -- pre-pass is class-independent); Mainline-code clients never do.
+    for _, profile in ipairs({ "era", "anniv", "titan" }) do
+        local b = build({ profile = profile })
+        assert(b ~= nil, "g2-reg-" .. profile .. ": the sandbox builds")
+        local T, F = b.ST, b.sb
+        T:OnInitialize()
+        report_login(b)
+        addon_loaded(b)
+        pew(b)
+        fire_lrc(b)
+        eq(T.interfaces_are_initialised, true, "g2-reg-" .. profile .. ": init completes")
+        eq(F.events["COMBAT_LOG_EVENT_UNFILTERED"], 1,
+            "g2-reg-" .. profile .. ": the hunter registers the CLEU (G2 all-class)")
+    end
+    do
+        local b = build({ profile = "retail" })
+        assert(b ~= nil, "g2-reg-retail: the sandbox builds")
+        local T, F = b.ST, b.sb
+        T:OnInitialize()
+        fire_lrc(b)
+        eq(T.interfaces_are_initialised, true, "g2-reg-retail: init completes")
+        eq(F.events["COMBAT_LOG_EVENT_UNFILTERED"], nil,
+            "g2-reg-retail: Retail never registers the CLEU (own API, HU-31)")
+    end
+    do
+        local b = build({ profile = "forever" })
+        assert(b ~= nil, "g2-reg-forever: the sandbox builds")
+        local T, F = b.ST, b.sb
+        T:OnInitialize()
+        pew(b)
+        fire_lrc(b)
+        eq(T.interfaces_are_initialised, true, "g2-reg-forever: init completes")
+        eq(F.events["COMBAT_LOG_EVENT_UNFILTERED"], nil,
+            "g2-reg-forever: Forever never registers the CLEU (own API, HU-31)")
+    end
+end
+
+do
+    -- G2 Anniversary: an extra swing suppresses instead of re-anchoring.
+    local b = build({ profile = "anniv" })
+    assert(b ~= nil, "g2-anniv-extra: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    local anchored = T.mainhand.start
+    check(anchored ~= nil, "g2-anniv-extra: the live cycle anchors first")
+    app_extra(b, 1)
+    advance(b, 0.5)
+    cleu_mh_swing(b)
+    eq(T.extra_attack_pending, 0, "g2-anniv-extra: the suppressed START consumes the count")
+    eq(T.mainhand.start, anchored, "g2-anniv-extra: the suppressed START does not re-anchor")
+    eq(#F.cb_errors, 0, "g2-anniv-extra: no callback-bus error was swallowed")
+end
+
+do
+    -- G2 Titanforge: an incoming parry shortens the live cycle.
+    local b = build({ profile = "titan" })
+    assert(b ~= nil, "g2-titan-parry: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    local exp_before = T.mainhand.ends_at
+    advance(b, 0.5)
+    app_incoming_miss(b, "PARRY")
+    near(T.mainhand.ends_at, exp_before - 0.4 * 2.6, "g2-titan-parry: the cycle shortens")
+    eq(#F.cb_errors, 0, "g2-titan-parry: no callback-bus error was swallowed")
+end
+
+do
+    -- G3 Era: the lib's own Slam reset START converts to the pause-extended
+    -- anchor (reference PAUSE_SWING_SPELLS; Era tables are empty, lib:953).
+    -- White-box arm mirrors the warrior module's Slam-START arming (the class
+    -- module is absent in this sandbox); the lib-side casting flag mirrors the
+    -- lib's own START handling (instants aside, GetSpellInfo is unscripted here).
+    local b = build({ profile = "era", off_speed = 1.8 })
+    assert(b ~= nil, "g3-era-slam: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    T.player_class = "WARRIOR"
+    b.sb.db.profile.WARRIOR = b.sb.db.profile.HUNTER -- rf_update reads the class table
+    cleu_mh_swing(b) -- live cycle, speed 2.6
+    local live_end = T.mainhand.ends_at
+    advance(b, 1.0) -- the Slam cast starts 1 s into the cycle
+    local pause_at = F.clock
+    T.warrior_slam_pause = {
+        at = pause_at,
+        valid_until = pause_at + 1.5 + 2.0,
+        mainhand_rem = live_end - pause_at,
+        mainhand_end = live_end,
+    }
+    b.lib.player.casting = true -- post-START lib state (Era noreset lacks Slam)
+    advance(b, 0.5) -- the 1.5 s Slam cast lands
+    local starts_before = wire_starts(b, "mainhand")
+    succeeded(b, 1464) -- lib SUCCEEDED: the generic path resets mh+oh
+    eq(wire_starts(b, "mainhand"), starts_before + 1, "g3-era-slam: the lib reset START arrives")
+    near(T.mainhand.ends_at, F.clock + (live_end - pause_at),
+        "g3-era-slam: the reset START extends by the pause remainder, not the full speed")
+    eq(T.warrior_slam_pause, nil, "g3-era-slam: the convert consumes the pause")
+    eq(#F.cb_errors, 0, "g3-era-slam: no callback-bus error was swallowed")
+end
+
+do
+    -- G3 Anniversary: same conversion on the BCC tables (also empty, lib:1064).
+    local b = build({ profile = "anniv", off_speed = 1.8 })
+    assert(b ~= nil, "g3-anniv-slam: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    T.player_class = "WARRIOR"
+    b.sb.db.profile.WARRIOR = b.sb.db.profile.HUNTER -- rf_update reads the class table
+    cleu_mh_swing(b)
+    local live_end = T.mainhand.ends_at
+    advance(b, 1.0)
+    local pause_at = F.clock
+    T.warrior_slam_pause = {
+        at = pause_at,
+        valid_until = pause_at + 1.5 + 2.0,
+        mainhand_rem = live_end - pause_at,
+        mainhand_end = live_end,
+    }
+    b.lib.player.casting = true
+    advance(b, 0.5)
+    succeeded(b, 1464)
+    near(T.mainhand.ends_at, F.clock + (live_end - pause_at),
+        "g3-anniv-slam: the reset START extends by the pause remainder")
+    eq(T.warrior_slam_pause, nil, "g3-anniv-slam: the convert consumes the pause")
+    eq(#F.cb_errors, 0, "g3-anniv-slam: no callback-bus error was swallowed")
+end
+
+do
+    -- G3 Titanforge negative: Wrath pauses Slam natively (lib:1203-1210), so no
+    -- our-side arm and no reset START - the lib UPDATE carries the extension.
+    local b = build({ profile = "titan", off_speed = 1.8 })
+    assert(b ~= nil, "g3-titan-slam: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    T.player_class = "WARRIOR"
+    b.sb.db.profile.WARRIOR = b.sb.db.profile.HUNTER -- rf_update reads the class table
+    cleu_mh_swing(b)
+    local live_end = T.mainhand.ends_at
+    local starts_before = wire_starts(b, "mainhand")
+    -- Post-START lib Wrath state: pause armed, casting set, Slam noreset-latched.
+    b.lib.player.casting = true
+    b.lib.player.preventSwingReset = true
+    b.lib.player.pauseSwingTime = F.clock
+    advance(b, 1.0) -- the Slam cast lands
+    succeeded(b, 1464)
+    eq(wire_starts(b, "mainhand"), starts_before, "g3-titan-slam: no reset START fires")
+    near(T.mainhand.ends_at, live_end + 1.0, "g3-titan-slam: the pause UPDATE extends the cycle")
+    eq(T.warrior_slam_pause, nil, "g3-titan-slam: our side never arms on Wrath")
+    eq(#F.cb_errors, 0, "g3-titan-slam: no callback-bus error was swallowed")
+end
+
+do
+    -- G3 stale arm: a pause older than its backstop re-anchors normally.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "g3-stale: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    T.player_class = "WARRIOR"
+    b.sb.db.profile.WARRIOR = b.sb.db.profile.HUNTER -- rf_update reads the class table
+    cleu_mh_swing(b)
+    T.warrior_slam_pause = {
+        at = F.clock - 10.0,
+        valid_until = F.clock - 10.0 + 1.5 + 2.0,
+        mainhand_rem = 2.0,
+        mainhand_end = T.mainhand.ends_at,
+    }
+    local anchored = T.mainhand.start
+    advance(b, 0.5)
+    cleu_mh_swing(b)
+    check(T.mainhand.start ~= anchored, "g3-stale: a stale pause re-anchors the swing")
+    eq(T.warrior_slam_pause, nil, "g3-stale: a stale pause is dropped")
+    eq(#F.cb_errors, 0, "g3-stale: no callback-bus error was swallowed")
+end
+
+do
+    -- G4 Era: HoJ SUCCEEDED restarts mh + ranged (the lib is silent for it).
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "g4-era-hoj: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    advance(b, 1.0)
+    T:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-9", 853)
+    eq(T.mainhand.start, F.clock, "g4-era-hoj: HoJ SUCCEEDED re-anchors mh")
+    near(T.mainhand.ends_at, F.clock + 2.6, "g4-era-hoj: the mh cycle runs the live speed")
+    near(T.ranged.ends_at, F.clock + 3.0, "g4-era-hoj: HoJ SUCCEEDED re-anchors ranged")
+    local mh_end = T.mainhand.ends_at
+    T:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-9", 999)
+    eq(T.mainhand.ends_at, mh_end, "g4-era-hoj: an untracked SUCCEEDED moves nothing")
+    eq(#F.cb_errors, 0, "g4-era-hoj: no callback-bus error was swallowed")
+end
+
+do
+    -- G4 Anniversary: HoJ by id and by name (R1 name-carrying payloads).
+    local b = build({ profile = "anniv" })
+    assert(b ~= nil, "g4-anniv-hoj: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    advance(b, 1.0)
+    T:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-9", 10308)
+    eq(T.mainhand.start, F.clock, "g4-anniv-hoj: HoJ rank SUCCEEDED re-anchors mh")
+    advance(b, 0.5)
+    T:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-9", "Hammer of Justice")
+    eq(T.mainhand.start, F.clock, "g4-anniv-hoj: a HoJ name SUCCEEDED re-anchors mh")
+    near(T.mainhand.ends_at, F.clock + 2.6, "g4-anniv-hoj: the named cycle runs the live speed")
+    eq(#F.cb_errors, 0, "g4-anniv-hoj: no callback-bus error was swallowed")
+end
+
+do
+    -- G4 Titanforge: Holy Wrath SUCCEEDED restarts mh (Wrath lib is silent too).
+    local b = build({ profile = "titan" })
+    assert(b ~= nil, "g4-titan-hw: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    cleu_mh_swing(b)
+    advance(b, 1.0)
+    T:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-9", 27139)
+    eq(T.mainhand.start, F.clock, "g4-titan-hw: Holy Wrath SUCCEEDED re-anchors mh")
+    near(T.mainhand.ends_at, F.clock + 2.6, "g4-titan-hw: the mh cycle runs the live speed")
+    eq(#F.cb_errors, 0, "g4-titan-hw: no callback-bus error was swallowed")
+end
+
+do
+    -- G4 negatives: Retail/Forever stay on their own APIs (no classic-lib reset).
+    local b = build({ profile = "retail" })
+    assert(b ~= nil, "g4-retail: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    fire_lrc(b)
+    T:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-9", 853)
+    eq(T.mainhand.ends_at, nil, "g4-retail: HoJ SUCCEEDED moves no Retail anchor")
+    eq(#F.cb_errors, 0, "g4-retail: no callback-bus error was swallowed")
+    local c = build({ profile = "forever" })
+    assert(c ~= nil, "g4-forever: the sandbox builds")
+    local U, G = c.ST, c.sb
+    U:OnInitialize()
+    pew(c)
+    fire_lrc(c)
+    U:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-9", 853)
+    eq(U.mainhand.ends_at, nil, "g4-forever: HoJ SUCCEEDED moves no Forever anchor")
+    eq(#G.cb_errors, 0, "g4-forever: no callback-bus error was swallowed")
 end
 
 print("")

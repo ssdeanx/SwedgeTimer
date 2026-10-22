@@ -40,10 +40,11 @@
 --   5. Pre-init safety: only AceDB's frame exists before OnInitialize, the early
 --      GCD/latency reports touch no frame and are init-guarded, the paladin's own anchor
 --      guard is inert pre-construction, and a re-entrant init_libs re-runs nothing.
---   6. Family gates: the CLEU registration matrix (classic paladin/warrior yes, classic
---      others no, Mainline-code none), the Retail inert-stand-in notice + hidden twist
---      band, the Forever (Mainline-code) builds that must keep the twist band and weave
---      marker, and compat's interface-version fallback (16001 -> FOREVER, 11509 -> ERA).
+--   6. Family gates: the CLEU registration matrix (every classic-line class yes -
+--      G2: the neutral extra-attack/parry pre-pass is class-independent - Mainline-code
+--      none), the Retail inert-stand-in notice + hidden twist band, the Forever
+--      (Mainline-code) builds that must keep the twist band and weave marker, and
+--      compat's interface-version fallback (16001 -> FOREVER, 11509 -> ERA).
 --
 -- Sandbox discipline (like tests/main_init_state.lua / practice_ui_state.lua): the
 -- sandbox owns its global table (env._G = env), so compat.lua's rawget(_G, ...) legacy
@@ -1963,6 +1964,147 @@ do
     eq(sb.ldb_calls.offhand, nil, "warrior ldb: the offhand tick never feeds the broker")
 end
 
+-- WARRIOR G1 (Era boot): INTERRUPTED/FAILED clears the HS/Cleave queue tint
+-- (reference SuperSwingTimer_State.lua:1129-1149); the current-spell probe
+-- re-arms a live queue (self-heal intact).
+do
+    local b = boot({ class = "WARRIOR", project = 2, interface = 11509 })
+    local sb = b.sb
+    local ST = b.ST
+    eq(b.st.family, "ERA", "warrior G1: the Era boot maps to ERA")
+    ST.hs_queued = true
+    ST:UNIT_SPELLCAST_INTERRUPTED("UNIT_SPELLCAST_INTERRUPTED", "player", "cast-9", 78)
+    eq(ST.hs_queued, false, "warrior G1: INTERRUPTED clears the HS flag")
+    eq(ST.cleave_queued, false, "warrior G1: INTERRUPTED leaves Cleave clear")
+    ST.cleave_queued = true
+    ST:UNIT_SPELLCAST_FAILED("UNIT_SPELLCAST_FAILED", "player", "cast-9", 845)
+    eq(ST.cleave_queued, false, "warrior G1: FAILED clears the Cleave flag")
+    ST.hs_queued = true
+    ST:UNIT_SPELLCAST_INTERRUPTED("UNIT_SPELLCAST_INTERRUPTED", "player", "cast-9", 403)
+    eq(ST.hs_queued, true, "warrior G1: an unrelated interrupt keeps the flag")
+    ST:UNIT_SPELLCAST_FAILED("UNIT_SPELLCAST_FAILED", "player", nil, nil)
+    eq(ST.hs_queued, false, "warrior G1: a nil token clears the flag")
+    sb.current_spell = 78
+    ST:CURRENT_SPELL_CAST_CHANGED("CURRENT_SPELL_CAST_CHANGED", false)
+    eq(ST.hs_queued, true, "warrior G1: the current-spell probe re-arms a live queue")
+    sb.current_spell = nil
+end
+
+-- WARRIOR G1 (TBC boot): name-carrying payloads (Anniversary R1) clear too.
+do
+    local b = boot({ class = "WARRIOR", project = 5, interface = 20506 })
+    local sb = b.sb
+    local ST = b.ST
+    eq(b.st.family, "TBC", "warrior G1: the Anniversary boot maps to TBC")
+    ST.hs_queued = true
+    ST:UNIT_SPELLCAST_INTERRUPTED("UNIT_SPELLCAST_INTERRUPTED", "player", "cast-9", "Heroic Strike")
+    eq(ST.hs_queued, false, "warrior G1: an HS name interrupt clears the flag")
+    ST.cleave_queued = true
+    ST:UNIT_SPELLCAST_FAILED("UNIT_SPELLCAST_FAILED", "player", "cast-9", "Cleave")
+    eq(ST.cleave_queued, false, "warrior G1: a Cleave name failure clears the flag")
+    sb.current_spell = "Heroic Strike"
+    ST:CURRENT_SPELL_CAST_CHANGED("CURRENT_SPELL_CAST_CHANGED", false)
+    eq(ST.hs_queued, true, "warrior G1: the TBC name probe re-arms a live queue")
+    sb.current_spell = nil
+end
+
+-- WARRIOR G3 (Era boot): Slam START arms the swing pause (even with the slam
+-- cast bar gated off - swing behavior, not display); the next mainhand START
+-- (the lib's SUCCEEDED reset) converts to the pause-extended anchor.
+do
+    local b = boot({ class = "WARRIOR", project = 2, interface = 11509 })
+    local sb = b.sb
+    local ST = b.ST
+    sb.clock = 50.0
+    start_swing(b, "mainhand", 2.6, 2.0) -- ends at 52.0
+    eq(ST.mainhand.ends_at, 52.0, "warrior G3: the live cycle anchors first")
+    class_db(b).show_warrior_slam_cast_bar = false
+    sb.cast = { name = "Slam", spell_id = 47475, start_ms = 50.0 * 1000, end_ms = 51.5 * 1000 }
+    ST:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-1", 47475)
+    check(ST.warrior_slam_pause ~= nil, "warrior G3: Slam START arms the pause")
+    eq(ST.warrior_slam_pause and ST.warrior_slam_pause.mainhand_rem or nil, 2.0,
+        "warrior G3: the pause records the remainder")
+    eq(ST.mainhand.is_paused, true, "warrior G3: the bar freezes for the cast")
+    sb.clock = 51.0
+    start_swing(b, "mainhand", 2.6, 2.6) -- the lib's reset START
+    eq(ST.mainhand.ends_at, 53.0, "warrior G3: the reset START extends by the remainder")
+    eq(ST.warrior_slam_pause, nil, "warrior G3: the convert consumes the pause")
+    eq(ST.mainhand.is_paused, false, "warrior G3: the bar unfreezes on convert")
+    class_db(b).show_warrior_slam_cast_bar = true
+    sb.cast = nil
+end
+
+-- WARRIOR G3 (Era boot): STOP clears without extending; INTERRUPTED extends by
+-- the paused span, then clears (reference AdjustSwingTimesAfterPause).
+do
+    local b = boot({ class = "WARRIOR", project = 2, interface = 11509 })
+    local sb = b.sb
+    local ST = b.ST
+    sb.clock = 60.0
+    start_swing(b, "mainhand", 2.6, 2.0) -- ends at 62.0
+    sb.cast = { name = "Slam", spell_id = 47475, start_ms = 60.0 * 1000, end_ms = 61.5 * 1000 }
+    ST:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-1", 47475)
+    ST:UNIT_SPELLCAST_STOP("UNIT_SPELLCAST_STOP", "player", "cast-1", 47475)
+    eq(ST.warrior_slam_pause, nil, "warrior G3: STOP clears the pause")
+    eq(ST.mainhand.ends_at, 62.0, "warrior G3: STOP extends nothing")
+    eq(ST.mainhand.is_paused, false, "warrior G3: STOP unfreezes the bar")
+    ST:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-2", 47475)
+    check(ST.warrior_slam_pause ~= nil, "warrior G3: Slam START re-arms the pause")
+    sb.clock = 60.5
+    ST:UNIT_SPELLCAST_INTERRUPTED("UNIT_SPELLCAST_INTERRUPTED", "player", "cast-2", 47475)
+    eq(ST.warrior_slam_pause, nil, "warrior G3: INTERRUPTED consumes the pause")
+    eq(ST.mainhand.ends_at, 62.5, "warrior G3: INTERRUPTED extends by the paused span")
+    eq(ST.mainhand.is_paused, false, "warrior G3: INTERRUPTED unfreezes the bar")
+    sb.cast = nil
+end
+
+-- WARRIOR G3 (Era boot): a pause older than its backstop never converts a
+-- later real swing.
+do
+    local b = boot({ class = "WARRIOR", project = 2, interface = 11509 })
+    local sb = b.sb
+    local ST = b.ST
+    sb.clock = 70.0
+    start_swing(b, "mainhand", 2.6, 2.0) -- ends at 72.0
+    sb.cast = { name = "Slam", spell_id = 47475, start_ms = 70.0 * 1000, end_ms = 71.5 * 1000 }
+    ST:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-1", 47475)
+    check(ST.warrior_slam_pause ~= nil, "warrior G3: the stale case arms first")
+    sb.clock = 80.0 -- past the 71.5 + 2.0 backstop
+    start_swing(b, "mainhand", 2.6, 2.6)
+    eq(ST.mainhand.ends_at, 82.6, "warrior G3: a stale pause re-anchors normally")
+    eq(ST.warrior_slam_pause, nil, "warrior G3: a stale pause is dropped")
+    sb.cast = nil
+end
+
+-- WARRIOR G3 (TBC boot): Anniversary arms like Era (the pause behavior is
+-- classic-line, not TBC-only).
+do
+    local b = boot({ class = "WARRIOR", project = 5, interface = 20506 })
+    local sb = b.sb
+    local ST = b.ST
+    eq(b.st.family, "TBC", "warrior G3: the Anniversary boot maps to TBC")
+    sb.clock = 50.0
+    start_swing(b, "mainhand", 2.6, 2.0)
+    sb.cast = { name = "Slam", spell_id = 47475, start_ms = 50.0 * 1000, end_ms = 51.5 * 1000 }
+    ST:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-1", 47475)
+    check(ST.warrior_slam_pause ~= nil, "warrior G3: Anniversary arms the pause")
+    sb.cast = nil
+end
+
+-- WARRIOR G3 (Wrath boot): never arms - the lib pauses Slam natively there.
+do
+    local b = boot({ class = "WARRIOR" })
+    local sb = b.sb
+    local ST = b.ST
+    sb.clock = 50.0
+    start_swing(b, "mainhand", 2.6, 2.0)
+    sb.cast = { name = "Slam", spell_id = 47475, start_ms = 50.0 * 1000, end_ms = 51.5 * 1000 }
+    ST:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-1", 47475)
+    eq(ST.warrior_slam_pause, nil, "warrior G3: Wrath never arms the pause")
+    check(not ST.mainhand.is_paused, "warrior G3: Wrath leaves the bar unfrozen")
+    sb.cast = nil
+end
+
 -- HUNTER: the ranged visual set (cast bar + window face, no-clip tint, range helper,
 -- Rapid Fire bar, aspect icon) and the queue-colour dispatch.
 do
@@ -2133,6 +2275,49 @@ do
     eq(ST.steady_shot_queued, false, "hunter queue: Steady Shot colouring is off by default")
 end
 
+-- HUNTER G1 (Era boot): INTERRUPTED/FAILED clears the Raptor/Steady tint by id;
+-- the current-spell probe re-arms a live queue (self-heal intact).
+do
+    local b = boot({ class = "HUNTER", project = 2, interface = 11509 })
+    local sb = b.sb
+    local ST = b.ST
+    eq(b.st.family, "ERA", "hunter G1: the Era boot maps to ERA")
+    ST.raptor_strike_queued = true
+    ST:UNIT_SPELLCAST_INTERRUPTED("UNIT_SPELLCAST_INTERRUPTED", "player", "cast-9", 2973)
+    eq(ST.raptor_strike_queued, false, "hunter G1: INTERRUPTED clears the Raptor flag")
+    ST.steady_shot_queued = true
+    ST:UNIT_SPELLCAST_FAILED("UNIT_SPELLCAST_FAILED", "player", "cast-9", 56641)
+    eq(ST.steady_shot_queued, false, "hunter G1: FAILED clears the Steady flag")
+    ST.raptor_strike_queued = true
+    ST:UNIT_SPELLCAST_INTERRUPTED("UNIT_SPELLCAST_INTERRUPTED", "player", "cast-9", 403)
+    eq(ST.raptor_strike_queued, true, "hunter G1: an unrelated interrupt keeps the flag")
+    ST:UNIT_SPELLCAST_FAILED("UNIT_SPELLCAST_FAILED", "player", nil, nil)
+    eq(ST.raptor_strike_queued, false, "hunter G1: a nil token clears the flag")
+    sb.current_spell = 2973
+    ST:CURRENT_SPELL_CAST_CHANGED("CURRENT_SPELL_CAST_CHANGED", false)
+    eq(ST.raptor_strike_queued, true, "hunter G1: the current-spell probe re-arms a live queue")
+    sb.current_spell = nil
+end
+
+-- HUNTER G1 (TBC boot): name-carrying payloads (Anniversary R1) clear too.
+do
+    local b = boot({ class = "HUNTER", project = 5, interface = 20506 })
+    local sb = b.sb
+    local ST = b.ST
+    eq(b.st.family, "TBC", "hunter G1: the Anniversary boot maps to TBC")
+    ST.raptor_strike_queued = true
+    ST:UNIT_SPELLCAST_INTERRUPTED("UNIT_SPELLCAST_INTERRUPTED", "player", "cast-9", "Raptor Strike")
+    eq(ST.raptor_strike_queued, false, "hunter G1: a Raptor name interrupt clears the flag")
+    ST.steady_shot_queued = true
+    ST:UNIT_SPELLCAST_FAILED("UNIT_SPELLCAST_FAILED", "player", "cast-9", "Steady Shot")
+    eq(ST.steady_shot_queued, false, "hunter G1: a Steady name failure clears the flag")
+    class_db(b).enable_steady_shot_color = true
+    sb.current_spell = "Steady Shot"
+    ST:CURRENT_SPELL_CAST_CHANGED("CURRENT_SPELL_CAST_CHANGED", false)
+    eq(ST.steady_shot_queued, true, "hunter G1: the TBC name probe re-arms a live queue")
+    sb.current_spell = nil
+end
+
 -- DRUID: the energy tick column, the form label and the target debuff bars.
 do
     local b = boot({ class = "DRUID" })
@@ -2243,6 +2428,37 @@ do
     ST:UNIT_POWER_FREQUENT("UNIT_POWER_FREQUENT", "player", "RAGE")
     vertex_eq(vf.bar.color, db_color(cdb.insufficient_rage_color),
         "druid queue: insufficient rage tints grey")
+end
+
+-- DRUID G1 (Era boot): INTERRUPTED/FAILED clears the Maul tint by id; the
+-- current-spell probe re-arms a live queue (self-heal intact).
+do
+    local b = boot({ class = "DRUID", project = 2, interface = 11509 })
+    local sb = b.sb
+    local ST = b.ST
+    eq(b.st.family, "ERA", "druid G1: the Era boot maps to ERA")
+    ST.maul_queued = true
+    ST:UNIT_SPELLCAST_INTERRUPTED("UNIT_SPELLCAST_INTERRUPTED", "player", "cast-9", 6807)
+    eq(ST.maul_queued, false, "druid G1: INTERRUPTED clears the Maul flag")
+    ST.maul_queued = true
+    ST:UNIT_SPELLCAST_FAILED("UNIT_SPELLCAST_FAILED", "player", "cast-9", 403)
+    eq(ST.maul_queued, true, "druid G1: an unrelated failure keeps the flag")
+    ST:UNIT_SPELLCAST_FAILED("UNIT_SPELLCAST_FAILED", "player", nil, nil)
+    eq(ST.maul_queued, false, "druid G1: a nil token clears the flag")
+    sb.current_spell = 6807
+    ST:CURRENT_SPELL_CAST_CHANGED("CURRENT_SPELL_CAST_CHANGED", false)
+    eq(ST.maul_queued, true, "druid G1: the current-spell probe re-arms a live queue")
+    sb.current_spell = nil
+end
+
+-- DRUID G1 (TBC boot): the Maul name (Anniversary) clears too.
+do
+    local b = boot({ class = "DRUID", project = 5, interface = 20506 })
+    local ST = b.ST
+    eq(b.st.family, "TBC", "druid G1: the Anniversary boot maps to TBC")
+    ST.maul_queued = true
+    ST:UNIT_SPELLCAST_INTERRUPTED("UNIT_SPELLCAST_INTERRUPTED", "player", "cast-9", "Maul")
+    eq(ST.maul_queued, false, "druid G1: a Maul name interrupt clears the flag")
 end
 
 -- SHAMAN: weave breakpoint markers + cast spark, offhand mirror, Windfury ICD,
@@ -2499,14 +2715,17 @@ do
     eq(classic_warrior.sb.events["COMBAT_LOG_EVENT_UNFILTERED"], 1,
         "family: the classic warrior registers the CLEU")
     local classic_hunter = boot({ class = "HUNTER" })
-    eq(classic_hunter.sb.events["COMBAT_LOG_EVENT_UNFILTERED"], nil,
-        "family: the classic hunter never registers the CLEU")
+    eq(classic_hunter.sb.events["COMBAT_LOG_EVENT_UNFILTERED"], 1,
+        "family: the classic hunter registers the CLEU (G2: neutral pre-pass)")
     local classic_shaman = boot({ class = "SHAMAN" })
-    eq(classic_shaman.sb.events["COMBAT_LOG_EVENT_UNFILTERED"], nil,
-        "family: the classic shaman never registers the CLEU")
+    eq(classic_shaman.sb.events["COMBAT_LOG_EVENT_UNFILTERED"], 1,
+        "family: the classic shaman registers the CLEU (G2: neutral pre-pass)")
     local classic_druid = boot({ class = "DRUID" })
-    eq(classic_druid.sb.events["COMBAT_LOG_EVENT_UNFILTERED"], nil,
-        "family: the classic druid never registers the CLEU")
+    eq(classic_druid.sb.events["COMBAT_LOG_EVENT_UNFILTERED"], 1,
+        "family: the classic druid registers the CLEU (G2: neutral pre-pass)")
+    local classic_rogue = boot({ class = "ROGUE" })
+    eq(classic_rogue.sb.events["COMBAT_LOG_EVENT_UNFILTERED"], 1,
+        "family: the classic rogue registers the CLEU (G2: neutral pre-pass)")
 
     -- Retail: the inert stand-in keeps the whole init arc alive, prints one notice and
     -- never registers the CLEU; the twist band is retail-gated.

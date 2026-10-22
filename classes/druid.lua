@@ -284,6 +284,32 @@ function ST.DRUID.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id)
     end
 end
 
+-- G1 (queued-melee tint clears, reference SuperSwingTimer_State.lua:1129-1149): an
+-- INTERRUPTED or FAILED cast clears the Maul queue tint when the token matches Maul
+-- (Era id, TBC name via is_maul_token) or names nothing identifiable (nil token).
+-- SUCCEEDED/FAILED_QUIET keep their own hooks; CURRENT_SPELL_CAST_CHANGED re-arms
+-- a genuinely live queue on its next probe, so this clear self-heals.
+function ST.DRUID.on_spellcast_event(self, event, unit, cast_guid, spell_id)
+    if unit ~= "player" or not self.interfaces_are_initialised then
+        return
+    end
+    if event ~= "UNIT_SPELLCAST_INTERRUPTED" and event ~= "UNIT_SPELLCAST_FAILED" then
+        return
+    end
+    local token = spell_id
+    if token == nil then
+        token = cast_guid
+    end
+    if token == nil or is_maul_token(token) then
+        if self.maul_queued == true then
+            self.maul_queued = false
+            self:set_bar_color("mainhand")
+        else
+            self.maul_queued = false
+        end
+    end
+end
+
 function ST.DRUID.on_current_spell_cast_changed(self, is_cancelled)
     -- This function detects when the player queues up a maul
     -- and sets relevant flags for the func to set bar colors.
