@@ -834,3 +834,12 @@ No git. No lint-config changes. Warning wiring per wire-not-strip (trace → WIR
 - Full suite BEFORE commit: 48/0, luacheck 2/0. Scope: hunter.lua +
   two suites + bench/journals. U1-U3 in-client owed; C3 nextaction_ui
   melee-gate noted for the handoff, not a ruling question.
+
+## GCD crash fixed + committed (2026-10-22, orchestrator)
+- In-client throw (main.lua:1160 index nil, caught by H3 isolation): GCD_OVER
+  looped all hands hiding gcd_bar; lazy-unbuilt hands have no visuals frame.
+  Guard via bar_is_built (bars.lua owns it); gcd_bar unconditional with the
+  frame, verified. Leg in main_init §4b-ii (no-throw + per-hand hide proof);
+  mutation reproduces the exact in-client signature.
+- Full suite BEFORE commit: 48/0, luacheck 2/0. Follow-up lane report
+  reconciled (scope held, focused suites green, mutations kill).

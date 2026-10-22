@@ -4120,20 +4120,15 @@ function ST.PALADIN.get_hud_state(self, slot, now)
         --                 probe runs every tick, so a talent change is picked
         --                 up without a reload).
         --   "unknown"   - the client could not answer the question: the slot
-        --                 hides as well - unknown-hides, the slot never shows
-        --                 a spell the player cannot cast, and the next tick
-        --                 asks again.
-        -- Both hiding answers are told apart here; only "known" shows. The
-        -- HUD's frozen state table has no room for a reason, so the class
-        -- keeps the last answer per band slot (a diagnostic surface: the
-        -- operator's in-client check reads it).
+        --                 SHOWS (fail-visible - never hide on a question the
+        --                 client could not answer), and the next tick asks
+        --                 again.
+        -- Only "not_known" hides. The HUD's frozen state table has no room for
+        -- a reason, so the class keeps the last answer per band slot (a
+        -- diagnostic surface: the operator's in-client check reads it).
         local known, known_state = api.is_spell_known_state(spell_query(slot.spell))
         ST.PALADIN.hud_band_spell_state[slot.key] = known_state
-        if known_state == "unknown" then
-            s.hidden = true
-            return s
-        end
-        if known ~= true then
+        if known ~= true and known_state ~= "unknown" then
             s.hidden = true
             return s
         end
@@ -4242,10 +4237,17 @@ function ST.PALADIN.get_hud_state(self, slot, now)
         end
     elseif slot.key == "aura_mastery" then
         -- Shockadin legs rune: ERA-gated + known, else hidden. Ready glows.
-        if not is_era_family or not is_spell_known_query(AM_SPELL_ID) then
+        -- Fail-visible: only a confirmed "not_known" hides; "unknown" (the
+        -- client could not answer) shows, and the next tick asks again.
+        if not is_era_family then
             s.hidden = true
         else
-            s.glow = (remaining <= 0 and self.in_combat == true) or false
+            local am_known, am_state = api.is_spell_known_state(spell_query(AM_SPELL_ID))
+            if am_known ~= true and am_state ~= "unknown" then
+                s.hidden = true
+            else
+                s.glow = (remaining <= 0 and self.in_combat == true) or false
+            end
         end
     elseif slot.key == "how_wrath" then
         -- The WotLK Hammer of Wrath is an EXECUTE-phase cast: the sim's own gate

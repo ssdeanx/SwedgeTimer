@@ -3932,8 +3932,11 @@ function ST.SHAMAN.get_hud_state(self, slot, now)
 			-- affirmatively empty. An unreadable slot draws nothing (never a
 			-- guess); another totem in the slot means the Searing is not due.
 			-- The known gate matches the guide's (the Searing Totem is a talent
-			-- on Era/SoD): a player without it is never cued.
-			if not api.is_spell_known(spell_query(guide_slot_searing.spell_id, WEAVE_SEARING_TOTEM_NAME)) then
+			-- on Era/SoD): a player without it is never cued. Fail-visible:
+			-- only a confirmed "not_known" hides; "unknown" (the client could
+			-- not answer) shows, and the next tick asks again.
+			local sear_known, sear_state = api.is_spell_known_state(spell_query(guide_slot_searing.spell_id, WEAVE_SEARING_TOTEM_NAME))
+			if sear_known ~= true and sear_state ~= "unknown" then
 				s.hidden = true
 				return s
 			end

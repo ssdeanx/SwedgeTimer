@@ -746,6 +746,79 @@ function HUD.icon_should_show(self, icon, designing)
 end
 
 --=========================================================================================
+-- Spell-known gate (leveling): an icon for a spell the player has not learned
+-- stays hidden instead of showing a dead icon. Fail-visible: only a confirmed
+-- "not_known" hides; "unknown" (the client could not answer) shows, and the
+-- next tick asks again. Trinket slots and slots without a spell query are not
+-- gated here (their own paths decide).
+--=========================================================================================
+-- Cache for the TBC id -> name resolution below (a name never changes; a cold
+-- book retries on the next tick instead of latching nil).
+HUD.known_names = HUD.known_names or {}
+
+-- The family-correct knowledge query for a slot (the operator name-vs-id rule:
+-- TBC Anniversary resolves by NAME, Classic Era by id). A slot that already
+-- carries a name (rogue TBC slots, druid/shaman TBC-resolved mirrors) probes
+-- it directly; a numeric id on TBC resolves through the client's own spell
+-- data, falling back to the id on a cold book (never nil). Nil when the slot
+-- carries no spell at all (an unresolved rogue slot) - the caller then defers
+-- to the provider's own verdict.
+local function hud_known_query(slot)
+    local spell = slot and slot.spell or nil
+    if spell == nil then
+        return nil
+    end
+    if type(spell) == "string" then
+        return spell
+    end
+    if type(spell) ~= "number" then
+        return nil
+    end
+    if st.family ~= "TBC" then
+        return spell
+    end
+    local cached = HUD.known_names[spell]
+    if cached ~= nil then
+        return cached
+    end
+    local ok, name = pcall(api.GetSpellInfo, spell)
+    if ok and type(name) == "string" then
+        HUD.known_names[spell] = name
+        return name
+    end
+    return spell
+end
+
+-- True when the slot may show: the player knows the spell, or the client
+-- could not answer the question (fail-visible). Only a confirmed "not_known"
+-- hides the icon (leveling: the spell is not in the book yet). A slot without
+-- a query, or a client without a knowledge probe, shows (never a guess).
+function HUD.spell_known_allows(slot)
+    if slot == nil or slot.inv_slot ~= nil then
+        return true
+    end
+    local query = hud_known_query(slot)
+    if query == nil then
+        return true
+    end
+    if type(api.is_spell_known_state) == "function" then
+        local known, state = api.is_spell_known_state(query)
+        if state == "unknown" then
+            return true
+        end
+        return known == true
+    end
+    if type(api.is_spell_known) == "function" then
+        local ok, known = pcall(api.is_spell_known, query)
+        if not ok then
+            return true
+        end
+        return known == true
+    end
+    return true
+end
+
+--=========================================================================================
 -- Layout and style (archive 294-363)
 --=========================================================================================
 -- Icon size that makes `count` icons with `spacing` between them exactly as wide as the
@@ -1196,6 +1269,14 @@ function HUD.update_display(self)
                         s = HUD_HIDDEN_STATE
                     end
                 end
+            end
+            if s and not s.hidden and not preview
+                and not HUD.spell_known_allows(icon.slot) then
+                -- The leveling gate: a spell the player has not learned draws
+                -- nothing (fail-visible: only a confirmed unknown hides, so a
+                -- client that cannot answer keeps the icon). The hide rides the
+                -- existing hidden-flip path below, so the row reflows.
+                s.hidden = true
             end
             if s and not s.hidden then
                 -- First observation baselines without reflowing (a live row never

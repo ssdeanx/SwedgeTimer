@@ -214,8 +214,22 @@ local function build(opts)
     cooldowns = {}
     -- The spellbook the knowledge probe reads. opts.known_spells REPLACES the
     -- shared table (the hunter census uses it: the SoD build of the Era client
-    -- knows the Chimera Shot rune). The default path is unchanged.
-    known_spells = opts.known_spells or { [35395] = true, ["Crusader Strike"] = true }
+    -- knows the Chimera Shot rune). The default path is unchanged. The default
+    -- book knows every spell the fixture's own spell data carries (ids AND
+    -- names, so both the Era id path and the TBC name path answer): a fully
+    -- trained book, so the layout pins below read cooldowns and glows, not
+    -- leveling gates. Leveling (unknown) and client-cannot-answer (declined)
+    -- legs set their own book explicitly.
+    known_spells = opts.known_spells or (function()
+        local known = { [35395] = true, ["Crusader Strike"] = true }
+        for id, info in pairs(opts.spells or SPELL_INFOS) do
+            known[id] = true
+            if type(info) == "table" and type(info.name) == "string" then
+                known[info.name] = true
+            end
+        end
+        return known
+    end)()
     item_ids = { [13] = nil, [14] = nil }
     item_textures = {}
     item_cooldowns = {}
@@ -1129,10 +1143,11 @@ do
     class_db.hud_show_hor = nil
 
     -- The spell-book gate: a build without the talent answers "not known" and
-    -- the slot hides (unknown-hides, never a wrong icon). The gate reads the
-    -- STATE (compat.lua's api.is_spell_known_state), not the binary, so it
-    -- tells the two hiding answers apart: "not_known" (the player has no such
-    -- spell) and "unknown" (this client could not answer the question).
+    -- the slot hides (never a wrong icon). The gate reads the STATE
+    -- (compat.lua's api.is_spell_known_state), not the binary, so it tells the
+    -- two answers apart: "not_known" (the player has no such spell - hides)
+    -- and "unknown" (this client could not answer the question - fail-visible,
+    -- shows, and the next tick asks again).
     class_db.hud_show_hor = true
     class_db.hud_show_how_wrath = true
     known_spells[67485] = nil
@@ -1146,11 +1161,11 @@ do
     eq(W.PALADIN.hud_band_spell_state.how_wrath, "not_known",
         "mirror Wrath: the gate reads the state for the WotLK Hammer of Wrath")
     -- The client cannot answer: the probe declines (nil), so the state is
-    -- "unknown". The slot still hides (unknown-hides - it never shows a spell
-    -- the player cannot cast) and the next tick asks again.
+    -- "unknown". Fail-visible: the slot SHOWS (never hide on a question the
+    -- client could not answer) and the next tick asks again.
     known_declines = true
     s = W.PALADIN.get_hud_state(W, wby_key.hor, clock)
-    eq(s.hidden, true, "mirror Wrath: an unanswerable book hides the slot (unknown-hides)")
+    eq(s.hidden, nil, "mirror Wrath: an unanswerable book SHOWS the slot (fail-visible)")
     eq(W.PALADIN.hud_band_spell_state.hor, "unknown",
         "mirror Wrath: the gate tells 'the client cannot answer' from 'not known'")
     known_declines = false
@@ -1200,6 +1215,81 @@ do
     known_spells[48806] = nil
     class_db.hud_show_hor = nil
     class_db.hud_show_how_wrath = nil
+end
+
+--=========================================================================================
+-- 7d) Leveling gate: unknown spells hide, client-cannot-answer shows.
+-- HUD.spell_known_allows (hud.lua) gates every spell icon per tick; a
+-- provider-hidden verdict always wins (the gate only ADDS hides, never
+-- revives). Binding: Era probes the spell ID, Anniversary the spell NAME -
+-- separate legs below.
+--=========================================================================================
+do
+    -- Unit pins: the gate's own truth table on the default TBC sandbox.
+    eq(HUD.spell_known_allows(nil), true, "known gate: a nil slot shows (never a guess)")
+    eq(HUD.spell_known_allows({}), true, "known gate: a slot without a spell defers to the provider")
+    eq(HUD.spell_known_allows({ key = "trinket1", kind = "trinket", inv_slot = 13 }), true,
+        "known gate: trinket slots are not gated")
+    eq(HUD.spell_known_allows({ key = "cs", spell = 35395 }), true,
+        "known gate: a known spell shows")
+    -- TBC probes the NAME: nil-ing the name alone hides even while the id is
+    -- still known (the id is never consulted on Anniversary).
+    known_spells["Crusader Strike"] = nil
+    eq(HUD.spell_known_allows({ key = "cs", spell = 35395 }), false,
+        "known gate TBC: the probe is the name, so an unknown name hides (leveling)")
+    eq(HUD.known_names[35395], "Crusader Strike",
+        "known gate TBC: the id resolved through the client's own spell data")
+    known_spells["Crusader Strike"] = true
+    eq(HUD.spell_known_allows({ key = "cs", spell = 35395 }), true,
+        "known gate TBC: a known name shows even while the id reads unknown")
+    known_spells[35395] = nil
+    known_spells["Crusader Strike"] = nil
+    eq(HUD.spell_known_allows({ key = "cs", spell = 35395 }), false,
+        "known gate TBC: a confirmed-unknown spell hides (leveling)")
+    known_declines = true
+    eq(HUD.spell_known_allows({ key = "cs", spell = 35395 }), true,
+        "known gate TBC: client-cannot-answer shows (fail-visible)")
+    known_declines = false
+    known_spells[35395] = true
+    known_spells["Crusader Strike"] = true
+end
+
+do
+    -- Era leg: the probe is the numeric ID (no name resolution, no cache).
+    local e = build({ project = 2 })
+    local est, EST = e.st, e.ST
+    local EHUD = est.hud
+    eq(est.family, "ERA", "known gate Era: the sandbox runs the ERA family")
+    EHUD.init(EST)
+    check(EHUD.frame ~= nil, "known gate Era: the HUD builds")
+    clock = 1100
+    EST.gcd = {}
+    EST.in_combat = false
+    EHUD.update_display(EST)
+    local full_width = EHUD.frame.width
+    local judge_icon = nil
+    for i = 1, #EHUD.icons do
+        if EHUD.icons[i].slot.key == "judgement" then judge_icon = EHUD.icons[i] end
+    end
+    check(judge_icon ~= nil, "known gate Era: the Judgement icon exists")
+    check(judge_icon:IsShown(), "known gate Era: a known Judgement shows")
+    -- Leveling: the player has not learned Judgement yet (id unknown).
+    known_spells[20271] = nil
+    EHUD.update_display(EST)
+    check(not judge_icon:IsShown(), "known gate Era: an unknown Judgement hides (leveling)")
+    eq(judge_icon.last_hidden, true, "known gate Era: the hide is recorded liveness")
+    eq(EHUD.frame.width, full_width - 38, "known gate Era: the row reflows into the gap")
+    eq(EHUD.known_names[20271], nil, "known gate Era: no name resolution runs on Era")
+    -- Client-cannot-answer: the probe declines, so the icon stays (fail-visible).
+    known_declines = true
+    EHUD.update_display(EST)
+    check(judge_icon:IsShown(), "known gate Era: client-cannot-answer shows (fail-visible)")
+    eq(EHUD.frame.width, full_width, "known gate Era: the reflow restores on fail-visible")
+    known_declines = false
+    known_spells[20271] = true
+    EHUD.update_display(EST)
+    check(judge_icon:IsShown(), "known gate Era: a learned Judgement shows again")
+    eq(EHUD.frame.width, full_width, "known gate Era: the row is whole once learned")
 end
 
 --=========================================================================================
@@ -1500,17 +1590,17 @@ do
         "the paladin band gate reads the spell-knowledge state")
     check(paladin_src:find("is_spell_known_query(slot.spell)", 1, true) == nil,
         "the paladin band gate does not use the binary spell-knowledge probe")
-    -- The gate tells the two hiding answers apart: the "unknown" branch (this
-    -- client could not answer) and the answer branch ("not known" - the
-    -- player has no such spell). Both hide, so only the shape carries the
+    -- The gate tells the two answers apart: the "unknown" state (this client
+    -- could not answer - fail-visible, shows) and the "not known" answer (the
+    -- player has no such spell - hides). Only the shape carries the
     -- distinction.
     local band_at = paladin_src:find('if slot.key == "hor" or slot.key == "how_wrath" then', 1, true)
     check(band_at ~= nil, "the paladin band gate block is found")
     if band_at then
         local band_stop = paladin_src:find("\n    end", band_at, true)
         local band_block = band_stop and paladin_src:sub(band_at, band_stop + 6) or ""
-        check(band_block:find('known_state == "unknown"', 1, true) ~= nil,
-            "the band gate branches on the 'unknown' state (the client cannot answer)")
+        check(band_block:find('known_state ~= "unknown"', 1, true) ~= nil,
+            "the band gate branches on the 'unknown' state (fail-visible: shows)")
         check(band_block:find("known ~= true", 1, true) ~= nil,
             "the band gate branches on the answer ('not known' hides too)")
         check(band_block:find("hud_band_spell_state[slot.key] = known_state", 1, true) ~= nil,
