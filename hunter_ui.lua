@@ -547,7 +547,14 @@ local function read_live_cast()
     if not name then
         return nil
     end
-    if spell_id == AUTO_SHOT_ID or name == ui.auto_shot_name then
+    -- Auto Shot exclusion (reference IsAutoShotSpell: id OR name): the older
+    -- classic payloads carry no numeric id (compat folds them to nil) and the
+    -- build-time name is nil while the spell data has not answered, so either
+    -- check alone lets a live Auto Shot reading through as a "cast" instead of
+    -- the hidden window. The English fallback covers a cold cache the same way
+    -- the reference's `or "Auto Shot"` does.
+    local auto_name = ui.auto_shot_name or "Auto Shot"
+    if spell_id == AUTO_SHOT_ID or name == auto_name then
         return nil
     end
     if type(cast_start) ~= "number" or type(cast_end) ~= "number" or cast_end <= cast_start then
@@ -557,29 +564,43 @@ local function read_live_cast()
 end
 
 -- The hidden Auto Shot window of the current ranged cycle, cached on the phase-1 ranged
--- state fields (hunter_window.hidden_window; reference UI.lua:394-430). A cached window
--- counts while `now` is inside it; a future one stays cached so the per-frame path costs
--- two comparisons until it opens; everything else recomputes from the live swing state.
+-- state fields (hunter_window.hidden_window; reference UI.lua:394-430). Only an
+-- inside window is cached: past and future recompute every tick like the reference
+-- (UI.lua:421-426 returns nil without caching outside the window), so the
+-- per-frame cost is one pure-arithmetic call until the window opens.
 local function get_hidden_window(self, now)
     local ranged = self.ranged
     if not ranged then
         return nil, nil
     end
+    local cycle_duration = ranged.synced_duration or ranged.speed
+    -- Provenance (see gather_guide_inputs): the cache counts only while it still
+    -- ends on the live cycle's end. A ranged re-anchor the hunter sync did not
+    -- clear (the engine's START/UPDATE stamps next to the sync's own clears; the
+    -- reference clears on every StartSwing) leaves a stale end behind, and the
+    -- stale bounds must lose to the live recompute.
+    local live_end
+    if type(ranged.start) == "number" and type(cycle_duration) == "number"
+        and cycle_duration > 0 then
+        live_end = ranged.start + cycle_duration
+    end
     local start = ranged.hidden_window_start
     local duration = ranged.hidden_window_duration
     if type(start) == "number" and type(duration) == "number" and duration > 0
+        and live_end ~= nil and math.abs((start + duration) - live_end) <= 1e-9
         and now >= start and now <= start + duration then
         return start, duration
     end
     ranged.hidden_window_start = nil
     ranged.hidden_window_duration = nil
-    local cycle_duration = ranged.synced_duration or ranged.speed
-    if type(ranged.start) ~= "number" or type(cycle_duration) ~= "number" or cycle_duration <= 0 then
+    if live_end == nil then
         return nil, nil
     end
     local window_start, window_end = st.hunter_window.hidden_window(
         ranged.start, cycle_duration, st.hunter_window.cast_window(world_latency_seconds(self)))
-    if not window_start or now > window_end then
+    if not window_start or type(now) ~= "number" or now < window_start or now > window_end then
+        -- Outside (past or future): never cache. The reference recomputes a
+        -- future window every tick instead of holding it (UI.lua:421-423).
         return nil, nil
     end
     ranged.hidden_window_start = window_start

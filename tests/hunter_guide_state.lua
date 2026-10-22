@@ -1997,14 +1997,47 @@ eq(ST.HUNTER.guide.gather(ST, gathered_target).latency, 0,
     "gather: an answerless latency client reads zero")
 ST.latency = { world_ms = 50 }
 
--- The cached window bounds win over a recompute (the visual half's cache is reused).
+-- A stale cache (a previous cycle's end) loses to the live recompute and is cleared,
+-- so Steady/Auto never hold on a dead window. Fixture: clock 100, live cycle
+-- [99, 102]; the cache ends at 100.9, off the live end.
 ST.ranged.hidden_window_start = 100.4
 ST.ranged.hidden_window_duration = 0.5
+local stale_gather = ST.HUNTER.guide.gather(ST, gathered_target)
+near(stale_gather.hidden_window_start, 101.45, 1e-9,
+    "gather: a stale cache loses to the live-cycle recompute")
+near(stale_gather.hidden_window_duration, 0.55, 1e-9,
+    "gather: the recomputed width follows the live cycle")
+eq(ST.ranged.hidden_window_start, nil,
+    "gather: the stale cache is cleared on the ranged state")
+eq(ST.ranged.hidden_window_duration, nil,
+    "gather: the stale cache width is cleared on the ranged state")
+
+-- The sharper half: `now` sits INSIDE the stale cache, so an inside-only check
+-- would still ride it. The cache [99.7, 100.2] ends off the live end (102) and
+-- must lose the same way.
+ST.ranged.hidden_window_start = 99.7
+ST.ranged.hidden_window_duration = 0.5
+local stale_inside_gather = ST.HUNTER.guide.gather(ST, gathered_target)
+near(stale_inside_gather.hidden_window_start, 101.45, 1e-9,
+    "gather: an inside-but-stale cache loses to the live-cycle recompute")
+near(stale_inside_gather.hidden_window_duration, 0.55, 1e-9,
+    "gather: the recompute wins over an inside-but-stale cache")
+eq(ST.ranged.hidden_window_start, nil,
+    "gather: the inside-but-stale cache is cleared on the ranged state")
+eq(ST.ranged.hidden_window_duration, nil,
+    "gather: the inside-but-stale width is cleared on the ranged state")
+
+-- A current-cycle cache (its end on the live cycle's end, now inside) is reused
+-- verbatim instead of recomputed: live end 100.5, cache [100, 100.5], now 100.
+ST.ranged.start = 97.5
+ST.ranged.hidden_window_start = 100.0
+ST.ranged.hidden_window_duration = 0.5
 local cached_gather = ST.HUNTER.guide.gather(ST, gathered_target)
-eq(cached_gather.hidden_window_start, 100.4,
-    "gather: the cached window bounds win over a recompute")
+eq(cached_gather.hidden_window_start, 100.0,
+    "gather: a current-cycle cache wins over a recompute")
 eq(cached_gather.hidden_window_duration, 0.5,
-    "gather: the cached window length wins over a recompute")
+    "gather: the cached length is reused verbatim")
+ST.ranged.start = 99.0
 ST.ranged.hidden_window_start = nil
 ST.ranged.hidden_window_duration = nil
 
@@ -2336,14 +2369,14 @@ do
     eq(ttarget("steady"), 0, "TBC tick: Steady stays dark behind a due Multi")
 
     -- The hidden window holds the weave prompt end to end (rule 2 on non-Wrath).
-    tST.ranged.hidden_window_start = tbc.clock - 0.2
-    tST.ranged.hidden_window_duration = 0.5
+    -- Only a current-cycle cache counts, so the tick advances into the live
+    -- cycle's window ([101.45, 102] for the [99, 102] cycle) instead of injecting
+    -- a synthetic off-cycle cache.
+    tbc.advance(1.1)
     ttick()
     eq(tui.frame.hold.fade.target, 1, "TBC tick: the window shows the hold overlay")
     eq(tui.frame.hold.text.text, "HOLD", "TBC tick: the window reads HOLD")
     eq(ttarget("multi"), 0, "TBC tick: the window suppresses the weave prompt")
-    tST.ranged.hidden_window_start = nil
-    tST.ranged.hidden_window_duration = nil
 end
 
 --=========================================================================================
@@ -2958,14 +2991,14 @@ do
     eq(ftarget("sniper"), 0, "Forever tick: the unconfirmed sniper slot stays dark")
     eq(fui.frame.hold.fade.target, 0, "Forever tick: no prompt shows no hold")
     eq(fui.frame.shown, true, "Forever tick: the frame shows in combat")
-    fST.ranged.hidden_window_start = fw.clock - 0.2
-    fST.ranged.hidden_window_duration = 0.5
+    -- The window still holds there (conservative, pinned at the pure level too).
+    -- Only a current-cycle cache counts, so the tick advances into the live
+    -- cycle's window instead of injecting a synthetic off-cycle cache.
+    fw.advance(1.3)
     ftick()
     eq(fui.frame.hold.fade.target, 1, "Forever tick: the window shows the hold overlay")
     eq(fui.frame.hold.text.text, "HOLD", "Forever tick: the window reads HOLD")
     eq(any_target_lit(), false, "Forever tick: the window suppresses every prompt")
-    fST.ranged.hidden_window_start = nil
-    fST.ranged.hidden_window_duration = nil
 end
 
 --=========================================================================================

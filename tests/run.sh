@@ -80,12 +80,14 @@ run "lua5.1 tests/practice_ui_state.lua" lua5.1 tests/practice_ui_state.lua
 run "lua5.1 tests/neutral_actions_state.lua" lua5.1 tests/neutral_actions_state.lua
 run "lua5.1 tests/prepull_contract_state.lua" lua5.1 tests/prepull_contract_state.lua
 run "lua5.1 tests/bars_state.lua" lua5.1 tests/bars_state.lua
+run "lua5.1 tests/bars_lazy_state.lua" lua5.1 tests/bars_lazy_state.lua
 run "lua5.1 tests/hud_state.lua" lua5.1 tests/hud_state.lua
 run "lua5.1 tests/rotationtext_state.lua" lua5.1 tests/rotationtext_state.lua
 run "lua5.1 tests/design_state.lua" lua5.1 tests/design_state.lua
 run "lua5.1 tests/designmode_state.lua" lua5.1 tests/designmode_state.lua
 run "lua5.1 tests/diag_state.lua" lua5.1 tests/diag_state.lua
 run "lua5.1 tests/main_init_state.lua" lua5.1 tests/main_init_state.lua
+run "lua5.1 tests/real_wire_state.lua" lua5.1 tests/real_wire_state.lua
 run "lua5.1 tests/options_load_state.lua" lua5.1 tests/options_load_state.lua
 run "lua5.1 tests/hud_templates_state.lua" lua5.1 tests/hud_templates_state.lua
 run "lua5.1 tests/secret_guard_state.lua" lua5.1 tests/secret_guard_state.lua

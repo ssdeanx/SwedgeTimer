@@ -134,12 +134,6 @@ local ALLOWLIST_CLOCK = {
 	["compat.lua"] =
 		"The clock's reference domain: GetTimePreciseSec() is converted into it once here. "
 		.. "This is the only file allowed to touch either raw clock.",
-	["main.lua"] =
-		"Legacy pre-P9 code in the GetTime() domain: it stores and compares the swing "
-		.. "engine's timestamps (self[hand].start / ends_at), which arrive in that domain.",
-	["bars.lua"] =
-		"Legacy pre-P9 code in the GetTime() domain: its progress/fill maths compares against "
-		.. "the swing engine's timestamps, which are stamped with GetTime() in main.lua.",
 	["swing_source.lua"] =
 		"The Forever swing engine must hand back timestamps in the same domain main.lua and "
 		.. "bars.lua compare in.",
@@ -1278,7 +1272,7 @@ ok(string.format("GetTime( checked outside compat.lua: %d hit(s)", gettime_hits)
 
 -- Non-vacuity / accounting: every counted GetTime( hit must land in an allowlisted file
 -- (a hit elsewhere is a defect reported above; a mismatch here means the counting no
--- longer matches the allowlist). Current tree: 11 hits, all in 5 allowlisted files. A
+-- longer matches the allowlist). Current tree: 3 hits, all in 3 allowlisted files. A
 -- fully blind GetTime( pattern reports 0 hits here but still trips the ALLOWLIST_CLOCK
 -- staleness check in the summary, so it cannot pass silently either.
 checks = checks + 1

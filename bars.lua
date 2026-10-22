@@ -165,11 +165,54 @@ function ST:init_visuals_template(hand)
 
 end
 
+--=========================================================================================
+-- HU-22 lazy bars: a swing hand's frames exist only when the bar is enabled AND the
+-- hand is in use. Frames are built once through ST:ensure_bar(hand) and never
+-- destroyed (unequip / switch-off hides through the existing visibility paths, which
+-- live in main.lua and already treat a disabled bar as hidden). Until the build
+-- points land (init / equip / option-on, owned by the engine lane's main.lua
+-- half), every getter and per-hand consumer below treats "not built" exactly like
+-- a disabled bar: no show, no update, no text, no error.
+--=========================================================================================
+function ST:bar_is_built(hand)
+    -- Built-state is the frames themselves (never the option/weapon gate, which
+    -- ensure_bar owns): init-built hands read true, a hand whose frames were
+    -- never created reads false, and no caller can nil-index through it.
+    return self:get_anchor_frame(hand) ~= nil
+end
+
+function ST:ensure_bar(hand)
+    -- One idempotent constructor for a hand's frames. The gate is exactly
+    -- db.enabled AND (mainhand OR has_weapon); mainhand.has_weapon is
+    -- permanently true (main.lua), so the mainhand gate reduces to db.enabled.
+    -- A second call builds nothing; a gated-off call builds nothing and
+    -- reports false so the caller skips the rest of the per-hand init.
+    if self:bar_is_built(hand) then
+        return true
+    end
+    local ok, db = pcall(self.get_hand_table, self, hand)
+    if not ok or type(db) ~= "table" or not db.enabled then
+        return false
+    end
+    if hand ~= "mainhand" then
+        local state = self[hand]
+        if type(state) ~= "table" or not state.has_weapon then
+            return false
+        end
+    end
+    self:init_visuals_template(hand)
+    self:set_bar_texts(hand)
+    return true
+end
+
 ------------------------------------------------------------------------------------
 -- Bar configuration functions (called on frame inits and setting changes)
 -- These all operate on a given hand.
 ------------------------------------------------------------------------------------
 function ST:configure_draw_layers(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     -- Sets the draw layers within the visuals frame for the swing timer
     -- bar sub-components.
     local f = self:get_visuals_frame(hand)
@@ -180,6 +223,9 @@ function ST:configure_draw_layers(hand)
 end
 
 function ST:configure_bar_size_and_positions(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     local db = self:get_hand_table(hand)
 
     -- First set the anchor frame and bar frames
@@ -235,6 +281,9 @@ function ST:configure_bar_size_and_positions(hand)
 end
 
 function ST:configure_frame_strata(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     local frame = self:get_bar_frame(hand)
     -- Draw level and frame strata are profile-wide settings: config.lua ships both in
     -- ST.defaults.profile and the strata option setter writes them through
@@ -248,6 +297,9 @@ function ST:configure_frame_strata(hand)
 end
 
 function ST:configure_bar_appearances(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     -- COnfigure textures/colors for bar and GCD underlay
     local frame = self:get_visuals_frame(hand)
     local db = self:get_hand_table(hand)
@@ -260,6 +312,9 @@ function ST:configure_bar_appearances(hand)
 end
 
 function ST:configure_gcd_markers(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     -- Configure textures and marker widths.
     local db = self:get_hand_table(hand)
     local f = self:get_visuals_frame(hand)
@@ -274,6 +329,9 @@ function ST:configure_gcd_markers(hand)
 end
 
 function ST:configure_deadzone(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
 	local db = self:get_hand_table(hand)
 	local f = self:get_visuals_frame(hand).deadzone
     if not db.enable_deadzone then
@@ -288,6 +346,9 @@ function ST:configure_deadzone(hand)
 end
 
 function ST:configure_texts(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     local db = self:get_hand_table(hand)
 	local frame = self:get_visuals_frame(hand)
 	-- The shared font chain (utils.lua): the bar texts are written per frame, so every
@@ -370,6 +431,9 @@ function ST:configure_texts(hand)
 end
 
 function ST:configure_bar_outline(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
 	local frame = self:get_bar_frame(hand)
     local db = self:get_hand_table(hand)
     frame.backdropInfo = {
@@ -393,6 +457,9 @@ function ST:configure_bar_outline(hand)
 end
 
 function ST:configure_gcd_underlay(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     local db = self:get_hand_table(hand)
 	local frame = self:get_visuals_frame(hand)
     frame.gcd_bar:SetTexture(fetch_statusbar_texture(db.gcd_texture_key))
@@ -413,23 +480,43 @@ end
 -- Property funcs
 --=========================================================================================
 function ST:get_bar_visuals_width_and_height(hand)
-    return self[hand].vf_width, self[hand].vf_height
+    local state = self[hand]
+    if type(state) ~= "table" then
+        return nil, nil
+    end
+    return state.vf_width, state.vf_height
 end
 
 function ST:get_anchor_frame(hand)
-    return self[hand].anchor_frame
+    local state = self[hand]
+    if type(state) ~= "table" then
+        return nil
+    end
+    return state.anchor_frame
 end
 
 function ST:get_hiding_anchor_frame(hand)
-    return self[hand].anchor_frame.hiding_anchor_frame
+    local anchor = self:get_anchor_frame(hand)
+    if anchor == nil then
+        return nil
+    end
+    return anchor.hiding_anchor_frame
 end
 
 function ST:get_visuals_frame(hand)
-    return self[hand].anchor_frame.bar_frame.visuals_frame
+    local anchor = self:get_anchor_frame(hand)
+    if anchor == nil or anchor.bar_frame == nil then
+        return nil
+    end
+    return anchor.bar_frame.visuals_frame
 end
 
 function ST:get_bar_frame(hand)
-    return self[hand].anchor_frame.bar_frame
+    local anchor = self:get_anchor_frame(hand)
+    if anchor == nil then
+        return nil
+    end
+    return anchor.bar_frame
 end
 
 --=========================================================================================
@@ -553,6 +640,9 @@ st.guard.label("class", "Bar update")
 st.guard.label("ldb", "Bar update")
 
 function ST:update_zones(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     -- Dispatches the registered zones for one hand, ascending priority. No-op (and no
     -- clock read) while nothing is registered.
     local zones = self.zones
@@ -583,10 +673,15 @@ end
 -- OnUpdate funcs
 --=========================================================================================
 function ST:onupdate_common(hand, elapsed)
+    if not self:bar_is_built(hand) then
+        -- No frames (HU-22 lazy rule): behave exactly like a disabled bar -
+        -- no show, no update, no text, no error.
+        return
+    end
     -- Template OnUpdate function for each bar.
     local frame = self:get_visuals_frame(hand)
     local d = self[hand]
-    local t = GetTime()
+    local t = st.api.get_time()
     local db = self:get_hand_table(hand)
     if d.engine_dead then
         -- H1-render: no engine. Never impersonate a live 1 s cycle; paint a dim bar
@@ -752,6 +847,9 @@ function ST:on_attack_speed_change(hand)
 end
 
 function ST:on_bar_active(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     -- Called when the bar enters the active state.
     -- This is whenever the player goes from a persistently idle state
     -- to actively swinging.
@@ -772,6 +870,9 @@ function ST:on_bar_active(hand)
 end
 
 function ST:on_bar_inactive(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     -- Called when the bar enters the inactive state.
     -- This is when the player stops swinging with a full timer for
     -- some finite and configurable period of time.
@@ -800,6 +901,9 @@ end
 -- These all operate on a given hand.
 --=========================================================================================
 function ST:set_gcd_width(hand, timer_width, progress)
+    if not self:bar_is_built(hand) then
+        return
+    end
     local frame = self:get_visuals_frame(hand)
     local tab = self[hand]
     local gcd_progress = (self.gcd.expires - tab.start) / (tab.ends_at - tab.start)
@@ -852,6 +956,9 @@ function ST:get_gcd_marker_duration(hand, marker)
 end
 
 function ST:set_gcd_marker_positions(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     -- This function's task is to first check if any GCD markers should
     -- be shown. It then calculates the necessary offsets from the end of the bar,
     -- and sets them.
@@ -926,6 +1033,9 @@ function ST:needs_range_string(hand)
 end
 
 function ST:set_bar_texts(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     -- Function to set the requisite texts on the bar.
     local frame = self:get_visuals_frame(hand)
     if self[hand].engine_dead then
@@ -938,7 +1048,7 @@ function ST:set_bar_texts(hand)
     end
     if self[hand].is_paused then return end
     local db = self:get_hand_table(hand)
-    local t = GetTime()
+    local t = st.api.get_time()
     local speed = self[hand].speed
     local ends_at = self[hand].ends_at
     local timer = type(ends_at) == "number" and max(0, ends_at - t) or nil
@@ -1004,6 +1114,9 @@ function ST:set_bar_texts(hand)
 end
 
 function ST:set_deadzone_width(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
     -- st.utils.print_msg('call to set deadzone width for '..hand)
     local db = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand).deadzone
@@ -1032,6 +1145,9 @@ function ST:set_deadzone_width(hand)
 end
 
 function ST:set_bar_color(hand, color_table)
+    if not self:bar_is_built(hand) then
+        return
+    end
     local db = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand)
 

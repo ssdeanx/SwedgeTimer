@@ -322,6 +322,12 @@ Role of this file: the ORCHESTRATOR's central lane ledger (lane table + decision
 | compat-tbc-defects | compat.lua + NEW tests/spell_known_state.lua ONLY: (1) DELETE `api.CheckInteractDistance` + its rawget (protected on TBC Anniversary — ADDON_ACTION_BLOCKED, operator in-client 2026-10-21; standing zero-client-range-calls policy); (2) `api.is_spell_known_state` must never throw — accept number|string, resolve names to numeric ids, pcall every probe, skip throwers, unknown => false,"unknown" (`IsSpellKnown("Kill Shot")` -> deprecated shim -> `C_SpellBook.IsSpellInSpellBook(string)` throw killed the hunter post_init) — bench/briefs/brief_compat-tbc-defects_2026-10-21.md; desk `compat-tbc-defects` | **running** | ses_e9f8d9783ffexJE4rS06g20dTM |
 | range-engine-tbc | main.lua (range state from `api.UnitDistance` exact yards; melee 5 / ranged 30-35; floor/ceil band + `ST.target_distance`; works with LRC absent; class `post_init` guarded), hunter_ui.lua (sweet-spot from yards; per-subfeature `st.guard.run` isolation so one feature cannot quarantine the class hook), vendored LibRangeCheck (build NO interact checkers; zero protected calls), NEW tests/range_source_state.lua + the suites pinning the old checker source — bench/briefs/brief_range-engine-tbc_2026-10-21.md; desk `range-engine-tbc` | **running** | ses_e9f8d9782ffeP0byqWMW6xPmFv |
 | lazy-bars | **operator order 2026-10-21**: "make sure bars like oh do not load unless user is using it" — clarified: SWING bars only (mainhand/off-hand/ranged), gate = **enabled AND in use** (no off-hand frames without an off-hand weapon, no ranged frames without a ranged weapon, no frames for an option-disabled bar; built lazily via one idempotent `ST:ensure_bar(hand)` on first need, never destroyed, every getter nil-safe) — bench/briefs/brief_lazy-bars_2026-10-21.md; desk `lazy-bars` | queued — **blocked on main.lua**: dispatch only after range-engine-tbc lands + reconciles (disjoint from bars.lua until then) | — |
+| swing-wire-hunter | read-only defect hunt: why mh/oh/ranged are dead on every class (vendored-lib wire vs SuperSwingTimer direct-CLEU vs Blizzard reference; Era / TBC-Anniversary / Retail-Forever) — bench/briefs/brief_swing-wire-hunter_2026-10-22.md; desk `swing-wire-hunter` | done (report filed as desk journal + done signal 20261022T003739Z; 7 findings D1-D7, close-outs U1-U8; orchestrator-verified every citation, closed U4 via origin/forever) | deleg_e944edf9 / sa-0-1ac963b8 |
+| swing-wire-build | OUR-files fixes only: D3 idle nil-shape + :331 comment, B2 probe-gated WEAPON_SLOT_CHANGED, B3 optional unit filter (`swing_source.lua` + `tests/swing_source_state.lua`; Libs/TOCs/run.sh/main.lua/bars.lua off-limits, FILE-don't-touch) — bench/briefs/brief_swing-wire-build_2026-10-22.md; desk `swing-wire-build` | done (report + desk journal + done signal 20261022T004500Z; diff verified 2 files, CRLF kept, stray luac.out removed; awaiting proctor verdict) | deleg_fb295452 / sa-0-66bc3e14 |
+| swing-wire-proctor | independent read-only verdict on the build (B1/B2/B3 logic, pins, scope, standing rules; harness/luacheck/mutations UNVERIFIED on that seat, orchestrator closes) — bench/briefs/brief_swing-wire-proctor_2026-10-22.md; desk `swing-wire-proctor` | done PASS (report filed as desk journal + done signal 20261022T005000Z; one low pin-gap F1; orchestrator-closed executions: run.sh 46/0, suite 149 PASS by direct run, luacheck 2/0) | deleg_4b60d91a / sa-0-835d3001 |
+| swing-wire-hunt2 | post-strip Era/Anniversary still-dead hunt (loadedAddonName gate, deadline ordering, init gates, registry delivery, bar-side death, SST contrast) + REAL-lib harness spec — bench/briefs/brief_swing-wire-hunt2_2026-10-22.md; desk `swing-wire-hunt2` | done (report filed as desk journal + done signal 20261022T010000Z; Era all-hops-WIRED, Anniversary WIRED-except-D2-ranged, new D8 deadline-trap + D10 stale-copy ranking + HU-25 harness spec; orchestrator closed U-H2/U-H4/U-H5 branch halves) | deleg_f6face31 / sa-0-0201288b |
+| swing-wire-fix | HU-25 real-lib harness (red first on D8/D2 legs) + D8 deadline rewire in main.lua narrow regions (new suite + :382-386/:393-411/:770-777; run.sh/TOCs/Libs/bars/compat/classes/swing_source/diag off-limits) — bench/briefs/brief_swing-wire-fix_2026-10-22.md; desk `swing-wire-fix` | done (report + desk journal + done signal 20261022T011500Z; red 109/14 recorded pre-fix → green 112/0 + 1 expected-fail; orchestrator added the run.sh line, full harness 47/0 incl. real_wire PASS, luacheck 2/0; awaiting proctor verdict) | deleg_29dcd1f0 / sa-0-3bc11bfe |
+| swing-wire-proctor2 | independent read-only verdict on harness + rewire (assembly reality, leg entailment, three main.lua regions, scope, standing; executions UNVERIFIED on that seat, orchestrator closes) — bench/briefs/brief_swing-wire-proctor2_2026-10-22.md; desk `swing-wire-proctor2` | done PASS, no findings (report filed as desk journal + done signal 20261022T012500Z; orchestrator-closed: run.sh 47/0, suite PASS, luacheck 2/0, rewire-detached mutation re-run → exact 14-fail red reproduced, copy removed) | deleg_4eaceee9 / sa-0-9b3708f1 |
 
 ## Reconcile decisions (2026-10-21, TBC Hunter test-session wave)
 - **The interact-band ladder is DEAD — it was the same mistake moved one call sideways.** The
@@ -526,3 +532,259 @@ No git. No lint-config changes. Warning wiring per wire-not-strip (trace → WIR
   the lib bundles v8 — ship the bundled v8, or keep v7 and let the harness
   prove the client shape?); HU-26 resolved (operator correction: code fixes go
   through a desk; the orchestrator briefs, dispatches and reconciles).
+
+## Reconcile decisions (2026-10-22, swing-wire-hunter)
+- Hunter lane DONE (deleg_e944edf9): 7 findings filed as
+  `desks/swing-wire-hunter/journal.md` + done signal. Orchestrator
+  re-verified every cited file:line; closed U4 via
+  `git show origin/forever` (Blizzard manager handles
+  `WEAPON_SLOT_CHANGED`/`PLAYER_TARGET_CHANGED`/`PLAYER_SWING_RANGE_UPDATE`;
+  `swing_source` lacks all three). U2 tree half: Anniversary project id 5
+  CONFIRMED on `origin/classic_anniversary`; expansion-level half is
+  binary-provided — in-client diag only.
+- Split: builder lane `swing-wire-build` owns the OUR-files items only
+  (D3 idle nil-shape + B2 equip-change handling + :331 comment;
+  `swing_source.lua` + `tests/swing_source_state.lua` — no owner conflict).
+  D2/D4/D5/D6 are vendored-lib → HU-29 (operator: upstream / fork-patch /
+  accept). `Libs/` stays untouched until ruled. U1/U2/U3/U7 go on the
+  operator's in-client copy list once the builder lands.
+
+## Reconcile decisions (2026-10-22, swing-wire-build + proctor)
+- Build card: proctor verdict PASS (`desks/swing-wire-proctor/journal.md`,
+  done signal 20261022T005000Z). Card complete minus the operator's
+  approval/copy — nothing here is in-client proven.
+- F1 (fallback-branch pin never exercised, sandbox-only: real frames
+  always offer `RegisterUnitEvent`) ACCEPTED as residual, not a rebuild:
+  proctor graded it low and non-blocking; the required B3 pins are present
+  and traced. Revisit only if the fallback ever fires in-client.
+- Orchestrator-closed executions on the final tree: `bash tests/run.sh`
+  46/0, `swing_source_state.lua` 149 PASS (direct run), luacheck 2/0 in
+  88 files, CRLF intact, diff confined to the two owned files.
+- Copy list for the operator: `swing_source.lua`,
+  `tests/swing_source_state.lua` (offline only), `main.lua`,
+  `option_tables.lua` (2026-10-21 fixes, never copied). In-client
+  checklist: U1 (Era mh / Anniversary ranged advance + `/st diag`
+  `swing_<hand>` counts), U2 (`proj=/exp=/bcc=` on Anniversary), U3
+  (`UnitRangedDamage` shape on 2.5.6), U7 (Cata/Mists "engine offline"
+  eyeball), D1 confirmation the strip holds live.
+
+## Reconcile decisions (2026-10-22, swing-wire-fix + proctor2)
+- Fix card: proctor verdict PASS with NO findings
+  (`desks/swing-wire-proctor2/journal.md`, done signal 20261022T012500Z).
+  Card complete minus the operator's approval/copy — nothing here is
+  in-client proven, per operator rule nothing is called fixed.
+- What the tree now proves offline (real lib + real registry + real
+  dispatcher in the loop): happy legs green on Era and Anniversary(1)
+  profiles (strip + wire shape hold with the real engine); D8 negative
+  leg red pre-fix → green post-fix; Anniversary-`nil` leg xfail-marked
+  for HU-29. Orchestrator independently re-ran the rewire-detached
+  mutation → the exact 14-failure red reproduced.
+- Orchestrator-closed executions on the final tree: `bash tests/run.sh`
+  47/0 (incl. `real_wire_state` PASS), luacheck 2/0 in 89 files, CRLF
+  intact, diff confined to `tests/real_wire_state.lua` (new) + the three
+  `main.lua` regions + ledgers/briefs/`run.sh` line. `Libs/` untouched.
+- Copy list additions: `main.lua` (strip + D8 rewire),
+  `tests/real_wire_state.lua` (offline only). U-H8 (strip-in-folders)
+  still needs the operator's folder; D10 ranking stands until a session
+  with diag output says otherwise.
+
+## Dispatch (2026-10-22, orchestrator): swing start/end/reset + test-gap audits
+- Hunter lane ses_e9b191e5cffeLWGAXiIHVJPd9A: read-only CLEU start/end/reset audit (ranged .5s hidden-cast, mh/oh never showing, steady/auto interference; Era/TBC/Retail/Forever; SuperSwingTimer-WoW reference). No write scope.
+- Proctor lane ses_e9b191e1effeom76gncvku9wnM: read-only suite-gap audit (real_wire_state, main_init_state §14b, swing_source_state, run.sh; stub-vs-real registry coverage per hand per family). No write scope.
+- Builder lane waits on both findings (dependency); orchestrator reconciles + runs full suite.
+
+## Proctor gap audit filed (2026-10-22, orchestrator)
+- Lane ses_e9b191e1effeom76gncvku9wnM (read-only, no write scope) complete.
+  Report filed as bench/proctor_swing_gap_2026-10-22.md (orchestrator-verified:
+  every checkable claim re-checked against the tree — offhand undriven,
+  FAILED_QUIET/CAST_START/MISSED/PARRY/EXTRA_ATTACK absent from real_wire,
+  §14b direct-dispatch, swing_source fake registry, no swing_engine_state
+  suite; all hold).
+- Top-3 pins for the builder brief, in order: (1) TBC ranged driver table
+  through real lib + real v7 (SUCCEEDED-without-autorepeat, CAST_START and
+  FAILED_QUIET negatives per family); (2) full START->UPDATE->hand-only STOP
+  lifecycle per hand incl. offhand (needs two-speed fixture + clock advance);
+  (3) MISSED routing + PARRY/EXTRA_ATTACKS as xfail pending HU-29.
+- Hunter lane ses_e9b191e5cffeLWGAXiIHVJPd9A still running; builder brief waits
+  on it (dependency) then carries pins 1-3.
+
+## Ruling + dispatch (2026-10-22, orchestrator, operator order)
+- Hunter lane ses_e9b191e5cffeLWGAXiIHVJPd9A CANCELLED mid-flight per operator:
+  read-only seats (hunter/proctor: no shell, no cross-client branch reads)
+  must not own cross-client verification — their branch claims come back
+  UNVERIFIED and risk new bugs. Recorded as resolved HU-30.
+- Proctor lane ses_e9b191e1effeom76gncvku9wnM completed and filed as
+  bench/proctor_swing_gap_2026-10-22.md, but its cross-client statements
+  carry the seat's own UNVERIFIED caveat — usable as a pin list (Pins 1-3),
+  not as API truth.
+- New lane: desks/swing-cross-client/ (shell-capable seat), brief
+  bench/briefs/brief_swing-cross-client_2026-10-22.md. Write scope:
+  main.lua dispatcher region + named swing-state lines in bars.lua /
+  classes/hunter.lua / hunter_ui.lua + tests/real_wire_state.lua legs.
+  run.sh wiring stays orchestrator-owned.
+- Cross-client lane session: ses_e9b153168ffeZ53a0otTtWqCbV (desk swing-cross-client).
+
+## Cross-client lane cancelled, zero output (2026-10-22)
+- Lane ses_e9b153168ffeZ53a0otTtWqCbV cancelled before its seat wrote
+  anything: desk journal untouched since dispatch, no signals, and no product
+  file changed by it (tree diff unchanged from before dispatch).
+- Honest answer to the operator's "why take 10 hours": the time was not work
+  — the seat never began. Nothing to reconcile, nothing to revert.
+- Standing state: the verified pin list is
+  bench/proctor_swing_gap_2026-10-22.md (Pins 1-3); the brief is
+  bench/briefs/brief_swing-cross-client_2026-10-22.md; both await the
+  operator's call on how to proceed.
+
+## Parallel dispatch (2026-10-22, orchestrator, operator order: finish now)
+- Display lane ses_e9b0ee364ffez1Y1QmPOsCqJlH (desk swing-display): bars.lua +
+  classes/hunter.lua + hunter_ui.lua — mh never shows, ranged wrong value,
+  steady/auto poisoned by shared state.
+- Engine lane ses_e9b0ee35affefEeVcg78oJFHKo (desk swing-engine-fix): main.lua
+  dispatcher/init/registration + compat.lua family detect — mh START never
+  lands, TBC fallback driver under both gate outcomes.
+- Harness lane ses_e9b0ee35affddtAQ5gXVsr2H9v (desk swing-harness):
+  swing_source.lua + tests/real_wire_state.lua legs (Pins 1-3).
+- Scopes disjoint by file; run.sh + full suite stay orchestrator-owned.
+  Issue stated first in every prompt; no hunter/proctor anywhere.
+
+## CLEU defects confirmed in pasted lib (2026-10-22, orchestrator)
+- Operator pasted LibClassicSwingTimerAPI v32; spot-checked against vendored:
+  identical. Four lib-side facts, all verified by grep (lib file + line):
+  (1) :397 catches all SWING_MISSED so the :415 PARRY arm is dead;
+  (2) :257 getUnit re-checks player.id instead of target.id;
+  (3) :456 + :772 ranged arms are isClassic-only (TBC = SUCCEEDED(75) only);
+  (4) :46 isMists self-compares the constant. Lib stays untouched.
+- Steered engine lane ses_e9b0ee35affefEeVcg78oJFHKo via task_message to route
+  around them in our code (fallback driver, no parry/target reliance).
+
+## Scope ruling HU-31 (2026-10-22, operator)
+- Lib-driven swing must work on classic_era, classic_anniversary, titanforge.
+  Retail/Forever use their own API (swing_source / inert stand-in) — no
+  classic-lib fallback built for them. Steered engine + harness lanes;
+  display lane unaffected.
+
+## Display lane reconciled (2026-10-22, orchestrator)
+- ses_e9b0ee364ffez1Y1QmPOsCqJlH DONE. Trail complete: desk journal current,
+  done signal filed, bench/swing_display_2026-10-22.md (new file only).
+- Claims verified, not trusted: hunter_state.lua re-run in-tree PASS (1744);
+  scope respected (bars.lua, classes/hunter.lua, hunter_ui.lua,
+  tests/hunter_guide_state.lua, tests/hunter_state.lua — main.lua diff is the
+  engine lane's ongoing work); /tmp/opencode probe leftovers belong to
+  running lanes, untouched.
+- Accepted: ranged shared-state provenance fix + Auto Shot exclusion fallback
+  (6/6 mutations kill, M4-M6 ad-hoc). mh visibility correctly NOT claimed
+  (needs engine START). Open follow-ups: committed lazy-bars suite + run.sh
+  line (queued lane), cast spark U4, in-client U1-U3.
+- Engine lane steered to the display contract before wiring build points.
+  Full run.sh waits on engine + harness lanes.
+
+## Harness lane reconciled (2026-10-22, orchestrator)
+- ses_e9b0ee35affddtAQ5gXVsr2H9v DONE. Trail complete: desk journal current,
+  two signals filed, scope respected (new file tests/real_wire_state.lua
+  only — untracked, no product edits; swing_source_state/run.sh diffs
+  predate today's lanes).
+- Claims verified, not trusted: real_wire_state.lua re-run in-tree 482/0
+  (3 xfail PARRY/EXTRA/D2); swing_source_state.lua 149 PASS; luacheck 0/0.
+- Accepted: Titanforge-shaped third profile (project 11/exp 2/iface 38002,
+  unblocks U-W1); driver loops era/anniv/titan with family negatives;
+  per-hand lifecycle incl. Wrath re-fire quirk; MISSED x3 + PX xfail;
+  Retail silent leg (own-API); sandbox clock/notice fixes (test-only).
+  Mutations M5/M8/M9/M10 kill as quoted.
+- Flags: lane reports the file's top header comment "reverted by an unknown
+  hand" mid-lane and rewrote it per HU-31 — no other lane owns that file
+  today; noted, watching. Crossfire noted (main.lua/swing_source.lua moved
+  underneath from the engine lane; legs pass against landed versions).
+- Owed: in-client U2/U3/U-H5. Full run.sh waits on the engine lane.
+
+## Engine lane reconciled, full suite mine (2026-10-22, orchestrator)
+- ses_e9b0ee35affefEeVcg78oJFHKo DONE. Trail complete (journal, 4 signals,
+  bench/swing_engine_fix_2026-10-22.md). Scope respected (main.lua only;
+  compat correctly untouched — design already held). Claims verified:
+  FULL bash tests/run.sh 47 steps 0 failed; luacheck 2/0 floor in 89 files.
+- Accepted: ST:bring_up_hand(hand) + init/equip wiring to the display
+  contract, nil-guards on show/hide/lock/unlock, warrior/rogue ranged
+  re-cut (disabled→unbuilt per HU-22, equip-point proof). Mutations M5-M7.
+- Notes: .vscode/settings.json diff is IDE-local paths, not lane output —
+  left alone. Harness header-revert flag watched, no recurrence.
+- Gap dispatched: ses_e9af06825ffegCcCag426PhxOM (desk lazy-bars) —
+  option_tables per-hand setter → bring_up_hand + committed
+  tests/bars_lazy_state.lua. run.sh line stays mine after it lands.
+
+## Lazy-bars lane re-dispatched correctly (2026-10-22, orchestrator)
+- Prior attempt ses_e9af06825ffegCcCag426PhxOM errored (step interrupted, no
+  result); result retrieved to authorize retry per tool rule.
+- New lane ses_e9aeefc40ffeUyxqteI5OOllBR (desk lazy-bars) with the four lane
+  skills named explicitly in the prompt (@bench-read, @desk-open,
+  @desk-journal, @signal-write + missing-skill reporting). Same write scope:
+  option_tables per-hand setter → bring_up_hand + tests/bars_lazy_state.lua.
+
+## Lazy-bars lane reconciled, wave complete (2026-10-22, orchestrator)
+- Lane DONE with all four skills confirmed in its report. Verified: journal
+  current, done signal filed, option_tables diff = setter + widget rewire
+  only (loop mirrors pre-existing generic/text setters exactly), new suite
+  tests/bars_lazy_state.lua 37/0 in-tree.
+- run.sh line added by orchestrator (bars_lazy_state after bars_state).
+  FULL harness: 48 steps, 0 failed; luacheck 2/0 floor in 90 files.
+- All four writer lanes reconciled (display, engine, harness, lazy-bars);
+  no lane owns anything further. Owed: operator copy + in-client proof.
+- Copy carries the HU-27 unreconciled range-engine files too (disclosed in
+  the handoff, not hidden).
+
+## Verify lane dispatched (2026-10-22, orchestrator, operator order)
+- Lane ses_e9ae7341bffeLmXSlnVEy276AZ (desk swing-verify), brief
+  bench/briefs/brief_swing-verify_2026-10-22.md. Four lane skills explicit
+  in prompt with missing-skill reporting.
+- Operator correction recorded: ranged = FULL swing timer (0.5s is part of
+  the cycle display, never the whole bar); mh/oh/ranged must sweep, stop,
+  and reset perfectly. No other writer running — no scope conflicts.
+
+## Correction to verify lane (2026-10-22, operator)
+- The 0.5s Auto Shot cast window is Era AND Anniversary (both classic-line),
+  not TBC-only. Steered ses_e9ae7341bffeLmXSlnVEy276AZ: cast-window asserts
+  identical on Era/Anniversary, fallback driver serves both.
+
+## Ruling HU-32 (2026-10-22, operator)
+- Orchestrator touches journal, hands-up, workshop ONLY. Bench (briefs,
+  reports, pins) is the lanes' workspace — brief context goes in the
+  dispatch prompt, the lane files its own bench artifacts. Past bench
+  writes by orchestrator stand as history, not precedent.
+
+## Workshop + hands-up brought current (2026-10-22, orchestrator, operator order)
+- hands-up.md: HU-25 rewritten (wave landed: real-wire 482/0, display/engine/
+  lazy contracts, full 48/0; owed = operator copy + in-client proof; verify
+  lane running); HU-27 refreshed (tree moved: strip, bring_up_hand, display
+  contract, lazy setter — revert impossible, review-against-contracts only);
+  HU-28 narrowed (v7 proven in-harness, v8 still unshipped; closer = /st diag
+  after copy); HU-29 refreshed (dead PARRY + getUnit + :46 confirmed vs paste;
+  xfail pins landed; ruling a/b/c still owed). HU-12/18/19/20/24 untouched.
+- workshop.md: state pointer now the live journal (Oct-21 status file =
+  history); flow step 1 per HU-32 (brief in prompt, lane files bench);
+  snapshot re-verified 2026-10-22 (234 entries, 12 new swing/lazy desks);
+  lessons 16 (full timer, not the window), 17 (cast window Era+Anniversary),
+  18 (name the four skills; read-only never cross-client; hands off bench).
+
+## Clock lane dispatched (2026-10-22, orchestrator, operator rule)
+- Lane ses_e9ae0e644ffeFG8GGPpjzoSC3g (desk swing-clock): GetTimePreciseSec
+  main / GetTime fallback-only. Scope: raw GetTime() in shipped code →
+  st.api.get_time(); Libs + docs + run.sh + TOCs excluded. Four skills
+  explicit. Orchestrator grep sized it (paladin/shaman/progress-ui/ldb/
+  nextaction_ui candidates; Libs files noted out-of-scope, not touched).
+
+## Queued (2026-10-22, operator order, runs after clock lane)
+- CLEU-parity lane (desk swing-cleu-parity): SuperSwingTimer-WoW vs ours,
+  event-by-event (CLEU subevents, unit events, autorepeat, FAILED_QUIET,
+  equipment/combat enter-leave) — list anything SST handles that we drop,
+  then fix our side (lib stays untouched). Starts after ses_e9ae0e644ffeFG8GGPpjzoSC3g
+  completes (write-scope separation).
+
+## Commit sequence (2026-10-22, operator order)
+- Hold the commit until the clock lane (ses_e9ae0e644ffeFG8GGPpjzoSC3g)
+  returns and is reconciled. Then: full run.sh + luacheck, commit the wave
+  (exclude .vscode/settings.json + luac.out), then dispatch the CLEU-parity
+  lane (desk swing-cleu-parity). No commit before that point.
+
+## Docs updated for commit rule (2026-10-22, orchestrator, operator order)
+- workshop.md flow gains step 8: reconciled waves commit promptly on operator
+  order (exclusions: .vscode/, luac.out, /tmp); committing is not a bench
+  touch. Pending sequence (journal 2026-10-22): clock-lane reconcile → full
+  suite → commit → CLEU-parity lane.

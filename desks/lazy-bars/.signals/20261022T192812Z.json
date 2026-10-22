@@ -1,0 +1,13 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-22T19:28:12Z",
+  "agent_name": "lazy-bars",
+  "self_assessment": { "intent": 5, "confidence": 5, "accuracy": 5, "completeness": 4 },
+  "patterns": {
+    "what_worked": "per-hand enabled setter reuses bring_up_hand seam; suite reuses bars_state sandbox shape with pre-boot defaults tweak",
+    "what_was_hard": "locating the per-hand setter (generic set_opts_funcs, not a named widget setter); sandbox has_weapon latch timing",
+    "skill_gap": "run.sh wiring stays orchestrator-owned"
+  },
+  "escalation": { "reason": null, "blocked_on": null, "recommendation": null }
+}

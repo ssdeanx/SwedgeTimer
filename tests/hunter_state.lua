@@ -1893,6 +1893,21 @@ do
         near(sb.ST.ranged.hidden_window_duration, 0.5,
             "the hidden window duration is cached on the ranged state")
 
+        -- An id-less live Auto Shot reading with a cold spell cache is still
+        -- excluded (reference IsAutoShotSpell: id OR name): the window face
+        -- persists instead of a bogus "Auto Shot" live cast.
+        local saved_auto_name = ui.auto_shot_name
+        ui.auto_shot_name = nil
+        sb.live_cast = { name = "Auto Shot", start_ms = -500, end_ms = 1500 }
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.cast_frame.text.text, "Auto Shot 0.4",
+            "an id-less Auto Shot with a cold cache keeps the window face")
+        eq(ui.cast_frame.tint.shown, false,
+            "an excluded Auto Shot carries no no-clip tint")
+        ui.auto_shot_name = saved_auto_name
+        sb.live_cast = nil
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+
         near(sb.mh_anchor.center_y, -129,
             "the mainhand re-anchors directly beneath the ranged bar while the cast bar shows")
         near(sb.oh_anchor.center_y, -145,
@@ -1917,6 +1932,25 @@ do
             "the mainhand anchor was handed back to LibWindow")
         check(sb.oh_anchor.restored > restored_after_show,
             "the offhand anchor was handed back to LibWindow")
+    end
+
+    -- 14d2) a ranged re-anchor drops the previous cycle's cache: the cast bar
+    -- hides instead of showing the dead window (the reference clears the cache
+    -- on every StartSwing; the engine's START stamp is the re-anchor here).
+    do
+        local sb = build_ui({ ranged_start = -1.6, ranged_speed = 2 })
+        sb.ST.HUNTER.post_init(sb.ST)
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        local ui = sb.st.hunter_ui
+        eq(ui.cast_frame.shown, true, "the live window shows the cast bar first")
+        sb.ST.ranged.start = 0.0
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.cast_frame.shown, false,
+            "a re-anchored cycle drops the previous window cache")
+        eq(sb.ST.ranged.hidden_window_start, nil,
+            "the re-anchor clears the cached window start")
+        eq(sb.ST.ranged.hidden_window_duration, nil,
+            "the re-anchor clears the cached window width")
     end
 
     -- 14e) the range helper colour follows range_state's priority ladder.

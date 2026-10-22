@@ -902,6 +902,11 @@ local CLASSES = {
       -- frames)
       textures = 12, fontstrings = 5, lines = 1, extra_frames = 23 },
     { key = "WARRIOR", hands = { "mainhand", "offhand", "ranged" },
+      -- HU-22 lazy bars: the fixture carries the shipped defaults, where the
+      -- warrior ranged bar ships disabled - so init builds mainhand+offhand
+      -- only. `hands` stays the class truth (iter_hands authority); `built`
+      -- is what the construction pins below assert.
+      built = { "mainhand", "offhand" },
       -- shield block (3 texture) + slam (2 texture, 1 fontstring) + 5 debuffs
       -- (15 texture, 5 fontstring) + overpower (4 texture, 1 fontstring)
       -- + Rampage badge (1 fontstring) + rage-bank cue (1 texture,
@@ -926,6 +931,9 @@ local CLASSES = {
       -- + 2 badge fontstrings + 4 shield rects = 13; offhand: the spark mirror = 1
       textures = 14, fontstrings = 3, lines = 0, extra_frames = 0 },
     { key = "ROGUE", hands = { "mainhand", "offhand", "ranged" },
+      -- HU-22 lazy bars: same shipped-default gate as the warrior - the rogue
+      -- ranged bar ships disabled, so init builds mainhand+offhand only.
+      built = { "mainhand", "offhand" },
       -- D3: mainhand only - tick spark + pooling wash + SS window band/text +
       -- swap band/text + poison reminder (4 extra textures, 3 extra fontstrings);
       -- the guide (nextaction_ui) and HUD suites are not loaded here so no frames
@@ -969,9 +977,11 @@ for i = 1, #CLASSES do
         local spec = CLASSES[i]
         local b = boot({ class = spec.key })
         local sb = b.sb
-        local hands = spec.hands
+        -- HU-22 lazy bars: construction pins assert the BUILT hands only (a
+        -- hand gated off by db.enabled/weapon has no frames by design).
+        local hands = spec.built or spec.hands
 
-        -- Non-vacuity floor: every hand built its full documented region set.
+        -- Non-vacuity floor: every built hand built its full documented region set.
         local per_hand = { frames = 4, textures = 3, fontstrings = 3, lines = 2 }
         eq(sb.frames_created, BOOT_FRAMES + #hands * per_hand.frames + spec.extra_frames,
             spec.key .. ": exactly the documented frames were created")
@@ -1090,6 +1100,36 @@ for i = 1, #CLASSES do
         eq(anchor.bar_frame.frame_level, 11, spec.key .. ": bar frame level is draw_level + 1")
         check(anchor.movable == false, spec.key .. ": frames start locked (post_init's lock_frames)")
         check(b.ST.interfaces_are_initialised == true, spec.key .. ": init completed")
+    end
+end
+
+--=========================================================================================
+-- 1b) HU-22 lazy bars: gated-off hands stay unbuilt and behave like disabled bars
+--=========================================================================================
+-- The fixture carries the shipped defaults, where the warrior and rogue ranged
+-- bars ship disabled. Init must not create their frames; show/hide/tick paths
+-- must treat them exactly like disabled bars (no error, no tick). Enabling the
+-- hand and re-equipping (the engine lane's equip build point in main.lua)
+-- builds it on demand with its tick installed.
+do
+    for _, cls in ipairs({ "WARRIOR", "ROGUE" }) do
+        local b = boot({ class = cls })
+        local T = b.ST
+        eq(T:bar_is_built("ranged"), false, cls .. ": ranged starts unbuilt (shipped default off)")
+        eq(T:get_anchor_frame("ranged"), nil, cls .. ": no anchor frame for the gated hand")
+        eq(T:ensure_bar("ranged"), false, cls .. ": ensure_bar reports false while gated")
+        local ok_hide, err_hide = pcall(T.hide_bar, T, "ranged")
+        check(ok_hide, cls .. ": hiding an unbuilt hand does not error (" .. tostring(err_hide) .. ")")
+        local ok_show, err_show = pcall(T.show_bar, T, "ranged")
+        check(ok_show, cls .. ": showing an unbuilt gated hand does not error (" .. tostring(err_show) .. ")")
+        eq(T:bar_is_built("ranged"), false, cls .. ": show on a gated hand builds nothing")
+        eq(T:get_bar_frame("ranged"), nil, cls .. ": no bar frame, so no OnUpdate script")
+        -- Enabling + (re-)equipping builds it through the equip build point.
+        hand_db(b, "ranged").enabled = true
+        T:PLAYER_EQUIPMENT_CHANGED("PLAYER_EQUIPMENT_CHANGED", 18, true)
+        eq(T:bar_is_built("ranged"), true, cls .. ": the equip build point builds the enabled hand")
+        local script = T:get_bar_frame("ranged"):GetScript("OnUpdate")
+        eq(script, T.ranged.onupdate, cls .. ": the built hand's tick is installed")
     end
 end
 

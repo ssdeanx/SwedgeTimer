@@ -1042,6 +1042,20 @@ function ST:set_opts_funcs()
             end
         end
 
+        -- A setter for the per-hand Enabled toggle: writes the value, then
+        -- builds the hand's frames on enable (HU-22 lazy bars: a bar switched
+        -- on mid-session appears without a reload). Never builds on disable.
+        -- Nil-safe when the build seam is absent (suites that stub main.lua).
+        ST.opts_funcs[hand].enabled_setter = function(_, info, value)
+            for h in ST:generic_iter(settings.hands) do
+                local db = ST:get_hand_table(h)
+                db[info[#info]] = value
+                if value and type(ST.bring_up_hand) == "function" then
+                    ST:bring_up_hand(h)
+                end
+            end
+        end
+
         -- A setter for bar texts
         ST.opts_funcs[hand].text_setter = function(_, info, value)
             for h in ST:generic_iter(settings.hands) do
@@ -6848,7 +6862,7 @@ function ST:generate_hand_options_table(hand)
             name = "Enabled",
             desc = "Enables or disables the swing timer.",
             get = "getter",
-            set = "setter",
+            set = "enabled_setter",
         },
 
         -- -- Bar size options

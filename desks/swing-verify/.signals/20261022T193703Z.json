@@ -1,0 +1,13 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-22T19:37:03Z",
+  "agent_name": "swing-verify",
+  "self_assessment": { "intent": 5, "confidence": 4, "accuracy": 5, "completeness": 4 },
+  "patterns": {
+    "what_worked": "reset + fallback legs through real lib + real v7; 7 red-first mutations on /tmp copies",
+    "what_was_hard": "AceEvent delivery is outside the lib frame bus, so fallback legs call the app handler directly (documented in-suite)",
+    "skill_gap": "in-client proof still needs the operator copy (U1/U2/U3/U-H5)"
+  },
+  "escalation": { "reason": null, "blocked_on": null, "recommendation": null }
+}

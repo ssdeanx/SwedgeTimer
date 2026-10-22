@@ -42,6 +42,12 @@ else
 	STL = make_swing_stub()
 	ST.swing_engine = "inert-standin"
 end
+-- D8 rewire (2026-10-22): the init deadline in OnInitialize may swap STL for
+-- the inert stand-in when the engine never reports ready. Keep the reporting
+-- engine (and the name ST.swing_engine had for it) so a late
+-- SWING_TIMER_INFO_INITIALIZED can re-point STL at it and re-register.
+local REAL_STL = STL
+local REAL_SWING_ENGINE = ST.swing_engine
 local LRC = LibStub("LibRangeCheck-2.0")
 local LLM = LibStub("LibLatencyMonitor")
 local LGC = LibStub("LibGlobalCooldown")
@@ -227,7 +233,13 @@ function ST:hide_bar(hand)
 	if hand == "mainhand" and st.practice_ui and st.practice_ui.is_active() then
 		return
 	end
-	self:get_bar_frame(hand):Hide()
+	-- HU-22 lazy bars: an unbuilt hand has no frames (bars.lua getters are
+	-- nil-safe); hiding it is a no-op, exactly like a disabled bar.
+	local bar_frame = self:get_bar_frame(hand)
+	if bar_frame == nil then
+		return
+	end
+	bar_frame:Hide()
 	self:get_hiding_anchor_frame(hand):Hide()
 end
 
@@ -260,6 +272,11 @@ end
 
 function ST:show_bar(hand)
 	local db_class = self:get_class_table()
+	-- HU-22 lazy bars: an unbuilt hand behaves exactly like a disabled bar -
+	-- nothing to show (its gate failed, so the check below would hide it).
+	if self:get_bar_frame(hand) == nil then
+		return
+	end
 	if self:check_bar_enable_settings(db_class, hand) then
 		if self.player_class == "DRUID" then
 			if self.should_show_bar_this_form then
@@ -288,24 +305,30 @@ end
 
 function ST:lock_frames()
 	for hand in self:iter_hands() do
+		-- HU-22: unbuilt hands have no anchor frame to lock.
 		local f = self:get_anchor_frame(hand)
-		f:SetMovable(false)
-		f:EnableMouse(false)
-		f:SetScript("OnMouseWheel", nil)
+		if f ~= nil then
+			f:SetMovable(false)
+			f:EnableMouse(false)
+			f:SetScript("OnMouseWheel", nil)
+		end
 	end
 end
 
 function ST:unlock_frames()
 	for hand in self:iter_hands() do
+		-- HU-22: unbuilt hands have no anchor frame to unlock.
 		local f = self:get_anchor_frame(hand)
-		f:SetMovable(true)
-		f:EnableMouse(true)
-		f:SetScript("OnMouseWheel", function(_, dir)
-				LWIN.OnMouseWheel(f, dir)
-				local ACR = LibStub("AceConfigRegistry-3.0")
-				ACR:NotifyChange(ST.options_table_name)
-			end
-		)
+		if f ~= nil then
+			f:SetMovable(true)
+			f:EnableMouse(true)
+			f:SetScript("OnMouseWheel", function(_, dir)
+					LWIN.OnMouseWheel(f, dir)
+					local ACR = LibStub("AceConfigRegistry-3.0")
+					ACR:NotifyChange(ST.options_table_name)
+				end
+			)
+		end
 	end
 end
 
@@ -380,9 +403,41 @@ function ST:OnInitialize()
 		end
 	)
 	STL.RegisterCallback(self, "SWING_TIMER_INFO_INITIALIZED", function()
-			self.stl_ready = true
-			self:init_libs()
+		self.stl_ready = true
+		-- D8 rewire (2026-10-22): the init deadline below may have substituted
+		-- the inert stand-in and finished init on it, leaving the bars
+		-- engine_dead for the session. A late report from the real engine
+		-- re-points STL, restores the engine line, re-registers
+		-- (register_timer_callbacks carries the double-reg guard) and re-seeds
+		-- the hands from the live engine -- the same seed init_timers runs,
+		-- minus the frame creation (the frames already exist from the first
+		-- init, and init_visuals_template must not run twice).
+		if self.init_deadline_fired and STL ~= REAL_STL then
+			STL = REAL_STL
+			SWING_ENGINE_AVAILABLE = true
+			ST.swing_engine = REAL_SWING_ENGINE
+			self:register_timer_callbacks()
+			self:check_weapons()
+			for hand in self:iter_hands() do
+				local t = { SwingTimerInfo(hand) }
+				if type(t[1]) ~= "number" then
+					self[hand].speed = nil
+					self[hand].ends_at = nil
+					self[hand].start = nil
+					self[hand].engine_dead = (SWING_ENGINE_AVAILABLE == false)
+				else
+					if t[1] == 0 then
+						t[1] = 0.1
+					end
+					self[hand].engine_dead = false
+					self[hand].speed = t[1]
+					self[hand].ends_at = t[2]
+					self[hand].start = t[3]
+				end
+			end
 		end
+		self:init_libs()
+	end
 	)
 
 	-- A library that never reports ready (an incompatible client, or an error
@@ -732,6 +787,38 @@ function ST:init_libs()
 	end
 end
 
+-- HU-22 lazy-bars build point (init / equip; the options layer reuses this
+-- method when a hand is enabled mid-session): bring one hand's frames up
+-- through the display lane's gate and install its tick exactly once.
+-- ST:ensure_bar (bars.lua) builds idempotently and reports false when gated
+-- off; environments without bars.lua keep the legacy unconditional build, so
+-- offline suites that stub the visuals keep their exact behaviour.
+function ST:bring_up_hand(hand)
+	if type(self.ensure_bar) == "function" then
+		if not self:ensure_bar(hand) then
+			return false
+		end
+	else
+		self:init_visuals_template(hand)
+		self:set_bar_texts(hand)
+	end
+	local bar_frame = self:get_bar_frame(hand)
+	if bar_frame == nil then
+		return false
+	end
+	if bar_frame:GetScript("OnUpdate") ~= nil then
+		return true
+	end
+	-- hook the onupdate (st.diag may install a per-tick counter wrapper; default OFF
+	-- installs the original untouched - see diag.lua's wrap_onupdate)
+	local onupdate = self[hand].onupdate
+	if st.diag and st.diag.wrap_onupdate then
+		onupdate = st.diag.wrap_onupdate(self, hand, onupdate)
+	end
+	bar_frame:SetScript("OnUpdate", onupdate)
+	return true
+end
+
 function ST:init_timers()
 	self:register_timer_callbacks()
 	self:check_weapons()
@@ -755,19 +842,22 @@ function ST:init_timers()
 			self[hand].ends_at = t[2]
 			self[hand].start = t[3]
 		end
-		ST:init_visuals_template(hand)
-		ST:set_bar_texts(hand)
-		-- hook the onupdate (st.diag may install a per-tick counter wrapper; default OFF
-		-- installs the original untouched - see diag.lua's wrap_onupdate)
-		local onupdate = self[hand].onupdate
-		if st.diag and st.diag.wrap_onupdate then
-			onupdate = st.diag.wrap_onupdate(self, hand, onupdate)
-		end
-		self:get_bar_frame(hand):SetScript("OnUpdate", onupdate)
+		-- HU-22 init build point: frames exist only when the hand is enabled
+		-- AND in use. State seeds above stay unconditional so /st diag reads
+		-- the engine even for hands with no frames.
+		self:bring_up_hand(hand)
 	end
 end
 
 function ST:register_timer_callbacks()
+	-- D8 rewire guard (2026-10-22): init_timers runs once per init, but the
+	-- late-INFO rewire above re-runs registration on a different engine object.
+	-- Re-registering on the same v7 registry would overwrite the same
+	-- self-keyed entries (harmless), but never do it twice all the same.
+	if self.swing_timer_registered_on == STL then
+		return
+	end
+	self.swing_timer_registered_on = STL
 	STL.RegisterCallback(self, "SWING_TIMER_CLIPPED", self.callback_event_handler)
 	STL.RegisterCallback(self, "SWING_TIMER_DELTA", self.callback_event_handler)
 	STL.RegisterCallback(self, "SWING_TIMER_PAUSED", self.callback_event_handler)
@@ -945,6 +1035,26 @@ function ST.callback_event_handler(event, ...)
 		and (select(1, ...) == "player" or select(1, ...) == "target") then
 		local n = select("#", ...)
 		local args = { ... }
+		-- The engine's own ranged START/UPDATE is the liveness proof the TBC
+		-- ranged fallback reads (see maybe_drive_ranged_fallback): stamp it so
+		-- the fallback never double-drives a live engine. A pending fallback
+		-- stop is cancelled with it - the engine's own timers rule from here.
+		if (event == "SWING_TIMER_START" or event == "SWING_TIMER_UPDATE")
+			and args[4] == "ranged" then
+			local get_time = api and api.get_time
+			local stamp = (type(get_time) == "function") and get_time() or nil
+			if type(stamp) == "number" then
+				ST.ranged_engine_stamp = stamp
+			end
+			local live = ST.ranged
+			if type(live) == "table" and live.fallback_timer ~= nil then
+				local superseded = live.fallback_timer
+				live.fallback_timer = nil
+				if type(superseded.Cancel) == "function" then
+					pcall(function() superseded:Cancel() end)
+				end
+			end
+		end
 		ok, err = pcall(handler, ST, event, unpack(args, 2, n))
 	else
 		ok, err = pcall(handler, ST, event, ...)
@@ -1057,7 +1167,7 @@ function ST:note_swing_wire(hand, kind)
 	elseif kind == "STOP" then
 		h.stop = h.stop + 1
 	end
-	self.swing_wire_last = { hand = hand, kind = kind, t = GetTime() }
+	self.swing_wire_last = { hand = hand, kind = kind, t = api.get_time() }
 end
 
 function ST:SWING_TIMER_CLIPPED(_, hand)
@@ -1105,7 +1215,7 @@ function ST:SWING_TIMER_START(_, speed, expiration_time, hand)
 	bar.is_full = false
 	bar.is_paused = false
 	bar.engine_dead = false
-	bar.start = GetTime()
+	bar.start = api.get_time()
 	bar.speed = speed
 	bar.ends_at = expiration_time
 	self:set_bar_color(hand)
@@ -1161,7 +1271,7 @@ function ST:SWING_TIMER_UPDATE(_, speed, expiration_time, hand)
 		end
 		return
 	end
-	local t = GetTime()
+	local t = api.get_time()
 	if expiration_time < t then
 		expiration_time = t
 	end
@@ -1212,6 +1322,10 @@ function ST:PLAYER_EQUIPMENT_CHANGED(_event, slot, _has_current)
 	if slot == 16 or slot == 17 or slot == 18 then
 		self:check_weapons()
 		for hand in self:iter_hands() do
+			-- HU-22 equip build point: a newly equipped (and enabled) hand
+			-- builds its frames and tick now; the attack-speed recolour below
+			-- is built-guarded, so still-unbuilt hands stay silent.
+			self:bring_up_hand(hand)
 			self:on_attack_speed_change(hand)
 		end
 	end
@@ -1519,6 +1633,97 @@ function ST:UNIT_SPELLCAST_SUCCEEDED(_event, unit_id, cast_guid, spell_id)
 	if self[self.player_class].on_spellcast_succeeded then
 		self[self.player_class].on_spellcast_succeeded(self, unit_id, cast_guid, spell_id)
 	end
+	-- TBC ranged fallback: our own SUCCEEDED(75) driver when the vendored
+	-- lib's isBCC gate misses (see maybe_drive_ranged_fallback below).
+	self:maybe_drive_ranged_fallback(spell_id)
+end
+
+-- Auto Shot's spell id on the classic line - the same id the vendored lib's
+-- ranged_swing tables key (Era lib:955, BCC lib:1066). Event payloads carry
+-- numeric ids on every family, so the TBC name-vs-id rule (which governs
+-- GetSpellInfo query forms, compat.lua) does not apply here.
+local AUTO_SHOT_SPELL_ID = 75
+
+function ST:maybe_drive_ranged_fallback(spell_id)
+	-- TBC ranged fallback driver (2026-10-22): when the vendored lib's isBCC
+	-- gate misses at runtime (project 5 without the binary-provided
+	-- expansion-level half), every BCC spell table stays empty and the lib's
+	-- own SUCCEEDED(75) arm never fires, while melee (CLEU-driven) survives.
+	-- There is no other TBC ranged driver to fall back on: the lib's
+	-- CAST_START (lib:456) and FAILED_QUIET (lib:772) ranged arms are both
+	-- isClassic-only, so on TBC ranged lives on SUCCEEDED(75)+autorepeat
+	-- alone - which is exactly the shape this fallback implements.
+	-- Our own SUCCEEDED(75)+START_AUTOREPEAT path then carries the ranged
+	-- cycle instead. It never double-drives a live engine: a shot is skipped
+	-- whenever the engine's own ranged side reported within the last full
+	-- cycle (the dispatcher stamps every engine ranged START/UPDATE), and
+	-- the Retail inert stand-in plus the Forever source engine are excluded
+	-- outright (neither is a silent lib).
+	if spell_id ~= AUTO_SHOT_SPELL_ID then
+		return
+	end
+	if self.swing_engine ~= "vendored-lib" then
+		return
+	end
+	if st.is_mainline then
+		return
+	end
+	local ranged = self.ranged
+	if type(ranged) ~= "table" or not self:has_hand("ranged") then
+		return
+	end
+	-- Auto-repeat must be on: the cached hunter reading, else the live client
+	-- probe (mounted hunters never auto-repeat; the probe path checks that).
+	local repeating = ranged.auto_repeat_active == true
+	if not repeating then
+		if api.IsMounted() then
+			return
+		end
+		repeating = api.IsAutoRepeatSpell(AUTO_SHOT_SPELL_ID)
+		if not repeating then
+			return
+		end
+	end
+	-- Engine liveness: skip when the engine's ranged side spoke recently. A
+	-- nil stamp (no engine ranged event yet this session) drives once; the
+	-- engine's own START lands on the same shot and converges (same speed
+	-- source, same tick), after which its stamps suppress every later shot.
+	local get_time = api and api.get_time
+	local now = (type(get_time) == "function") and get_time() or nil
+	if type(now) ~= "number" then
+		return
+	end
+	local speed = api.UnitRangedDamage("player")
+	if type(speed) ~= "number" or speed <= 0 then
+		speed = ranged.synced_duration
+	end
+	if type(speed) ~= "number" or speed <= 0 then
+		return
+	end
+	local stamp = self.ranged_engine_stamp
+	if type(stamp) == "number" and now - stamp < speed * 2 then
+		return
+	end
+	-- Drive through the real dispatcher, speed-first (no unit-id lead, so no
+	-- strip and no liveness stamp - this payload must never read as the
+	-- engine's own): the same START state the engine path writes, already in
+	-- the client clock domain. A pending fallback stop is superseded first.
+	if ranged.fallback_timer ~= nil then
+		local pending = ranged.fallback_timer
+		ranged.fallback_timer = nil
+		if type(pending.Cancel) == "function" then
+			pcall(function() pending:Cancel() end)
+		end
+	end
+	self.callback_event_handler("SWING_TIMER_START", speed, now + speed, "ranged")
+	-- The engine would STOP the cycle at its end; without it the bar would
+	-- sit full instead of marking full through the shared STOP path. The
+	-- engine's next START/UPDATE cancels this (see the dispatcher), as does
+	-- the next fallback shot above.
+	ranged.fallback_timer = C_Timer.NewTimer(speed, function()
+		ranged.fallback_timer = nil
+		self.callback_event_handler("SWING_TIMER_STOP", "ranged")
+	end)
 end
 
 -- Player spellcast lifecycle events: one thin handler per event, each forwarded to
@@ -2126,7 +2331,7 @@ function ST:print_runtime_diag()
 	local last = self.swing_wire_last
 	if type(last) == "table" then
 		local age = "?"
-		local now = GetTime()
+		local now = api.get_time()
 		if type(now) == "number" and type(last.t) == "number" then
 			age = string.format("%.1f", now - last.t)
 		end

@@ -224,7 +224,12 @@ local function on_player_swing(swing_duration, swing_type)
 	end)
 end
 
-local function on_unit_attack_speed()
+local function on_unit_attack_speed(unit)
+	-- Unit-filtered: only the player's own speed matters. A nil unit (direct call)
+	-- still re-reads; any other unit is noise from an unfiltered registration.
+	if unit ~= nil and unit ~= "player" then
+		return
+	end
 	-- WoW Forever returns mainhand, offhand and ranged speeds from UnitAttackSpeed
 	-- (Blizzard_SwingTimer.lua reads all three via GetEquippedSwingDuration). Re-read
 	-- and update every in-flight cycle whose speed moved. A missing or throwing reader
@@ -269,6 +274,61 @@ local function on_unit_attack_speed()
 			-- The read could not describe this hand (nil/zero): the cycle keeps its
 			-- schedule, and the keep is counted for /st diag (H5).
 			stats.speed_read_keeps = stats.speed_read_keeps + 1
+		end
+	end
+end
+
+local function on_weapon_slot_changed()
+	-- A weapon swap re-times live cycles to the newly equipped speeds and ends
+	-- cycles whose hand the swap invalidated (no usable speed: weapon removed),
+	-- mirroring the combat-exit clear shape below. A swap-clear is not a reject,
+	-- so the H5 reject counters are untouched.
+	if type(UnitAttackSpeed) ~= "function" then
+		stats.speed_read_keeps = stats.speed_read_keeps + 1
+		return
+	end
+	local ok, main_speed, off_speed, ranged_speed = pcall(UnitAttackSpeed, "player")
+	if not ok then
+		stats.speed_read_keeps = stats.speed_read_keeps + 1
+		return
+	end
+	-- A restricted reading keeps every cycle on its scheduled speed: an opaque value
+	-- must never reach the rescale arithmetic below.
+	if is_secret(main_speed) or is_secret(off_speed) or is_secret(ranged_speed) then
+		stats.speed_read_keeps = stats.speed_read_keeps + 1
+		return
+	end
+	local speeds = {
+		mainhand = main_speed,
+		offhand = off_speed,
+		ranged = ranged_speed,
+	}
+	for i = 1, #HANDS do
+		local hand = HANDS[i]
+		local cycle = active_cycles[hand]
+		if cycle then
+			local new_speed = speeds[hand]
+			if new_speed and new_speed > 0 then
+				if new_speed ~= cycle.speed then
+					-- Same rescale as the attack-speed path: the REMAINING time
+					-- scales by new/old instead of moving the whole cycle.
+					local t = now()
+					local old_speed = cycle.speed
+					local remaining = cycle.expiration - t
+					if remaining < 0 then
+						remaining = 0
+					end
+					cycle.speed = new_speed
+					cycle.expiration = t + remaining * (new_speed / old_speed)
+					callbacks:Fire("SWING_TIMER_UPDATE", cycle.speed, cycle.expiration, hand)
+				end
+			else
+				-- No usable speed for this hand after the swap: the cycle is
+				-- invalid, so end it like a combat-exit clear. Its scheduled stop
+				-- timer then finds no matching cycle and is ignored.
+				clear_cycle(hand)
+				callbacks:Fire("SWING_TIMER_STOP", hand)
+			end
 		end
 	end
 end
@@ -328,9 +388,9 @@ function swing_source:SwingTimerInfo(hand)
 	if cycle then
 		return cycle.speed, cycle.expiration, cycle.start
 	end
-	-- Idle/unknown: mirror main.lua's make_swing_stub() (1s full swing).
-	local start_time = now()
-	return 1, start_time + 1, start_time
+	-- Idle/unknown: mirror main.lua's make_swing_stub() nil-shape (nil, nil, nil);
+	-- init_timers turns the nil-shape into the per-hand engine_dead idle path.
+	return nil, nil, nil
 end
 
 --------------------------------------------------------------------------------
@@ -341,16 +401,23 @@ if swing_source.available then
 	local frame = CreateFrame("Frame", "SwedgeTimer_SwingSourceFrame")
 	frame:Hide()
 
+	-- PLAYER_TARGET_CHANGED and PLAYER_SWING_RANGE_UPDATE are deliberately not
+	-- registered: both carry target/range display inputs, never swing-cycle state.
 	local engine_events = {
 		"PLAYER_SWING",
 		"UNIT_ATTACK_SPEED",
+		"WEAPON_SLOT_CHANGED",
 		"PLAYER_IN_COMBAT_CHANGED",
 		"PLAYER_ENTERING_WORLD",
 	}
 	for i = 1, #engine_events do
 		local event_name = engine_events[i]
 		if is_event_valid(event_name) then
-			frame:RegisterEvent(event_name)
+			if event_name == "UNIT_ATTACK_SPEED" and frame.RegisterUnitEvent then
+				frame:RegisterUnitEvent(event_name, "player")
+			else
+				frame:RegisterEvent(event_name)
+			end
 		end
 	end
 
@@ -358,7 +425,9 @@ if swing_source.available then
 		if event == "PLAYER_SWING" then
 			on_player_swing(...)
 		elseif event == "UNIT_ATTACK_SPEED" then
-			on_unit_attack_speed()
+			on_unit_attack_speed(...)
+		elseif event == "WEAPON_SLOT_CHANGED" then
+			on_weapon_slot_changed()
 		elseif event == "PLAYER_IN_COMBAT_CHANGED" then
 			on_combat_changed(...)
 		elseif event == "PLAYER_ENTERING_WORLD" then

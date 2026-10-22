@@ -8,7 +8,7 @@ mechanics are in `AGENTS.md`; this file is the map.
 - lanes, decisions, session ids: `desks/journal.md` (the central ledger)
 - open questions and verdicts: `hands-up.md`
 - briefs, findings, lessons: `bench/` (`bench/briefs/`, `bench/lessons.md`)
-- the last session's honest state: `bench/swing_wire_status_2026-10-21.md`
+- current state: `desks/journal.md` (the ledger is live; `bench/swing_wire_status_2026-10-21.md` is the 2026-10-21 snapshot, history)
 - the operator's rules: `CAIRN.md` (disposition), `AGENTS.md` (mechanics)
 
 ## the rooms
@@ -23,8 +23,9 @@ mechanics are in `AGENTS.md`; this file is the map.
 
 ## how work flows
 
-1. the brief is written to `bench/briefs/` — verified paths and ids
-   only (verify before you reference).
+1. the brief travels in the dispatch prompt — verified paths and ids
+    only (verify before you reference). the lane files its own bench
+    artifacts; the orchestrator never touches `bench/` (HU-32).
 2. the desk is dispatched; its row goes into `desks/journal.md` with the
    session id exactly as returned by the dispatch.
 3. its desk is opened (`desk-open`) and the desk reads (`bench-read`: its own journal (`desks/<name>/journal.md`) to load
@@ -44,12 +45,16 @@ mechanics are in `AGENTS.md`; this file is the map.
    there. the in-client result is the only proof that counts, it is
    recorded in the journal, and a fix that never reached the folder is not
    a fix (lesson 14).
+8. reconciled waves get committed promptly on operator order — never let
+   the tree go a full wave uncommitted. exclusions: IDE-local files
+   (`.vscode/`) and build artifacts (`luac.out`, `/tmp`). committing is
+   not a bench touch (HU-32).
 
 ## current desks
 
 The desk list below is a **snapshot for orientation only** — the central lane table
 (state + session ids) in `desks/journal.md` is the only authoritative lane table.
-Verified against the tree on **2026-10-21**.
+Verified against the tree on **2026-10-22** (234 entries).
 
 `audit-fixes`, `bar-texture-default`, `bars-design`, `bars-print-policy`,
 `bars-reconcile`, `changelog`, `changelog-pd`, `changelog-truth`,
@@ -75,7 +80,7 @@ Verified against the tree on **2026-10-21**.
 `hunter-resweep`, `hunter-rotation`, `hunter-rotfix`, `hunter-seam`,
 `hunter-serpent`, `hunter-sod-build`, `hunter-steady-family`,
 `hunter-utility-live`, `hunter-wa`, `hunter-wa-leftovers`, `hunter-weave-prog`,
-`icd-tracker`, `ids-research`, `open-rules`, `options`, `options-hooks`,
+`icd-tracker`, `ids-research`, `lazy-bars`, `open-rules`, `options`, `options-hooks`,
 `options-pass`, `options-sod-fix`, `options-wire`, `oracle`, `oracle-fixes`,
 `paladin`, `paladin-apl`, `paladin-audit-close`, `paladin-fixes`,
 `paladin-followups`, `paladin-forever-ids`, `paladin-hud-band`,
@@ -102,7 +107,10 @@ Verified against the tree on **2026-10-21**.
 `shaman-residuals`, `shaman-rotation`, `shaman-rotation-fix`,
 `shaman-slot-options`, `shaman-slots`, `shared-engine-bs8`, `sim-resources`,
 `sod-detect`, `sod-practice-font`, `stale-claims`, `superseded-wrappers`,
-`swing-guard`, `templates-design`, `trinket-usable`, `version-bump`,
+`swing-cross-client`, `swing-display`, `swing-engine-fix`,
+`swing-guard`, `swing-harness`, `swing-verify`, `swing-wire-build`, `swing-wire-fix`,
+`swing-wire-hunt2`, `swing-wire-hunter`, `swing-wire-proctor`, `swing-wire-proctor2`,
+`templates-design`, `trinket-usable`, `version-bump`,
 `w2-hunter-badges`, `warrior`, `warrior-apl`, `warrior-desync`,
 `warrior-drills`, `warrior-hamstring-slot`, `warrior-hold`, `warrior-hs-queue`,
 `warrior-rotation`, `warrior-rotfix`, `warrior-styles`, `warrior-utility-live`,
@@ -176,3 +184,19 @@ hardest, written for a desk that has never seen this tree:
     were written by the orchestrator instead of a desk, and the trail shows the
     gap. Code fixes go through a desk; the orchestrator briefs it and reconciles
     it. (Operator correction, 2026-10-21.)
+16. **The ranged bar is the FULL swing timer — on every client.** The 0.5s
+    cast is part of the cycle display, never the bar. Mainhand, offhand and
+    ranged must each sweep their full cycle, stop at expiry, and reset on the
+    next swing. A lane that ships "the window" instead of "the timer" has not
+    finished. (Operator correction, 2026-10-22.)
+17. **The cast window lives on Era AND Anniversary.** Both classic-line
+    clients share the 0.5s Auto Shot cast mechanic — it is not TBC-only. The
+    lib gates its FAILED_QUIET/CAST_START arms to isClassic only, and that
+    gate IS the TBC risk; any fallback driver serves both, never TBC alone.
+    (Operator correction, 2026-10-22.)
+18. **Name the four lane skills on every dispatch.** @bench-read, @desk-open,
+    @desk-journal, @signal-write — written out, with missing-skill reporting
+    if a seat lacks one. A lane that guesses blind instead of reading the
+    journals first will rediscover earned lessons as new bugs. Read-only seats
+    never do cross-client work (HU-30); the orchestrator never touches bench
+    (HU-32) — brief context in the prompt, artifacts filed by the lane.

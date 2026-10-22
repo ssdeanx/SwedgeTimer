@@ -2593,25 +2593,48 @@ function ST.HUNTER.gather_guide_inputs(self, out)
 
     -- The hidden Auto-Shot window: the cached bounds the visual half last computed, or
     -- recomputed from the live cycle through the pure hunter_window maths (the same
-    -- synced_duration-or-speed basis as the cast bar). nil when the client cannot
-    -- provide a cycle; the engine then never holds on window grounds.
+    -- synced_duration-or-speed basis as the cast bar). The cache counts only while
+    -- `now` sits inside it AND its end still lands on the live cycle's end
+    -- (provenance: reference UI.lua:399-406 clears on every StartSwing; hunter_ui's
+    -- get_hidden_window reads the same way) - a stale cache from a re-anchored
+    -- cycle must never ride into the engine, or Steady/Auto prompts hold on a
+    -- window that already closed. nil when the client cannot provide a cycle;
+    -- the engine then never holds on window grounds.
     local window_start
     local window_duration
     if ranged then
+        local cycle_duration = ranged.synced_duration or ranged.speed
+        -- Provenance: the cache belongs to the live (start, cycle) only when its
+        -- end still lands on the live cycle's end. A ranged re-anchor the hunter
+        -- sync did not clear (the engine's START/UPDATE stamps next to the sync's
+        -- own clears; the reference clears on every StartSwing) leaves a stale
+        -- end behind, and the stale bounds must lose to the live recompute -
+        -- otherwise Steady/Auto prompts hold on the previous cycle's window.
+        local live_end
+        if type(ranged.start) == "number" and type(cycle_duration) == "number"
+            and cycle_duration > 0 then
+            live_end = ranged.start + cycle_duration
+        end
         local cached_start = ranged.hidden_window_start
         local cached_duration = ranged.hidden_window_duration
         if type(cached_start) == "number" and type(cached_duration) == "number"
-            and cached_duration > 0 then
+            and cached_duration > 0 and type(now) == "number" and live_end ~= nil
+            and math.abs((cached_start + cached_duration) - live_end) <= 1e-9
+            and now >= cached_start and now <= cached_start + cached_duration then
             window_start, window_duration = cached_start, cached_duration
-        elseif hunter_window then
-            local cycle_duration = ranged.synced_duration or ranged.speed
-            if type(ranged.start) == "number" and type(cycle_duration) == "number"
-                and cycle_duration > 0 then
-                local start_bound, end_bound = hunter_window.hidden_window(
-                    ranged.start, cycle_duration, hunter_window.cast_window(latency))
-                if start_bound ~= nil then
-                    window_start, window_duration = start_bound, end_bound - start_bound
-                end
+        else
+            ranged.hidden_window_start = nil
+            ranged.hidden_window_duration = nil
+        end
+        if window_start == nil and hunter_window and live_end ~= nil then
+            -- The recompute rides through verbatim (even a future window): it is
+            -- derived from the live cycle, so it is never stale, and the engine
+            -- bounds-checks it (is_in_window, inclusive) before any HOLD. Only
+            -- the cache above is gated.
+            local start_bound, end_bound = hunter_window.hidden_window(
+                ranged.start, cycle_duration, hunter_window.cast_window(latency))
+            if start_bound ~= nil then
+                window_start, window_duration = start_bound, end_bound - start_bound
             end
         end
     end

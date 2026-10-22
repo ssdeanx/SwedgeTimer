@@ -15,6 +15,12 @@
 --  11. Enum-absent numeric fallback for the swing-type mapping.
 --  12. H5 observability: payload-reject / speed-read-keep counters, the one-time
 --      sustained-reject notice, and the /st diag text.
+--  13. B1 idle nil-shape: no cycle returns (nil, nil, nil) like
+--      main.lua's make_swing_stub(); a live cycle still reports its triple.
+--  14. B2 WEAPON_SLOT_CHANGED: re-times live cycles, clears invalidated hands
+--      with STOP traffic, never counts a reject, probe-gated registration.
+--  15. B3 UNIT_ATTACK_SPEED unit filter: non-player units ignored, player/nil
+--      re-read, RegisterUnitEvent used when the frame offers it.
 local script_dir = (arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
 local ROOT = script_dir .. "/../"
 
@@ -67,10 +73,16 @@ end
 -- Fake engine frame ----------------------------------------------------------------------
 local frame = nil
 local frame_events = {}
-local function make_frame(events)
+local frame_unit_events = {}
+local function make_frame(events, unit_events)
     events = events or frame_events
+    unit_events = unit_events or frame_unit_events
     local f = {}
     function f:RegisterEvent(name) events[#events + 1] = name end
+    function f:RegisterUnitEvent(name, unit)
+        events[#events + 1] = name
+        unit_events[#unit_events + 1] = { name = name, unit = unit }
+    end
     function f:UnregisterEvent() end
     function f:SetScript(script, fn) self.scripts = self.scripts or {}; self.scripts[script] = fn end
     function f:Hide() end
@@ -113,10 +125,13 @@ check(type(src) == "table", "st.swing_source exists")
 eq(src.available, true, "available on FOREVER when the event probe is missing")
 check(type(frame) == "table", "engine frame created")
 check(frame.scripts ~= nil and frame.scripts.OnEvent ~= nil, "engine frame has an OnEvent script")
-eq(#frame_events, 4, "engine registers exactly four events")
+eq(#frame_events, 5, "engine registers exactly five events")
 eq(table.concat(frame_events, ","),
-    "PLAYER_SWING,UNIT_ATTACK_SPEED,PLAYER_IN_COMBAT_CHANGED,PLAYER_ENTERING_WORLD",
-    "engine registers exactly the four engine events, in order")
+    "PLAYER_SWING,UNIT_ATTACK_SPEED,WEAPON_SLOT_CHANGED,PLAYER_IN_COMBAT_CHANGED,PLAYER_ENTERING_WORLD",
+    "engine registers exactly the five engine events, in order")
+eq(#frame_unit_events, 1, "exactly one event uses the unit-filtered registration")
+eq(frame_unit_events[1].name, "UNIT_ATTACK_SPEED", "the unit-filtered event is UNIT_ATTACK_SPEED")
+eq(frame_unit_events[1].unit, "player", "the unit filter is the player unit")
 
 local function fire(event, ...)
     frame.scripts.OnEvent(frame, event, ...)
@@ -154,9 +169,10 @@ advance(2.0) -- t=4.8: second stop timer (due 4.7) runs for the live cycle
 eq(count_event("SWING_TIMER_STOP"), 1, "current stop timer fires STOP once")
 
 speed, expiration, start_time = src:SwingTimerInfo("mainhand")
-eq(speed, 1, "idle SwingTimerInfo uses the stub shape (speed 1)")
-eq(expiration, clock + 1, "idle SwingTimerInfo expiration is now + 1")
-eq(start_time, clock, "idle SwingTimerInfo start is now")
+eq(speed, nil, "B1: idle SwingTimerInfo returns the nil-shape (speed)")
+eq(expiration, nil, "B1: idle SwingTimerInfo returns the nil-shape (expiration)")
+eq(start_time, nil, "B1: idle SwingTimerInfo returns the nil-shape (start)")
+eq(src:SwingTimerInfo("offhand"), nil, "B1: an untouched hand is nil-shaped too")
 
 -- 3) UNIT_ATTACK_SPEED rescales the REMAINING time proportionally -----------------------
 fire("PLAYER_SWING", 2.6, 0) -- t=4.8: expiration 7.4
@@ -215,7 +231,7 @@ local function load_with_probe(probe)
     end
     env2.CreateFrame = function()
         probe_frames = probe_frames + 1
-        return make_frame(probe_events)
+        return make_frame(probe_events, {})
     end
     env2.C_Timer = { After = function() end }
     env2.Enum = { PlayerSwingType = { MainHand = 0, OffHand = 1, Ranged = 2 } }
@@ -299,7 +315,7 @@ local function load_with_family(family, probe)
     end
     envF.CreateFrame = function()
         inert_frames = inert_frames + 1
-        return make_frame(inert_events)
+        return make_frame(inert_events, {})
     end
     envF.C_Timer = { After = function() end }
     envF.Enum = { PlayerSwingType = { MainHand = 0, OffHand = 1, Ranged = 2 } }
@@ -473,6 +489,111 @@ do
         and text:find("speed_read_keeps=", 1, true) ~= nil
         and text:find("valid_swings=", 1, true) ~= nil,
         "H5: /st diag text reports payload, speed and valid-swing counters")
+end
+
+-- 13) B1 idle nil-shape ------------------------------------------------------------
+-- The engine mirrors main.lua's make_swing_stub(): with no active cycle every hand
+-- reports (nil, nil, nil) so init_timers takes the engine_dead idle path instead of
+-- seeding a phantom 1 s live cycle. A live cycle still reports its triple.
+do
+    fire("PLAYER_IN_COMBAT_CHANGED", false) -- drain any live cycle left above
+    for _, hand in ipairs({ "mainhand", "offhand", "ranged" }) do
+        local s, e, st_ = src:SwingTimerInfo(hand)
+        eq(s, nil, "B1: idle " .. hand .. " speed is nil")
+        eq(e, nil, "B1: idle " .. hand .. " expiration is nil")
+        eq(st_, nil, "B1: idle " .. hand .. " start is nil")
+    end
+    eq(src:SwingTimerInfo("bogus-hand"), nil, "B1: an unknown hand is nil-shaped too")
+    fire("PLAYER_SWING", 2.6, 0)
+    local s, e, st_ = src:SwingTimerInfo("mainhand")
+    eq(s, 2.6, "B1: a live cycle still reports its speed")
+    eq(e, st_ + 2.6, "B1: a live cycle still reports start + speed")
+    fire("PLAYER_IN_COMBAT_CHANGED", false) -- back to idle for the next section
+    local fh = io.open(ROOT .. "swing_source.lua", "r")
+    local text = fh and fh:read("*a") or ""
+    if fh then fh:close() end
+    check(text:find("make_swing_stub", 1, true) ~= nil
+        and text:find("nil, nil, nil", 1, true) ~= nil,
+        "B1: the idle comment matches the shipped stub shape")
+end
+
+-- 14) B2 WEAPON_SLOT_CHANGED -------------------------------------------------------
+do
+    local stops_before = count_event("SWING_TIMER_STOP")
+    local updates_before = count_event("SWING_TIMER_UPDATE")
+    local rejects_before = src.stats.payload_rejects
+    fire("PLAYER_SWING", 2.6, 0) -- live mainhand cycle at the current clock
+    fire("PLAYER_SWING", 2.0, 1) -- live offhand cycle at the current clock
+    env.UnitAttackSpeed = function() return 1.3, 2.0, nil end
+    fire("WEAPON_SLOT_CHANGED")
+    eq(count_event("SWING_TIMER_UPDATE"), updates_before + 1,
+        "B2: a weapon swap re-times the changed hand only")
+    eq(last_event().event, "SWING_TIMER_UPDATE", "B2: the re-time fires UPDATE")
+    eq(last_event().a[1], 1.3, "B2: the UPDATE carries the new speed")
+    eq(last_event().a[2], clock + 1.3, "B2: the UPDATE rescales the remaining time")
+    eq(last_event().a[3], "mainhand", "B2: the UPDATE names the swapped hand")
+    eq(src:SwingTimerInfo("mainhand"), 1.3, "B2: the swapped hand runs at the new speed")
+    eq(src:SwingTimerInfo("offhand"), 2.0, "B2: the unchanged hand keeps its speed")
+    env.UnitAttackSpeed = function() return nil, nil, nil end
+    fire("WEAPON_SLOT_CHANGED")
+    eq(count_event("SWING_TIMER_STOP"), stops_before + 2,
+        "B2: removing the weapons stops both live hands")
+    local cs, ce, cst = src:SwingTimerInfo("mainhand")
+    eq(cs, nil, "B2: a cleared hand speed is nil")
+    eq(ce, nil, "B2: a cleared hand expiration is nil")
+    eq(cst, nil, "B2: a cleared hand start is nil")
+    eq(src.stats.payload_rejects, rejects_before, "B2: a swap-clear counts no reject")
+    local traffic_before = #fired
+    fire("WEAPON_SLOT_CHANGED")
+    eq(#fired, traffic_before, "B2: a swap with no live cycle fires nothing")
+    -- A throwing reader keeps the cycle instead of clearing it.
+    fire("PLAYER_SWING", 2.6, 0)
+    local keeps_before = src.stats.speed_read_keeps
+    local ks, ke = src:SwingTimerInfo("mainhand")
+    env.UnitAttackSpeed = function() error("attack-speed reader threw") end
+    check(pcall(fire, "WEAPON_SLOT_CHANGED"), "B2: a throwing reader does not throw")
+    eq(src.stats.speed_read_keeps, keeps_before + 1, "B2: the kept swap read is counted")
+    local ks2, ke2 = src:SwingTimerInfo("mainhand")
+    eq(ks2, ks, "B2: a kept swap read leaves the cycle speed alone")
+    eq(ke2, ke, "B2: a kept swap read leaves the expiration alone")
+    fire("PLAYER_IN_COMBAT_CHANGED", false) -- drain for the next section
+    env.UnitAttackSpeed = function() return 2.6, nil, nil end -- restore
+end
+
+-- B2 probe-gating: a probe that rejects WEAPON_SLOT_CHANGED never registers it,
+-- while frames without RegisterUnitEvent still register UNIT_ATTACK_SPEED.
+do
+    local _, _, eventsW, loadedW, errW = load_with_probe(function(name)
+        return name ~= "WEAPON_SLOT_CHANGED"
+    end)
+    check(loadedW, "B2 probe sandbox: swing_source.lua loads (" .. tostring(errW) .. ")")
+    local found_swap, found_uas = false, false
+    for i = 1, #eventsW do
+        if eventsW[i] == "WEAPON_SLOT_CHANGED" then found_swap = true end
+        if eventsW[i] == "UNIT_ATTACK_SPEED" then found_uas = true end
+    end
+    check(not found_swap, "B2: probe-absent clients never register WEAPON_SLOT_CHANGED")
+    check(found_uas, "B3: frames without RegisterUnitEvent still register UNIT_ATTACK_SPEED")
+end
+
+-- 15) B3 UNIT_ATTACK_SPEED unit filter ----------------------------------------------
+do
+    fire("PLAYER_SWING", 2.6, 0) -- live mainhand cycle at the current clock
+    local updates_before = count_event("SWING_TIMER_UPDATE")
+    env.UnitAttackSpeed = function() return 1.3 end
+    fire("UNIT_ATTACK_SPEED", "target")
+    eq(count_event("SWING_TIMER_UPDATE"), updates_before,
+        "B3: a non-player unit fires no update")
+    eq(src:SwingTimerInfo("mainhand"), 2.6, "B3: a non-player unit leaves the cycle alone")
+    fire("UNIT_ATTACK_SPEED", "player")
+    eq(count_event("SWING_TIMER_UPDATE"), updates_before + 1,
+        "B3: the player unit re-times the cycle")
+    env.UnitAttackSpeed = function() return 0.65 end
+    fire("UNIT_ATTACK_SPEED")
+    eq(count_event("SWING_TIMER_UPDATE"), updates_before + 2,
+        "B3: a unit-less call still re-times (direct-call shape)")
+    fire("PLAYER_IN_COMBAT_CHANGED", false) -- drain
+    env.UnitAttackSpeed = function() return 2.6, nil, nil end -- restore
 end
 
 if failures == 0 then
