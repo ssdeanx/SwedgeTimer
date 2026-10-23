@@ -127,18 +127,18 @@ local ui = st.practice_ui
 --=========================================================================================
 -- Display constants
 --=========================================================================================
-local UPDATE_INTERVAL = 0.05    -- simulation tick cadence (guide/WA poll parity)
-local ICON_SIZE = 30            -- archive geometry
+local UPDATE_INTERVAL = 0.05 -- simulation tick cadence (guide/WA poll parity)
+local ICON_SIZE = 30         -- archive geometry
 local ICON_SPACING = 4
 local ICONS_PER_ROW = 5
 local PANEL_WIDTH = 210
-local PANEL_ANCHOR_GAP = 8      -- archive: panel TOPLEFT 8 px right of the bar TOPRIGHT
+local PANEL_ANCHOR_GAP = 8 -- archive: panel TOPLEFT 8 px right of the bar TOPRIGHT
 local RESULT_WIDTH = 200
 local RESULT_HEIGHT = 50
 local RESULT_FADE_SECONDS = 0.3 -- archive: the popup fades over its final 0.3 s
 local RESULT_FALLBACK_FONT = "Fonts\\FRIZQT__.TTF"
-local RESULT_COLOR_HIT = {0, 1, 0, 1}
-local RESULT_COLOR_MISS = {1, 0.2, 0.2, 1}
+local RESULT_COLOR_HIT = { 0, 1, 0, 1 }
+local RESULT_COLOR_MISS = { 1, 0.2, 0.2, 1 }
 local HINT_ACTIVE = "Click an icon to cast. /st practice or the X button stops."
 local HINT_STOPPED = "Press Start Fight, or cast seals with the icon grid."
 local HINT_PAUSED = "Paused: in combat. Practice resumes when combat ends."
@@ -202,7 +202,7 @@ local TIMELINE_LANE_HEIGHT = 24
 local TIMELINE_ICON_SIZE = 20
 local TIMELINE_LABEL_WIDTH = 60
 local TIMELINE_RULER_HEIGHT = 46
-local TIMELINE_DEFAULT_X = 0      -- session-local default centre offset (archive layout)
+local TIMELINE_DEFAULT_X = 0 -- session-local default centre offset (archive layout)
 local TIMELINE_DEFAULT_Y = -200
 local ROTATION_BAND_ICON_SIZE = 14
 local ROTATION_BAND_ICON_SPACING = 2
@@ -241,9 +241,12 @@ local ROT_LABELS = { auto = "Raid Pull", ["1/2"] = "1/2", ["2/3"] = "2/3", ["2/4
 
 -- Bare modifier keys the capture overlay ignores (archive 237-242).
 local IGNORE_KEYS = {
-    LSHIFT = true, RSHIFT = true,
-    LCTRL = true, RCTRL = true,
-    LALT = true, RALT = true,
+    LSHIFT = true,
+    RSHIFT = true,
+    LCTRL = true,
+    RCTRL = true,
+    LALT = true,
+    RALT = true,
     UNKNOWN = true,
 }
 
@@ -717,7 +720,7 @@ function ui.practice_class_order()
         return nil
     end
     local panel = ui.practice_panel()
-    if type(panel.order) ~= "function" then
+    if not panel or type(panel.order) ~= "function" then
         return nil
     end
     local ok, order = pcall(panel.order)
@@ -1689,7 +1692,9 @@ local function create_button(parent, label)
     btn:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 8, edgeSize = 8,
+        tile = true,
+        tileSize = 8,
+        edgeSize = 8,
         insets = { left = 2, right = 2, top = 2, bottom = 2 },
     })
     btn:SetBackdropColor(0.15, 0.15, 0.15, 0.9)
@@ -1914,7 +1919,9 @@ function ui.build_panel(self)
     panel:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 12,
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
     panel:SetBackdropColor(0, 0, 0, 0.85)
@@ -1986,11 +1993,11 @@ function ui.build_panel(self)
     -- Rotation line (archive update_info_display 3677-3687, second half; paladin
     -- sim only - the hunter, shaman, rogue and druid drills have no rotation to show).
     if not ui.practice_class_drill() then
-    panel.rotation_text = panel:CreateFontString(nil, "OVERLAY")
-    panel.rotation_text:SetPoint("TOP", panel, "TOP", 0, y)
-    panel.rotation_text:SetFontObject(GameFontHighlightSmall)
-    panel.rotation_text:SetText("Rotation: --")
-    y = y - 16
+        panel.rotation_text = panel:CreateFontString(nil, "OVERLAY")
+        panel.rotation_text:SetPoint("TOP", panel, "TOP", 0, y)
+        panel.rotation_text:SetFontObject(GameFontHighlightSmall)
+        panel.rotation_text:SetText("Rotation: --")
+        y = y - 16
     end
 
     -- Ability grid: the engine's own order, two rows of five (archive row layout).
@@ -2004,28 +2011,28 @@ function ui.build_panel(self)
     local class_drill = ui.practice_class_drill()
     local rows = math.ceil(#order / ICONS_PER_ROW)
     if practice_class_runs_sim_session() then
-    for row = 1, rows do
-        local first = (row - 1) * ICONS_PER_ROW + 1
-        local last = math.min(row * ICONS_PER_ROW, #order)
-        local count = last - first + 1
-        local total_width = count * ICON_SIZE + (count - 1) * ICON_SPACING
-        local start_x = -total_width / 2 + ICON_SIZE / 2
-        for i = first, last do
-            local key = order[i]
-            local ab = pr.ABILITIES[key]
-            if ab == nil and class_drill then
-                ab = ui.practice_class_def(key)
+        for row = 1, rows do
+            local first = (row - 1) * ICONS_PER_ROW + 1
+            local last = math.min(row * ICONS_PER_ROW, #order)
+            local count = last - first + 1
+            local total_width = count * ICON_SIZE + (count - 1) * ICON_SPACING
+            local start_x = -total_width / 2 + ICON_SIZE / 2
+            for i = first, last do
+                local key = order[i]
+                local ab = pr.ABILITIES[key]
+                if ab == nil and class_drill then
+                    ab = ui.practice_class_def(key)
+                end
+                if ab then
+                    local icon = create_ability_icon(panel, key, ab)
+                    icon:SetPoint("TOP", panel, "TOP",
+                        start_x + (i - first) * (ICON_SIZE + ICON_SPACING), y)
+                    panel.ability_icons = panel.ability_icons or {}
+                    panel.ability_icons[key] = icon
+                end
             end
-            if ab then
-                local icon = create_ability_icon(panel, key, ab)
-                icon:SetPoint("TOP", panel, "TOP",
-                    start_x + (i - first) * (ICON_SIZE + ICON_SPACING), y)
-                panel.ability_icons = panel.ability_icons or {}
-                panel.ability_icons[key] = icon
-            end
+            y = y - ICON_SIZE - 4
         end
-        y = y - ICON_SIZE - 4
-    end
     end
     y = y - 2
 
@@ -2083,94 +2090,96 @@ function ui.build_panel(self)
     -- A class that runs no sim session at all (its own drills are its session)
     -- skips them too: the twist sim's widgets are not its practice.
     if practice_class_runs_sim_session() and not ui.practice_class_drill() then
-    -- Haste buttons (archive 761-796): Bloodlust left, Haste Pot right, each with a
-    -- countdown label. Bloodlust is silent during a fight (auto-controlled there).
-    panel.bl_btn = create_button(panel, "Bloodlust")
-    panel.bl_btn:ClearAllPoints()
-    panel.bl_btn:SetPoint("TOPRIGHT", panel, "TOP", -2, y)
-    panel.bl_btn:SetScript("OnClick", function()
-        ui.click_haste(ST, "bl")
-    end)
-    panel.bl_btn.countdown = panel.bl_btn:CreateFontString(nil, "OVERLAY")
-    panel.bl_btn.countdown:SetPoint("RIGHT", panel.bl_btn, "RIGHT", -4, 0)
-    panel.bl_btn.countdown:SetFontObject(GameFontHighlightSmall)
-    panel.bl_btn.countdown:SetText("")
+        -- Haste buttons (archive 761-796): Bloodlust left, Haste Pot right, each with a
+        -- countdown label. Bloodlust is silent during a fight (auto-controlled there).
+        panel.bl_btn = create_button(panel, "Bloodlust")
+        panel.bl_btn:ClearAllPoints()
+        panel.bl_btn:SetPoint("TOPRIGHT", panel, "TOP", -2, y)
+        panel.bl_btn:SetScript("OnClick", function()
+            ui.click_haste(ST, "bl")
+        end)
+        panel.bl_btn.countdown = panel.bl_btn:CreateFontString(nil, "OVERLAY")
+        panel.bl_btn.countdown:SetPoint("RIGHT", panel.bl_btn, "RIGHT", -4, 0)
+        panel.bl_btn.countdown:SetFontObject(GameFontHighlightSmall)
+        panel.bl_btn.countdown:SetText("")
 
-    panel.hp_btn = create_button(panel, "Haste Pot")
-    panel.hp_btn:ClearAllPoints()
-    panel.hp_btn:SetPoint("TOPLEFT", panel, "TOP", 2, y)
-    panel.hp_btn:SetScript("OnClick", function()
-        ui.click_haste(ST, "hpot")
-    end)
-    panel.hp_btn.countdown = panel.hp_btn:CreateFontString(nil, "OVERLAY")
-    panel.hp_btn.countdown:SetPoint("RIGHT", panel.hp_btn, "RIGHT", -4, 0)
-    panel.hp_btn.countdown:SetFontObject(GameFontHighlightSmall)
-    panel.hp_btn.countdown:SetText("")
-    y = y - 28
+        panel.hp_btn = create_button(panel, "Haste Pot")
+        panel.hp_btn:ClearAllPoints()
+        panel.hp_btn:SetPoint("TOPLEFT", panel, "TOP", 2, y)
+        panel.hp_btn:SetScript("OnClick", function()
+            ui.click_haste(ST, "hpot")
+        end)
+        panel.hp_btn.countdown = panel.hp_btn:CreateFontString(nil, "OVERLAY")
+        panel.hp_btn.countdown:SetPoint("RIGHT", panel.hp_btn, "RIGHT", -4, 0)
+        panel.hp_btn.countdown:SetFontObject(GameFontHighlightSmall)
+        panel.hp_btn.countdown:SetText("")
+        y = y - 28
 
-    -- DST proc toggle (session-local; the archived practice_dst_enabled option is out
-    -- of scope, so the toggle lives on the panel instead of in the options).
-    panel.dst_btn = create_button(panel, "DST: Off")
-    panel.dst_btn:SetPoint("TOP", panel, "TOP", 0, y)
-    panel.dst_btn:SetScript("OnClick", function()
-        ui.click_haste(ST, "dst")
-    end)
-    y = y - 28
+        -- DST proc toggle (session-local; the archived practice_dst_enabled option is out
+        -- of scope, so the toggle lives on the panel instead of in the options).
+        panel.dst_btn = create_button(panel, "DST: Off")
+        panel.dst_btn:SetPoint("TOP", panel, "TOP", 0, y)
+        panel.dst_btn:SetScript("OnClick", function()
+            ui.click_haste(ST, "dst")
+        end)
+        y = y - 28
 
-    -- Rotation selector (archive 807-862): Raid Pull (auto) plus the three locked
-    -- presets. Clicking the active preset reverts to auto (engine toggle semantics
-    -- live in set_locked_rotation).
-    local rot_label = panel:CreateFontString(nil, "OVERLAY")
-    rot_label:SetPoint("TOP", panel, "TOP", 0, y)
-    rot_label:SetFontObject(GameFontHighlightSmall)
-    rot_label:SetText("Practice Rotation")
-    y = y - 14
+        -- Rotation selector (archive 807-862): Raid Pull (auto) plus the three locked
+        -- presets. Clicking the active preset reverts to auto (engine toggle semantics
+        -- live in set_locked_rotation).
+        local rot_label = panel:CreateFontString(nil, "OVERLAY")
+        rot_label:SetPoint("TOP", panel, "TOP", 0, y)
+        rot_label:SetFontObject(GameFontHighlightSmall)
+        rot_label:SetText("Practice Rotation")
+        y = y - 14
 
-    panel.rot_buttons = {}
-    local rot_btn_w, rot_btn_h = 88, 20
-    local rot_btn_spacing = 2
-    local rot_total_w = 2 * rot_btn_w + 1 * rot_btn_spacing
-    for row_i, row in ipairs(ROT_GRID) do
-        for col_i, rot_key in ipairs(row) do
-            local btn = CreateFrame("Button", nil, panel, "BackdropTemplate")
-            btn:SetSize(rot_btn_w, rot_btn_h)
-            local bx = -rot_total_w / 2 + (col_i - 1) * (rot_btn_w + rot_btn_spacing)
-                + rot_btn_w / 2
-            local by = y - (row_i - 1) * (rot_btn_h + rot_btn_spacing)
-            btn:SetPoint("TOP", panel, "TOP", bx, by)
-            btn:SetBackdrop({
-                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-                tile = true, tileSize = 8, edgeSize = 8,
-                insets = { left = 2, right = 2, top = 2, bottom = 2 },
-            })
-            btn:SetBackdropColor(0.15, 0.15, 0.15, 0.9)
-            btn:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
-            btn.label = btn:CreateFontString(nil, "OVERLAY")
-            btn.label:SetPoint("CENTER", 0, 0)
-            btn.label:SetFontObject(GameFontHighlightSmall)
-            btn.label:SetText(ROT_LABELS[rot_key] or rot_key)
-            btn.rot_key = rot_key
-            btn:SetScript("OnClick", function(self_btn)
-                if self_btn.rot_key == "auto" then
-                    ui.set_locked_rotation(ST, nil)
-                else
-                    ui.set_locked_rotation(ST, self_btn.rot_key)
-                end
-            end)
-            panel.rot_buttons[rot_key] = btn
+        panel.rot_buttons = {}
+        local rot_btn_w, rot_btn_h = 88, 20
+        local rot_btn_spacing = 2
+        local rot_total_w = 2 * rot_btn_w + 1 * rot_btn_spacing
+        for row_i, row in ipairs(ROT_GRID) do
+            for col_i, rot_key in ipairs(row) do
+                local btn = CreateFrame("Button", nil, panel, "BackdropTemplate")
+                btn:SetSize(rot_btn_w, rot_btn_h)
+                local bx = -rot_total_w / 2 + (col_i - 1) * (rot_btn_w + rot_btn_spacing)
+                    + rot_btn_w / 2
+                local by = y - (row_i - 1) * (rot_btn_h + rot_btn_spacing)
+                btn:SetPoint("TOP", panel, "TOP", bx, by)
+                btn:SetBackdrop({
+                    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                    tile = true,
+                    tileSize = 8,
+                    edgeSize = 8,
+                    insets = { left = 2, right = 2, top = 2, bottom = 2 },
+                })
+                btn:SetBackdropColor(0.15, 0.15, 0.15, 0.9)
+                btn:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
+                btn.label = btn:CreateFontString(nil, "OVERLAY")
+                btn.label:SetPoint("CENTER", 0, 0)
+                btn.label:SetFontObject(GameFontHighlightSmall)
+                btn.label:SetText(ROT_LABELS[rot_key] or rot_key)
+                btn.rot_key = rot_key
+                btn:SetScript("OnClick", function(self_btn)
+                    if self_btn.rot_key == "auto" then
+                        ui.set_locked_rotation(ST, nil)
+                    else
+                        ui.set_locked_rotation(ST, self_btn.rot_key)
+                    end
+                end)
+                panel.rot_buttons[rot_key] = btn
+            end
         end
-    end
-    y = y - (#ROT_GRID * (rot_btn_h + rot_btn_spacing) + 4)
+        y = y - (#ROT_GRID * (rot_btn_h + rot_btn_spacing) + 4)
 
-    -- Timeline toggle button (archive 895-899).
-    panel.timeline_btn = create_button(panel, "Timeline")
-    panel.timeline_btn:ClearAllPoints()
-    panel.timeline_btn:SetPoint("TOP", panel, "TOP", 0, y)
-    panel.timeline_btn:SetScript("OnClick", function()
-        ui.toggle_timeline(ST)
-    end)
-    y = y - 28
+        -- Timeline toggle button (archive 895-899).
+        panel.timeline_btn = create_button(panel, "Timeline")
+        panel.timeline_btn:ClearAllPoints()
+        panel.timeline_btn:SetPoint("TOP", panel, "TOP", 0, y)
+        panel.timeline_btn:SetScript("OnClick", function()
+            ui.toggle_timeline()
+        end)
+        y = y - 28
     end
 
     panel:SetHeight(math.abs(y) + 8)
@@ -2194,7 +2203,9 @@ function ui.build_panel(self)
     badge:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 12,
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
     badge:SetBackdropColor(0, 0, 0, 0.75)
@@ -3315,7 +3326,9 @@ function ui.build_timeline(self)
     frame:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 12,
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
     frame:SetBackdropColor(0.05, 0.05, 0.05, 0.92)
@@ -3339,7 +3352,7 @@ function ui.build_timeline(self)
     close_btn.label:SetFontObject(GameFontHighlightSmall)
     close_btn.label:SetText("X")
     close_btn:SetScript("OnClick", function()
-        ui.toggle_timeline(ST)
+        ui.toggle_timeline()
     end)
 
     local label_area = CreateFrame("Frame", nil, frame)
@@ -3789,6 +3802,7 @@ function ui.update_overlays(self, now)
         end
     end
 end
+
 --=========================================================================================
 -- Session lifecycle
 --=========================================================================================
@@ -3877,15 +3891,15 @@ end
 -- adds a field needs no change here, a field nobody listed still reaches the class's
 -- grader, and no class can crash this path.
 local SCENARIO_RESOURCE_KEYS = {
-    "mana",           -- hunter (its own ctx publishes the mana fraction)
-    "mana_pct",       -- paladin
-    "mana_fraction",  -- shaman
-    "rage",           -- druid (bear) and warrior
-    "energy",         -- druid (cat)
-    "energy_now",     -- rogue
-    "max_energy",     -- rogue
-    "combo_points",   -- druid (cat)
-    "cp",             -- rogue
+    "mana",          -- hunter (its own ctx publishes the mana fraction)
+    "mana_pct",      -- paladin
+    "mana_fraction", -- shaman
+    "rage",          -- druid (bear) and warrior
+    "energy",        -- druid (cat)
+    "energy_now",    -- rogue
+    "max_energy",    -- rogue
+    "combo_points",  -- druid (cat)
+    "cp",            -- rogue
 }
 
 -- The live pull clock in the context (BS-8 item 2): the prepull rule and the
@@ -5412,6 +5426,15 @@ function ui.tick(self, elapsed)
         else
             ui.shift_sim_times(ui.sim, shift)
         end
+        -- The scenario's decision window freezes over the pause too: the player
+        -- cannot cast while the sim is paused (cast_key returns early in combat),
+        -- so a pause that outlasts the window must not close the step as a miss.
+        -- The scenario owns no provider session (the branch above never runs for
+        -- it), so the engine shifts its own deadline here.
+        if ui.scenario_step and type(ui.scenario_step.deadline) == "number"
+            and type(shift) == "number" and shift > 0 then
+            ui.scenario_step.deadline = ui.scenario_step.deadline + shift
+        end
         ui.update_hint(self)
     end
 
@@ -5446,65 +5469,65 @@ function ui.tick(self, elapsed)
             return
         end
     else
-    local ok, tick_err = pcall(pr.tick, sim, now, elapsed, out)
-    if not ok then
-        note_practice_error(self, tick_err)
-        return
-    end
-    if out.buffs_changed or out.bl_fired or out.buff_changed then
-        -- A haste source started or expired (the tick's own buffs_changed / bl_fired,
-        -- or buff_changed merged from a queue-fired cast): re-derive speed and GCD.
-        pr.apply_haste(sim, ui.base_speed, now)
-    end
-    if out.swing_ready then
-        -- A swing landed: restart the next swing (the engine's contract keeps the
-        -- restart with the caller), then grade the landing. A real-combat pause skips
-        -- this whole tick, which is how grading is suspended there. Guarded (N4):
-        -- a throwing grade freezes scoring for the tick, never corrupts the session.
-        local grade = ui.grade_out
-        local swing_ok, swing_err = pcall(function()
-            pr.start_swing(sim, now)
-            pr.on_swing(sim, now, grade)
-        end)
-        if not swing_ok then
-            note_practice_error(self, swing_err)
+        local ok, tick_err = pcall(pr.tick, sim, now, elapsed, out)
+        if not ok then
+            note_practice_error(self, tick_err)
             return
         end
-        if grade.feedback then
-            ui.show_result(self, grade.feedback)
+        if out.buffs_changed or out.bl_fired or out.buff_changed then
+            -- A haste source started or expired (the tick's own buffs_changed / bl_fired,
+            -- or buff_changed merged from a queue-fired cast): re-derive speed and GCD.
+            pr.apply_haste(sim, ui.base_speed, now)
         end
-        -- Scoring: a graded attempt (grade is nil for swings with no attempt) feeds
-        -- the running session score, the progression state and repaints the panel
-        -- score line.
-        if grade.grade and ui.score then
-            ui.record_graded_attempt(self, grade.grade, grade.lead_ms)
-            ui.update_score(self)
-        end
-        -- Timeline: mirror the swing event with its fight-relative time.
-        ui.timeline_event_count = pr.push_timeline_event(ui.timeline_events,
-            ui.timeline_event_count, sim, now, "melee", pr.MELEE_TEXTURE,
-            grade.result, grade.timeline_event and grade.timeline_event.seal)
-        ui.timeline_needs_render = true
-        -- DST proc roll (archive sim_on_swing 3515-3525): session toggle + unlocked.
-        if ui.dst_enabled and not sim.locked_rotation then
-            local roll = (ui.random or math.random)()
-            if pr.maybe_dst_proc(sim, now, roll) then
-                pr.apply_haste(sim, ui.base_speed, now)
+        if out.swing_ready then
+            -- A swing landed: restart the next swing (the engine's contract keeps the
+            -- restart with the caller), then grade the landing. A real-combat pause skips
+            -- this whole tick, which is how grading is suspended there. Guarded (N4):
+            -- a throwing grade freezes scoring for the tick, never corrupts the session.
+            local grade = ui.grade_out
+            local swing_ok, swing_err = pcall(function()
+                pr.start_swing(sim, now)
+                pr.on_swing(sim, now, grade)
+            end)
+            if not swing_ok then
+                note_practice_error(self, swing_err)
+                return
+            end
+            if grade.feedback then
+                ui.show_result(self, grade.feedback)
+            end
+            -- Scoring: a graded attempt (grade is nil for swings with no attempt) feeds
+            -- the running session score, the progression state and repaints the panel
+            -- score line.
+            if grade.grade and ui.score then
+                ui.record_graded_attempt(self, grade.grade, grade.lead_ms)
+                ui.update_score(self)
+            end
+            -- Timeline: mirror the swing event with its fight-relative time.
+            ui.timeline_event_count = pr.push_timeline_event(ui.timeline_events,
+                ui.timeline_event_count, sim, now, "melee", pr.MELEE_TEXTURE,
+                grade.result, grade.timeline_event and grade.timeline_event.seal)
+            ui.timeline_needs_render = true
+            -- DST proc roll (archive sim_on_swing 3515-3525): session toggle + unlocked.
+            if ui.dst_enabled and not sim.locked_rotation then
+                local roll = (ui.random or math.random)()
+                if pr.maybe_dst_proc(sim, now, roll) then
+                    pr.apply_haste(sim, ui.base_speed, now)
+                end
+            end
+            -- Drill rage generation (sim-resources lane): the landed white swing
+            -- banks rage through the sim formula when the drill owns a pool AND a
+            -- drill damage + level. Both default nil (unknown-hides): no pool or
+            -- no damage runs the tick exactly as before.
+            if ui.rage_pool and type(ui.drill_white_damage) == "number" then
+                local conv = pr.rage_conversion and pr.rage_conversion(ui.drill_level) or nil
+                local gain = conv and pr.rage_white_gain
+                    and pr.rage_white_gain(ui.drill_white_damage, conv) or nil
+                if gain then
+                    pr.rage_gain(ui.rage_pool, gain)
+                end
             end
         end
-        -- Drill rage generation (sim-resources lane): the landed white swing
-        -- banks rage through the sim formula when the drill owns a pool AND a
-        -- drill damage + level. Both default nil (unknown-hides): no pool or
-        -- no damage runs the tick exactly as before.
-        if ui.rage_pool and type(ui.drill_white_damage) == "number" then
-            local conv = pr.rage_conversion and pr.rage_conversion(ui.drill_level) or nil
-            local gain = conv and pr.rage_white_gain
-                and pr.rage_white_gain(ui.drill_white_damage, conv) or nil
-            if gain then
-                pr.rage_gain(ui.rage_pool, gain)
-            end
-        end
-    end
     end
     if sim.fight_active then
         -- Fight clock, rotation bands, rotation display.
@@ -5813,6 +5836,12 @@ function ui.cast_key(self, key)
         -- the GCD is free (like sim_cast_seal, twist-arming included). Both ride
         -- the Practice page toggles (nil = off).
         local db = self:get_class_table()
+        -- Nil-safe like every other Practice-page read in this file: a session
+        -- with no class profile row runs the shipped defaults (both AW pieces
+        -- off), never a throw out of the cast handler.
+        if type(db) ~= "table" then
+            db = {}
+        end
         if db.practice_aw_includes_pot == true
             and not sim.has_haste_pot and not sim.locked_rotation then
             sim.has_haste_pot = true
@@ -6439,6 +6468,12 @@ function ui.save_position(self)
         return
     end
     local db = self:get_class_table()
+    -- The panel offsets are per-class settings: with no class row there is
+    -- nowhere to persist them, so the drag still moved the live panel but is
+    -- not silently recorded as saved (same rule as maybe_save_bests).
+    if type(db) ~= "table" then
+        return
+    end
     db.practice_panel_x = math.floor(left - bar_right - PANEL_ANCHOR_GAP + 0.5)
     db.practice_panel_y = math.floor(top - bar_top + 0.5)
     ui.apply_settings(self)
@@ -6619,7 +6654,9 @@ function ui.build_hunter_report(self)
     frame:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 12,
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
     frame:SetBackdropColor(0, 0, 0, 0.85)
@@ -6739,7 +6776,9 @@ function ui.build_warrior_execute_report(self)
     frame:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 12,
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
     frame:SetBackdropColor(0, 0, 0, 0.85)

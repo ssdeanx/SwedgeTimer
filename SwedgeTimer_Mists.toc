@@ -2,14 +2,14 @@
 ## Title: SwedgeTimer
 ## Notes: General purpose swing timer addon for all WoW clients.
 ## IconTexture: SwedgeTimer_v2_transparent.tga
-## Author: Swedge
+## Author: AcidBomb
 ## Version: "2.1.1"
 ## DefaultState: enabled
 ## OptDeps: Ace3, LibSharedMedia-3.0, LibStub
 ## SavedVariables: SwedgeTimerDB
-## X-Wago-ID: 9rN4dMND
+## X-Wago-ID: aNerkM62
 ## X-WoWI-ID: 26295
-## X-Curse-Project-ID: 621214
+## X-Curse-Project-ID: 1753984
 
 Libs\LibStub\LibStub.lua
 Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml

@@ -7,7 +7,7 @@
 -- class options.
 ------------------------------------------------------------------------------------
 local addon_name, st = ...
----@class ST
+---@class ST: AceAddon
 ---@field opts_table table
 ---@field opts_funcs table
 ---@field set_adjusted_latencies fun(self: ST)
@@ -22,7 +22,7 @@ local addon_name, st = ...
 ---@field configure_bar_outline fun(self: ST, hand: any)
 ---@field configure_gcd_markers fun(self: ST, hand: any)
 ---@field configure_deadzone fun(self: ST, hand: any)
----@field set_bar_color fun(self: ST, hand: any)
+---@field set_bar_color fun(self: ST, hand: any, color_table?: any)
 ---@field configure_frame_strata fun(self: ST, hand: any)
 ---@field lock_frames fun(self: ST)
 ---@field unlock_frames fun(self: ST)
@@ -1394,8 +1394,10 @@ local twist_sound_options = {
 -- (orders 8.x HUD, 9.x rotation): the same shared hud_*/rotation_label_* keys
 -- from ST.class_defaults, the same widget types, ranges, selects and disablers.
 -- Only the description copy, the glow-cue text and the per-slot toggles differ
--- per class. hud_enabled / rotation_label_enabled ship false in the shared
--- defaults, so nothing surfaces until enabled.
+-- per class. The HUD master hud_enabled ships true in the shared defaults
+-- (owner order 2026-10-19 on-by-default package, pinned in
+-- tests/options_load_state.lua §17); rotation_label_enabled still ships false,
+-- so only the label waits for its toggle.
 --
 -- slot_toggles is an array of { key = "hud_show_<slot>", name = "...",
 -- desc = "..." } mirroring the class's HUD_SLOTS keys/titles; hud_desc,

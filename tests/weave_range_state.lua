@@ -478,6 +478,20 @@ check(okC2, "compat.lua loads without UnitDistanceSquared (" .. tostring(errC2) 
 eq(stC2.api.UnitDistance("target"), nil, "wrapper: absent API -> nil (band fallback)")
 
 --=========================================================================================
+-- NILSWEEP (2026-10-22): the driver's 0.2 s poll with no class row. No row means no
+-- toggle, so the bar hides; the unguarded code indexes class_db.weave_range_enabled
+-- and throws, so the leg is red-first.
+--=========================================================================================
+do
+    ST.class_db = nil
+    bar.shown = true
+    local w1ok, w1err = pcall(wr2.update, ST)
+    check(w1ok, "NILSWEEP W1 update tolerates a missing class row (error: " .. tostring(w1err) .. ")")
+    eq(bar.shown, false, "NILSWEEP W1 the bar hides with no class row")
+    ST.class_db = { class_enabled = true, weave_range_enabled = false }
+end
+
+--=========================================================================================
 print("")
 print(string.format("%d checks, %d failures", checks, failures))
 if failures > 0 then os.exit(1) end

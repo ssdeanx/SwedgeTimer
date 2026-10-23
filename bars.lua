@@ -17,7 +17,9 @@ local addon_name, st = ...
 local LSM = LibStub("LibSharedMedia-3.0")
 local LCG = LibStub("LibCustomGlow-1.0")
 local floor = math.floor
----@class ST
+local max = math.max
+local format = string.format
+---@class ST: AceAddon
 ---@field get_hand_table fun(self: ST, hand: string): table
 ---@field get_class_table fun(self: ST): table
 ---@field options_table_name string
@@ -175,10 +177,12 @@ end
 -- a disabled bar: no show, no update, no text, no error.
 --=========================================================================================
 function ST:bar_is_built(hand)
-    -- Built-state is the frames themselves (never the option/weapon gate, which
+    -- Built-state is the full frame chain (never the option/weapon gate, which
     -- ensure_bar owns): init-built hands read true, a hand whose frames were
-    -- never created reads false, and no caller can nil-index through it.
-    return self:get_anchor_frame(hand) ~= nil
+    -- never created reads false, and no caller can nil-index through it. The
+    -- visuals frame is the read because it is what every per-hand consumer
+    -- touches - an anchor without its children still reads unbuilt.
+    return self:get_visuals_frame(hand) ~= nil
 end
 
 function ST:ensure_bar(hand)
@@ -216,10 +220,11 @@ function ST:configure_draw_layers(hand)
     -- Sets the draw layers within the visuals frame for the swing timer
     -- bar sub-components.
     local f = self:get_visuals_frame(hand)
-    f.gcd_bar:SetDrawLayer("ARTWORK", -2)
-    f.deadzone:SetDrawLayer("ARTWORK", -1)
-    f.gcd1a_marker:SetDrawLayer("OVERLAY", -1)
-    f.gcd1b_marker:SetDrawLayer("OVERLAY", -1)
+    if not f then return end
+    if f.gcd_bar then f.gcd_bar:SetDrawLayer("ARTWORK", -2) end
+    if f.deadzone then f.deadzone:SetDrawLayer("ARTWORK", -1) end
+    if f.gcd1a_marker then f.gcd1a_marker:SetDrawLayer("OVERLAY", -1) end
+    if f.gcd1b_marker then f.gcd1b_marker:SetDrawLayer("OVERLAY", -1) end
 end
 
 function ST:configure_bar_size_and_positions(hand)
@@ -232,12 +237,14 @@ function ST:configure_bar_size_and_positions(hand)
     -- to the full size in the settings, and restore their
     -- positions with LibWindow
     local anchor_frame = self:get_anchor_frame(hand)
-    anchor_frame:ClearAllPoints()
-    anchor_frame:SetPoint("CENTER")
-    anchor_frame:SetWidth(db.bar_width)
-    anchor_frame:SetHeight(db.bar_height)
-    LWIN.RestorePosition(anchor_frame)
-    anchor_frame:Show()
+    if anchor_frame then
+        anchor_frame:ClearAllPoints()
+        anchor_frame:SetPoint("CENTER")
+        anchor_frame:SetWidth(db.bar_width)
+        anchor_frame:SetHeight(db.bar_height)
+        LWIN.RestorePosition(anchor_frame)
+        anchor_frame:Show()
+    end
 
     -- And also the hiding anchor frame.
     local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
@@ -251,10 +258,12 @@ function ST:configure_bar_size_and_positions(hand)
 
     -- Might need to set the width/height of the bar_frame too
     local bar_frame = self:get_bar_frame(hand)
-    bar_frame:ClearAllPoints()
-    bar_frame:SetPoint("CENTER")
-    bar_frame:SetWidth(db.bar_width)
-    bar_frame:SetHeight(db.bar_height)
+    if bar_frame then
+        bar_frame:ClearAllPoints()
+        bar_frame:SetPoint("CENTER")
+        bar_frame:SetWidth(db.bar_width)
+        bar_frame:SetHeight(db.bar_height)
+    end
 
     -- For the visuals frame, we calculate a reduced size
     -- based on the backplane settings.
@@ -262,21 +271,31 @@ function ST:configure_bar_size_and_positions(hand)
     local visuals_frame = self:get_visuals_frame(hand)
     local vf_width = db.bar_width - (db.border_width * 2)
     local vf_height = db.bar_height - (db.border_width * 2)
-    self[hand].vf_width = vf_width
-    self[hand].vf_height = vf_height
-    visuals_frame:SetHeight(vf_height)
-    visuals_frame:SetWidth(vf_width)
+    if self[hand] then
+        self[hand].vf_width = vf_width
+        self[hand].vf_height = vf_height
+    end
+    if visuals_frame then
+        visuals_frame:SetHeight(vf_height)
+        visuals_frame:SetWidth(vf_width)
 
-    -- And set the subcomponent anchors (where appropriate)
-    -- and sizes.
-    visuals_frame.bar:SetPoint("TOPLEFT", 0, 0)
-    visuals_frame.bar:SetHeight(vf_height)
-    visuals_frame.bar:SetWidth(vf_width)
-    visuals_frame.gcd_bar:SetHeight(vf_height)
-    visuals_frame.deadzone:SetHeight(vf_height)
-    visuals_frame.deadzone:SetPoint("TOPRIGHT")
-    visuals_frame:ClearAllPoints()
-    visuals_frame:SetPoint("CENTER")
+        -- And set the subcomponent anchors (where appropriate)
+        -- and sizes.
+        if visuals_frame.bar then
+            visuals_frame.bar:SetPoint("TOPLEFT", 0, 0)
+            visuals_frame.bar:SetHeight(vf_height)
+            visuals_frame.bar:SetWidth(vf_width)
+        end
+        if visuals_frame.gcd_bar then
+            visuals_frame.gcd_bar:SetHeight(vf_height)
+        end
+        if visuals_frame.deadzone then
+            visuals_frame.deadzone:SetHeight(vf_height)
+            visuals_frame.deadzone:SetPoint("TOPRIGHT")
+        end
+        visuals_frame:ClearAllPoints()
+        visuals_frame:SetPoint("CENTER")
+    end
     self:configure_texts(hand)
     self:configure_gcd_markers(hand)
     self:configure_bar_outline(hand)
@@ -294,8 +313,12 @@ function ST:configure_frame_strata(hand)
     -- db.draw_level nil here - a nil-arithmetic crash in init_timers -> init_libs on
     -- every fresh profile (see tests/bars_state.lua, which reproduces it).
     local db = self:get_profile_table()
-    frame:SetFrameLevel(db.draw_level+1)
-    frame:SetFrameStrata(db.frame_strata)
+    if frame and db and db.draw_level then
+        frame:SetFrameLevel(db.draw_level + 1)
+        if db.frame_strata then
+            frame:SetFrameStrata(db.frame_strata)
+        end
+    end
 end
 
 function ST:configure_bar_appearances(hand)
@@ -305,12 +328,19 @@ function ST:configure_bar_appearances(hand)
     -- COnfigure textures/colors for bar and GCD underlay
     local frame = self:get_visuals_frame(hand)
     local db = self:get_hand_table(hand)
-    frame.bar:SetTexture(fetch_statusbar_texture(db.bar_texture_key))
-    frame.gcd_bar:SetTexture(fetch_statusbar_texture(db.gcd_texture_key))
+    if not frame or not db then
+        return
+    end
+    if frame.bar then
+        frame.bar:SetTexture(fetch_statusbar_texture(db.bar_texture_key))
+    end
+    if frame.gcd_bar then
+        frame.gcd_bar:SetTexture(fetch_statusbar_texture(db.gcd_texture_key))
+        frame.gcd_bar:SetVertexColor(
+            self:convert_color(db.bar_color_gcd)
+        )
+    end
     self:set_bar_color(hand)
-    frame.gcd_bar:SetVertexColor(
-        self:convert_color(db.bar_color_gcd)
-    )
 end
 
 function ST:configure_gcd_markers(hand)
@@ -320,14 +350,21 @@ function ST:configure_gcd_markers(hand)
     -- Configure textures and marker widths.
     local db = self:get_hand_table(hand)
     local f = self:get_visuals_frame(hand)
-    f.gcd1a_marker:SetColorTexture(
-        self:convert_color(db.gcd1a_marker_color)
-    )
-    f.gcd1b_marker:SetColorTexture(
-        self:convert_color(db.gcd1b_marker_color)
-    )
-    f.gcd1a_marker:SetThickness(db.gcd1a_marker_width)
-    f.gcd1b_marker:SetThickness(db.gcd1b_marker_width)
+    if not f or not db then
+        return
+    end
+    if f.gcd1a_marker then
+        f.gcd1a_marker:SetColorTexture(
+            self:convert_color(db.gcd1a_marker_color)
+        )
+        f.gcd1a_marker:SetThickness(db.gcd1a_marker_width or 1)
+    end
+    if f.gcd1b_marker then
+        f.gcd1b_marker:SetColorTexture(
+            self:convert_color(db.gcd1b_marker_color)
+        )
+        f.gcd1b_marker:SetThickness(db.gcd1b_marker_width or 1)
+    end
 end
 
 function ST:configure_deadzone(hand)
@@ -335,7 +372,11 @@ function ST:configure_deadzone(hand)
         return
     end
 	local db = self:get_hand_table(hand)
-	local f = self:get_visuals_frame(hand).deadzone
+	local vf = self:get_visuals_frame(hand)
+	local f = vf and vf.deadzone
+	if not f or not db then
+		return
+	end
     if not db.enable_deadzone then
         f:Hide()
     else
@@ -353,12 +394,9 @@ function ST:configure_texts(hand)
     end
     local db = self:get_hand_table(hand)
 	local frame = self:get_visuals_frame(hand)
-	-- The shared font chain (utils.lua): the bar texts are written per frame, so every
-	-- one of them carries a font from the start - a FontString with no font throws
-	-- "Font not set" on its first SetText. A key that no longer resolves (the font
-	-- lives in another addon's LSM registration) falls back through
-	-- STANDARD_TEXT_FONT to the classic client font instead of handing SetFont a
-	-- nil path, which would throw out of the bar build.
+    if not frame or not db then
+        return
+    end
 	local font_path = st.utils.fetch_font_path(db.text_font)
     local outlines = {
         none = "",
@@ -372,63 +410,67 @@ function ST:configure_texts(hand)
     -------------------------------------
     -- Left text
     -------------------------------------
-    -- The best center point for the x offset seems to be about 1% above normal.
-    local left_text_x_offset = ((db.left_text_x_percent_offset + 1)/ 100) * w
-    -- The best center point for the y offset seems to be about 5% below normal.
-    local left_text_y_offset = ((db.left_text_y_percent_offset - 1)/ 100) * h
-    frame.left_text:SetPoint(
-        "LEFT",
-        left_text_x_offset,
-        left_text_y_offset
-    )
-    st.utils.apply_font(frame.left_text, font_path, db.text_size, opt_string)
-    frame.left_text:SetTextColor(
-        self:convert_color(db.text_color)
-    )
-    if db.left_text_enabled then
-        frame.left_text:Show()
-    else
-        frame.left_text:Hide()
+    if frame.left_text then
+        local left_text_x_offset = ((db.left_text_x_percent_offset + 1)/ 100) * w
+        local left_text_y_offset = ((db.left_text_y_percent_offset - 1)/ 100) * h
+        frame.left_text:SetPoint(
+            "LEFT",
+            left_text_x_offset,
+            left_text_y_offset
+        )
+        st.utils.apply_font(frame.left_text, font_path, db.text_size, opt_string)
+        frame.left_text:SetTextColor(
+            self:convert_color(db.text_color)
+        )
+        if db.left_text_enabled then
+            frame.left_text:Show()
+        else
+            frame.left_text:Hide()
+        end
     end
 
     -------------------------------------
     -- Center text
     -------------------------------------
-    local center_text_x_offset = ((db.center_text_x_percent_offset + 1)/ 100) * w
-    local center_text_y_offset = ((db.center_text_y_percent_offset - 1)/ 100) * h
-    frame.center_text:SetPoint(
-        "CENTER",
-        center_text_x_offset,
-        center_text_y_offset
-    )
-    st.utils.apply_font(frame.center_text, font_path, db.text_size, opt_string)
-    frame.center_text:SetTextColor(
-        select(1, self:convert_color(db.text_color))
-    )
-    if db.center_text_enabled then
-        frame.center_text:Show()
-    else
-        frame.center_text:Hide()
+    if frame.center_text then
+        local center_text_x_offset = ((db.center_text_x_percent_offset + 1)/ 100) * w
+        local center_text_y_offset = ((db.center_text_y_percent_offset - 1)/ 100) * h
+        frame.center_text:SetPoint(
+            "CENTER",
+            center_text_x_offset,
+            center_text_y_offset
+        )
+        st.utils.apply_font(frame.center_text, font_path, db.text_size, opt_string)
+        frame.center_text:SetTextColor(
+            select(1, self:convert_color(db.text_color))
+        )
+        if db.center_text_enabled then
+            frame.center_text:Show()
+        else
+            frame.center_text:Hide()
+        end
     end
 
     -------------------------------------
     -- Right text
     -------------------------------------
-    local right_text_x_offset = ((db.right_text_x_percent_offset -1)/ 100) * w
-    local right_text_y_offset = ((db.right_text_y_percent_offset - 1)/ 100) * h
-	frame.right_text:SetPoint(
-        "RIGHT",
-        right_text_x_offset,
-        right_text_y_offset
-    )
-    st.utils.apply_font(frame.right_text, font_path, db.text_size, opt_string)
-	frame.right_text:SetTextColor(
-        self:convert_color(db.text_color)
-    )
-    if db.right_text_enabled then
-        frame.right_text:Show()
-    else
-        frame.right_text:Hide()
+    if frame.right_text then
+        local right_text_x_offset = ((db.right_text_x_percent_offset -1)/ 100) * w
+        local right_text_y_offset = ((db.right_text_y_percent_offset - 1)/ 100) * h
+        frame.right_text:SetPoint(
+            "RIGHT",
+            right_text_x_offset,
+            right_text_y_offset
+        )
+        st.utils.apply_font(frame.right_text, font_path, db.text_size, opt_string)
+        frame.right_text:SetTextColor(
+            self:convert_color(db.text_color)
+        )
+        if db.right_text_enabled then
+            frame.right_text:Show()
+        else
+            frame.right_text:Hide()
+        end
     end
 end
 
@@ -438,24 +480,27 @@ function ST:configure_bar_outline(hand)
     end
 	local frame = self:get_bar_frame(hand)
     local db = self:get_hand_table(hand)
+    if not frame or not db then
+        return
+    end
     frame.backdropInfo = {
         bgFile = fetch_statusbar_texture(db.background_texture_key),
 		edgeFile = LSM:Fetch('border', db.border_texture_key),
         tile = true, tileSize = 16, edgeSize = db.border_width,
-        -- insets = {
-        --     left = db.border_width,
-        --     right = db.border_width,
-        --     top = db.border_width,
-        --     bottom = db.border_width
-        -- }
     }
-    frame:ApplyBackdrop()
-    frame:SetBackdropBorderColor(
-        self:convert_color(db.border_color)
-    )
-	frame:SetBackdropColor(
-        self:convert_color(db.background_color)
-    )
+    if frame.ApplyBackdrop then
+        frame:ApplyBackdrop()
+    end
+    if frame.SetBackdropBorderColor then
+        frame:SetBackdropBorderColor(
+            self:convert_color(db.border_color)
+        )
+    end
+    if frame.SetBackdropColor then
+        frame:SetBackdropColor(
+            self:convert_color(db.background_color)
+        )
+    end
 end
 
 function ST:configure_gcd_underlay(hand)
@@ -464,6 +509,9 @@ function ST:configure_gcd_underlay(hand)
     end
     local db = self:get_hand_table(hand)
 	local frame = self:get_visuals_frame(hand)
+    if not frame or not frame.gcd_bar or not db then
+        return
+    end
     frame.gcd_bar:SetTexture(fetch_statusbar_texture(db.gcd_texture_key))
     frame.gcd_bar:SetVertexColor(
         self:convert_color(db.bar_color_gcd)
@@ -682,9 +730,18 @@ function ST:onupdate_common(hand, elapsed)
     end
     -- Template OnUpdate function for each bar.
     local frame = self:get_visuals_frame(hand)
+    if frame == nil then
+        return
+    end
     local d = self[hand]
+    if type(d) ~= "table" then
+        return
+    end
     local t = st.api.get_time()
     local db = self:get_hand_table(hand)
+    if type(db) ~= "table" then
+        return
+    end
     if d.engine_dead then
         -- H1-render: no engine. Never impersonate a live 1 s cycle; paint a dim bar
         -- with an explicit degraded label instead. This is terminal for the session.
@@ -708,75 +765,81 @@ function ST:onupdate_common(hand, elapsed)
         return
     end
     if not d.is_paused then
-        d.current_progress = math.min(1, (t - d.start) /
-            (d.ends_at - d.start)
-        )
+        local duration = (d.ends_at > d.start) and (d.ends_at - d.start) or (d.speed > 0 and d.speed or 2.0)
+        d.current_progress = math.max(0, math.min(1, (t - d.start) / duration))
     end
 
-    local progress = d.current_progress
+    local progress = d.current_progress or 0
     local w, h = self:get_bar_visuals_width_and_height(hand)
     -- Update the main bar's width
     local timer_width = w * progress
-    frame.bar:SetWidth(max(1, timer_width))
-	frame.bar:SetTexCoord(0, progress, 0, 1)
+    if frame.bar then
+        frame.bar:SetWidth(max(1, timer_width))
+        frame.bar:SetTexCoord(0, progress, 0, 1)
+    end
 
     -- Update the GCD underlay if necessary.
-    if db.show_gcd_underlay and self.gcd.expires then
+    if db.show_gcd_underlay and self.gcd and self.gcd.expires then
         self:set_gcd_width(hand, timer_width, progress)
     end
 
     -- If any gcd marker is anchored to the swing, handle
     -- that here.
-    if db.gcd1a_marker_enabled and db.gcd1a_marker_anchor == "swing" then
+    if db.gcd1a_marker_enabled and db.gcd1a_marker_anchor == "swing" and frame.gcd1a_marker then
         local gcd_d = self:get_gcd_marker_duration(hand, '1a')
-        local gcd_additional_progress = gcd_d / d.speed
-        local combined_progress = progress + gcd_additional_progress
-        -- Hide it only if the bar is full and hide_inactive is enabled,
-        -- otherwise show.
-        if d.is_full and db.gcd1a_marker_hide_inactive then
-            frame.gcd1a_marker:Hide()
-        else
-            frame.gcd1a_marker:Show()
-        end
-        if combined_progress > 1.0 then
-            if db.gcd1a_swing_anchor_wrap then
-                while combined_progress > 1.0 do
-                    combined_progress = combined_progress - 1.0
-                end
-            else
-                combined_progress = 1.0
+        if gcd_d and d.speed and d.speed > 0 then
+            local gcd_additional_progress = gcd_d / d.speed
+            local combined_progress = progress + gcd_additional_progress
+            -- Hide it only if the bar is full and hide_inactive is enabled,
+            -- otherwise show.
+            if d.is_full and db.gcd1a_marker_hide_inactive then
                 frame.gcd1a_marker:Hide()
-            end
-        end
-        local offset = combined_progress * w
-        local v_offset = h * db.gcd1a_marker_fractional_height * -1
-        frame.gcd1a_marker:SetStartPoint("TOPLEFT", offset, 0)
-        frame.gcd1a_marker:SetEndPoint("TOPLEFT", offset, v_offset)
-    end
-    if db.gcd1b_marker_enabled and db.gcd1b_marker_anchor == "swing" then
-        local gcd_d = self:get_gcd_marker_duration(hand, '1b')
-        local gcd_additional_progress = gcd_d / d.speed
-        local combined_progress = progress + gcd_additional_progress
-        if d.is_full and db.gcd1b_marker_hide_inactive then
-            frame.gcd1b_marker:Hide()
-        else
-            frame.gcd1b_marker:Show()
-        end
-        if combined_progress > 1.0 then
-            if db.gcd1b_swing_anchor_wrap then
-                while combined_progress > 1.0 do
-                    combined_progress = combined_progress - 1.0
-                end
             else
-                combined_progress = 1.0
-                frame.gcd1b_marker:Hide()
+                frame.gcd1a_marker:Show()
             end
+            if combined_progress > 1.0 then
+                if db.gcd1a_swing_anchor_wrap then
+                    while combined_progress > 1.0 do
+                        combined_progress = combined_progress - 1.0
+                    end
+                else
+                    combined_progress = 1.0
+                    frame.gcd1a_marker:Hide()
+                end
+            end
+            local offset = combined_progress * w
+            local frac = db.gcd1a_marker_fractional_height or 0.5
+            local v_offset = h * frac * -1
+            frame.gcd1a_marker:SetStartPoint("TOPLEFT", offset, 0)
+            frame.gcd1a_marker:SetEndPoint("TOPLEFT", offset, v_offset)
         end
-        -- st.utils.print_msg(combined_progress)
-        local offset = combined_progress * w
-        local v_offset = h * db.gcd1b_marker_fractional_height
-        frame.gcd1b_marker:SetStartPoint("BOTTOMLEFT", offset, 0)
-        frame.gcd1b_marker:SetEndPoint("BOTTOMLEFT", offset, v_offset)
+    end
+    if db.gcd1b_marker_enabled and db.gcd1b_marker_anchor == "swing" and frame.gcd1b_marker then
+        local gcd_d = self:get_gcd_marker_duration(hand, '1b')
+        if gcd_d and d.speed and d.speed > 0 then
+            local gcd_additional_progress = gcd_d / d.speed
+            local combined_progress = progress + gcd_additional_progress
+            if d.is_full and db.gcd1b_marker_hide_inactive then
+                frame.gcd1b_marker:Hide()
+            else
+                frame.gcd1b_marker:Show()
+            end
+            if combined_progress > 1.0 then
+                if db.gcd1b_swing_anchor_wrap then
+                    while combined_progress > 1.0 do
+                        combined_progress = combined_progress - 1.0
+                    end
+                else
+                    combined_progress = 1.0
+                    frame.gcd1b_marker:Hide()
+                end
+            end
+            local offset = combined_progress * w
+            local frac = db.gcd1b_marker_fractional_height or 0.5
+            local v_offset = h * frac
+            frame.gcd1b_marker:SetStartPoint("BOTTOMLEFT", offset, 0)
+            frame.gcd1b_marker:SetEndPoint("BOTTOMLEFT", offset, v_offset)
+        end
     end
 
     -- Set texts
@@ -857,16 +920,19 @@ function ST:on_bar_active(hand)
     -- to actively swinging.
     local db = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand)
+    if not frame or not db then
+        return
+    end
     if db.gcd1a_marker_enabled or db.gcd1b_marker_enabled then
         self:set_gcd_marker_positions(hand)
     end
-    if db.enable_deadzone then
+    if db.enable_deadzone and frame.deadzone then
         frame.deadzone:Show()
     end
-    if db.left_text_hide_inactive then
+    if db.left_text_hide_inactive and frame.left_text then
         frame.left_text:Hide()
     end
-    if db.right_text_hide_inactive then
+    if db.right_text_hide_inactive and frame.right_text then
         frame.right_text:Hide()
     end
 end
@@ -881,19 +947,22 @@ function ST:on_bar_inactive(hand)
     -- st.utils.print_msg("TRIGGERING BAR INACTIVE")
     local db = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand)
-    if db.gcd1a_marker_hide_inactive then
+    if not frame or not db then
+        return
+    end
+    if db.gcd1a_marker_hide_inactive and frame.gcd1a_marker then
         frame.gcd1a_marker:Hide()
     end
-    if db.gcd1b_marker_hide_inactive then
+    if db.gcd1b_marker_hide_inactive and frame.gcd1b_marker then
         frame.gcd1b_marker:Hide()
     end
-    if db.deadzone_hide_inactive then
+    if db.deadzone_hide_inactive and frame.deadzone then
         frame.deadzone:Hide()
     end
-    if db.left_text_hide_inactive then
+    if db.left_text_hide_inactive and frame.left_text then
         frame.left_text:Hide()
     end
-    if db.right_text_hide_inactive then
+    if db.right_text_hide_inactive and frame.right_text then
         frame.right_text:Hide()
     end
 end
@@ -907,7 +976,11 @@ function ST:set_gcd_width(hand, timer_width, progress)
         return
     end
     local frame = self:get_visuals_frame(hand)
+    if not frame or not frame.gcd_bar then return end
     local tab = self[hand]
+    if not self.gcd or not self.gcd.expires or not tab or not tab.start or not tab.ends_at or tab.ends_at <= tab.start then
+        return
+    end
     local gcd_progress = (self.gcd.expires - tab.start) / (tab.ends_at - tab.start)
     -- if gcd would go over the end of the bar, instead use the swing timer
     -- bar progress to evalute texture coords and gcd bar width
@@ -934,6 +1007,7 @@ end
 
 function ST:get_gcd_marker_duration(hand, marker)
     local db = self:get_hand_table(hand)
+    if not db or not self.gcd then return 0 end
     if marker == '1a' then
         local t = self.gcd.gcd1_phys_time_before_swing
         if db.gcd1a_marker_mode == "spell" then
@@ -943,7 +1017,7 @@ function ST:get_gcd_marker_duration(hand, marker)
                 t = self.gcd.gcd1_spell_time_before_swing
             end
         end
-        return t
+        return t or 0
     elseif marker == '1b' then
         local t = self.gcd.gcd1_phys_time_before_swing
         if db.gcd1b_marker_mode == "spell" then
@@ -953,8 +1027,9 @@ function ST:get_gcd_marker_duration(hand, marker)
                 t = self.gcd.gcd1_spell_time_before_swing
             end
         end
-        return t
+        return t or 0
     end
+    return 0
 end
 
 function ST:set_gcd_marker_positions(hand)
@@ -967,7 +1042,11 @@ function ST:set_gcd_marker_positions(hand)
     -- st.utils.print_msg('Setting marker positions for hand: ' .. tostring(hand))
     local db_hand = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand)
-    local s = self[hand].speed
+    if not db_hand or not frame or not frame.gcd1a_marker or not frame.gcd1b_marker then
+        return
+    end
+    local hand_data = self[hand]
+    local s = hand_data and hand_data.speed
     if type(s) ~= "number" or s <= 0 then
         -- No engine cycle: no marker can be positioned. Hide both, never divide nil.
         frame.gcd1a_marker:Hide()
@@ -988,12 +1067,13 @@ function ST:set_gcd_marker_positions(hand)
                 frame.gcd1a_marker:Hide()
             else
                 -- If the bar is full and hide_when_inactive, also hide
-                if (self[hand].is_full and db_hand.gcd1a_marker_hide_inactive) then
+                if (hand_data and hand_data.is_full and db_hand.gcd1a_marker_hide_inactive) then
                     frame.gcd1a_marker:Hide()
                 else
                     -- If we get here, show it
+                    local frac_a = db_hand.gcd1a_marker_fractional_height or 0.5
                     local offset = progress * w * -1
-                    local v_offset = h * db_hand.gcd1a_marker_fractional_height * -1
+                    local v_offset = h * frac_a * -1
                     frame.gcd1a_marker:SetStartPoint("TOPRIGHT", offset, 0)
                     frame.gcd1a_marker:SetEndPoint("TOPRIGHT", offset, v_offset)
                     frame.gcd1a_marker:Show()
@@ -1007,13 +1087,14 @@ function ST:set_gcd_marker_positions(hand)
         if db_hand.gcd1b_marker_anchor == "endofswing" then
             local t_before = self:get_gcd_marker_duration(hand, '1b')
             local progress = t_before / s
-            if progress >= 1 or (self[hand].is_full and db_hand.gcd1b_marker_hide_inactive) then
+            if progress >= 1 or (hand_data and hand_data.is_full and db_hand.gcd1b_marker_hide_inactive) then
                 frame.gcd1b_marker:Hide()
             else
                 frame.gcd1b_marker:Show()
             end
+            local frac_b = db_hand.gcd1b_marker_fractional_height or 0.5
             local offset = progress * w * -1
-            local v_offset = h * db_hand.gcd1b_marker_fractional_height
+            local v_offset = h * frac_b
             frame.gcd1b_marker:SetStartPoint("BOTTOMRIGHT", offset, 0)
             frame.gcd1b_marker:SetEndPoint("BOTTOMRIGHT", offset, v_offset)
         end
@@ -1024,6 +1105,7 @@ end
 
 function ST:needs_range_string(hand)
     local db = self:get_hand_table(hand)
+    if not db then return false end
     if db.left_text_enabled and db.left_text_key == "range_finder" then
         return true
     elseif db.center_text_enabled and db.center_text_key == "range_finder" then
@@ -1040,19 +1122,25 @@ function ST:set_bar_texts(hand)
     end
     -- Function to set the requisite texts on the bar.
     local frame = self:get_visuals_frame(hand)
-    if self[hand].engine_dead then
+    if not frame then return end
+    local hand_tab = self[hand]
+    if not hand_tab then return end
+    if hand_tab.engine_dead then
         -- H1-render: an explicit degraded label instead of blank/pretend values.
-        frame.left_text:Hide()
-        frame.right_text:Hide()
-        frame.center_text:SetText("engine offline")
-        frame.center_text:Show()
+        if frame.left_text then frame.left_text:Hide() end
+        if frame.right_text then frame.right_text:Hide() end
+        if frame.center_text then
+            frame.center_text:SetText("engine offline")
+            frame.center_text:Show()
+        end
         return
     end
-    if self[hand].is_paused then return end
+    if hand_tab.is_paused then return end
     local db = self:get_hand_table(hand)
+    if not db then return end
     local t = st.api.get_time()
-    local speed = self[hand].speed
-    local ends_at = self[hand].ends_at
+    local speed = hand_tab.speed
+    local ends_at = hand_tab.ends_at
     local timer = type(ends_at) == "number" and max(0, ends_at - t) or nil
     local lookup = {
         attack_speed = type(speed) == "number"
@@ -1078,40 +1166,46 @@ function ST:set_bar_texts(hand)
         end
     end
 
-    if db.left_text_enabled then
-        if db.left_text_hide_inactive and self[hand].is_full then
+    if frame.left_text then
+        if db.left_text_enabled then
+            if db.left_text_hide_inactive and hand_tab.is_full then
+                frame.left_text:Hide()
+            else
+                local text = lookup[db.left_text_key]
+                frame.left_text:SetText(text)
+                frame.left_text:Show()
+            end
+        else
             frame.left_text:Hide()
-        else
-            local text = lookup[db.left_text_key]
-            frame.left_text:SetText(text)
-            frame.left_text:Show()
         end
-    else
-        frame.left_text:Hide()
     end
 
-    if db.center_text_enabled then
-        if db.center_text_hide_inactive and self[hand].is_full then
+    if frame.center_text then
+        if db.center_text_enabled then
+            if db.center_text_hide_inactive and hand_tab.is_full then
+                frame.center_text:Hide()
+            else
+                local text = lookup[db.center_text_key]
+                frame.center_text:SetText(text)
+                frame.center_text:Show()
+            end
+        else
             frame.center_text:Hide()
-        else
-            local text = lookup[db.center_text_key]
-            frame.center_text:SetText(text)
-            frame.center_text:Show()
         end
-    else
-        frame.center_text:Hide()
     end
 
-    if db.right_text_enabled then
-        if db.right_text_hide_inactive and self[hand].is_full then
-            frame.right_text:Hide()
+    if frame.right_text then
+        if db.right_text_enabled then
+            if db.right_text_hide_inactive and hand_tab.is_full then
+                frame.right_text:Hide()
+            else
+                local text = lookup[db.right_text_key]
+                frame.right_text:SetText(text)
+                frame.right_text:Show()
+            end
         else
-            local text = lookup[db.right_text_key]
-            frame.right_text:SetText(text)
-            frame.right_text:Show()
+            frame.right_text:Hide()
         end
-    else
-        frame.right_text:Hide()
     end
 end
 
@@ -1121,16 +1215,22 @@ function ST:set_deadzone_width(hand)
     end
     -- st.utils.print_msg('call to set deadzone width for '..hand)
     local db = self:get_hand_table(hand)
-    local frame = self:get_visuals_frame(hand).deadzone
-    local speed = self[hand].speed
+    local vf = self:get_visuals_frame(hand)
+    local frame = vf and vf.deadzone
+    if not frame or not db then
+        return
+    end
+    local hand_tab = self[hand]
+    local speed = hand_tab and hand_tab.speed
     if type(speed) ~= "number" or speed <= 0 then
         -- No engine cycle to scale against (the inert stand-in): hide, never divide nil.
         frame:Hide()
         return
     end
-    local db_shared = self.db.profile
-    local frac = (self.latency.world_ms / 1000) / speed
-    frac = frac * db_shared.deadzone_scale_factor
+    local db_shared = self.db and self.db.profile
+    local latency_ms = (self.latency and self.latency.world_ms) or 0
+    local scale_factor = (db_shared and db_shared.deadzone_scale_factor) or 1.0
+    local frac = ((latency_ms / 1000) / speed) * scale_factor
     local w = self:get_bar_visuals_width_and_height(hand)
     frame:SetWidth(max(1, frac * w))
 
@@ -1139,7 +1239,7 @@ function ST:set_deadzone_width(hand)
         frame:Hide()
         return
     end
-    if db.deadzone_hide_inactive and self[hand].is_full then
+    if db.deadzone_hide_inactive and hand_tab and hand_tab.is_full then
         frame:Hide()
         return
     end
@@ -1152,6 +1252,9 @@ function ST:set_bar_color(hand, color_table)
     end
     local db = self:get_hand_table(hand)
     local frame = self:get_visuals_frame(hand)
+    if not frame or not frame.bar or not db then
+        return
+    end
 
     -- If given a manual color, set that.
     if color_table then
@@ -1163,8 +1266,9 @@ function ST:set_bar_color(hand, color_table)
 
     -- If a class override exists, use it.
     local result = false
-    if self[self.player_class].set_bar_color then
-        result = self[self.player_class].set_bar_color(self, hand)
+    local class = self[self.player_class]
+    if type(class) == "table" and class.set_bar_color then
+        result = class.set_bar_color(self, hand)
     end
 
     -- If no special behaviour was triggered, revert to the default.
@@ -1335,10 +1439,13 @@ function ST:new_pips(parent, opts)
                     -- return nil, the template's "not readable" contract, instead of
                     -- indexing a nil table from inside the design-mode drag handler.
                     if not base then return nil end
-                    local s = (frame:GetEffectiveScale() or 1)
-                        / (UIParent:GetEffectiveScale() or 1)
+                    local up_scale = (UIParent and UIParent.GetEffectiveScale) and UIParent:GetEffectiveScale() or 1
+                    local s = (frame:GetEffectiveScale() or 1) / (up_scale > 0 and up_scale or 1)
                     local cx, cy = frame:GetCenter()
-                    local ux, uy = UIParent:GetCenter()
+                    local ux, uy = 0, 0
+                    if UIParent and UIParent.GetCenter then
+                        ux, uy = UIParent:GetCenter()
+                    end
                     if not (cx and cy and ux and uy) then return nil end
                     local ox, oy = cx * s - ux, cy * s - uy
                     for i = 1, count do

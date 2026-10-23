@@ -3390,7 +3390,7 @@ do
         "H2: the hint reports the clip count")
     check(u.hunter_report_frame.hint_text.text:find("buffer used") == nil,
         "H2: no hunter_window means no buffer clause")
-    b.st.hunter_window = { cast_window = function(lat) return 0.5 + (lat or 0) end }
+    b.st.hunter_window = { cast_window = function() return 0.5 end }
     u.render_hunter_report(T)
     check(u.hunter_report_frame.hint_text.text:find("buffer used") ~= nil,
         "H2: the kernel injects the buffer clause")
@@ -4658,6 +4658,43 @@ do
     eq(u.scenario_run, nil, "stop clears the scenario run")
     eq(u.scenario_step, nil, "stop clears the open step")
     eq(u.practice_row.shown, false, "stop hides the practice row")
+end
+
+-- 22b1b) Real combat freezes the scenario decision window: a pause that outlasts
+-- the window must not close the open step as a miss (the player cannot cast while
+-- the sim is paused - cast_key returns early in combat).
+do
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function() return { action = "cs", reason = "the seal is up" } end
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    check(u.scenario_step ~= nil, "the first step is open")
+    eq(u.scenario_step.deadline, 3.0, "the window is the design 3 s")
+    -- Into combat with 1 s left on the window; the pause outlasts it.
+    F.clock = 2
+    T.in_combat = true
+    drive(b, 0.05)
+    eq(u.combat_paused, true, "the tick pauses in combat")
+    F.clock = 30
+    drive(b, 0.05)
+    eq(u.scenario_run.misses, 0, "no miss is recorded while paused")
+    eq(u.score.attempts, 0, "no attempt is recorded while paused")
+    -- Leave combat: the window resumes with its remaining second, not as a miss.
+    T.in_combat = false
+    F.clock = 30.1
+    drive(b, 0.05)
+    eq(u.combat_paused, false, "leaving combat resumes")
+    eq(u.scenario_run.misses, 0, "the outlasted window is not a miss on resume")
+    check(u.scenario_step ~= nil, "the step is still open after the pause")
+    -- The window was shifted, not cancelled: past the shifted deadline it misses.
+    F.clock = 31.5
+    drive(b, 0.05)
+    eq(u.scenario_run.misses, 1, "past the shifted deadline the step misses")
+    eq(u.score.attempts, 1, "the shifted miss is one attempt")
+    u.stop(T)
 end
 
 -- 22c) A class that cannot decide answers nil: the step is UNKNOWN, no attempt is
@@ -7338,6 +7375,38 @@ do
     check(unconfirmed >= 2,
         "comment: both drill-icon notes mark the name leg UNCONFIRMED in-client (found "
             .. tostring(unconfirmed) .. ")")
+end
+
+--=========================================================================================
+-- NILSWEEP (2026-10-22): the module's documented "a session with no class profile row
+-- still starts/grades" contract on the two remaining per-event reads/writes. The
+-- unguarded code throws, so each leg is red-first.
+--=========================================================================================
+do
+    -- N1: an AW cast with no class row applies the shipped AW defaults (both pieces
+    -- off) instead of throwing out of the cast handler.
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    u.init(T)
+    u.start(T)
+    T.get_class_table = function() return nil end
+    local ok, err = pcall(u.cast_key, T, "aw")
+    check(ok, "NILSWEEP P1 cast_key AW tolerates a missing class row (error: " .. tostring(err) .. ")")
+    check(u.sim.has_haste_pot ~= true, "NILSWEEP P1 the pot piece stays off without a class row")
+end
+
+do
+    -- N2: a drag with no class row moves the live panel and does not claim a save.
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    u.init(T)
+    u.start(T)
+    -- The panel must have on-screen geometry or save_position returns before the db
+    -- read; the bar frame already carries right/top (the builder sets them).
+    u.panel.left, u.panel.top = 10, 20
+    T.get_class_table = function() return nil end
+    local ok, err = pcall(u.save_position, T)
+    check(ok, "NILSWEEP P2 save_position tolerates a missing class row (error: " .. tostring(err) .. ")")
 end
 
 if failures == 0 then

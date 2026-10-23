@@ -72,7 +72,7 @@ ST.defaults = {
 		SHAMAN = ST.SHAMAN.defaults,
 		WARLOCK = ST.WARLOCK.defaults,
 		WARRIOR = ST.WARRIOR.defaults,
-    },
+	},
 
 }
 

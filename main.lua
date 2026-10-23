@@ -79,7 +79,7 @@ ST.WARRIOR = {}
 -- Funcs/iterables to automate common tasks
 --=========================================================================================
 local SwingTimerInfo = function(hand)
-    return STL:SwingTimerInfo(hand)
+	return STL:SwingTimerInfo(hand)
 end
 
 -- Lua 5.1 has no table.pack (pinned by tests/main_init_state.lua and the
@@ -96,16 +96,16 @@ ST.offhand = {}
 ST.ranged = {}
 
 ST.class_hands = {
-	DEATHKNIGHT = {"mainhand", "offhand"},
-	DRUID = {"mainhand"},
-	HUNTER = {"mainhand", "offhand", "ranged"},
-	MAGE = {"mainhand", "ranged"},
-	PALADIN = {"mainhand"},
-	PRIEST = {"mainhand", "ranged"},
-	ROGUE = {"mainhand", "offhand", "ranged"},
-	SHAMAN = {"mainhand", "offhand"},
-	WARLOCK = {"mainhand", "ranged"},
-	WARRIOR = {"mainhand", "offhand", "ranged"},
+	DEATHKNIGHT = { "mainhand", "offhand" },
+	DRUID = { "mainhand" },
+	HUNTER = { "mainhand", "offhand", "ranged" },
+	MAGE = { "mainhand", "ranged" },
+	PALADIN = { "mainhand" },
+	PRIEST = { "mainhand", "ranged" },
+	ROGUE = { "mainhand", "offhand", "ranged" },
+	SHAMAN = { "mainhand", "offhand" },
+	WARLOCK = { "mainhand", "ranged" },
+	WARRIOR = { "mainhand", "offhand", "ranged" },
 }
 
 -- Hands for the player's class. `class_hands` is keyed by the uppercase class token
@@ -125,7 +125,7 @@ function ST:iter_hands()
 	local i = 0
 	local hands = self:get_class_hands()
 	local n = #hands
-	return function ()
+	return function()
 		i = i + 1
 		if i <= n then
 			return hands[i]
@@ -171,17 +171,17 @@ end
 
 function ST:convert_color(t, new_alpha)
 	-- Convert standard 0-255 colors down to WoW 0-1 ranges.
-	local r,g,b,a = unpack(t)
+	local r, g, b, a = unpack(t)
 	a = new_alpha or a
-	r = r/255
-	g = g/255
-	b = b/255
+	r = r / 255
+	g = g / 255
+	b = b / 255
 	return r, g, b, a
 end
 
 function ST:convert_color_up(t, new_alpha)
 	-- Convert WoW 0-1 ranges up to standard 0-255 ranges.
-	local r,g,b,a = unpack(t)
+	local r, g, b, a = unpack(t)
 	a = new_alpha or a
 	r = r * 255
 	g = g * 255
@@ -191,23 +191,39 @@ end
 
 function ST:get_anchor_frame(hand)
 	-- Gets the main anchor frame for the hand.
-	return self[hand].anchor_frame
+	local state = self[hand]
+	if type(state) ~= "table" then
+		return nil
+	end
+	return state.anchor_frame
 end
 
 function ST:get_hiding_anchor_frame(hand)
 	-- Get the hiding anchor frame, which also gets calls to show/hide.
-	return self:get_anchor_frame(hand).hiding_anchor_frame
+	local anchor = self:get_anchor_frame(hand)
+	if anchor == nil then
+		return nil
+	end
+	return anchor.hiding_anchor_frame
 end
 
 function ST:get_bar_frame(hand)
 	-- Gets the bar frame for the hand.
 	-- This is the frame with the backdrop, but *not* the frame
 	-- with the bar visuals - that's a child of this one.
-	return self:get_anchor_frame(hand).bar_frame
+	local anchor = self:get_anchor_frame(hand)
+	if anchor == nil then
+		return nil
+	end
+	return anchor.bar_frame
 end
 
 function ST:get_visuals_frame(hand)
-	return self:get_bar_frame(hand).visuals_frame
+	local bar_frame = self:get_bar_frame(hand)
+	if bar_frame == nil then
+		return nil
+	end
+	return bar_frame.visuals_frame
 end
 
 function ST:get_profile_table()
@@ -215,11 +231,28 @@ function ST:get_profile_table()
 end
 
 function ST:get_class_table()
-	return self.db.profile[self.player_class]
+	-- The profile row for the playing class. nil is a legitimate answer: the
+	-- accessor is the shared seam every module type-checks (bars.lua pcall+type,
+	-- hud.lua `or {}`, practice_ui.lua), and pre-init / sandbox callers have no
+	-- AceDB yet. Returning nil here (instead of index-nil-throwing) preserves the
+	-- one behaviour every caller already branches on; the caller decides whether
+	-- that is "bar disabled" (main), "no HUD" (hud) or "defaults" (practice).
+	local profile = self.db and self.db.profile
+	if type(profile) ~= "table" then
+		return nil
+	end
+	return profile[self.player_class]
 end
 
 function ST:get_hand_table(hand)
-	return self.db.profile[self.player_class][hand]
+	-- Same contract as get_class_table: a class row without this hand (a class
+	-- that does not ship the hand) answers nil instead of throwing, and every
+	-- per-hand consumer already treats nil as "not configured / not built".
+	local class = self:get_class_table()
+	if type(class) ~= "table" then
+		return nil
+	end
+	return class[hand]
 end
 
 function ST:get_in_range(hand)
@@ -240,7 +273,10 @@ function ST:hide_bar(hand)
 		return
 	end
 	bar_frame:Hide()
-	self:get_hiding_anchor_frame(hand):Hide()
+	local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
+	if hiding_anchor_frame ~= nil then
+		hiding_anchor_frame:Hide()
+	end
 end
 
 function ST:check_bar_enable_settings(db_class, hand)
@@ -251,23 +287,30 @@ function ST:check_bar_enable_settings(db_class, hand)
 	if hand == "mainhand" and st.practice_ui and st.practice_ui.is_active() then
 		return true
 	end
-	if not db_class.class_enabled then 	-- Global enable/disable
+	-- No class row means no bar configuration at all (an unsupported class, or a
+	-- caller before AceDB is up): the bar cannot be enabled without settings, so
+	-- the answer is the same one a disabled bar gets. Never show an unconfigured
+	-- bar on invented defaults.
+	if type(db_class) ~= "table" then
 		return false
 	end
-	if not self:bar_is_enabled(hand) then 	-- Hand enabled
+	if not db_class.class_enabled then -- Global enable/disable
 		return false
 	end
-	if self.current_talent_group == 1 then  -- Spec 1 enabled
+	if not self:bar_is_enabled(hand) then -- Hand enabled
+		return false
+	end
+	if self.current_talent_group == 1 then -- Spec 1 enabled
 		if not db_class.enable_spec1 then
 			return false
 		end
 	end
-	if self.current_talent_group == 2 then  -- Spec 1 enabled
+	if self.current_talent_group == 2 then -- Spec 1 enabled
 		if not db_class.enable_spec2 then
 			return false
 		end
 	end
-	return true 	-- If we get to the end the bar should be shown.
+	return true -- If we get to the end the bar should be shown.
 end
 
 function ST:show_bar(hand)
@@ -281,22 +324,31 @@ function ST:show_bar(hand)
 		if self.player_class == "DRUID" then
 			if self.should_show_bar_this_form then
 				self:get_bar_frame(hand):Show()
-				self:get_hiding_anchor_frame(hand):Show()
+				local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
+				if hiding_anchor_frame ~= nil then
+					hiding_anchor_frame:Show()
+				end
 			else
 				self:hide_bar(hand)
 			end
 		elseif self.player_class == "WARRIOR" then
-			if db_class.hide_in_tank_spec and self.has_imp_def_stance then
+			if db_class and db_class.hide_in_tank_spec and self.has_imp_def_stance then
 				self:hide_bar(hand)
-			elseif db_class.hide_in_arms_spec and self.has_bladestorm then
+			elseif db_class and db_class.hide_in_arms_spec and self.has_bladestorm then
 				self:hide_bar(hand)
 			else
 				self:get_bar_frame(hand):Show()
-				self:get_hiding_anchor_frame(hand):Show()
+				local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
+				if hiding_anchor_frame ~= nil then
+					hiding_anchor_frame:Show()
+				end
 			end
 		else
 			self:get_bar_frame(hand):Show()
-			self:get_hiding_anchor_frame(hand):Show()
+			local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
+			if hiding_anchor_frame ~= nil then
+				hiding_anchor_frame:Show()
+			end
 		end
 	else
 		self:hide_bar(hand)
@@ -323,21 +375,19 @@ function ST:unlock_frames()
 			f:SetMovable(true)
 			f:EnableMouse(true)
 			f:SetScript("OnMouseWheel", function(_, dir)
-					LWIN.OnMouseWheel(f, dir)
-					local ACR = LibStub("AceConfigRegistry-3.0")
-					ACR:NotifyChange(ST.options_table_name)
-				end
+				LWIN.OnMouseWheel(f, dir)
+				local ACR = LibStub("AceConfigRegistry-3.0")
+				ACR:NotifyChange(ST.options_table_name)
+			end
 			)
 		end
 	end
 end
 
-
 --=========================================================================================
 -- Funcs to initialise the addon
 --=========================================================================================
 function ST:OnInitialize()
-
 	-- Get player class first
 	self.player_class_pretty, self.player_class = UnitClass("player")
 
@@ -363,7 +413,7 @@ function ST:OnInitialize()
 	)
 
 	-- Addon database
-	local SwedgeTimerDB = LibStub("AceDB-3.0"):New(addon_name.."DB", self.defaults, true)
+	local SwedgeTimerDB = LibStub("AceDB-3.0"):New(addon_name .. "DB", self.defaults, true)
 	self.db = SwedgeTimerDB
 
 	-----------------------------------------------------------
@@ -373,14 +423,14 @@ function ST:OnInitialize()
 	local ACD = LibStub("AceConfigDialog-3.0")
 	self:set_opts()
 
-	self.options_table_name = addon_name.."_Options"
+	self.options_table_name = addon_name .. "_Options"
 	AC:RegisterOptionsTable(self.options_table_name, self.opts_table)
 	self.optionsFrame = ACD:AddToBlizOptions(self.options_table_name, addon_name)
 
 	-- Profile options
 	local profiles = LibStub("AceDBOptions-3.0"):GetOptionsTable(self.db)
-	AC:RegisterOptionsTable(addon_name.."_Profiles", profiles)
-	ACD:AddToBlizOptions(addon_name.."_Profiles", "Profiles", addon_name)
+	AC:RegisterOptionsTable(addon_name .. "_Profiles", profiles)
+	ACD:AddToBlizOptions(addon_name .. "_Profiles", "Profiles", addon_name)
 
 	-----------------------------------------------------------
 	-- Callbackhandlers for letting the addon know that dependent
@@ -390,17 +440,17 @@ function ST:OnInitialize()
 	-- libs are both loaded, as they are interdependent
 	-- init_libs has a check to ensure this only happens once per reload
 	self.lrc_ready = false
-	self.lrc_unavailable = false -- set by the init deadline if LRC never reports ready
+	self.lrc_unavailable = false             -- set by the init deadline if LRC never reports ready
 	self.stl_ready = not SWING_ENGINE_AVAILABLE -- inert stand-in counts as ready
 	self.llm_ready = false
 	LRC.RegisterCallback(self, LRC.CHECKERS_CHANGED, function()
-			self.lrc_ready = true
-			-- A late report means the init deadline was wrong about LibRangeCheck:
-			-- clear the fallback flag so /st diag stops reporting lrc=fallback.
-			-- Range state does not depend on it (exact yards, api.UnitDistance).
-			self.lrc_unavailable = false
-			self:init_libs()
-		end
+		self.lrc_ready = true
+		-- A late report means the init deadline was wrong about LibRangeCheck:
+		-- clear the fallback flag so /st diag stops reporting lrc=fallback.
+		-- Range state does not depend on it (exact yards, api.UnitDistance).
+		self.lrc_unavailable = false
+		self:init_libs()
+	end
 	)
 	STL.RegisterCallback(self, "SWING_TIMER_INFO_INITIALIZED", function()
 		self.stl_ready = true
@@ -446,24 +496,24 @@ function ST:OnInitialize()
 	-- this session. Range state does not depend on LibRangeCheck any more; the flag
 	-- only feeds /st diag's lrc= line, and a late report clears it (callback above).
 	C_Timer.After(5, function()
-			if self.interfaces_are_initialised then
-				return
-			end
-			-- Recorded for the diagnostic report: a library never reported ready in
-			-- time, so this deadline had to finish the initialisation.
-			self.init_deadline_fired = true
-			if not self.lrc_ready then
-				self.lrc_unavailable = true
-				self.lrc_ready = true
-			end
-			if not self.stl_ready then
-				STL = make_swing_stub()
-				SWING_ENGINE_AVAILABLE = false
-				ST.swing_engine = "inert-standin"
-				self.stl_ready = true
-			end
-			self:init_libs()
+		if self.interfaces_are_initialised then
+			return
 		end
+		-- Recorded for the diagnostic report: a library never reported ready in
+		-- time, so this deadline had to finish the initialisation.
+		self.init_deadline_fired = true
+		if not self.lrc_ready then
+			self.lrc_unavailable = true
+			self.lrc_ready = true
+		end
+		if not self.stl_ready then
+			STL = make_swing_stub()
+			SWING_ENGINE_AVAILABLE = false
+			ST.swing_engine = "inert-standin"
+			self.stl_ready = true
+		end
+		self:init_libs()
+	end
 	)
 
 	-----------------------------------------------------------
@@ -534,8 +584,8 @@ function ST:OnInitialize()
 	self.mainhand.speed = nil
 	self.mainhand.ends_at = nil
 	self.mainhand.inactive_timer = nil
-	self.mainhand.has_weapon = true  -- always true
-	self.mainhand.is_full = true  -- deliberately true
+	self.mainhand.has_weapon = true -- always true
+	self.mainhand.is_full = true -- deliberately true
 	self.mainhand.is_full_timer = nil
 	self.mainhand.is_paused = false
 	self.mainhand.current_progress = false
@@ -574,7 +624,7 @@ function ST:OnInitialize()
 
 	-- GCD info containers
 	self.gcd = {}
-    self.gcd.duration = nil
+	self.gcd.duration = nil
 	self.gcd.started = nil
 	self.gcd.expires = nil
 	self.gcd.phys_length = nil
@@ -679,7 +729,6 @@ function ST:OnInitialize()
 	-- Register Slashcommands
 	-----------------------------------------------------------
 	self:register_slashcommands()
-
 end
 
 --=========================================================================================
@@ -705,7 +754,10 @@ function ST:activate_class()
 	-- ST.active_class and never guesses from player_class.
 	self.active_class = nil
 
-	local selection = self:get_class_table().class_activation
+	-- No class row means no stored class-module choice; nil selection reads as
+	-- "Auto" below (the shipped default), i.e. activate the class being played.
+	local class_db = self:get_class_table()
+	local selection = type(class_db) == "table" and class_db.class_activation or nil
 	local explicit = type(selection) == "string" and string.lower(selection) ~= "auto"
 	if not explicit then
 		selection = self.player_class
@@ -829,7 +881,7 @@ function ST:init_timers()
 	self:register_timer_callbacks()
 	self:check_weapons()
 	for hand in self:iter_hands() do
-		local t = {SwingTimerInfo(hand)}
+		local t = { SwingTimerInfo(hand) }
 		if type(t[1]) ~= "number" then
 			-- Unknown engine shape (the inert stand-in returns nil): never invent a
 			-- cycle. The per-hand flag is what bars.lua renders as "engine offline".
@@ -915,7 +967,8 @@ function ST:post_init()
 		self[hand].is_full = true
 	end
 
-	if self[self.player_class].post_init then
+	local post_init_class = self[self.player_class]
+	if type(post_init_class) == "table" and post_init_class.post_init then
 		-- R4 (class post_init isolation, 2026-10-21): a throwing class post_init used to
 		-- abort ST:post_init before the shared widgets below (frame lock state, bar
 		-- visibility, the TBC aura poll), and the error escaped into init_libs. One
@@ -936,9 +989,12 @@ function ST:post_init()
 		st.weave_range.init(self)
 	end
 
-	-- Set frames to locked or unlocked based on settings.
+	-- Set frames to locked or unlocked based on settings. No class row means no
+	-- stored lock choice, and the shipped default is locked (class_defaults
+	-- timers_locked = true): keep the frames locked rather than invent an
+	-- unlocked state the user never chose.
 	local db_class = self:get_class_table()
-	if db_class.timers_locked then
+	if type(db_class) ~= "table" or db_class.timers_locked then
 		self:lock_frames()
 	else
 		self:unlock_frames()
@@ -1004,6 +1060,28 @@ function ST:COMBAT_LOG_EVENT_UNFILTERED(event, ...)
 	if not self.interfaces_are_initialised then
 		return
 	end
+	if select("#", ...) == 0 and api.CombatLogGetCurrentEventInfo then
+		return self:COMBAT_LOG_EVENT_UNFILTERED(event, api.CombatLogGetCurrentEventInfo())
+	end
+
+	-- Noise filter: only process combat log events involving the player or current target/enemy.
+	local num_args = select("#", ...)
+	if num_args >= 8 then
+		local player_guid = self.player_guid or (type(UnitGUID) == "function" and UnitGUID("player")) or nil
+		local target_guid = type(UnitGUID) == "function" and UnitGUID("target") or nil
+		if player_guid or target_guid then
+			local source_guid = select(4, ...)
+			local dest_guid = select(8, ...)
+			if type(source_guid) == "string" or type(dest_guid) == "string" then
+				local is_player = player_guid and ((source_guid and source_guid == player_guid) or (dest_guid and dest_guid == player_guid))
+				local is_enemy = target_guid and ((source_guid and source_guid == target_guid) or (dest_guid and dest_guid == target_guid))
+				if not is_player and not is_enemy then
+					return
+				end
+			end
+		end
+	end
+
 	-- Neutral pre-pass (all CLEU-registered classes): extra-attack and parry
 	-- handling the class modules do not own. Runs before the class dispatch and
 	-- never returns early, so the twist/Overpower paths below are unaffected.
@@ -1012,10 +1090,14 @@ function ST:COMBAT_LOG_EVENT_UNFILTERED(event, ...)
 	-- arg12, arg13, ..., arg15, ...). Only the two subevents below are read.
 	self:note_extra_attack_or_parry(select(4, ...), select(8, ...), select(2, ...),
 		select(12, ...), select(15, ...))
-	if self.player_class == "PALADIN" then
-		self.PALADIN.on_combat_log_unfiltered(self, event, ...)
-	elseif self.player_class == "WARRIOR" then
-		self.WARRIOR.on_combat_log_unfiltered(self, event, ...)
+	-- Class dispatch through the same "module present and hook present" shape the
+	-- other class hooks use: only the SELECTED class's module runs (operator rule
+	-- 2026-10-21), so the playing class's table can be an empty {} when another
+	-- class is activated. Calling the hook unconditionally made every combat-log
+	-- event throw in that configuration; the neutral pre-pass above still runs.
+	local class = self[self.player_class]
+	if type(class) == "table" and class.on_combat_log_unfiltered then
+		class.on_combat_log_unfiltered(self, event, ...)
 	end
 end
 
@@ -1164,7 +1246,10 @@ function ST:GCD_OVER()
 		-- carries one. The typeof guard mirrors bring_up_hand's seam guard:
 		-- bars.lua owns bar_is_built.
 		if type(self.bar_is_built) ~= "function" or self:bar_is_built(hand) then
-			self:get_visuals_frame(hand).gcd_bar:Hide()
+			local visuals_frame = self:get_visuals_frame(hand)
+			if visuals_frame ~= nil and visuals_frame.gcd_bar ~= nil then
+				visuals_frame.gcd_bar:Hide()
+			end
 		end
 	end
 end
@@ -1349,9 +1434,14 @@ function ST:SWING_TIMER_START(_, speed, expiration_time, hand)
 	bar.is_full = false
 	bar.is_paused = false
 	bar.engine_dead = false
-	bar.start = api.get_time()
+	local now = api.get_time()
+	bar.start = now
 	bar.speed = speed
-	bar.ends_at = expiration_time
+	if type(expiration_time) == "number" and expiration_time > now then
+		bar.ends_at = expiration_time
+	else
+		bar.ends_at = now + speed
+	end
 	self:set_bar_color(hand)
 	-- Next-action guide: count melee swings started while in combat (the guide's
 	-- filler suggestion waits for more than two swings; paladins only have a
@@ -1485,7 +1575,6 @@ function ST:PLAYER_EQUIPMENT_CHANGED(_event, slot, _has_current)
 			self:on_attack_speed_change(hand)
 		end
 	end
-
 end
 
 function ST:PLAYER_LOGOUT()
@@ -1763,8 +1852,11 @@ function ST:UNIT_POWER_FREQUENT(_event, unit_id, powerType)
 		return
 	end
 	if powerType == "RAGE" then
-		if self[self.player_class].on_rage_update then
-			self[self.player_class].on_rage_update(self)
+		-- Same guarded dispatch as the other class hooks: an inactive class
+		-- module (only the selected class is activated) simply has no hook.
+		local class = self[self.player_class]
+		if type(class) == "table" and class.on_rage_update then
+			class.on_rage_update(self)
 		end
 	end
 end
@@ -1781,119 +1873,126 @@ end
 -- the same clock domain and converges to the identical anchor. Classic line only
 -- (HU-31): Retail/Forever stay on their own APIs.
 local SWING_RESET_SPELL_IDS = {
-    [16589] = true, -- Noggenfogger Elixir
-    [2645] = true, -- Ghost Wolf
-    [51533] = true, -- Feral Spirit
-    [2764] = true, -- Throw
-    [3018] = true, -- Shoot
-    [5384] = true, -- Feign Death
-    [5019] = true, -- Shoot Wand
-    [20066] = true, -- Repentance
-    [853] = true, [5588] = true, [5589] = true, [10308] = true, -- Hammer of Justice
-    [2812] = true, [10318] = true, [27139] = true, -- Holy Wrath
+	[16589] = true,                                             -- Noggenfogger Elixir
+	[2645] = true,                                              -- Ghost Wolf
+	[51533] = true,                                             -- Feral Spirit
+	[2764] = true,                                              -- Throw
+	[3018] = true,                                              -- Shoot
+	[5384] = true,                                              -- Feign Death
+	[5019] = true,                                              -- Shoot Wand
+	[20066] = true,                                             -- Repentance
+	[853] = true,
+	[5588] = true,
+	[5589] = true,
+	[10308] = true,                                             -- Hammer of Justice
+	[2812] = true,
+	[10318] = true,
+	[27139] = true,                                             -- Holy Wrath
 }
 -- Literal English fallbacks for name-carrying payloads (Anniversary R1) and for a
 -- cold spell cache: the localized cache below wins whenever the client answers.
 local SWING_RESET_SPELL_NAMES = {
-    ["Hammer of Justice"] = true,
-    ["Holy Wrath"] = true,
+	["Hammer of Justice"] = true,
+	["Holy Wrath"] = true,
 }
 local swing_reset_names
 
 local function is_swing_reset_token(token)
-    if token == nil then
-        return false
-    end
-    local id = tonumber(token)
-    if id ~= nil and SWING_RESET_SPELL_IDS[id] == true then
-        return true
-    end
-    if type(token) ~= "string" then
-        return false
-    end
-    if SWING_RESET_SPELL_NAMES[token] == true then
-        return true
-    end
-    if swing_reset_names == nil then
-        swing_reset_names = {}
-        for spell_id in pairs(SWING_RESET_SPELL_IDS) do
-            local ok, name = pcall(api.GetSpellInfo, spell_id)
-            if ok and type(name) == "string" then
-                swing_reset_names[name] = true
-            end
-        end
-    end
-    return swing_reset_names[token] == true
+	if token == nil then
+		return false
+	end
+	local id = tonumber(token)
+	if id ~= nil and SWING_RESET_SPELL_IDS[id] == true then
+		return true
+	end
+	if type(token) ~= "string" then
+		return false
+	end
+	if SWING_RESET_SPELL_NAMES[token] == true then
+		return true
+	end
+	if swing_reset_names == nil then
+		swing_reset_names = {}
+		for spell_id in pairs(SWING_RESET_SPELL_IDS) do
+			local ok, name = pcall(api.GetSpellInfo, spell_id)
+			if ok and type(name) == "string" then
+				swing_reset_names[name] = true
+			end
+		end
+	end
+	return swing_reset_names[token] == true
 end
 
 -- Restarts one hand's cycle now (the in-game reset semantic): same anchor writes
 -- as the SWING_TIMER_START tail (full-timer cancel, active mark, colour), without
 -- the engine wire count or the swing-start-only extras (guide count, form gate).
 local function restart_swing_for_reset(self, hand, now)
-    local bar = self[hand]
-    if type(bar) ~= "table" then
-        return
-    end
-    local speed
-    if hand == "ranged" then
-        speed = api.UnitRangedDamage("player")
-    else
-        local mh_speed, oh_speed = api.UnitAttackSpeed("player")
-        if hand == "offhand" then
-            speed = oh_speed
-        else
-            speed = mh_speed
-        end
-    end
-    if type(speed) ~= "number" or speed <= 0 then
-        return
-    end
-    if bar.is_full_timer ~= nil then
-        if type(bar.is_full_timer.Cancel) == "function" then
-            pcall(function() bar.is_full_timer:Cancel() end)
-        end
-        self:on_bar_active(hand)
-    elseif bar.is_full then
-        self:on_bar_active(hand)
-    end
-    bar.is_full = false
-    bar.is_paused = false
-    bar.engine_dead = false
-    bar.start = now
-    bar.speed = speed
-    bar.ends_at = now + speed
-    self:set_bar_color(hand)
+	local bar = self[hand]
+	if type(bar) ~= "table" then
+		return
+	end
+	local speed
+	if hand == "ranged" then
+		speed = api.UnitRangedDamage("player")
+	else
+		local mh_speed, oh_speed = api.UnitAttackSpeed("player")
+		if hand == "offhand" then
+			speed = oh_speed
+		else
+			speed = mh_speed
+		end
+	end
+	if type(speed) ~= "number" or speed <= 0 then
+		return
+	end
+	if bar.is_full_timer ~= nil then
+		if type(bar.is_full_timer.Cancel) == "function" then
+			pcall(function() bar.is_full_timer:Cancel() end)
+		end
+		self:on_bar_active(hand)
+	elseif bar.is_full then
+		self:on_bar_active(hand)
+	end
+	bar.is_full = false
+	bar.is_paused = false
+	bar.engine_dead = false
+	bar.start = now
+	bar.speed = speed
+	bar.ends_at = now + speed
+	self:set_bar_color(hand)
 end
 
 local function maybe_reset_swing_on_utility_cast(self, spell_id, cast_guid)
-    if self.swing_engine ~= "vendored-lib" then
-        return
-    end
-    if st.is_mainline then
-        return
-    end
-    if not is_swing_reset_token(spell_id) and not is_swing_reset_token(cast_guid) then
-        return
-    end
-    local get_time = api and api.get_time
-    local now = (type(get_time) == "function") and get_time() or nil
-    if type(now) ~= "number" then
-        return
-    end
-    restart_swing_for_reset(self, "mainhand", now)
-    restart_swing_for_reset(self, "offhand", now)
-    if self:has_hand("ranged") then
-        restart_swing_for_reset(self, "ranged", now)
-    end
+	if self.swing_engine ~= "vendored-lib" then
+		return
+	end
+	if st.is_mainline then
+		return
+	end
+	if not is_swing_reset_token(spell_id) and not is_swing_reset_token(cast_guid) then
+		return
+	end
+	local get_time = api and api.get_time
+	local now = (type(get_time) == "function") and get_time() or nil
+	if type(now) ~= "number" then
+		return
+	end
+	restart_swing_for_reset(self, "mainhand", now)
+	restart_swing_for_reset(self, "offhand", now)
+	if self:has_hand("ranged") then
+		restart_swing_for_reset(self, "ranged", now)
+	end
 end
 
 function ST:UNIT_SPELLCAST_FAILED_QUIET(_event, unit_id, cast_guid, spell_id)
 	if unit_id ~= "player" or (not self.interfaces_are_initialised) then
 		return
 	end
-	-- Trigger any class-specific behaviour
-	if self[self.player_class].on_spellcast_failed_quiet then
-		self[self.player_class].on_spellcast_failed_quiet(self, unit_id, cast_guid, spell_id)
+	-- Trigger any class-specific behaviour (module-presence guarded like the
+	-- other class hooks: only the selected class module is populated).
+	local class = self[self.player_class]
+	if type(class) == "table" and class.on_spellcast_failed_quiet then
+		class.on_spellcast_failed_quiet(self, unit_id, cast_guid, spell_id)
 	end
 end
 
@@ -1903,9 +2002,11 @@ function ST:UNIT_SPELLCAST_SUCCEEDED(_event, unit_id, cast_guid, spell_id)
 	if unit_id ~= "player" or (not self.interfaces_are_initialised) then
 		return
 	end
-	-- Trigger any class-specific behaviour
-	if self[self.player_class].on_spellcast_succeeded then
-		self[self.player_class].on_spellcast_succeeded(self, unit_id, cast_guid, spell_id)
+	-- Trigger any class-specific behaviour (module-presence guarded like the
+	-- other class hooks: only the selected class module is populated).
+	local class = self[self.player_class]
+	if type(class) == "table" and class.on_spellcast_succeeded then
+		class.on_spellcast_succeeded(self, unit_id, cast_guid, spell_id)
 	end
 	-- Utility-cast swing resets (G4, our side): HoJ/Holy Wrath-style instants the
 	-- lib never resets (no explicit entry, no casting flag). Converges with the
@@ -1937,7 +2038,10 @@ function ST:maybe_drive_ranged_fallback(spell_id)
 	-- cycle (the dispatcher stamps every engine ranged START/UPDATE), and
 	-- the Retail inert stand-in plus the Forever source engine are excluded
 	-- outright (neither is a silent lib).
-	if spell_id ~= AUTO_SHOT_SPELL_ID then
+	local is_auto_shot = (spell_id == AUTO_SHOT_SPELL_ID)
+		or (spell_id == "Auto Shot")
+		or (api.GetSpellInfo and spell_id == api.GetSpellInfo(AUTO_SHOT_SPELL_ID))
+	if not is_auto_shot then
 		return
 	end
 	if self.swing_engine ~= "vendored-lib" then
@@ -2082,21 +2186,21 @@ function ST:UPDATE_SHAPESHIFT_FORM()
 	-- At present, only druids care about shapeshifting, so the code
 	-- to handle their forms goes here.
 	if self.player_class ~= "DRUID" then
-        return
-    end
+		return
+	end
 	local i = api.GetShapeshiftForm()
 
 	-- If form hasn't changed, do nothing.
 	if i == self.form_index then
 		return
 	end
-    self.form_index = i
+	self.form_index = i
 	self:determine_form_visibility_flag()
-	if i == 1 or i ==3 then
-        self.is_cat_or_bear = true
-    else
-        self.is_cat_or_bear = false
-    end
+	if i == 1 or i == 3 then
+		self.is_cat_or_bear = true
+	else
+		self.is_cat_or_bear = false
+	end
 
 	-- Set a flag to ensure a recalculation of bar elements at the next swing
 	-- in case of any snapshotting
@@ -2152,6 +2256,13 @@ function ST:determine_form_visibility_flag()
 	local i = api.GetShapeshiftForm()
 	local db = self:get_class_table()
 	self.should_show_bar_this_form = false
+	-- No class row means no per-form preferences: leave the flag false (the bar
+	-- stays hidden, exactly like every form whose toggle is off). Reached on a
+	-- form-change event and from post_init; absence is legitimate (unsupported
+	-- class / pre-AceDB caller), never a guess at a default form.
+	if type(db) ~= "table" then
+		return
+	end
 	if i == 0 and db.form_vis_normal then
 		self.should_show_bar_this_form = true
 	elseif i == 1 and db.form_vis_bear then
@@ -2218,11 +2329,11 @@ end
 -- verified; the flags then simply stay false.
 local talent_positions = {
 	WRATH = {
-		moonkin = {1, 11},
-		tree_of_life = {3, 19},
-		devastate = {3, 20},
-		imp_def_stance = {3, 16},
-		bladestorm = {1, 27},
+		moonkin = { 1, 11 },
+		tree_of_life = { 3, 19 },
+		devastate = { 3, 20 },
+		imp_def_stance = { 3, 16 },
+		bladestorm = { 1, 27 },
 	},
 }
 
@@ -2427,7 +2538,13 @@ end
 
 function ST:handle_oor_hand(hand)
 	local db = self:get_hand_table(hand)
+	if type(db) ~= "table" then
+		return
+	end
 	local frame = self:get_bar_frame(hand)
+	if frame == nil then
+		return
+	end
 	-- self:Print(db.dim_oor)
 	if db.dim_oor then
 		-- if hand == "offhand" then
@@ -2448,6 +2565,11 @@ end
 ------------------------------------------------------------------------------------
 function ST:bar_is_enabled(hand)
 	local db = self:get_hand_table(hand)
+	-- No hand row means the hand is not configured: it cannot be enabled, so it
+	-- reads exactly like a disabled bar (the HU-22 rule every frame consumer uses).
+	if type(db) ~= "table" then
+		return false
+	end
 	if hand == "mainhand" then -- always has weapon
 		if db.enabled then
 			return true
@@ -2465,6 +2587,13 @@ end
 function ST:handle_bar_visibility(hand)
 	-- Determines if the bar should be shown or not.
 	local db = self:get_hand_table(hand)
+	-- No hand row means no visibility rule to apply. Hiding is the only safe
+	-- state: a bar may only be visible because its configuration says so, and
+	-- there is no configuration here. (hide_bar is a no-op for an unbuilt hand.)
+	if type(db) ~= "table" then
+		self:hide_bar(hand)
+		return
+	end
 	if db.show_behaviour == "always" then
 		self:show_bar(hand)
 		return
@@ -2525,7 +2654,11 @@ end
 function ST:set_bar_visibilities()
 	-- Function hooked onto the rangefinder C_Timer to determine bar states
 	local db_class = self:get_class_table()
-	if not db_class.class_enabled then
+	-- Runs every 0.05 s from the range poll. With no class row there is no
+	-- configuration that could enable a bar, so every hand lands on the disabled
+	-- branch (hide). That is the same state the class_enabled=false branch paints,
+	-- not a guess and not a silent skip.
+	if type(db_class) ~= "table" or not db_class.class_enabled then
 		for hand in self:iter_hands() do
 			self:hide_bar(hand)
 		end
@@ -2655,7 +2788,7 @@ function ST:open_menu(input)
 	arg = arg:lower()
 	if arg == "" then
 		local ACD = LibStub("AceConfigDialog-3.0")
-		ACD:Open(addon_name.."_Options")
+		ACD:Open(addon_name .. "_Options")
 	elseif arg == "practice" then
 		if st.practice_ui then
 			st.practice_ui.toggle(self)
@@ -2678,24 +2811,31 @@ function ST:open_menu(input)
 			self:Print("Diagnostics are not available on this client.")
 		end
 	else
-		self:Print("Unknown argument '" .. arg .. "'. Usage: /st practice to toggle practice mode, /st design to toggle design mode, /st diag for a diagnostic report, /st to open options.")
+		self:Print("Unknown argument '" ..
+		arg ..
+		"'. Usage: /st practice to toggle practice mode, /st design to toggle design mode, /st diag for a diagnostic report, /st to open options.")
 	end
 end
 
 --=========================================================================================
 -- Funcs to apply per-class settings
 --=========================================================================================
+-- The class-dispatch helpers (aura / queue-colour / spellcast). Each runs on the
+-- matching game event, which is why each one goes through the module-presence guard:
+-- only the SELECTED class is activated, so the playing class's table may be an empty
+-- {} (explicit class_activation pick) or absent (no class token). In those states the
+-- hook simply does not exist - the event has nothing to dispatch to, never a throw.
 function ST:class_on_aura_change()
-	local c = self.player_class
-	if self[c].on_aura_change then
-		self[c].on_aura_change(self)
+	local c = self[self.player_class]
+	if type(c) == "table" and c.on_aura_change then
+		c.on_aura_change(self)
 	end
 end
 
 function ST:class_on_current_spell_cast_changed(is_cancelled)
-	local c = self.player_class
-	if self[c].on_current_spell_cast_changed then
-		self[c].on_current_spell_cast_changed(self, is_cancelled)
+	local c = self[self.player_class]
+	if type(c) == "table" and c.on_current_spell_cast_changed then
+		c.on_current_spell_cast_changed(self, is_cancelled)
 	end
 end
 
@@ -2705,9 +2845,9 @@ function ST:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
 	if unit_id ~= "player" then
 		return
 	end
-	local c = self.player_class
-	if self[c].on_spellcast_event then
-		self[c].on_spellcast_event(self, event, unit_id, cast_guid, spell_id)
+	local c = self[self.player_class]
+	if type(c) == "table" and c.on_spellcast_event then
+		c.on_spellcast_event(self, event, unit_id, cast_guid, spell_id)
 	end
 end
 

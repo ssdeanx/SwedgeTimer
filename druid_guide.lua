@@ -864,7 +864,7 @@ local function wrath_wait_for_ff(inputs)
     local cd = inputs.ff_cd_remaining
     if type(cd) ~= "number" or cd ~= cd or cd <= 0
         or cd >= st.druid_guide.FF_WAIT_SECONDS
-            - st.druid_guide.FF_MAX_DELAY_SECONDS then
+        - st.druid_guide.FF_MAX_DELAY_SECONDS then
         return false
     end
     local energy = inputs.energy
@@ -1246,7 +1246,7 @@ function st.druid_guide.evaluate(inputs, out)
                 -- S4. Omen of Clarity proc: a free Shred, ahead of the finishers.
                 action = "shred"
             elseif cp >= 5 and (type(inputs.rip_remaining) ~= "number"
-                or inputs.rip_remaining <= 0)
+                    or inputs.rip_remaining <= 0)
                 and not fight_is_young(inputs,
                     st.druid_guide.FIGHT_ELAPSED_ERA_SECONDS) then
                 -- S5. 5 CP Rip expired on a proven-old fight: Rip, never clipped
@@ -1291,7 +1291,7 @@ function st.druid_guide.evaluate(inputs, out)
                 -- (the sim's first branch).
                 action = "shred"
             elseif cp >= 5 and (type(inputs.rip_remaining) ~= "number"
-                or inputs.rip_remaining <= 0)
+                    or inputs.rip_remaining <= 0)
                 and not fight_is_young(inputs,
                     st.druid_guide.FIGHT_ELAPSED_ERA_SECONDS) then
                 -- E1. 5 CP with Rip expired on a proven-old fight: Rip, never
@@ -1333,7 +1333,7 @@ function st.druid_guide.evaluate(inputs, out)
             elseif inputs.berserk_ready == true
                 and type(inputs.tf_cd_remaining) == "number"
                 and inputs.tf_cd_remaining
-                    >= st.druid_guide.TF_CD_GATE_BERSERK_SECONDS
+                >= st.druid_guide.TF_CD_GATE_BERSERK_SECONDS
                 and type(inputs.rip_remaining) == "number"
                 and inputs.rip_remaining > 0
                 and inputs.clearcast ~= true then
@@ -1352,7 +1352,7 @@ function st.druid_guide.evaluate(inputs, out)
                 -- W4. Omen of Clarity proc: a free Shred, ahead of the finishers.
                 action = "shred"
             elseif cp >= 5 and (type(inputs.rip_remaining) ~= "number"
-                or inputs.rip_remaining <= 0) then
+                    or inputs.rip_remaining <= 0) then
                 -- W5. 5 CP with Rip expired: Rip, never clipped. No energy gate:
                 -- the guide shows the next action, the pooling shows on the
                 -- energy tick bar.
@@ -1364,7 +1364,7 @@ function st.druid_guide.evaluate(inputs, out)
                 -- pools instead (the sim's waitForFf).
                 action = "mangle"
             elseif (type(inputs.rake_remaining) ~= "number"
-                or inputs.rake_remaining <= 0)
+                    or inputs.rake_remaining <= 0)
                 and not wrath_wait_for_ff(inputs) then
                 -- W7. Rake expired, never clipped. FF imminent pools instead
                 -- (the sim's waitForFf).
@@ -1448,7 +1448,7 @@ function st.druid_guide.evaluate(inputs, out)
                     -- finishers (the APL ccShred).
                     action = "shred"
                 elseif fcp >= 5 and (type(inputs.rip_remaining) ~= "number"
-                    or inputs.rip_remaining <= 0)
+                        or inputs.rip_remaining <= 0)
                     and not fight_is_young(inputs,
                         st.druid_guide.FIGHT_ELAPSED_FOREVER_SECONDS) then
                     -- F3. 5 CP Rip expired on a proven-old fight (the APL ripNow:

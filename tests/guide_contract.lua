@@ -639,6 +639,13 @@ fST.get_class_table().nextaction_visibility_key = "always"
 local saved_mainhand = fST.mainhand
 fST.mainhand = nil
 eq(fui.should_show(fST), false, "no swing state hides the guide")
+-- Ranged-only play (the hunter at range): no mainhand cycle ever starts, so the
+-- guide must ride the ranged hand instead of staying dead.
+fST.ranged = { speed = 2.9, ends_at = 2.9, start = 0.0, is_full = false }
+eq(fui.should_show(fST), true, "a ranged cycle alone keeps the guide visible")
+fST.ranged.is_full = true
+eq(fui.should_show(fST), false, "a full ranged bar does not count as a live cycle")
+fST.ranged = nil
 fST.mainhand = saved_mainhand
 
 --=========================================================================================
@@ -1650,6 +1657,32 @@ do
         "the guide keeps no second counter bookkeeping")
     check(src:find('st.guard.label("nextaction", "Next action")', 1, true) ~= nil,
         "the guide wording stays at the call site")
+end
+
+--=========================================================================================
+-- NILSWEEP (2026-10-22): the guide's per-frame update and settings apply with no class
+-- row. No row means no guide settings: the frame hides, never a nil read out of
+-- should_show/apply_settings. The unguarded code throws, so each leg is red-first.
+--=========================================================================================
+do
+    local nk = build()
+    local nST, nUI = nk.ST, nk.st.nextaction_ui
+    nST.WARRIOR = { guide = fake_provider() }
+    nST.in_combat = true
+    nST.mainhand = { speed = 3.0, ends_at = 3.0, start = 0.0, is_full = false }
+    nUI.init(nST)
+    check(nUI.frame ~= nil, "fixture: the guide frame built")
+    nST.get_class_table = function() return nil end
+    nUI.frame:Show()
+    -- Pass the throttled compute gate: the visibility check runs on a compute tick.
+    nUI.last_compute = -1
+    local g1ok, g1err = pcall(nUI.update, nST)
+    check(g1ok, "NILSWEEP G1 update tolerates a missing class row (error: " .. tostring(g1err) .. ")")
+    eq(nUI.frame:IsShown(), false, "NILSWEEP G1 update hides the guide without a class row")
+    nUI.frame:Show()
+    local g2ok, g2err = pcall(nUI.apply_settings, nST)
+    check(g2ok, "NILSWEEP G2 apply_settings tolerates a missing class row (error: " .. tostring(g2err) .. ")")
+    eq(nUI.frame:IsShown(), false, "NILSWEEP G2 apply_settings hides the guide without a class row")
 end
 
 if failures == 0 then

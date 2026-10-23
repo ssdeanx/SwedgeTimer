@@ -58,10 +58,10 @@ local RT = st.rotation_text
 --=========================================================================================
 -- Constants
 --=========================================================================================
-local TICK = 0.1                          -- archive 16: update throttle (0.1 s)
-local DEFAULT_X, DEFAULT_Y = 0, -150      -- archive 80 / core.lua 581-582
+local TICK = 0.1                        -- archive 16: update throttle (0.1 s)
+local DEFAULT_X, DEFAULT_Y = 0, -150    -- archive 80 / core.lua 581-582
 local DEFAULT_SCALE = 1
-local COLOR_FALLBACK = {255, 209, 0, 1}   -- archive {1.0, 0.82, 0.0, 1.0} in 0-255
+local COLOR_FALLBACK = { 255, 209, 0, 1 } -- archive {1.0, 0.82, 0.0, 1.0} in 0-255
 local OUTLINE_MAP = { _none = "", outline = "OUTLINE", thick_outline = "THICKOUTLINE" }
 
 -- The keys whose change re-applies the frame: position/scale/lock and every style key
@@ -99,7 +99,7 @@ function RT.format_value(key, fmt, names, descs)
     elseif fmt == "both" then
         return desc ~= "" and (name .. "  -  " .. desc) or name
     end
-    return name   -- "key" (and any unknown format value): the display name alone
+    return name -- "key" (and any unknown format value): the display name alone
 end
 
 -- The label's anchor point for an alignment value (archive 108-112).
@@ -158,10 +158,10 @@ function RT.should_show_state(s)
         return false
     end
     if s.locked == false then
-        return true    -- unlocked: keep it visible so it can be positioned (guide rule)
+        return true -- unlocked: keep it visible so it can be positioned (guide rule)
     end
     if s.practice_active then
-        return true    -- Practice Mode always shows it (archive rule)
+        return true -- Practice Mode always shows it (archive rule)
     end
     if s.visibility_key == "in_combat" then
         return s.in_combat == true
@@ -484,6 +484,16 @@ end
 function RT.on_update(self, elapsed)
     self = self or ST
     if RT.inert or not self.db then
+        return
+    end
+    -- Per-frame entry: the layout poll and apply_settings below read the class
+    -- row. No row means no label settings, so a live label hides (the state a
+    -- switched-off label paints) instead of throwing out of the driver tick.
+    local class_db = self.get_class_table and self:get_class_table() or nil
+    if type(class_db) ~= "table" then
+        if RT.frame and RT.frame:IsShown() then
+            RT.frame:Hide()
+        end
         return
     end
     RT.update_counter = RT.update_counter + (elapsed or 0.016)

@@ -3,6 +3,7 @@
 ## [2.1.1]
 
 ### Added
+
 - One universal build for every supported client family, selected by per-flavor TOC dispatch:
   Classic Era / Season of Discovery (11509), TBC Anniversary (20506), WotLK Titanforge (38002),
   WoW Forever (16001) and Retail (120100, 120105).
@@ -75,12 +76,14 @@
   Twist-of-Light, Shifting Power, Farseer haste).
 
 ### Changed
+
 - All timing now runs on a single aligned high-precision clock behind the compatibility
   layer; every cross-client API access goes through one compat module.
 - Spell, aura, cast, cooldown and haste reads are normalised across the classic and
   Mainline-code client families.
 
 ### Fixed
+
 - Warrior: the rage-vs-queued-cost colouring never ran because its event was never
   registered; Blood Surge glow could churn and double-release its pooled frame.
 - Casting within the first seconds after a reload could error on the spellcast, current-cast,
@@ -114,8 +117,35 @@
   `IsSpellInRange` / `CheckInteractDistance` reads no longer throw when the client dropped
   them, and the range poll has a dead-man that disables range checking with one notice
   instead of erroring every interval (`tests/lrc_guard_state.lua` pins both).
+- TBC Anniversary Hunter Swing Engine: `LibClassicSwingTimerAPI` expansion level detection
+  now correctly detects TBC Anniversary (`LE_EXPANSION_LEVEL_CURRENT == nil` in Lua UI space;
+  `GetClassicExpansionLevel() <= LE_EXPANSION_BURNING_CRUSADE` / `WOW_PROJECT_ID == 5`),
+  properly initializing the `ranged_swing` and `next_melee_spells` tables.
+- Auto Shot & Steady Shot Interaction: Added Steady Shot ranks (34120, 25258) to
+  `noreset_swing_spells` in `LibClassicSwingTimerAPI` so Steady Shot casts never reset the
+  ranged cycle. Steady Shot can safely land within the 0.5 s Auto Shot cast window (red zone)
+  without clipping Auto Shot, provided it finishes before the auto shot releases.
+- Combat Log Noise Reduction: Added source/dest GUID filtering to `ST:COMBAT_LOG_EVENT_UNFILTERED`
+  and `LibClassicSwingTimerAPI:COMBAT_LOG_EVENT_UNFILTERED` to only process events involving the
+  player or current target/enemy, filtering out >95% of extraneous raid/combat noise while
+  safely preserving incoming PARRY haste on the player.
+- Hunter Bar Defaults & Visibility: Set Hunter `mainhand`, `offhand`, and `ranged` bar presets to
+  `show_condition = "either"` and `require_in_range = false`, preventing swing bars from hiding
+  or freezing at 1px when out of range or when rangefinder checks lag.
+- Clock Drift & Progress Skew: Aligned CLEU event timestamps with the monotonic
+  `CanonicalGetTime()` clock domain (`_cleuClockOffset`) and clamped swing duration and progress
+  calculations in `bars.lua` and `classes/hunter.lua` so `ends_at` strictly leads `start`.
+- Code Quality & Nil Safety: Guarded all nil-check warnings in `bars.lua` (`set_gcd_marker_positions`,
+  `on_bar_active`, `on_bar_inactive`, `set_gcd_width`, `set_deadzone_width`, `set_bar_texts`,
+  `set_bar_color`) and `main.lua` (`ST:show_bar`), fixed `offSpeed` global variable leak in
+  `LibClassicSwingTimerAPI.lua`, fixed `ui.practice_class_order` nil guard and `ui.toggle_timeline`
+- Cross-Class Bar Audit & Ranged Presets: Audited bar enable flags, weapon probes, and visibility gating
+  across Warrior, Paladin, Rogue, Shaman, and Druid. Aligned Rogue and Warrior ranged bar presets to
+  `require_in_range = false` (matching Hunter and `ST.bar_defaults`), ensuring manually enabled ranged
+  bars are never unexpectedly suppressed by range-checking failures or melee proximity.
 
 ### Guidance, HUD and design mode
+
 - Cooldown HUD (ported from the archived build): a slot row with cooldown swipes, GCD dims,
   desaturate-on-cooldown, mana/out-of-range tints, proc glow and a trinket on-use/proc/ICD
   state machine; a per-class slot registry lets every class plug in its own abilities.
@@ -218,7 +248,7 @@
   `inputs_unknown` contract) with `tests/rogue_guide_state.lua` (206 checks).
 - Cues + provider: proc-aware 2 s energy-tick predictor (Combat-Potency 15-energy
   grants never re-anchor; ambiguous tick hides, never guesses), energy-tick spark
-  + pooling tint, Era-only post-mainhand-swing 0.1–0.2 s Sinister Strike window
+  - pooling tint, Era-only post-mainhand-swing 0.1–0.2 s Sinister Strike window
   (sword mainhand only; never on TBC+), weapon-swap band ("swap: GCD + swing
   reset"), mainhand/offhand poison reminder (presence only — charges UNCONFIRMED,
   unrendered), live HUD slots (SnD/Rupture/EA/AR/BF/Tea/Kick) + POOL/NOW guide
@@ -275,6 +305,7 @@
   UNCONFIRMED in-client; see bench/live_test_script_2026-10-19.md.
 
 ### Final hardening (2026-10-19, verified offline, UNCONFIRMED in-client)
+
 - TBC-name / Era-id spell resolution across all classes with both-directions pins; compat hardened (C_SpellBook probes, CLEU mainline gate, shapeshift fallback); missing-class stubs for Monk/Demon Hunter/Evoker on Retail.
 - Hunter melee-weave prog (distance band + LibRangeCheck drive, opt-in toggle) and trap tracking with Clever Traps handling.
 - Usable-only trinket HUD (passive/unknown hide); running-GCD swipe on rogue; Claw HUD slot on druid; paladin guide→HUD slot mirror; warrior Sunder/Rend/stance-dance/hamstring rules.
@@ -283,6 +314,7 @@
 - Release readiness audited (bench/release_audit_2026-10-19.md): versions 2.1.1, TOC coverage, harness 38/0, luacheck 2/0.
 
 ### Practice/designer wave (2026-10-19; closes proctor G5)
+
 - Top-level Practice page (`ST.opts_table.args.practice`, order 1.46): Start/Stop toggle on the same `st.practice_ui.toggle` session as `/st practice` and the class-panel buttons; Simulation rows (weapon-speed override, AW-macro pot/SoB, DST, queue window, BL delay) with live `practice_ui` consumers; rotation/timeline status text; feedback mirrors; desc enumerates all six drills (verified offline, UNCONFIRMED in-client; `bench/paladin_practice_designer_2026-10-19.md`, `tests/paladin_state.lua` page pins).
 - Paladin drill deltas: twist sim + AW-combo drill (`paladin_twist`, `paladin_aw_combo`) on the shared session with start seeding (dst/bl/queue, nil = current defaults) and the archive-rule AW macro (pot sets the buff directly, SoB casts the full seal when the GCD is free) (verified offline, UNCONFIRMED in-client; `tests/paladin_state.lua` 520/520, `tests/practice_state.lua` registry pins).
 - Warrior Execute drill: `warrior_execute` (20% HP threshold, BANK entry-rage bands S..F) grades live Execute-range entries with no sim of its own, plus the post-fight WarriorExecuteReport frame (verified offline, UNCONFIRMED in-client; `tests/warrior_state.lua` W6 pins, `tests/practice_state.lua` execute_phase pins; H6 ruling: report/live-log design stands, copy describes it honestly).
@@ -904,6 +936,7 @@ only thing that can confirm the in-client behaviour.
   in `bench/live_test_script_2026-10-19.md` are the owner acceptance pass.
 
 ### Operator test-session wave (2026-10-21, verified offline, UNCONFIRMED in-client)
+
 Found by the operator's first in-client session on Classic Era 1.15.9; the range fix and the
 design-mode work are verified offline, the in-client confirmation is still owed.
 
@@ -948,32 +981,36 @@ design-mode work are verified offline, the in-client confirmation is still owed.
 ## [2.0.8] -- 2023-05-09
 
 ### Added
+
 - Swing timers can now be enabled or disabled depending on which Dual-Specialization group the player is using.
 - Further to the above, Warriors now have the option to disable the swing timer when in Arms or Protection spec.
 
 ### Fixed
+
 - Fixed a bug where indeterminate ordering of event callbacks was makinng the weapon checks for offhand and ranged lag behind
   equipment changes. This will fix a bug for warriors where ElvUI being loaded causes equipping a shield to break the offhand timer.
-- Fixed an issue where an outdated version of LibCustomGlow was being used (if any other addon loaded by the user included the 
+- Fixed an issue where an outdated version of LibCustomGlow was being used (if any other addon loaded by the user included the
   more up to date version of this library, the bug would not have occurred).
 
 ## [2.0.7] -- 2023-01-19
 
 ### Changed
+
 - The addon has been confirmed to function properly in 3.4.1 and the Interface tag updated to reflect this.
 
 ## [2.0.6] - 2022-12-25
 
 ### Fixed
-- The LibRangeCheck-2.0 library takes a finite amount of time on first client load to gather the information it needs to 
+
+- The LibRangeCheck-2.0 library takes a finite amount of time on first client load to gather the information it needs to
   function properly. Previously, the code to show and hide bars was blocked until the range checking
   was functional. Now show/hide checks will be run immediately.
 - Added some additional cross-checks to ensure bars show and hide when necessary.
 
-
 ## [2.0.5] - 2022-12-24
 
 ### Fixed
+
 - Fixed an issue with warrior shields where the offhand timer bar initialisation was
   being broken by a zero attack speed. This might fix a bug warriors have experiencing
   with the offhand timer bar breaking during swaps, but still unclear.
@@ -981,32 +1018,38 @@ design-mode work are verified offline, the in-client confirmation is still owed.
 
 ## [2.0.4] - 2022-11-24
 
-### Added 
+### Added
+
 - Seal of Justice custom timer bar color added for Paladins.
 - Druids can now enable custom bar visibilities based on their current form.
 - Druids can now enable custom bar colours for travel and flight form.
 
 ### Fixed
+
 - Druid forms now properly respect the adaptive form index for Moonkin and Tree form
 depending on if Moonkin and Tree forms are currently talented.
 
 ## [2.0.3] - 2022-11-15
 
 ### Fixed
+
 - Addon now uses an updated version of LibClassicSwingTimerAPI, which fixes some lua errors around C_Timers.
 
 ## [2.0.2] - 2022-10-11
 
 ### Added
+
 - Warrior Bloodsurge glow proc options added
 - Bar Positioning menus now also lets the user change bar dimensions there
 
 ### Fixed
+
 - Typo in GCD marker settings fixed
 
 ## [2.0.1] - 2202-10-08
 
 ### Fixed
+
 - Removed an eroneous debug print when druids cast Maul.
 - Fixed typo in the settings UI's info panel.
 
@@ -1016,6 +1059,7 @@ The TBC Ret Paladin version of the Addon has been re-written from the ground up 
 every class in WotLK.
 
 ### Added
+
 - Support for mainhand/offhand/ranged swing timers.
 - Ships tailored and customisable timer configurations for every class in WotLK.
 - Some classes (Druid/Hunter/Paladin/Warrior) ship with specific aura/proc monitors that are
@@ -1027,10 +1071,12 @@ every class in WotLK.
   the end of the swing timer bar, or to the progress bar itself, moving with the timer progress.
 
 ### Changed
+
 - SwedgeTimer no longer implements its own Swing Timer engine, it now uses LibClassicSwingTimerAPI, a project by Ralgathor (with contributions from Swedge and Buds) that produces a standardised swing timer API. It takes account of the many different edge cases the WoW swing timer has for each class.
 - Timer border and background customisation has been improved.
 - Improved timer positioning within the UI powered by LibWindow-1.1.
 
 ### Removed
+
 - With the demise of Seal Twisting, some of the Ret Paladin functionality to help with seal
   twisting has been removed. Much of that functionality is generally useful, and has been adapted into the rest of the addon.

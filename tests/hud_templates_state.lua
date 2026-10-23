@@ -123,7 +123,17 @@ local CLASSES = {
     { pretty = "Shaman", lower = "shaman", token = "SHAMAN",
       templates = { "twist_core", "full_weave", "minimal" },
       slots = { "stormstrike", "flameshock", "weave", "firenova",
-          "earthshock", "twist", "trinket1", "trinket2" },
+          "earthshock", "twist", "lightningshield", "searing", "coe",
+          "trinket1", "trinket2" },
+      -- The three maintain mirrors ship OFF and stay off in every template
+      -- (no template pick surfaces upkeep icons unasked; the full-set promise
+      -- holds for all 11 slots).
+      ship_false = { lightningshield = true, searing = true, coe = true },
+      template_values = {
+          twist_core = { lightningshield = false, searing = false, coe = false },
+          full_weave = { lightningshield = false, searing = false, coe = false },
+          minimal = { lightningshield = false, searing = false, coe = false },
+      },
       geometry = {
           twist_core = { size = 36, spacing = 2, orientation = "horizontal", match = false },
           full_weave = { size = 36, spacing = 2, orientation = "horizontal", match = true },

@@ -1846,10 +1846,10 @@ eq(gathered.synced_duration, nil, "gather: an absent synced duration stays nil")
 eq(gathered.auto_repeat_active, true, "gather: auto_repeat_active")
 near(gathered.latency, 0.999, 1e-9,
     "gather: the calibrated latency wins when usable (never the twist calibration)")
-near(gathered.hidden_window_start, 100.501, 1e-9,
+near(gathered.hidden_window_start, 101.5, 1e-9,
     "gather: the hidden window is recomputed from the live cycle")
-near(gathered.hidden_window_duration, 1.499, 1e-9,
-    "gather: the window width is the base cast window plus the compensated latency")
+near(gathered.hidden_window_duration, 0.5, 1e-9,
+    "gather: the window width is the fixed 0.5 s cast window (latency never added)")
 eq(gathered.raptor_strike_queued, true, "gather: raptor_strike_queued")
 eq(gathered.steady_shot_queued, false, "gather: steady_shot_queued")
 eq(gathered.casting, true, "gather: the live cast state")
@@ -2041,10 +2041,10 @@ ST.latency = { world_ms = 50 }
 ST.ranged.hidden_window_start = 100.4
 ST.ranged.hidden_window_duration = 0.5
 local stale_gather = ST.HUNTER.guide.gather(ST, gathered_target)
-near(stale_gather.hidden_window_start, 101.45, 1e-9,
+near(stale_gather.hidden_window_start, 101.5, 1e-9,
     "gather: a stale cache loses to the live-cycle recompute")
-near(stale_gather.hidden_window_duration, 0.55, 1e-9,
-    "gather: the recomputed width follows the live cycle")
+near(stale_gather.hidden_window_duration, 0.5, 1e-9,
+    "gather: the recomputed width is the fixed cast window")
 eq(ST.ranged.hidden_window_start, nil,
     "gather: the stale cache is cleared on the ranged state")
 eq(ST.ranged.hidden_window_duration, nil,
@@ -2056,9 +2056,9 @@ eq(ST.ranged.hidden_window_duration, nil,
 ST.ranged.hidden_window_start = 99.7
 ST.ranged.hidden_window_duration = 0.5
 local stale_inside_gather = ST.HUNTER.guide.gather(ST, gathered_target)
-near(stale_inside_gather.hidden_window_start, 101.45, 1e-9,
+near(stale_inside_gather.hidden_window_start, 101.5, 1e-9,
     "gather: an inside-but-stale cache loses to the live-cycle recompute")
-near(stale_inside_gather.hidden_window_duration, 0.55, 1e-9,
+near(stale_inside_gather.hidden_window_duration, 0.5, 1e-9,
     "gather: the recompute wins over an inside-but-stale cache")
 eq(ST.ranged.hidden_window_start, nil,
     "gather: the inside-but-stale cache is cleared on the ranged state")
@@ -2117,7 +2117,7 @@ eq(gathered2.lnl_ready, nil, "the LnL window stays nil on the reused table")
 eq(gathered2.serpent_known, nil, "the Serpent known stays nil on the reused table")
 eq(gathered2.serpent_active, nil, "the Serpent active stays nil on the reused table")
 eq(gathered2.sniper_range_buff_active, nil, "the Sniper buff stays nil on the reused table")
-near(gathered2.hidden_window_start, 51.45, 1e-9,
+near(gathered2.hidden_window_start, 51.5, 1e-9,
     "the recomputed window follows the new cycle")
 
 -- The GCD echo is filtered (1.51 s boundary) and a real cooldown reads through.
@@ -2408,9 +2408,10 @@ do
 
     -- The hidden window holds the weave prompt end to end (rule 2 on non-Wrath).
     -- Only a current-cycle cache counts, so the tick advances into the live
-    -- cycle's window ([101.45, 102] for the [99, 102] cycle) instead of injecting
-    -- a synthetic off-cycle cache.
-    tbc.advance(1.1)
+    -- cycle's fixed 0.5 s window ([101.5, 102] for the [99, 102] cycle) instead
+    -- of injecting a synthetic off-cycle cache. 1.2 s (not 1.1) keeps the
+    -- floating-point clock clear of the inclusive lower bound.
+    tbc.advance(1.2)
     ttick()
     eq(tui.frame.hold.fade.target, 1, "TBC tick: the window shows the hold overlay")
     eq(tui.frame.hold.text.text, "HOLD", "TBC tick: the window reads HOLD")
@@ -3031,8 +3032,9 @@ do
     eq(fui.frame.shown, true, "Forever tick: the frame shows in combat")
     -- The window still holds there (conservative, pinned at the pure level too).
     -- Only a current-cycle cache counts, so the tick advances into the live
-    -- cycle's window instead of injecting a synthetic off-cycle cache.
-    fw.advance(1.3)
+    -- cycle's fixed 0.5 s window instead of injecting a synthetic off-cycle
+    -- cache. 1.4 s keeps the floating-point clock clear of the lower bound.
+    fw.advance(1.4)
     ftick()
     eq(fui.frame.hold.fade.target, 1, "Forever tick: the window shows the hold overlay")
     eq(fui.frame.hold.text.text, "HOLD", "Forever tick: the window reads HOLD")

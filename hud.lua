@@ -94,25 +94,25 @@ local HUD = st.hud
 --=========================================================================================
 -- Constants
 --=========================================================================================
-local TICK = 0.05                 -- archive 36: per-frame update throttle (0.05 s)
-local WARN_SECONDS = 3            -- archive 37: red text under this many seconds
-local GCD_TEXT_HIDE = 2           -- archive 38: swipes shorter than this show no text
-local AURA_SCAN_LIMIT = 40        -- archive 164: buff scan cap
-local DEFAULT_ICON_SIZE = 36      -- archive 237
+local TICK = 0.05            -- archive 36: per-frame update throttle (0.05 s)
+local WARN_SECONDS = 3       -- archive 37: red text under this many seconds
+local GCD_TEXT_HIDE = 2      -- archive 38: swipes shorter than this show no text
+local AURA_SCAN_LIMIT = 40   -- archive 164: buff scan cap
+local DEFAULT_ICON_SIZE = 36 -- archive 237
 local DEFAULT_X, DEFAULT_Y = 0, -236
 local DEFAULT_SPACING = 2
 local DEFAULT_SCALE = 1
 local GLOW_KEY = "SwedgeTimerHud"
-local GLOW_LINES = 8              -- same parameters as the guide's judgement glow
+local GLOW_LINES = 8 -- same parameters as the guide's judgement glow
 local GLOW_FREQUENCY = 0.25
 local GLOW_LENGTH = 10
 local GLOW_THICKNESS = 1
 local TRINKET_SLOTS = { 13, 14 }
 -- The WA's empty-slot icons (archive 35).
 local TRINKET_FALLBACK_ICON = { [13] = 133450, [14] = 133448 }
-local COLOR_NO_MANA = { 0.50, 0.50, 1.00 }        -- archive 56
-local COLOR_OUT_OF_RANGE = { 1.00, 0.25, 0.25 }   -- archive 57
-local COLOR_WHITE = { 1, 1, 1 }                   -- archive 58
+local COLOR_NO_MANA = { 0.50, 0.50, 1.00 }      -- archive 56
+local COLOR_OUT_OF_RANGE = { 1.00, 0.25, 0.25 } -- archive 57
+local COLOR_WHITE = { 1, 1, 1 }                 -- archive 58
 -- Text colours are stored 0-255 (the codebase's class-colour convention, so the
 -- standard color_getter / color_setter options work); these are the archive defaults
 -- (archive 567-568) converted up.
@@ -143,53 +143,53 @@ local unit_guid = rawget(_G, "UnitGUID")
 -- Quagmire caveat shows Anniversary drift) - never invent a length; an item with
 -- no confirmed length ships with no `icd` and loses only the reversed swipe.
 local TRINKET_DATA = {
-    [28830] = { buff = 34775, icd = 20 },   -- Dragonspine Trophy
-    [29383] = { buff = 35166 },             -- Bloodlust Brooch
-    [19343] = { buff = 23733 },             -- Scrolls of Blinding Light
-    [23570] = { buff = 29602 },             -- Jom Gabbar
-    [38290] = { buff = 51953 },             -- Dark Iron Smoking Pipe
-    [38289] = { buff = 51952 },             -- Coren's Lucky Coin
-    [38288] = { buff = 51954 },             -- Direbrew Hops
-    [38287] = { buff = 51955 },             -- Empty Mug of Direbrew
-    [29387] = { buff = 35169 },             -- Gnomeregan Auto-Blocker 600
-    [29376] = { buff = 35165 },             -- Essence of the Martyr
-    [28789] = { buff = 34747 },             -- Eye of Magtheridon
-    [29370] = { buff = 35163 },             -- Icon of the Silver Crescent
-    [28034] = { buff = 33649, icd = 50 },   -- Hourglass of the Unraveller
-    [27891] = { buff = 33479 },             -- Adamantine Figurine
-    [34473] = { buff = 45058, icd = 30 },   -- Commendation of Kael'thas
-    [34472] = { buff = 45053, icd = 45 },   -- Shard of Contempt
-    [32534] = { buff = 40538 },             -- Brooch of the Immortal King
-    [30841] = { buff = 37879 },             -- Lower City Prayerbook
-    [28727] = { buff = 29601 },             -- Pendant of the Violet Eye
-    [28288] = { buff = 33807 },             -- Abacus of Violent Odds
-    [28590] = { buff = 38332 },             -- Ribbon of Sacrifice
-    [28528] = { buff = 34519 },             -- Moroes' Lucky Pocket Watch
-    [28418] = { buff = 34321, icd = 45 },   -- Shiffar's Nexus-Horn
-    [28370] = { buff = 34210, icd = 50 },   -- Bangle of Endless Blessings
-    [28190] = { buff = 33370, icd = 45 },   -- Scarab of the Infinite Cycle
-    [27683] = { buff = 33370, icd = 45 },   -- Quagmirran's Eye
-    [35702] = { buff = 46784 },             -- Figurine - Shadowsong Panther
-    [35700] = { buff = 46783 },             -- Figurine - Crimson Serpent
-    [35693] = { buff = 46780 },             -- Figurine - Empyrean Tortoise
-    [30627] = { buff = 42084, icd = 45 },   -- Tsunami Talisman
-    [30626] = { buff = 38348, icd = 45 },   -- Sextant of Unstable Currents
-    [33831] = { buff = 43716 },             -- Berserker's Call
-    [33829] = { buff = 43712 },             -- Hex Shrunken Head
-    [33828] = { buff = 43710 },             -- Tome of Diabolic Remedy
-    [32505] = { buff = 40477 },             -- Madness of the Betrayer
-    [32501] = { buff = 40464 },             -- Shadowmoon Insignia
-    [32496] = { buff = 37656, icd = 50 },   -- Memento of Tyrande
-    [32483] = { buff = 40396 },             -- The Skull of Gul'dan
-    [34427] = { buff = 45040, icd = 45 },   -- Blackened Naaru Sliver
-    [32486] = { buff = 40452, icd = 10 },   -- Ashtongue Talisman of Equilibrium
-    [30450] = { buff = 37174, icd = 30 },   -- Warp-Spring Coil
-    [30447] = { buff = 37198, icd = 45 },   -- Tome of Fiery Redemption
-    [30663] = { buff = 37243, icd = 40 },   -- Fathom-Brooch of the Tidewalker
-    [30619] = { buff = 38324, icd = 15 },   -- Fel Reaver's Piston
-    [34470] = { buff = 45055, icd = 15 },   -- Timbal's Focusing Crystal
-    [32770] = { buff = 41261, icd = 10 },   -- Skyguard Silver Cross
-    [32771] = { buff = 41263, icd = 10 },   -- Airman's Ribbon of Gallantry
+    [28830] = { buff = 34775, icd = 20 }, -- Dragonspine Trophy
+    [29383] = { buff = 35166 },           -- Bloodlust Brooch
+    [19343] = { buff = 23733 },           -- Scrolls of Blinding Light
+    [23570] = { buff = 29602 },           -- Jom Gabbar
+    [38290] = { buff = 51953 },           -- Dark Iron Smoking Pipe
+    [38289] = { buff = 51952 },           -- Coren's Lucky Coin
+    [38288] = { buff = 51954 },           -- Direbrew Hops
+    [38287] = { buff = 51955 },           -- Empty Mug of Direbrew
+    [29387] = { buff = 35169 },           -- Gnomeregan Auto-Blocker 600
+    [29376] = { buff = 35165 },           -- Essence of the Martyr
+    [28789] = { buff = 34747 },           -- Eye of Magtheridon
+    [29370] = { buff = 35163 },           -- Icon of the Silver Crescent
+    [28034] = { buff = 33649, icd = 50 }, -- Hourglass of the Unraveller
+    [27891] = { buff = 33479 },           -- Adamantine Figurine
+    [34473] = { buff = 45058, icd = 30 }, -- Commendation of Kael'thas
+    [34472] = { buff = 45053, icd = 45 }, -- Shard of Contempt
+    [32534] = { buff = 40538 },           -- Brooch of the Immortal King
+    [30841] = { buff = 37879 },           -- Lower City Prayerbook
+    [28727] = { buff = 29601 },           -- Pendant of the Violet Eye
+    [28288] = { buff = 33807 },           -- Abacus of Violent Odds
+    [28590] = { buff = 38332 },           -- Ribbon of Sacrifice
+    [28528] = { buff = 34519 },           -- Moroes' Lucky Pocket Watch
+    [28418] = { buff = 34321, icd = 45 }, -- Shiffar's Nexus-Horn
+    [28370] = { buff = 34210, icd = 50 }, -- Bangle of Endless Blessings
+    [28190] = { buff = 33370, icd = 45 }, -- Scarab of the Infinite Cycle
+    [27683] = { buff = 33370, icd = 45 }, -- Quagmirran's Eye
+    [35702] = { buff = 46784 },           -- Figurine - Shadowsong Panther
+    [35700] = { buff = 46783 },           -- Figurine - Crimson Serpent
+    [35693] = { buff = 46780 },           -- Figurine - Empyrean Tortoise
+    [30627] = { buff = 42084, icd = 45 }, -- Tsunami Talisman
+    [30626] = { buff = 38348, icd = 45 }, -- Sextant of Unstable Currents
+    [33831] = { buff = 43716 },           -- Berserker's Call
+    [33829] = { buff = 43712 },           -- Hex Shrunken Head
+    [33828] = { buff = 43710 },           -- Tome of Diabolic Remedy
+    [32505] = { buff = 40477 },           -- Madness of the Betrayer
+    [32501] = { buff = 40464 },           -- Shadowmoon Insignia
+    [32496] = { buff = 37656, icd = 50 }, -- Memento of Tyrande
+    [32483] = { buff = 40396 },           -- The Skull of Gul'dan
+    [34427] = { buff = 45040, icd = 45 }, -- Blackened Naaru Sliver
+    [32486] = { buff = 40452, icd = 10 }, -- Ashtongue Talisman of Equilibrium
+    [30450] = { buff = 37174, icd = 30 }, -- Warp-Spring Coil
+    [30447] = { buff = 37198, icd = 45 }, -- Tome of Fiery Redemption
+    [30663] = { buff = 37243, icd = 40 }, -- Fathom-Brooch of the Tidewalker
+    [30619] = { buff = 38324, icd = 15 }, -- Fel Reaver's Piston
+    [34470] = { buff = 45055, icd = 15 }, -- Timbal's Focusing Crystal
+    [32770] = { buff = 41261, icd = 10 }, -- Skyguard Silver Cross
+    [32771] = { buff = 41263, icd = 10 }, -- Airman's Ribbon of Gallantry
 }
 
 --=========================================================================================
@@ -222,8 +222,8 @@ local function call_hud_provider(mod, self, slot, now)
     return mod.get_hud_state(self, slot, now)
 end
 
-local TRINKET_STATE = {}   -- one reused state table for the trinket machine
-local PREVIEW_STATE = {}   -- one reused state table for the design-mode sample
+local TRINKET_STATE = {} -- one reused state table for the trinket machine
+local PREVIEW_STATE = {} -- one reused state table for the design-mode sample
 
 --=========================================================================================
 -- Small helpers
@@ -501,12 +501,12 @@ local function create_icon(parent, slot, index, db)
     f.text:SetShadowOffset(0, 0)
     f.text:SetText("")
 
-    f.cd_key = nil        -- what the swipe currently shows, to call SetCooldown once
+    f.cd_key = nil -- what the swipe currently shows, to call SetCooldown once
     f.glowing = false
     f.desaturated = false
     f.tint = COLOR_WHITE
     f.text_hidden = false
-    f.text_value = nil    -- the quantised value behind the current text
+    f.text_value = nil -- the quantised value behind the current text
     f.text_color = nil
     -- Provider liveness baseline: the first tick observes without reflowing (so a
     -- live row never shifts on boot); a later flip reflows the row (see reflow_row).
@@ -631,7 +631,9 @@ function HUD.build_event_frame()
             if HUD.cleu_register_notified ~= true then
                 HUD.cleu_register_notified = true
                 if st.utils and type(st.utils.print_msg) == "function" then
-                    pcall(st.utils.print_msg, "SwedgeTimer: combat-log tracking for trinket internal cooldowns is unavailable; on-use cooldowns and proc buffs still work. (" .. tostring(err) .. ")")
+                    pcall(st.utils.print_msg,
+                        "SwedgeTimer: combat-log tracking for trinket internal cooldowns is unavailable; on-use cooldowns and proc buffs still work. (" ..
+                        tostring(err) .. ")")
                 end
             end
         end
@@ -660,6 +662,13 @@ function HUD.init(self)
     if HUD.frame or HUD.inert then
         return
     end
+    -- Boot entry from a class post_init: without a class row there is no HUD
+    -- configuration to create against. Do not mark the module inert (the row is
+    -- a profile state, not a class fact) - the per-tick class hook retries.
+    local class_db = self.get_class_table and self:get_class_table() or nil
+    if type(class_db) ~= "table" then
+        return
+    end
     HUD.owner = self
     HUD.ensure_created(self)
 end
@@ -685,6 +694,13 @@ function HUD.on_bar_update(self, hand)
     -- Called from a class module's per-frame hook: retries a creation deferred by
     -- lockdown, and picks layout changes up between the driver's ticks. The row
     -- itself is driven by HUD.on_update on its own driver frame.
+    local class_db = self and self.get_class_table and self:get_class_table() or nil
+    -- No class row means no HUD settings to build or lay out from: stay hidden
+    -- (the same state a switched-off HUD paints) instead of creating a frame whose
+    -- first apply_settings read would throw.
+    if type(class_db) ~= "table" then
+        return
+    end
     if not HUD.frame then
         HUD.ensure_created(self)
         return
@@ -1333,6 +1349,16 @@ function HUD.on_update(self, elapsed)
     self = self or ST
     local frame = HUD.frame
     if not frame then
+        return
+    end
+    -- Per-frame entry: every branch below reads the class row (layout poll,
+    -- visibility, paint). With no row there is nothing to lay out, so hide the
+    -- row instead of throwing out of the driver tick.
+    local class_db = self.get_class_table and self:get_class_table() or nil
+    if type(class_db) ~= "table" then
+        if frame:IsShown() then
+            frame:Hide()
+        end
         return
     end
     HUD.update_counter = HUD.update_counter + (elapsed or 0.016)

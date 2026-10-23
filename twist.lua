@@ -192,7 +192,7 @@ end
 -- swing (unless they stopattack). Inside the twist window the warning clears, as in
 -- the archive, because it is already go-time. All inputs are plain numbers.
 function st.twist.is_twist_impossible(enabled, remaining_seconds, gcd_seconds, lag_ms,
-                                       lag_multiplier, lag_offset_ms, window_seconds)
+                                      lag_multiplier, lag_offset_ms, window_seconds)
     if not enabled then return false end
     if remaining_seconds < 0 then remaining_seconds = 0 end
     local window = window_seconds or st.twist.BASE_WINDOW_SECONDS

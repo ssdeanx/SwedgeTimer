@@ -527,6 +527,81 @@ do
         "the class master toggle still writes class_enabled inline (untouched)")
 end
 
+--=========================================================================================
+-- 6. per-hand frame-path hardening (audit-core 2026-10-22: the GCD_OVER class)
+--=========================================================================================
+-- The reachable unbuilt-hand paths were already guarded (HU-22: bar_is_built /
+-- bar_frame nil checks). These legs pin the hardening on top: the main.lua
+-- getters never index through nil (bars.lua absent in some offline sandboxes),
+-- bar_is_built reads the full frame chain (one predicate for every consumer),
+-- and every per-hand frame touch degrades to a silent no-op when its frame is
+-- absent. Each leg fails when its guard is neutered (M1-M4, /tmp/opencode copies).
+do
+    local b = boot({ pre_init = function(bb)
+        bb.ST.HUNTER.defaults.offhand.enabled = false
+        bb.sb.oh_speed = 0 -- weaponless: the hand stays unbuilt AND disabled
+    end })
+    local ST = b.ST
+    -- (a) main.lua getters on an unknown hand read nil, never throw.
+    eq(ST:get_anchor_frame("nope"), nil, "hardening: unknown hand has no anchor frame")
+    eq(ST:get_hiding_anchor_frame("nope"), nil, "hardening: unknown hand has no hiding anchor")
+    eq(ST:get_bar_frame("nope"), nil, "hardening: unknown hand has no bar frame")
+    eq(ST:get_visuals_frame("nope"), nil, "hardening: unknown hand has no visuals frame")
+    -- (b) a partial chain (anchor without children) reads unbuilt.
+    local anchor = ST:get_anchor_frame("mainhand")
+    check(anchor ~= nil, "fixture: the mainhand anchor is built")
+    ST.mainhand.anchor_frame = { hiding_anchor_frame = {} }
+    check(not ST:bar_is_built("mainhand"), "hardening: anchor-without-children reads unbuilt")
+    -- (c) bar_is_built-only consumers stay silent on the partial chain.
+    check(pcall(ST.configure_draw_layers, ST, "mainhand"),
+        "hardening: configure_draw_layers on a partial chain is pcall-clean")
+    check(pcall(ST.set_gcd_marker_positions, ST, "mainhand"),
+        "hardening: set_gcd_marker_positions on a partial chain is pcall-clean")
+    check(pcall(ST.on_bar_active, ST, "mainhand"),
+        "hardening: on_bar_active on a partial chain is pcall-clean")
+    ST.mainhand.anchor_frame = anchor
+    check(ST:bar_is_built("mainhand"), "fixture: the restored mainhand reads built again")
+end
+
+do
+    local b = boot({ pre_init = function(bb)
+        bb.ST.HUNTER.defaults.offhand.enabled = false
+        bb.sb.oh_speed = 0
+    end })
+    local ST = b.ST
+    -- (d) GCD_OVER with the bar_is_built seam absent stays silent on unbuilt hands.
+    local real_is_built = ST.bar_is_built
+    ST.bar_is_built = nil
+    check(pcall(ST.GCD_OVER, ST), "hardening: GCD_OVER with no bar_is_built is pcall-clean")
+    ST.bar_is_built = real_is_built
+    -- (e) handle_oor_hand on a frameless hand and on an unknown hand stays silent.
+    check(pcall(ST.handle_oor_hand, ST, "offhand"),
+        "hardening: handle_oor_hand on a frameless hand is pcall-clean")
+    check(pcall(ST.handle_oor_hand, ST, "nope"),
+        "hardening: handle_oor_hand on an unknown hand is pcall-clean")
+end
+
+do
+    local b = boot({ pre_init = function(bb)
+        bb.ST.HUNTER.defaults.offhand.enabled = false
+        bb.sb.oh_speed = 0
+    end })
+    local sb, ST = b.sb, b.ST
+    -- (f) the tick's own guards: a live cycle on a frameless hand, and a built
+    -- hand with no readable hand table, both degrade to a silent no-op.
+    ST.offhand.speed, ST.offhand.start, ST.offhand.ends_at = 2, sb.clock, sb.clock + 2
+    local real_is_built = ST.bar_is_built
+    ST.bar_is_built = function() return true end
+    check(pcall(ST.onupdate_common, ST, "offhand", 0.05),
+        "hardening: onupdate_common on a frameless hand is pcall-clean")
+    ST.bar_is_built = real_is_built
+    local real_hand_table = ST.get_hand_table
+    ST.get_hand_table = function() return nil end
+    check(pcall(ST.onupdate_common, ST, "mainhand", 0.05),
+        "hardening: onupdate_common with no hand table is pcall-clean")
+    ST.get_hand_table = real_hand_table
+end
+
 print("checks: " .. checks .. ", failures: " .. failures)
 if failures > 0 then os.exit(1) end
 print("PASS bars_lazy_state (" .. checks .. " checks)")

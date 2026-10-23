@@ -200,6 +200,13 @@ function st.weave_range.update(ST)
 
     local class_db = ST:get_class_table()
     local profile_db = ST:get_profile_table()
+    -- No class row means no weave range toggle: the bar cannot be enabled without
+    -- settings, so it hides (the same fail-closed state an off toggle paints).
+    -- This runs from the driver's 0.2 s poll, so it must never throw on absence.
+    if type(class_db) ~= "table" then
+        if frame:IsShown() then frame:Hide() end
+        return
+    end
     local enabled = class_db.weave_range_enabled == true
         and class_db.class_enabled ~= false
         and (profile_db == nil or profile_db.enabled ~= false)

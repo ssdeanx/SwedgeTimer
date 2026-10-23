@@ -205,7 +205,9 @@ local function sample_maul_badge(self, now)
         return
     end
     local db = get_class_table(self)
-    if db.show_druid_maul_badge ~= true then
+    -- PROPER: the badge is fight-report state, not live UI; without a profile (or
+    -- with the toggle off) there is nothing to keep, so leaving it untouched is exact.
+    if type(db) ~= "table" or db.show_druid_maul_badge ~= true then
         return
     end
     local power = api.UnitPower("player")
@@ -342,6 +344,11 @@ function ST.DRUID.on_current_spell_cast_changed(self, is_cancelled)
     -- This function detects when the player queues up a maul
     -- and sets relevant flags for the func to set bar colors.
     local db = self:get_class_table()
+    if type(db) ~= "table" then
+        -- PROPER: no profile means no user preferences to honor; the queue flag
+        -- stays cleared and the bar keeps its default colour instead of throwing.
+        return
+    end
     -- Only run this logic if special on-next-attack colors are enabled in the druid settings.
     if not db.enable_maul_color then
         return
@@ -489,7 +496,11 @@ function ST.DRUID.set_bar_color(self, hand)
     -- and will set a special color when the player has one of those queued up but has
     -- insufficient rage to cast them.
     local db_class = self:get_class_table()
-    local frame = self:get_visuals_frame(hand)
+    if type(db_class) ~= "table" then
+        -- PROPER: false lets the parent draw the default colour; the bar still
+        -- shows, only the optional queue tint is withheld without preferences.
+        return false
+    end
     if hand ~= "mainhand" then
         return false
     end
@@ -503,6 +514,13 @@ function ST.DRUID.set_bar_color(self, hand)
     -- every hand on every call was pure waste.
     self:get_druid_talent_info()
     self:determine_form_visibility_flag()
+
+    -- The visuals frame may be absent pre-init (section 11 pins that the refresh
+    -- above still runs then); the colour branches below need it, so stop here.
+    local frame = self:get_visuals_frame(hand)
+    if frame == nil then
+        return false
+    end
 
     -- On-next-attack behaviours
     if db_class.enable_maul_color and self.maul_queued and not (self.insufficient_rage) then
@@ -1692,6 +1710,12 @@ function ST.DRUID.on_bar_update(self, hand)
     -- that rebuild the frame (scale/position/lock) are applied when the class options
     -- change; the display toggles are read live by the UI.
     local db = self:get_class_table()
+    if type(db) ~= "table" then
+        -- PROPER: every widget below reads this table; with no profile there is
+        -- nothing configured to draw. The swing bars still render (bars.lua owns
+        -- them), so skipping the tick hides nothing live.
+        return
+    end
     if db.nextaction_icon_size ~= self.guide_ui_icon_size
         or db.nextaction_x ~= self.guide_ui_x
         or db.nextaction_y ~= self.guide_ui_y
@@ -2110,7 +2134,9 @@ function ST.DRUID.gather_guide_inputs(self, out)
     local now = api.get_time()
     local d = self.mainhand
     local gcd = self.gcd
-    local db = self:get_class_table()
+    local db = self:get_class_table() or {}
+    -- PROPER: {} reads every tunable as nil, which is exactly the engine's
+    -- documented default for each; the live reads below still run.
 
     -- Swing and GCD, in the api.get_time() domain (ends_at and the GCD stamp share it).
     inputs.speed = (d and d.speed) or 0
@@ -2778,6 +2804,13 @@ function ST.DRUID.get_hud_state(self, slot, now)
     -- ERA token but proves Mangle via rune (sod_runes_present above): the slot
     -- stays live there.
     now = now or api.get_time()
+    if type(slot) ~= "table" or type(slot.key) ~= "string" then
+        -- PROPER: a slot without a key carries nothing renderable; hiding draws
+        -- the honest state instead of throwing. The driver always passes a slot
+        -- table, so this only fires for a caller bug.
+        s.hidden = true
+        return s
+    end
     if slot.key == "mangle" and st.family == "ERA" and sod_runes_present() ~= true then
         s.hidden = true
         return s
@@ -2821,10 +2854,12 @@ function ST.DRUID.get_hud_state(self, slot, now)
     end
 
     local db = self:get_class_table()
-    if db.hud_mana_tint and hud_no_mana(slot) then
+    -- PROPER: the tints are opt-in feedback; without a profile there is no opt-in
+    -- to honor, so the slot draws untinted rather than guessing.
+    if type(db) == "table" and db.hud_mana_tint and hud_no_mana(slot) then
         s.usable = false
     end
-    if db.hud_range_tint and hud_out_of_range(slot) then
+    if type(db) == "table" and db.hud_range_tint and hud_out_of_range(slot) then
         s.in_range = false
     end
 

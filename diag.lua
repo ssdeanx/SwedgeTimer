@@ -423,12 +423,12 @@ end
 -- clients, where the line is just "secrets api=no". Every probe is pcall'd; a missing,
 -- throwing or non-boolean probe renders "?" rather than erroring.
 local SECRET_PROBES = {
-    { "restrictions", "HasSecretRestrictions", {} },
-    { "cd", "ShouldCooldownsBeSecret", {} },
-    { "aura", "ShouldAurasBeSecret", {} },
-    { "power", "ShouldUnitPowerBeSecret", { "player" } },
-    { "stats", "ShouldUnitStatsBeSecret", {} },
-    { "cast", "ShouldUnitSpellCastingBeSecret", { "player" } },
+    { "restrictions", "HasSecretRestrictions",          {} },
+    { "cd",           "ShouldCooldownsBeSecret",        {} },
+    { "aura",         "ShouldAurasBeSecret",            {} },
+    { "power",        "ShouldUnitPowerBeSecret",        { "player" } },
+    { "stats",        "ShouldUnitStatsBeSecret",        {} },
+    { "cast",         "ShouldUnitSpellCastingBeSecret", { "player" } },
 }
 
 local function secret_probe_flag(c_secrets, name, args)
@@ -661,13 +661,15 @@ local function append_section(out, section_lines, cap, label)
         return
     end
     if remaining == 1 then
-        out[#out + 1] = PREFIX .. " " .. label .. " +" .. tostring(#section_lines) .. " more (cap " .. tostring(cap) .. ")"
+        out[#out + 1] = PREFIX ..
+        " " .. label .. " +" .. tostring(#section_lines) .. " more (cap " .. tostring(cap) .. ")"
         return
     end
     for i = 1, remaining - 1 do
         out[#out + 1] = section_lines[i]
     end
-    out[#out + 1] = PREFIX .. " " .. label .. " +" .. tostring(#section_lines - (remaining - 1)) .. " more (cap " .. tostring(cap) .. ")"
+    out[#out + 1] = PREFIX ..
+    " " .. label .. " +" .. tostring(#section_lines - (remaining - 1)) .. " more (cap " .. tostring(cap) .. ")"
 end
 
 --=========================================================================================

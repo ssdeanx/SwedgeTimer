@@ -1636,7 +1636,10 @@ end
 -- family with a resolved spell. Returns the catalog entry and its family ("LvB" for
 -- the Lava Burst spender), or nil when nothing is drawable.
 function ST.SHAMAN.get_weave_visual_spell(self)
-	local db = self:get_class_table()
+	local db = self:get_class_table() or {}
+	-- PROPER: {} reads every family toggle as unset, which matches this file's own
+	-- opt-out flag semantics (weave_enabled nil = enabled); the catalogue fallback
+	-- below still runs, so the assist degrades to defaults instead of dying.
 	local families = db.weave_families
 	-- MW5 spender choice (S4). A held-back guard (FS inside its final 2 s with a
 	-- ready shock) or a disabled LB family falls through to the catalogue read
@@ -2563,7 +2566,10 @@ local function update_offhand_spark(self, hand)
 		spark:Hide()
 		vf.weave_spark_offhand = spark
 	end
-	local db = self:get_class_table()
+	local db = self:get_class_table() or {}
+	-- PROPER: {} reads the breakpoint toggles as unset (= this file's defaults);
+	-- the swing-shape gates below still run, so an unknown profile hides the
+	-- spark through the normal gates instead of throwing.
 	local d = self.mainhand
 	if db.weave_enabled == false
 		or db.show_shaman_breakpoint_markers == false
@@ -2620,6 +2626,12 @@ function ST.SHAMAN.on_bar_update(self, hand)
 	-- (scale/position/lock) are applied when the class options change; the display
 	-- toggles are read live by the UI.
 	local db = self:get_class_table()
+	if type(db) ~= "table" then
+		-- PROPER: every widget below reads this table; with no profile there is
+		-- nothing configured to draw. The swing bars still render (bars.lua owns
+		-- them), so skipping the tick hides nothing live.
+		return
+	end
 	if db.nextaction_icon_size ~= self.guide_ui_icon_size
 		or db.nextaction_x ~= self.guide_ui_x
 		or db.nextaction_y ~= self.guide_ui_y
@@ -3052,7 +3064,10 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	local now = api.get_time()
 	local d = self.mainhand
 	local gcd = self.gcd
-	local db = self:get_class_table()
+	local db = self:get_class_table() or {}
+	-- PROPER: {} reads every tunable as nil, which is exactly the engine's
+	-- documented default for each (flameshock 0 included); the live reads below
+	-- still run.
 
 	-- Swing and GCD, in the api.get_time() domain (ends_at and the GCD stamp share it).
 	inputs.speed = (d and d.speed) or 0
@@ -3890,6 +3905,13 @@ function ST.SHAMAN.get_hud_state(self, slot, now)
 	s.text_remaining, s.desaturate, s.usable, s.in_range = nil, nil, nil, nil
 	s.glow, s.count, s.texture, s.hidden = nil, nil, nil, nil
 	now = now or api.get_time()
+	if type(slot) ~= "table" or type(slot.key) ~= "string" then
+		-- PROPER: a slot without a key carries nothing renderable; hiding draws
+		-- the honest state instead of throwing. The driver always passes a slot
+		-- table, so this only fires for a caller bug.
+		s.hidden = true
+		return s
+	end
 	-- The maintain mirrors (audit 2026-10-19 §2.6 S-19 / S-17 and S-20): display-
 	-- only, no cooldown to ride (they are in HUD_SKIP_GCD). Each hides unless its
 	-- hud_show_<key> toggle reads exactly true - the HUD treats a nil toggle as
@@ -3967,10 +3989,12 @@ function ST.SHAMAN.get_hud_state(self, slot, now)
 	end
 
 	local db = self:get_class_table()
-	if db.hud_mana_tint and hud_no_mana(slot) then
+	-- PROPER: the tints are opt-in feedback; without a profile there is no opt-in
+	-- to honor, so the slot draws untinted rather than guessing.
+	if type(db) == "table" and db.hud_mana_tint and hud_no_mana(slot) then
 		s.usable = false
 	end
-	if db.hud_range_tint and hud_out_of_range(slot) then
+	if type(db) == "table" and db.hud_range_tint and hud_out_of_range(slot) then
 		s.in_range = false
 	end
 

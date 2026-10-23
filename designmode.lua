@@ -59,9 +59,9 @@ local DM = st.designmode
 local floor = math.floor
 
 local LAYER_NAME = addon_name .. "DesignMode"
-local TICK = 0.5                              -- overlay refresh cadence while unlocked
-local WARM = { 1, 0.82, 0.48 }                -- the overlay/guide colour (archive warm_light)
-local DIM_ALPHA = 0.35                        -- the veil over the screen while designing
+local TICK = 0.5               -- overlay refresh cadence while unlocked
+local WARM = { 1, 0.82, 0.48 } -- the overlay/guide colour (archive warm_light)
+local DIM_ALPHA = 0.35         -- the veil over the screen while designing
 
 -- Layering against the AceConfig options panel (the AceGUI "Frame" container:
 -- FULLSCREEN_DIALOG / level 100, AceGUIContainer-Frame.lua Constructor). The chrome
@@ -72,22 +72,22 @@ local DIM_ALPHA = 0.35                        -- the veil over the screen while 
 -- guides (140) < control panel (150); the AceConfig validation popup stays on top at
 -- TOOLTIP / 100.
 local CHROME = {
-    strata = "FULLSCREEN_DIALOG",             -- above the options panel
-    layer = 110,                              -- veil + grid
-    visual = 130,                             -- the per-element overlay visuals
-    guides = 140,                             -- snap guides (over everything design)
-    control = 150,                            -- the control panel
-    input_strata = "FULLSCREEN",              -- below FULLSCREEN_DIALOG: input can never rise over the panel
+    strata = "FULLSCREEN_DIALOG", -- above the options panel
+    layer = 110,                  -- veil + grid
+    visual = 130,                 -- the per-element overlay visuals
+    guides = 140,                 -- snap guides (over everything design)
+    control = 150,                -- the control panel
+    input_strata = "FULLSCREEN",  -- below FULLSCREEN_DIALOG: input can never rise over the panel
     input_level = 1,
 }
 
 local active = false
 local layer, guides
-local control                                 -- the control panel (built on first enter)
-local drag_locked = false                      -- session lock: overlays shown but frozen (no db key)
-local overlays = {}                           -- pooled element overlays
-local grid_lines = {}                         -- pooled 1px line textures on the layer
-local locks_saved = {}                        -- element key -> true when design mode overrode it
+local control             -- the control panel (built on first enter)
+local drag_locked = false -- session lock: overlays shown but frozen (no db key)
+local overlays = {}       -- pooled element overlays
+local grid_lines = {}     -- pooled 1px line textures on the layer
+local locks_saved = {}    -- element key -> true when design mode overrode it
 
 -- Reusable candidate-line lists and box-line scratch for the drag tick (design.lua
 -- reuses the slot tables; the lists never allocate after the first drag).
@@ -356,7 +356,7 @@ local function ensure_guides()
     guides = CreateFrame("Frame", nil, UIParent)
     guides:SetAllPoints(UIParent)
     guides:SetFrameStrata(CHROME.strata)
-    guides:SetFrameLevel(CHROME.guides)       -- over the veil, the panel and the overlay visuals
+    guides:SetFrameLevel(CHROME.guides) -- over the veil, the panel and the overlay visuals
     guides:EnableMouse(false)
     guides.v = guides:CreateTexture(nil, "OVERLAY")
     guides.v:SetColorTexture(WARM[1], WARM[2], WARM[3], 0.9)
@@ -401,7 +401,7 @@ end
 --=========================================================================================
 local function overlay_paint(o, hot)
     local a_fill = hot and 0.14 or 0.06
-    if o.dragging then a_fill = 0 end        -- see the element itself while placing it
+    if o.dragging then a_fill = 0 end -- see the element itself while placing it
     local a_line = hot and 1 or 0.75
     o.fill:SetColorTexture(WARM[1], WARM[2], WARM[3], a_fill)
     local sides = o.border
@@ -451,7 +451,7 @@ local function collect_lines(o, l, r, t, b)
     return nx, ny
 end
 
-local drag_tick   -- forward declaration
+local drag_tick -- forward declaration
 
 local function make_overlay(i)
     -- Split in two frames: the INPUT button (drag/click/tooltip) lives at the
@@ -510,7 +510,7 @@ local function make_overlay(i)
         GameTooltip:Hide()
     end)
     o:SetScript("OnDragStart", function(self)
-        if DM.is_locked() then return end        -- frozen: visible, but not draggable
+        if DM.is_locked() then return end -- frozen: visible, but not draggable
         local d, f = self.desc, self.target
         if not (d and f) then return end
         if InCombatLockdown and InCombatLockdown() then return end
@@ -540,7 +540,7 @@ local function make_overlay(i)
         DM.refresh()
     end)
     o:SetScript("OnDoubleClick", function(self)
-        if DM.is_locked() then return end        -- frozen: no reset either
+        if DM.is_locked() then return end -- frozen: no reset either
         local d = self.desc
         if not (d and d.reset) then return end
         if InCombatLockdown and InCombatLockdown() then return end
@@ -724,6 +724,10 @@ local function bar_descriptor(hand)
             local frame = ST[hand] and ST[hand].anchor_frame
             if not frame then return end
             local hand_db = ST:get_hand_table(hand)
+            -- No hand row means no stored position to reset (the frame can only
+            -- exist for a hand that was configured, but the accessor's nil
+            -- contract is explicit: reset nothing rather than throw).
+            if type(hand_db) ~= "table" then return end
             hand_db.x = hand_default(hand, "x")
             hand_db.y = hand_default(hand, "y")
             hand_db.point = hand_default(hand, "point") or "CENTER"
@@ -1045,7 +1049,7 @@ local function ensure_control()
     if control then return end
     control = CreateFrame("Frame", LAYER_NAME .. "Control", UIParent)
     control:SetFrameStrata(CHROME.strata)
-    control:SetFrameLevel(CHROME.control)     -- over the veil, the guides and the overlays
+    control:SetFrameLevel(CHROME.control) -- over the veil, the guides and the overlays
     control:SetSize(220, 72)
     control:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -96)
     control:EnableMouse(true)
@@ -1128,12 +1132,21 @@ function DM.enter()
         ST:Print("SwedgeTimer is still loading - try again in a moment.")
         return
     end
+    -- Design mode exists to move elements and persist their positions through the
+    -- owning module's save path; every one of those paths writes the class/hand
+    -- settings. With no class row there is nowhere to persist, so refuse the
+    -- session LOUDLY instead of opening a session whose drags silently cannot
+    -- save (and whose lock/grid reads would throw out of the enter path).
+    if type(db()) ~= "table" then
+        ST:Print("Design mode is unavailable for this character: SwedgeTimer has no settings row for this class.")
+        return
+    end
     ensure_layer()
     ensure_guides()
     ensure_control()
     active = true
     DM.set_locked(false)
-    sync_esc_registration()                   -- Esc ends design mode only while no options window is open
+    sync_esc_registration() -- Esc ends design mode only while no options window is open
     unlock_elements()
     set_bars_designing(true)
     draw_grid()
@@ -1141,7 +1154,8 @@ function DM.enter()
     layer:Show()
     control:Show()
     notify_options()
-    ST:Print("Design mode on: drag an element, Shift = no snap, Alt = exact centre, double-click = reset. Esc or /st design ends it.")
+    ST:Print(
+    "Design mode on: drag an element, Shift = no snap, Alt = exact centre, double-click = reset. Esc or /st design ends it.")
 end
 
 -- The teardown is decorative + db lock flags only (no protected calls), which is what
@@ -1149,7 +1163,7 @@ end
 function DM.stop(quiet)
     if not active then return false end
     active = false
-    DM.set_locked(false)                      -- the session lock dies with the session
+    DM.set_locked(false) -- the session lock dies with the session
     for i = 1, #overlays do
         local o = overlays[i]
         o:Hide()

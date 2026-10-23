@@ -41,10 +41,10 @@ function lib:latency_checker()
     -- prevent duplicate events booking multiple C_Timers
     lib.is_registered = true
 
-	local old_home = self.home_latency_ms
-	local old_world = self.world_latency_ms
+    local old_home = self.home_latency_ms
+    local old_world = self.world_latency_ms
     local down, up, home, world = GetNetStats()
-	self.bandwidth_down_KBps = down
+    self.bandwidth_down_KBps = down
     self.bandwidth_up_KBps = up
     self.home_latency_ms = home
     self.world_latency_ms = world
@@ -65,8 +65,8 @@ function lib:latency_checker()
             self:set_update_timestamp_ticker()
         end
         self.callbacks:Fire("LATENCY_CHANGED", home, world)
-	end
-	C_Timer.After(self.update_interval_s, function() self:latency_checker() end)
+    end
+    C_Timer.After(self.update_interval_s, function() self:latency_checker() end)
 end
 
 function lib:set_check_interval(interval)
@@ -82,11 +82,11 @@ function lib:activate()
         frame:RegisterEvent("PLAYER_LOGIN")
     end
     self.frame:SetScript("OnEvent", function()
-            if not self.is_registered then
-                self:latency_checker()
-                self.is_registered = true
-            end
+        if not self.is_registered then
+            self:latency_checker()
+            self.is_registered = true
         end
+    end
     )
 end
 

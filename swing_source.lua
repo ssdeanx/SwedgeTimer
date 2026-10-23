@@ -374,7 +374,7 @@ end
 function swing_source:diagnostic_text()
 	return string.format(
 		"swing source payload_rejects=%d unknown_type=%d malformed_duration=%d"
-			.. " speed_read_keeps=%d valid_swings=%d notice=%s",
+		.. " speed_read_keeps=%d valid_swings=%d notice=%s",
 		stats.payload_rejects,
 		stats.unknown_swing_type,
 		stats.malformed_duration,

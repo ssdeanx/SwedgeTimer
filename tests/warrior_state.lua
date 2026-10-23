@@ -1870,7 +1870,18 @@ do
 
     -- G2: the classic-line combat log gate covers every classic-line class (the
     -- neutral extra-attack/parry pre-pass is class-independent) and the handler keeps
-    -- the paladin/warrior dispatch chains, with the init guard intact.
+    -- the class dispatch, with the init guard intact.
+    --
+    -- NILSWEEP recut (2026-10-22): the handler no longer names PALADIN/WARRIOR
+    -- directly. Only the SELECTED class's module is populated (operator rule
+    -- 2026-10-21), so a direct class call throws in the other-class configuration;
+    -- the dispatch resolves the playing class's module through the shared presence
+    -- guard instead. The two dispatch pins keep their original intent (the paladin
+    -- chain and the warrior hook are both dispatched) against that new contract:
+    --   * the module comes from self[self.player_class] (selected class),
+    --   * the hook is called only behind the presence guard,
+    --   * the neutral pre-pass runs BEFORE the dispatch,
+    --   * no class is named directly.
     local main_src = read("main.lua")
     local gate = main_src:match(
         "if not st%.is_mainline then[^\n]*")
@@ -1891,10 +1902,19 @@ do
         end
     end
     local handler = table.concat(handler_lines, "\n")
-    check(handler:find("self%.PALADIN%.on_combat_log_unfiltered%(self, event, %.%.%.%)") ~= nil,
-        "the combat-log handler dispatches the paladin chain")
-    check(handler:find("self%.WARRIOR%.on_combat_log_unfiltered%(self, event, %.%.%.%)") ~= nil,
-        "the combat-log handler dispatches the warrior hook")
+    local pre_pass_at = handler:find("self:note_extra_attack_or_parry(", 1, true)
+    local class_at = handler:find("local class = self[self.player_class]", 1, true)
+    local guard_at = handler:find('type(class) == "table" and class.on_combat_log_unfiltered', 1, true)
+    local call_at = handler:find("class.on_combat_log_unfiltered(self, event, ...)", 1, true)
+    check(class_at ~= nil and call_at ~= nil and call_at > class_at,
+        "the combat-log handler dispatches the paladin chain (selected-class module)")
+    check(guard_at ~= nil and call_at ~= nil and call_at > guard_at,
+        "the combat-log handler dispatches the warrior hook (behind the presence guard)")
+    check(pre_pass_at ~= nil and class_at ~= nil and pre_pass_at < class_at,
+        "the neutral pre-pass still runs before the class dispatch")
+    check(handler:find("self%.PALADIN%.on_combat_log_unfiltered", 1) == nil
+        and handler:find("self%.WARRIOR%.on_combat_log_unfiltered", 1) == nil,
+        "the combat-log handler names no class directly (selected-class rule)")
     check(handler:find("interfaces_are_initialised", 1, true) ~= nil,
         "the combat-log handler keeps the init guard")
 end
@@ -5772,6 +5792,178 @@ do
     ST.WARRIOR.on_spellcast_failed_quiet(ST, "target", "cast-4", 25286)
     eq(ST.hs_queued, false, "Era: a numeric-id quiet HS failure clears the tint")
     eq(sb.bar_color_calls, 1, "Era: the quiet HS id clear recolours once")
+end
+
+--=========================================================================================
+-- NILSWEEP (2026-10-22): nil class-table / frame guards on every per-frame and
+-- per-event entry. Each leg below throws on the unguarded code (red-first) and
+-- passes with the guard. A nil get_class_table return means the profile has no
+-- table for the class (unknown/unsupported class); a nil frame means an
+-- unbuilt hand (lazy bars). Neither may throw.
+--=========================================================================================
+do
+    -- W1: on_current_spell_cast_changed with no class table.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.WARRIOR.on_current_spell_cast_changed, ST)
+    check(ok, "NILSWEEP W1 on_current_spell_cast_changed tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- W2a: glow_start with no class table starts no glow and throws nothing.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local n0 = sb.glow.starts
+    local ok, err = pcall(ST.WARRIOR.glow_start, ST)
+    check(ok, "NILSWEEP W2a glow_start tolerates a nil class table (error: " .. tostring(err) .. ")")
+    eq(sb.glow.starts, n0, "NILSWEEP W2a glow_start starts no glow without a class table")
+end
+
+do
+    -- W2b: glow_start with no bar frame starts no glow and throws nothing.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_bar_frame = function() return nil end
+    local n0 = sb.glow.starts
+    local ok, err = pcall(ST.WARRIOR.glow_start, ST)
+    check(ok, "NILSWEEP W2b glow_start tolerates a nil bar frame (error: " .. tostring(err) .. ")")
+    eq(sb.glow.starts, n0, "NILSWEEP W2b glow_start starts no glow without a bar frame")
+end
+
+do
+    -- W2c: glow_start with no hand table falls back to thickness 1.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_hand_table = function() return nil end
+    local ok, err = pcall(ST.WARRIOR.glow_start, ST)
+    check(ok, "NILSWEEP W2c glow_start tolerates a nil hand table (error: " .. tostring(err) .. ")")
+    if ok then
+        eq(sb.glow.last_start.thickness, 1, "NILSWEEP W2c glow_start defaults thickness to 1 without a hand table")
+    end
+end
+
+do
+    -- W3: process_bloodsurge with no class table is a no-op.
+    -- The proc is armed so the option read actually runs (otherwise the `and`
+    -- short-circuits before the class table and the leg would pass on
+    -- unguarded code too).
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    ST.has_bloodsurge = true
+    local ok, err = pcall(ST.WARRIOR.process_bloodsurge, ST)
+    check(ok, "NILSWEEP W3 process_bloodsurge tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- W4: glow_stop with no bar frame stops nothing and throws nothing.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_bar_frame = function() return nil end
+    local n0 = sb.glow.stops
+    local ok, err = pcall(ST.WARRIOR.glow_stop, ST)
+    check(ok, "NILSWEEP W4 glow_stop tolerates a nil bar frame (error: " .. tostring(err) .. ")")
+    eq(sb.glow.stops, n0, "NILSWEEP W4 glow_stop stops no glow without a bar frame")
+end
+
+do
+    -- W5a: set_bar_color with no class table declines (false) and throws nothing.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, res = pcall(ST.WARRIOR.set_bar_color, ST, "mainhand")
+    check(ok, "NILSWEEP W5a set_bar_color tolerates a nil class table")
+    eq(res, false, "NILSWEEP W5a set_bar_color returns false without a class table")
+end
+
+do
+    -- W5b: set_bar_color with no visuals frame declines (false) and throws nothing.
+    -- The HS queue is armed so the colour branch actually runs (otherwise neither
+    -- tree touches the missing frame and the leg would pass on unguarded code too).
+    local sb = build()
+    local ST = sb.ST
+    ST.get_visuals_frame = function() return nil end
+    ST.hs_queued = true
+    ST.insufficient_rage = false
+    local ok, res = pcall(ST.WARRIOR.set_bar_color, ST, "mainhand")
+    check(ok, "NILSWEEP W5b set_bar_color tolerates a nil visuals frame")
+    if ok then
+        eq(res, false, "NILSWEEP W5b set_bar_color returns false without a visuals frame")
+    end
+end
+
+do
+    -- W6: on_spellcast_event START with no class table skips the slam-bar gate.
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.WARRIOR.on_spellcast_event, ST, "UNIT_SPELLCAST_START", "player", nil, nil)
+    check(ok, "NILSWEEP W6 on_spellcast_event tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- W7: on_bar_update with no class table skips the tick.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.WARRIOR.on_bar_update, ST, "mainhand")
+    check(ok, "NILSWEEP W7 on_bar_update tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- W8: gather_guide_inputs with no class table reads option defaults.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, inputs = pcall(ST.WARRIOR.gather_guide_inputs, ST, {})
+    check(ok, "NILSWEEP W8 gather_guide_inputs tolerates a nil class table")
+    if ok then
+        eq(inputs.execute_pct, 20, "NILSWEEP W8 gather_guide_inputs defaults execute_pct to 20")
+    end
+end
+
+do
+    -- W9/W10: get_hud_state with no class table skips the tints and throws nothing.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, s = pcall(ST.WARRIOR.get_hud_state, ST, { key = "op" }, 100)
+    check(ok, "NILSWEEP W9/W10 get_hud_state tolerates a nil class table")
+    if ok then
+        eq(s.usable, nil, "NILSWEEP W10 get_hud_state leaves usable alone without a class table")
+        eq(s.in_range, nil, "NILSWEEP W10 get_hud_state leaves in_range alone without a class table")
+    end
+end
+
+do
+    -- W9x: get_hud_state on the execute slot with no class table reads the default
+    -- execute threshold (20) and throws nothing. In combat against a 15%-hp target
+    -- so the range read actually runs (otherwise an unknown target hides before
+    -- the class table and the leg would pass on unguarded code too).
+    local sb = build({ health = { target = { cur = 1500, max = 10000 } } })
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    ST.in_combat = true
+    local ok, s = pcall(ST.WARRIOR.get_hud_state, ST, { key = "execute" }, 100)
+    check(ok, "NILSWEEP W9x get_hud_state (execute) tolerates a nil class table")
+    if ok then
+        eq(s.hidden, nil, "NILSWEEP W9x get_hud_state does not hide execute without a class table")
+        eq(s.glow, true, "NILSWEEP W9x get_hud_state glows in range on the default threshold")
+    end
+end
+
+do
+    -- W11: get_hud_state with no slot hides instead of throwing.
+    local sb = build()
+    local ST = sb.ST
+    local ok, s = pcall(ST.WARRIOR.get_hud_state, ST, nil, 100)
+    check(ok, "NILSWEEP W11 get_hud_state tolerates a nil slot")
+    if ok then
+        eq(s.hidden, true, "NILSWEEP W11 get_hud_state hides a nil slot")
+    end
 end
 
 if failures == 0 then

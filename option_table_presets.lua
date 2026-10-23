@@ -13,33 +13,33 @@ local LSM = LibStub("LibSharedMedia-3.0")
 -- Selections and orderings for dropdowns
 --=========================================================================================
 ST.valid_anchor_points = {
-	TOPLEFT="TOPLEFT",
-    TOPRIGHT="TOPRIGHT",
-    BOTTOMLEFT="BOTTOMLEFT",
-    BOTTOMRIGHT="BOTTOMRIGHT",
-    TOP="TOP",
-    BOTTOM="BOTTOM",
-    LEFT="LEFT",
-    RIGHT="RIGHT",
-    CENTER="CENTER",
+    TOPLEFT = "TOPLEFT",
+    TOPRIGHT = "TOPRIGHT",
+    BOTTOMLEFT = "BOTTOMLEFT",
+    BOTTOMRIGHT = "BOTTOMRIGHT",
+    TOP = "TOP",
+    BOTTOM = "BOTTOM",
+    LEFT = "LEFT",
+    RIGHT = "RIGHT",
+    CENTER = "CENTER",
 }
 
 ST.outlines = {
-	_none="None",
-	outline="Outline",
-	thick_outline="Thick Outline",
+    _none = "None",
+    outline = "Outline",
+    thick_outline = "Thick Outline",
 }
 
 ST.texts = {
-	attack_speed="Attack speed",
-	swing_timer="Swing timer",
-    range_finder="Range Finder",
+    attack_speed = "Attack speed",
+    swing_timer = "Swing timer",
+    range_finder = "Range Finder",
 }
 
 ST.bar_border_modes = {
-	Solid="Solid",
-	Texture="Texture",
-	None="None",
+    Solid = "Solid",
+    Texture = "Texture",
+    None = "None",
 }
 
 ST.gcd_anchor_points = {
@@ -99,15 +99,15 @@ function ST:construct_latency_settings_table()
         desc_latency = {
             order = 3.05,
             type = "description",
-            name = "These options control fixed or latency-based offsets to the GCD marker positions. "..
-            "This can help give a more representative picture of available time to act before a swing.",
+            name = "These options control fixed or latency-based offsets to the GCD marker positions. " ..
+                "This can help give a more representative picture of available time to act before a swing.",
         },
         gcd_marker_offset_mode = {
             type = "select",
             order = 3.1,
             name = "Marker Offset Mode",
-            desc = "The type of offset, if any, to apply to the GCD marker positions. Fixed applies the specified "..
-                "offset, Dynamic applies an offset based on latency, Calibrated combines the Fixed "..
+            desc = "The type of offset, if any, to apply to the GCD marker positions. Fixed applies the specified " ..
+                "offset, Dynamic applies an offset based on latency, Calibrated combines the Fixed " ..
                 "and Dynamic offsets.",
             values = ST.gcd_marker_offsets,
             get = "getter",
@@ -118,7 +118,9 @@ function ST:construct_latency_settings_table()
             order = 3.2,
             name = "Fixed Offset (ms)",
             desc = "Value in ms to add to Fixed or Calibrated latency.",
-            min = 0, max = 200, step = 1,
+            min = 0,
+            max = 200,
+            step = 1,
             get = "getter",
             set = "latency_setter",
             disabled = function(panel)
@@ -141,13 +143,13 @@ function ST:construct_strata_settings_table()
         desc_strata = {
             order = 4.05,
             type = "description",
-            name = "These options control the frame strata and draw levels of the addon's timers."..
-                " Anything higher than MEDIUM will be drawn over some in-game menus, "..
+            name = "These options control the frame strata and draw levels of the addon's timers." ..
+                " Anything higher than MEDIUM will be drawn over some in-game menus, " ..
                 "so this is the highest strata allowed.",
         },
         frame_strata = {
             order = 7.2,
-            type="select",
+            type = "select",
             name = "Frame strata",
             desc = "The frame strata the addon's timers should be drawn at.",
             values = {
@@ -163,7 +165,9 @@ function ST:construct_strata_settings_table()
             order = 7.3,
             name = "Draw level",
             desc = "The bar's draw level within the frame strata.",
-            min = 1, max=100, step=1,
+            min = 1,
+            max = 100,
+            step = 1,
             get = "getter",
             set = "strata_setter",
         },
@@ -180,9 +184,9 @@ function ST:construct_delay_settings_table()
         delay_on_full_desc = {
             type = "description",
             order = 9.1,
-            name = "SwedgeTimer allows for the timer's visual state to change when filling (active) and full "..
-                "(inactive). This setting allows the user to specify a delay once the progress bar fills up before "..
-                "the timer changes to the inactive state, to prevent the timer state rapidly shifting between "..
+            name = "SwedgeTimer allows for the timer's visual state to change when filling (active) and full " ..
+                "(inactive). This setting allows the user to specify a delay once the progress bar fills up before " ..
+                "the timer changes to the inactive state, to prevent the timer state rapidly shifting between " ..
                 "active/inactive due to latency effects."
         },
         bar_full_delay = {
@@ -194,7 +198,9 @@ function ST:construct_delay_settings_table()
                 "combat.",
             get = "getter",
             set = "setter",
-            min = 0, max = 1.0, step = 0.01,
+            min = 0,
+            max = 1.0,
+            step = 0.01,
         },
     }
 end
@@ -229,9 +235,9 @@ function ST:construct_bar_appearance_settings_table()
         },
         size_desc = {
             order = 0.11,
-            name = "It is recommended to change the timer dimensions to a ratio you like and adjust the overall "..
-            "size of the bar using the scale setting (either mousewheel scroll with the timer unlocked, or use the "..
-            "Positioning/Scale panel.",
+            name = "It is recommended to change the timer dimensions to a ratio you like and adjust the overall " ..
+                "size of the bar using the scale setting (either mousewheel scroll with the timer unlocked, or use the " ..
+                "Positioning/Scale panel.",
             type = "description",
         },
         bar_width = {
@@ -239,7 +245,9 @@ function ST:construct_bar_appearance_settings_table()
             order = 0.2,
             name = "Width",
             desc = "The width of the swing timer.",
-            min = 100, max = 600, step = 1,
+            min = 100,
+            max = 600,
+            step = 1,
             get = "getter",
             set = "bar_setter",
         },
@@ -248,7 +256,9 @@ function ST:construct_bar_appearance_settings_table()
             order = 0.3,
             name = "Height",
             desc = "The height of the swing timer.",
-            min = 6, max = 60, step = 1,
+            min = 6,
+            max = 60,
+            step = 1,
             get = "getter",
             set = "bar_setter",
         },
@@ -261,10 +271,10 @@ function ST:construct_bar_appearance_settings_table()
         },
         bar_color_default = {
             order = 1.1,
-            type="color",
-            name="Color",
-            desc="The color of the progress bar.",
-            hasAlpha=true,
+            type = "color",
+            name = "Color",
+            desc = "The color of the progress bar.",
+            hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
         },
@@ -286,10 +296,10 @@ function ST:construct_bar_appearance_settings_table()
         },
         background_color = {
             order = 2.1,
-            type="color",
-            name="Color",
-            desc="The color of the timer background.",
-            hasAlpha=true,
+            type = "color",
+            name = "Color",
+            desc = "The color of the timer background.",
+            hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
         },
@@ -311,10 +321,10 @@ function ST:construct_bar_appearance_settings_table()
         },
         border_color = {
             order = 3.1,
-            type="color",
-            name="Color",
-            desc="The color of the timer border.",
-            hasAlpha=true,
+            type = "color",
+            name = "Color",
+            desc = "The color of the timer border.",
+            hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
         },
@@ -331,23 +341,23 @@ function ST:construct_bar_appearance_settings_table()
         border_desc = {
             order = 3.21,
             type = "description",
-            name = "Sometimes due to how the WoW client handles pixels and scaling, the border texture"..
-            " can be uneven around the timer."..
-            " If this happens, the width can be fine-tweaked until the texture is an even thickness on all sides."
+            name = "Sometimes due to how the WoW client handles pixels and scaling, the border texture" ..
+                " can be uneven around the timer." ..
+                " If this happens, the width can be fine-tweaked until the texture is an even thickness on all sides."
         },
         border_width = {
             order = 3.3,
             type = "range",
             name = "Border thickness",
             desc = "The thickness of the timer border.",
-            min = 0.1, max = 8,
+            min = 0.1,
+            max = 8,
             step = 0.1,
             get = "getter",
             set = "bar_setter",
         },
     }
 end
-
 
 function ST:construct_text_settings_table()
     ST.fonts_table_preset = {
@@ -361,17 +371,20 @@ function ST:construct_text_settings_table()
             order = 4.03,
             name = "Text size",
             desc = "The size of the timer texts.",
-            min = 10, max = 40, softMin = 8, softMax = 34,
+            min = 10,
+            max = 40,
+            softMin = 8,
+            softMax = 34,
             step = 1,
             get = "getter",
             set = "text_setter",
         },
         text_color = {
-            order=4.035,
-            type="color",
-            name="Text color",
-            desc="The color of the timer texts.",
-            hasAlpha=false,
+            order = 4.035,
+            type = "color",
+            name = "Text color",
+            desc = "The color of the timer texts.",
+            hasAlpha = false,
             get = "color_getter",
             set = "color_setter",
         },
@@ -386,19 +399,19 @@ function ST:construct_text_settings_table()
             set = "text_setter",
         },
         text_outline_key = {
-            order=4.04,
-            type="select",
-            values=ST.outlines,
-            style="dropdown",
-            desc="The outline type to use with the timer texts.",
-            name="Text outline",
+            order = 4.04,
+            type = "select",
+            values = ST.outlines,
+            style = "dropdown",
+            desc = "The outline type to use with the timer texts.",
+            name = "Text outline",
             get = "getter",
             set = "text_setter",
         },
         texts_left_header = {
-            order=4.045,
-            type="header",
-            name="Left Text Control",
+            order = 4.045,
+            type = "header",
+            name = "Left Text Control",
         },
         texts_left_desc = {
             type = "description",
@@ -414,10 +427,10 @@ function ST:construct_text_settings_table()
             set = "setter",
         },
         left_text_key = {
-            type="select",
+            type = "select",
             order = 4.08,
-            values=ST.texts,
-            style="dropdown",
+            values = ST.texts,
+            style = "dropdown",
             name = "",
             desc = "What to show on the left of the timer.",
             get = "getter",
@@ -443,7 +456,10 @@ function ST:construct_text_settings_table()
             order = 4.082,
             name = "x offset %",
             desc = "The text's horizontal offset as a percentage of the timer width.",
-            min = -100 , max = 100, softMin = -30, softMax = 30,
+            min = -100,
+            max = 100,
+            softMin = -30,
+            softMax = 30,
             step = 0.1,
             get = "getter",
             set = "text_setter",
@@ -453,16 +469,19 @@ function ST:construct_text_settings_table()
             order = 4.083,
             name = "y offset %",
             desc = "The text's vertical offset as a percentage of the timer height.",
-            min = -250 , max = 250, softMin = -150, softMax = 150,
+            min = -250,
+            max = 250,
+            softMin = -150,
+            softMax = 150,
             step = 0.1,
             get = "getter",
             set = "text_setter",
         },
 
         texts_center_header = {
-            order=4.0831,
-            type="header",
-            name="Center Text Control",
+            order = 4.0831,
+            type = "header",
+            name = "Center Text Control",
         },
         texts_center_desc = {
             type = "description",
@@ -478,10 +497,10 @@ function ST:construct_text_settings_table()
             set = "setter",
         },
         center_text_key = {
-            type="select",
+            type = "select",
             order = 4.0834,
-            values=ST.texts,
-            style="dropdown",
+            values = ST.texts,
+            style = "dropdown",
             name = "",
             desc = "What to show on the center of the timer.",
             get = "getter",
@@ -507,7 +526,10 @@ function ST:construct_text_settings_table()
             order = 4.0837,
             name = "x offset %",
             desc = "The text's horizontal offset as a percentage of the timer width.",
-            min = -100 , max = 100, softMin = -30, softMax = 30,
+            min = -100,
+            max = 100,
+            softMin = -30,
+            softMax = 30,
             step = 0.1,
             get = "getter",
             set = "text_setter",
@@ -517,16 +539,19 @@ function ST:construct_text_settings_table()
             order = 4.0838,
             name = "y offset %",
             desc = "The text's vertical offset as a percentage of the timer height.",
-            min = -250 , max = 250, softMin = -150, softMax = 150,
+            min = -250,
+            max = 250,
+            softMin = -150,
+            softMax = 150,
             step = 0.1,
             get = "getter",
             set = "text_setter",
         },
 
         texts_right_header = {
-            order=4.095,
-            type="header",
-            name="Right Text Control",
+            order = 4.095,
+            type = "header",
+            name = "Right Text Control",
         },
         texts_right_desc = {
             type = "description",
@@ -542,10 +567,10 @@ function ST:construct_text_settings_table()
             set = "setter",
         },
         right_text_key = {
-            type="select",
+            type = "select",
             order = 4.12,
-            values=ST.texts,
-            style="dropdown",
+            values = ST.texts,
+            style = "dropdown",
             name = "",
             desc = "What to show on the right of the timer.",
             get = "getter",
@@ -571,7 +596,10 @@ function ST:construct_text_settings_table()
             order = 4.121,
             name = "x offset %",
             desc = "The text's horizontal offset as a percentage of the timer width.",
-            min = -100 , max = 100, softMin = -30, softMax = 30,
+            min = -100,
+            max = 100,
+            softMin = -30,
+            softMax = 30,
             step = 0.1,
             get = "getter",
             set = "text_setter",
@@ -581,7 +609,10 @@ function ST:construct_text_settings_table()
             order = 4.122,
             name = "y offset %",
             desc = "The text's vertical offset as a percentage of the timer height.",
-            min = -250 , max = 250, softMin = -150, softMax = 150,
+            min = -250,
+            max = 250,
+            softMin = -150,
+            softMax = 150,
             step = 0.1,
             get = "getter",
             set = "text_setter",
@@ -593,9 +624,9 @@ function ST:construct_border_settings_table()
     ST.borders_preset = {
         -- Border settings
         header_borders = {
-            order=4.0,
-            type="header",
-            name="Border Appearance",
+            order = 4.0,
+            type = "header",
+            name = "Border Appearance",
         },
         -- bar_border_description = {
         --     order=4.1,
@@ -612,7 +643,8 @@ function ST:construct_border_settings_table()
             order = 4.4,
             name = "Border thickness",
             desc = "The thickness of the bar border.",
-            min = 0.1, max = 8,
+            min = 0.1,
+            max = 8,
             step = 0.1,
             get = "getter",
             set = "bar_setter",
@@ -648,7 +680,7 @@ function ST:construct_gcd_underlay_settings_table()
         desc = {
             type = "description",
             order = 1.1,
-            name = "A texture can be placed after the progress bar to show the user"..
+            name = "A texture can be placed after the progress bar to show the user" ..
                 " the ongoing duration of any active Global Cooldown."
         },
         lb1 = {
@@ -680,17 +712,16 @@ function ST:construct_gcd_underlay_settings_table()
             set = "bar_setter",
         },
         bar_color_gcd = {
-            order=1.5,
-            type="color",
-            name="Color",
-            desc="The color of the GCD underlay bar.",
-            hasAlpha=true,
+            order = 1.5,
+            type = "color",
+            name = "Color",
+            desc = "The color of the GCD underlay bar.",
+            hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
         },
     }
 end
-
 
 function ST:construct_gcd_marker_settings_table()
     ST.gcd_markers_preset = {
@@ -700,14 +731,14 @@ function ST:construct_gcd_marker_settings_table()
             order = 0.9,
         },
         desc_1 = {
-            type="description",
+            type = "description",
             order = 1.0,
-            name = "These settings control the GCD markers on the top and bottom of the swing timer."..
-            " The markers represent one standard physical or spell GCD's time on the timer from their anchor point. "..
-            "They can be anchored to the end of the swing, or to the swing progress itself. "..
-            "The spell or physical GCD duration shown can be set manually or set to be context-sensitive, e.g. "..
-            "changing to the physical GCD duration for druids when in bear/cat form, and spell GCD duration when "..
-            "in other forms.",
+            name = "These settings control the GCD markers on the top and bottom of the swing timer." ..
+                " The markers represent one standard physical or spell GCD's time on the timer from their anchor point. " ..
+                "They can be anchored to the end of the swing, or to the swing progress itself. " ..
+                "The spell or physical GCD duration shown can be set manually or set to be context-sensitive, e.g. " ..
+                "changing to the physical GCD duration for druids when in bear/cat form, and spell GCD duration when " ..
+                "in other forms.",
         },
 
         -- Marker Appearance
@@ -717,20 +748,20 @@ function ST:construct_gcd_marker_settings_table()
             order = 1.1,
         },
         gcd1a_marker_color = {
-            order=1.2,
-            type="color",
-            name="Top marker color",
-            desc="The color of the top GCD marker.",
-            hasAlpha=true,
+            order = 1.2,
+            type = "color",
+            name = "Top marker color",
+            desc = "The color of the top GCD marker.",
+            hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
         },
         gcd1b_marker_color = {
-            order=1.3,
-            type="color",
-            name="Bottom marker color",
-            desc="The color of the top GCD marker.",
-            hasAlpha=true,
+            order = 1.3,
+            type = "color",
+            name = "Bottom marker color",
+            desc = "The color of the top GCD marker.",
+            hasAlpha = true,
             get = "color_getter",
             set = "color_setter",
         },
@@ -739,7 +770,8 @@ function ST:construct_gcd_marker_settings_table()
             order = 1.4,
             name = "Top marker width",
             desc = "The line width of the top GCD marker.",
-            min = 1, max = 6,
+            min = 1,
+            max = 6,
             step = 1,
             get = "getter",
             set = "bar_setter",
@@ -749,7 +781,8 @@ function ST:construct_gcd_marker_settings_table()
             order = 1.5,
             name = "Bottom marker width",
             desc = "The line width of the bottom GCD marker.",
-            min = 1, max = 6,
+            min = 1,
+            max = 6,
             step = 1,
             get = "getter",
             set = "bar_setter",
@@ -759,7 +792,8 @@ function ST:construct_gcd_marker_settings_table()
             order = 1.6,
             name = "Top marker height",
             desc = "The height of the top marker as a fraction of the bar height",
-            min = 0.01, max = 1.0,
+            min = 0.01,
+            max = 1.0,
             step = 0.01,
             get = "getter",
             set = "bar_setter",
@@ -769,7 +803,8 @@ function ST:construct_gcd_marker_settings_table()
             order = 1.6,
             name = "Bottom marker height",
             desc = "The height of the bottom marker as a fraction of the bar height",
-            min = 0.01, max = 1.0,
+            min = 0.01,
+            max = 1.0,
             step = 0.01,
             get = "getter",
             set = "bar_setter",
@@ -777,9 +812,9 @@ function ST:construct_gcd_marker_settings_table()
 
         -- Top Marker Behaviour
         markers_beheaviour_header_top = {
-            order=2.0,
-            type="header",
-            name="Top Marker Behaviour",
+            order = 2.0,
+            type = "header",
+            name = "Top Marker Behaviour",
         },
         gcd1a_marker_enabled = {
             type = "toggle",
@@ -804,7 +839,7 @@ function ST:construct_gcd_marker_settings_table()
             type = "select",
             order = 2.3,
             name = "Anchor point",
-            values=ST.gcd_anchor_points,
+            values = ST.gcd_anchor_points,
             desc = "The anchor point for the top GCD marker.",
             get = "getter",
             set = "bar_setter",
@@ -814,7 +849,7 @@ function ST:construct_gcd_marker_settings_table()
             type = "toggle",
             order = 2.4,
             name = "Wrap Swing markers",
-            desc = "If the marker anchor is Swing, toggles the marker wrapping back to the start of the bar "..
+            desc = "If the marker anchor is Swing, toggles the marker wrapping back to the start of the bar " ..
                 "when the GCD marker falls in the player's next swing.",
             get = "getter",
             set = "bar_setter",
@@ -823,9 +858,9 @@ function ST:construct_gcd_marker_settings_table()
 
         -- Bottom Marker Behaviour
         markers_beheaviour_header_bottom = {
-            order=2.5,
-            type="header",
-            name="Bottom Marker Behaviour",
+            order = 2.5,
+            type = "header",
+            name = "Bottom Marker Behaviour",
         },
         gcd1b_marker_enabled = {
             type = "toggle",
@@ -850,7 +885,7 @@ function ST:construct_gcd_marker_settings_table()
             type = "select",
             order = 2.8,
             name = "Anchor point",
-            values=ST.gcd_anchor_points,
+            values = ST.gcd_anchor_points,
             desc = "The anchor point for the bottom GCD marker.",
             get = "getter",
             set = "bar_setter",
@@ -860,7 +895,7 @@ function ST:construct_gcd_marker_settings_table()
             type = "toggle",
             order = 2.9,
             name = "Wrap Swing markers",
-            desc = "If the marker anchor is Swing, toggles the marker wrapping back to the start of the bar "..
+            desc = "If the marker anchor is Swing, toggles the marker wrapping back to the start of the bar " ..
                 "when the GCD marker falls in the player's next swing.",
             get = "getter",
             set = "bar_setter",
@@ -877,12 +912,12 @@ function ST:construct_deadzone_settings_table()
             order = 1.0,
         },
         desc_1 = {
-            type="description",
+            type = "description",
             order = 1.1,
-            name = "The Deadzone is a shaded region at the end of the swing timer bar indicating the  "..
-                "player's latency to the game world. When the bar progress is inside the deadzone, "..
-                "it should not be possible to input a new action that will occur before the swing goes off.\n\n"..
-                "This can be used to queue abilities that should be registered immediately after the swing, "..
+            name = "The Deadzone is a shaded region at the end of the swing timer bar indicating the  " ..
+                "player's latency to the game world. When the bar progress is inside the deadzone, " ..
+                "it should not be possible to input a new action that will occur before the swing goes off.\n\n" ..
+                "This can be used to queue abilities that should be registered immediately after the swing, " ..
                 "such as form changes while bearweaving.",
         },
         lb1 = {
@@ -919,9 +954,9 @@ function ST:construct_deadzone_settings_table()
         deadzone_bar_color = {
             type = "color",
             order = 1.5,
-            name="Deadzone color",
-            desc="The color of the Deadzone bar.",
-            hasAlpha=true,
+            name = "Deadzone color",
+            desc = "The color of the Deadzone bar.",
+            hasAlpha = true,
             get = "color_getter",
             set = "color_setter"
         },
@@ -938,11 +973,12 @@ function ST:construct_info_panel()
         desc1 = {
             type = "description",
             order = 1.1,
-            name = "SwedgeTimer is a general-purpose Swing Timer addon for Titanforge (WotLK 3.80) and all supported Classic clients. "..
-                "It aims to be a one-stop-shop for swing timers, supporting independent and feature-rich "..
+            name =
+                "SwedgeTimer is a general-purpose Swing Timer addon for Titanforge (WotLK 3.80) and all supported Classic clients. " ..
+                "It aims to be a one-stop-shop for swing timers, supporting independent and feature-rich " ..
                 "timer configurations for each class in the game."
-                -- "SwedgeTimer is powered by LibClassicSwingTimerAPI and accounts for the many "..
-                -- "edge cases in WoW's often confusing swing timer implementation.",
+            -- "SwedgeTimer is powered by LibClassicSwingTimerAPI and accounts for the many "..
+            -- "edge cases in WoW's often confusing swing timer implementation.",
         },
         header2 = {
             type = "header",
@@ -952,11 +988,11 @@ function ST:construct_info_panel()
         desc2 = {
             type = "description",
             order = 1.3,
-            name = "By default the addon only shows timers relevant to each class, and disables all timers"..
-                " for caster classes.\n\n"..
-                "Also by default, the timers will only show under certain conditions, usually requiring that "..
-                "the player is either in-combat or has an attackable target. By default, range finders "..
-                "are also enabled that will partially fade the timer when the target is out-of-range.\n\n"..
+            name = "By default the addon only shows timers relevant to each class, and disables all timers" ..
+                " for caster classes.\n\n" ..
+                "Also by default, the timers will only show under certain conditions, usually requiring that " ..
+                "the player is either in-combat or has an attackable target. By default, range finders " ..
+                "are also enabled that will partially fade the timer when the target is out-of-range.\n\n" ..
                 "The visibility conditions can be set in each timer's menu on the left panel."
         },
         header3 = {
@@ -967,9 +1003,9 @@ function ST:construct_info_panel()
         desc3 = {
             type = "description",
             order = 1.5,
-            name = "When the timers are unlocked (see top panel), they can be clicked and "..
-                "dragged to new positions. When unlocked, the mousewheel can also be used to increase "..
-                "or decrease the timer scale.\n\n"..
+            name = "When the timers are unlocked (see top panel), they can be clicked and " ..
+                "dragged to new positions. When unlocked, the mousewheel can also be used to increase " ..
+                "or decrease the timer scale.\n\n" ..
                 "The Bar Positioning/Scale menu on the left can also be used for a finer control of position/scale.",
         },
         header4 = {
@@ -980,9 +1016,9 @@ function ST:construct_info_panel()
         desc4 = {
             type = "description",
             order = 1.7,
-            name = "SwedgeTimer includes a number of features as standard, including a GCD underlay, adjustable GCD time"..
-                " markers, and a Deadzone indicating the player's latency."..
-                " All of these features can be configured in each timer's submenu on the left panel,"..
+            name = "SwedgeTimer includes a number of features as standard, including a GCD underlay, adjustable GCD time" ..
+                " markers, and a Deadzone indicating the player's latency." ..
+                " All of these features can be configured in each timer's submenu on the left panel," ..
                 " where the timer appearance can also be fully customised."
         },
         header5 = {
@@ -993,8 +1029,8 @@ function ST:construct_info_panel()
         desc5 = {
             type = "description",
             order = 1.9,
-            name = "SwedgeTimer includes modules that display specialised information for certain classes."..
-                " For instance, Paladins have access to seal-dependent progress bar colors and proc alert glows."..
+            name = "SwedgeTimer includes modules that display specialised information for certain classes." ..
+                " For instance, Paladins have access to seal-dependent progress bar colors and proc alert glows." ..
                 " If a class has such configuration, it will be visible in the left panel of the settings menu.",
         }
     }
@@ -1018,16 +1054,16 @@ function ST:construct_class_info_panel()
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Death Knights can use a mainhand and offhand weapon, and by default these timers are both "..
-                "enabled. The offhand timer only displays if the player has an offhand weapon equipped."..
-                "\n\nBy default, the timers will only show when the player is in-combat or has an attackable "..
-                "target, and the timers will be dimmed when the player is outside of melee range"..
-                " of their target, or has no target.\n\n"..
-                "The GCD underlay is enabled on the mainhand timer. "..
-                "The GCD markers are split between showing the expected Physical GCD (top) and Spell "..
-                "GCD (bottom). Spell GCD duration is affected by haste rating and related buffs, while the"..
-                " Physical GCD duration is not."..
-                " The markers can also be anchored to the timer's progress instead."
+                name = "Death Knights can use a mainhand and offhand weapon, and by default these timers are both " ..
+                    "enabled. The offhand timer only displays if the player has an offhand weapon equipped." ..
+                    "\n\nBy default, the timers will only show when the player is in-combat or has an attackable " ..
+                    "target, and the timers will be dimmed when the player is outside of melee range" ..
+                    " of their target, or has no target.\n\n" ..
+                    "The GCD underlay is enabled on the mainhand timer. " ..
+                    "The GCD markers are split between showing the expected Physical GCD (top) and Spell " ..
+                    "GCD (bottom). Spell GCD duration is affected by haste rating and related buffs, while the" ..
+                    " Physical GCD duration is not." ..
+                    " The markers can also be anchored to the timer's progress instead."
             },
             h2 = {
                 type = "header",
@@ -1037,65 +1073,66 @@ function ST:construct_class_info_panel()
             d2 = {
                 type = "description",
                 order = 1.3,
-                name = "A Multi-timer control is included to let the player alter properties of both the mainhand "..
-                "and offhand timers together, accessible from the relevant panel on the left."
+                name = "A Multi-timer control is included to let the player alter properties of both the mainhand " ..
+                    "and offhand timers together, accessible from the relevant panel on the left."
             },
         }
     elseif player_class == "DRUID" then
-       per_class = {
-        d1 = {
-            type = "description",
-            order = 1.1,
-            name = "Druids are only capable of using mainhand weapons, and so the class only has "..
-            "a single timer."..
-            "\n\nBy default, the timer will only show when the player is in-combat or has an attackable "..
-            "target. By default, the timer will be dimmed when the player is outside of melee range."..
-            "\n\nThe GCD underlay is enabled. "..
-            "The GCD markers show the Spell GCD duration while in normal, Moonkin, and Tree form, "..
-            "and show the Physical GCD duration while in cat, bear, and dire bear form."..
-            " Spell GCD duration is affected by haste rating and buffs, while the"..
-            " physical GCD duration is not."..
-            "The markers are anchored to the end of the timer bar, and will hide when the timer is inactive."..
-            " The markers can also be anchored to the timer's progress instead."
-        },
-        h2 = {
-            type = "header",
-            order = 1.2,
-            name = "Form Colors",
-        },
-        d2 = {
-            type = "description",
-            order = 1.3,
-            name = "The timer bar is by default configured to change color based on the druid's form. These colors "..
-            "can be specified in Druid Configuration."
-        },
-        h3 = {
-            type = "header",
-            order = 1.4,
-            name = "Maul Queueing",
-        },
-        d3 = {
-            type = "description",
-            order = 1.5,
-            name = "The progress bar is configured to change color when the druid has Maul queued for their next attack. "..
-            "The bar will also turn a special color when the druid has Maul queued but rage decay or rage spending "..
-            "takes them below the rage threshold to cast Maul."
-        },
-    }
+        per_class = {
+            d1 = {
+                type = "description",
+                order = 1.1,
+                name = "Druids are only capable of using mainhand weapons, and so the class only has " ..
+                    "a single timer." ..
+                    "\n\nBy default, the timer will only show when the player is in-combat or has an attackable " ..
+                    "target. By default, the timer will be dimmed when the player is outside of melee range." ..
+                    "\n\nThe GCD underlay is enabled. " ..
+                    "The GCD markers show the Spell GCD duration while in normal, Moonkin, and Tree form, " ..
+                    "and show the Physical GCD duration while in cat, bear, and dire bear form." ..
+                    " Spell GCD duration is affected by haste rating and buffs, while the" ..
+                    " physical GCD duration is not." ..
+                    "The markers are anchored to the end of the timer bar, and will hide when the timer is inactive." ..
+                    " The markers can also be anchored to the timer's progress instead."
+            },
+            h2 = {
+                type = "header",
+                order = 1.2,
+                name = "Form Colors",
+            },
+            d2 = {
+                type = "description",
+                order = 1.3,
+                name = "The timer bar is by default configured to change color based on the druid's form. These colors " ..
+                    "can be specified in Druid Configuration."
+            },
+            h3 = {
+                type = "header",
+                order = 1.4,
+                name = "Maul Queueing",
+            },
+            d3 = {
+                type = "description",
+                order = 1.5,
+                name =
+                    "The progress bar is configured to change color when the druid has Maul queued for their next attack. " ..
+                    "The bar will also turn a special color when the druid has Maul queued but rage decay or rage spending " ..
+                    "takes them below the rage threshold to cast Maul."
+            },
+        }
     elseif player_class == "HUNTER" then
         per_class = {
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "The ranged timer is the primary timer for hunters and is visible whenever the player "..
-                "has a target or is in-combat, dimming when out-of-range.\n\n"..
-                "The mainhand timer (and offhand timer if an offhand is equipped) is smaller and placed below the "..
-                "ranged timer. It only appears when the player is in-combat and in melee range of the target.\n\n"..
-                "The GCD underlay is enabled on the bar by default, however the GCD markers are turned off. "..
-                "This is to make room for a central range-finding text, that shows the approximate range the hunter "..
-                "is to the target. While this feature is possible with any class, Hunter is the only one with it enabled"..
-                " by default.\n\n"..
-                "The Deadzone is also enabled on the ranged bar to let Hunters keep an eye on their latency."
+                name = "The ranged timer is the primary timer for hunters and is visible whenever the player " ..
+                    "has a target or is in-combat, dimming when out-of-range.\n\n" ..
+                    "The mainhand timer (and offhand timer if an offhand is equipped) is smaller and placed below the " ..
+                    "ranged timer. It only appears when the player is in-combat and in melee range of the target.\n\n" ..
+                    "The GCD underlay is enabled on the bar by default, however the GCD markers are turned off. " ..
+                    "This is to make room for a central range-finding text, that shows the approximate range the hunter " ..
+                    "is to the target. While this feature is possible with any class, Hunter is the only one with it enabled" ..
+                    " by default.\n\n" ..
+                    "The Deadzone is also enabled on the ranged bar to let Hunters keep an eye on their latency."
             },
             h1 = {
                 type = "header",
@@ -1105,8 +1142,8 @@ function ST:construct_class_info_panel()
             d2 = {
                 type = "description",
                 order = 1.3,
-                name = "The mainhand progress bar is configured to change color when the hunter has Raptor Strike "..
-                "queued for their next attack."
+                name = "The mainhand progress bar is configured to change color when the hunter has Raptor Strike " ..
+                    "queued for their next attack."
             },
         }
     elseif player_class == "MAGE" then
@@ -1114,27 +1151,27 @@ function ST:construct_class_info_panel()
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Mages, like all other casters, have less of a need for a swing timer on Titanforge, "..
-                "and so Swedgetimer is globally disabled for the class by default.\n\n"..
-                "If the player enables the addon for Mages, then the ranged timer will be used for wand shooting progress"..
-                " and the mainhand timer will be disabled by default."
-           }
+                name = "Mages, like all other casters, have less of a need for a swing timer on Titanforge, " ..
+                    "and so Swedgetimer is globally disabled for the class by default.\n\n" ..
+                    "If the player enables the addon for Mages, then the ranged timer will be used for wand shooting progress" ..
+                    " and the mainhand timer will be disabled by default."
+            }
         }
     elseif player_class == "PALADIN" then
         per_class = {
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Paladins are only capable of using mainhand weapons, and so the class only has "..
-                "a single mainhand timer."..
-                "\n\nBy default, the timer will only show when the player is in-combat or has an attackable "..
-                "target. By default, the timer will be dimmed when the player is outside of melee range."..
-                "\n\nThe GCD underlay is enabled for the mainhand. "..
-                "The GCD markers are split between showing the expected Physical GCD (top) and Spell "..
-                "GCD (bottom). Spell GCD duration is affected by haste rating and related buffs, while the"..
-                " Physical GCD duration is not."..
-                "The markers are anchored to the timer's end, and will hide when the bar is inactive."..
-                " The markers can also be anchored to the timer's progress instead."
+                name = "Paladins are only capable of using mainhand weapons, and so the class only has " ..
+                    "a single mainhand timer." ..
+                    "\n\nBy default, the timer will only show when the player is in-combat or has an attackable " ..
+                    "target. By default, the timer will be dimmed when the player is outside of melee range." ..
+                    "\n\nThe GCD underlay is enabled for the mainhand. " ..
+                    "The GCD markers are split between showing the expected Physical GCD (top) and Spell " ..
+                    "GCD (bottom). Spell GCD duration is affected by haste rating and related buffs, while the" ..
+                    " Physical GCD duration is not." ..
+                    "The markers are anchored to the timer's end, and will hide when the bar is inactive." ..
+                    " The markers can also be anchored to the timer's progress instead."
             },
             h1 = {
                 type = "header",
@@ -1144,9 +1181,9 @@ function ST:construct_class_info_panel()
             d2 = {
                 type = "description",
                 order = 1.3,
-                name = "Paladins by default have their progress bar set to a grey color with no seal, "..
-                "and when a seal is active on the paladin the bar turns a color corresponding to the seal. "..
-                "This can be changed in Paladin Configuration."
+                name = "Paladins by default have their progress bar set to a grey color with no seal, " ..
+                    "and when a seal is active on the paladin the bar turns a color corresponding to the seal. " ..
+                    "This can be changed in Paladin Configuration."
             },
             h3 = {
                 type = "header",
@@ -1156,36 +1193,37 @@ function ST:construct_class_info_panel()
             d3 = {
                 type = "description",
                 order = 1.5,
-                name = "The timer is configured to have a pixel glow when the player both has Art of War and has Exorcism "..
-                "off cooldown. The glow can be disabled or tweaked in Paladin Configuration."..
-                " The glow effect can also be set to not require Exorcism off cooldown, which can be handy "..
-                "for Rets who want to optimise their Flash of Light casts.",
+                name =
+                    "The timer is configured to have a pixel glow when the player both has Art of War and has Exorcism " ..
+                    "off cooldown. The glow can be disabled or tweaked in Paladin Configuration." ..
+                    " The glow effect can also be set to not require Exorcism off cooldown, which can be handy " ..
+                    "for Rets who want to optimise their Flash of Light casts.",
+            }
         }
-    }
     elseif player_class == "PRIEST" then
         per_class = {
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Priests, like all other casters, have less of a need for a swing timer on Titanforge, "..
-                "and so Swedgetimer is globally disabled for the class by default.\n\n"..
-                "If the player enables the addon for Priests, then the ranged timer will be used for wand shooting progress"..
-                " and the mainhand timer will be disabled by default."
-           }
+                name = "Priests, like all other casters, have less of a need for a swing timer on Titanforge, " ..
+                    "and so Swedgetimer is globally disabled for the class by default.\n\n" ..
+                    "If the player enables the addon for Priests, then the ranged timer will be used for wand shooting progress" ..
+                    " and the mainhand timer will be disabled by default."
+            }
         }
     elseif player_class == "ROGUE" then
         per_class = {
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Rogues have access to mainhand, offhand, and ranged weapons. "..
-                "The mainhand and offhand timers are enabled by default, while the ranged timer is disabled. "..
-                "If the ranged timer is enabled, it will be a smaller bar below the offhand, which will only "..
-                "show when the rogue is both in-combat, and in range with the equipped ranged weapon.\n\n"..
-                "The main/offhand timers will by default only show when the player has a valid target, or "..
-                "is in combat."..
-                "\n\nThe GCD underlay is enabled for the mainhand. "..
-                "The GCD markers show the physical GCD duration anchored to the end of the swing."
+                name = "Rogues have access to mainhand, offhand, and ranged weapons. " ..
+                    "The mainhand and offhand timers are enabled by default, while the ranged timer is disabled. " ..
+                    "If the ranged timer is enabled, it will be a smaller bar below the offhand, which will only " ..
+                    "show when the rogue is both in-combat, and in range with the equipped ranged weapon.\n\n" ..
+                    "The main/offhand timers will by default only show when the player has a valid target, or " ..
+                    "is in combat." ..
+                    "\n\nThe GCD underlay is enabled for the mainhand. " ..
+                    "The GCD markers show the physical GCD duration anchored to the end of the swing."
             },
             h2 = {
                 type = "header",
@@ -1195,9 +1233,9 @@ function ST:construct_class_info_panel()
             d2 = {
                 type = "description",
                 order = 1.3,
-                name = "As Rogue is a class that can use all three weapon types, two Multi-timer controls are included."..
-                " These can be used to alter all three timer properties together, or to alter just the mainhand and offhand"..
-                " together."
+                name = "As Rogue is a class that can use all three weapon types, two Multi-timer controls are included." ..
+                    " These can be used to alter all three timer properties together, or to alter just the mainhand and offhand" ..
+                    " together."
             },
         }
     elseif player_class == "SHAMAN" then
@@ -1205,16 +1243,17 @@ function ST:construct_class_info_panel()
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Shamans can use a mainhand and offhand weapon if they are specced as Enhancement, and by default these timers are both "..
-                "enabled. The offhand timer only displays if the player has an offhand weapon equipped."..
-                "\n\nBy default, the timers will only show when the player is in-combat or has an attackable "..
-                "target, and the timers will be dimmed when the player is outside of melee range"..
-                " of their target, or has no target.\n\n"..
-                "The GCD underlay is enabled on the mainhand timer. "..
-                "The GCD markers are split between showing the expected Physical GCD (top) and Spell "..
-                "GCD (bottom). Spell GCD duration is affected by haste rating and related buffs, while the"..
-                " Physical GCD duration is not."..
-                " The markers can also be anchored to the timer's progress instead."
+                name =
+                    "Shamans can use a mainhand and offhand weapon if they are specced as Enhancement, and by default these timers are both " ..
+                    "enabled. The offhand timer only displays if the player has an offhand weapon equipped." ..
+                    "\n\nBy default, the timers will only show when the player is in-combat or has an attackable " ..
+                    "target, and the timers will be dimmed when the player is outside of melee range" ..
+                    " of their target, or has no target.\n\n" ..
+                    "The GCD underlay is enabled on the mainhand timer. " ..
+                    "The GCD markers are split between showing the expected Physical GCD (top) and Spell " ..
+                    "GCD (bottom). Spell GCD duration is affected by haste rating and related buffs, while the" ..
+                    " Physical GCD duration is not." ..
+                    " The markers can also be anchored to the timer's progress instead."
             },
             h2 = {
                 type = "header",
@@ -1224,8 +1263,8 @@ function ST:construct_class_info_panel()
             d2 = {
                 type = "description",
                 order = 1.3,
-                name = "A Multi-timer control is included to let the player alter properties of both the mainhand "..
-                "and offhand timers together, accessible from the relevant panel on the left."
+                name = "A Multi-timer control is included to let the player alter properties of both the mainhand " ..
+                    "and offhand timers together, accessible from the relevant panel on the left."
             },
         }
     elseif player_class == "WARLOCK" then
@@ -1233,25 +1272,25 @@ function ST:construct_class_info_panel()
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Warlocks, like all other casters, have less of a need for a swing timer on Titanforge, "..
-                "and so Swedgetimer is globally disabled for the class by default.\n\n"..
-                "If the player enables the addon for Warlocks, then the ranged timer will be used for wand shooting progress"..
-                " and the mainhand timer will be disabled by default."
-           }
+                name = "Warlocks, like all other casters, have less of a need for a swing timer on Titanforge, " ..
+                    "and so Swedgetimer is globally disabled for the class by default.\n\n" ..
+                    "If the player enables the addon for Warlocks, then the ranged timer will be used for wand shooting progress" ..
+                    " and the mainhand timer will be disabled by default."
+            }
         }
     elseif player_class == "WARRIOR" then
         per_class = {
             d1 = {
                 type = "description",
                 order = 1.1,
-                name = "Warriors have access to mainhand, offhand, and ranged weapons. "..
-                "The mainhand and offhand timers are enabled by default, while the ranged timer is disabled. "..
-                "If the ranged timer is enabled, it will be a smaller bar below the offhand, which will only "..
-                "show when the warrior is both in-combat, and in range with the equipped ranged weapon.\n\n"..
-                "The main/offhand timers will by default only show when the player has a valid target, or "..
-                "is in combat."..
-                "\n\nThe GCD underlay is enabled for the mainhand. "..
-                "The GCD markers show the physical GCD duration anchored to the end of the swing."
+                name = "Warriors have access to mainhand, offhand, and ranged weapons. " ..
+                    "The mainhand and offhand timers are enabled by default, while the ranged timer is disabled. " ..
+                    "If the ranged timer is enabled, it will be a smaller bar below the offhand, which will only " ..
+                    "show when the warrior is both in-combat, and in range with the equipped ranged weapon.\n\n" ..
+                    "The main/offhand timers will by default only show when the player has a valid target, or " ..
+                    "is in combat." ..
+                    "\n\nThe GCD underlay is enabled for the mainhand. " ..
+                    "The GCD markers show the physical GCD duration anchored to the end of the swing."
             },
             h2 = {
                 type = "header",
@@ -1261,9 +1300,10 @@ function ST:construct_class_info_panel()
             d2 = {
                 type = "description",
                 order = 1.3,
-                name = "As Warrior is a class that can use all three weapon types, two Multi-timer controls are included."..
-                " These can be used to alter all three timer properties together, or to alter just the mainhand and offhand"..
-                " together."
+                name =
+                    "As Warrior is a class that can use all three weapon types, two Multi-timer controls are included." ..
+                    " These can be used to alter all three timer properties together, or to alter just the mainhand and offhand" ..
+                    " together."
             },
             h3 = {
                 type = "header",
@@ -1273,11 +1313,11 @@ function ST:construct_class_info_panel()
             d3 = {
                 type = "description",
                 order = 1.5,
-                name = "The mainhand progress bar is configured to change color when the Warrior has an on-next-attack"..
-                " queued, with different colors enabled for Heroic Strike and Cleave."..
-                "The bar will also turn a special color when the player has an on-next-attack ability "..
-                "queued but rage decay or rage spending "..
-                "takes them below the rage threshold to cast it."
+                name = "The mainhand progress bar is configured to change color when the Warrior has an on-next-attack" ..
+                    " queued, with different colors enabled for Heroic Strike and Cleave." ..
+                    "The bar will also turn a special color when the player has an on-next-attack ability " ..
+                    "queued but rage decay or rage spending " ..
+                    "takes them below the rage threshold to cast it."
             },
         }
     end

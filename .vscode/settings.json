@@ -159,9 +159,20 @@
         "BOOKTYPE_SPELL",
         "IsSpellInRange",
         "WOW_PROJECT_MISTS_CLASSIC",
-        "PlayerFrame"
+        "PlayerFrame",
+        "exclude_files",
+        "ignore",
+        "std",
+        "max_line_length",
+        "GameFontNormal",
+        "GameFontHighlight",
+        "GameFontHighlightLarge",
+        "GameFontHighlightSmall",
+        "ChatFontNormal",
+        "NumberFontNormalSmallGray"
     ],
     "Lua.diagnostics.disable": [
         "assign-type-mismatch"
-    ]
+    ],
+    "Lua.type.weakUnionCheck": true
 }

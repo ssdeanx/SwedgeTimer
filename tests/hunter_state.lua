@@ -76,6 +76,8 @@ local function build(opts)
         is_current_spell_tokens = {}, -- every token IsCurrentSpell was probed with
         is_spell_known_tokens = {}, -- every token IsSpellKnown was probed with
         channel_spell = opts.channel_spell, -- the spell id UnitChannelInfo reports, or nil
+        channel_name = opts.channel_name, -- the channel name (nil = "Steady Shot")
+        channel_idless = opts.channel_idless, -- true: a live channel with no numeric id (R1)
         channel_calls = 0,
         bar_color_calls = 0,
         set_vertex_calls = 0,
@@ -207,13 +209,18 @@ local function build(opts)
         return known ~= nil and known[id] == true
     end
     -- UnitChannelInfo returns the spell id as the 8th value and has no castID (unlike
-    -- UnitCastingInfo). nil models "not channelling", the classic non-channel payload.
+    -- UnitCastingInfo). nil models "not channelling", the classic non-channel payload;
+    -- channel_idless models the R1 shape (a live channel whose payload carries no
+    -- numeric id), channel_name overrides the reported name (default "Steady Shot").
     env.UnitChannelInfo = function()
         sb.channel_calls = sb.channel_calls + 1
-        if sb.channel_spell == nil then
+        if sb.channel_spell == nil and sb.channel_name == nil and not sb.channel_idless then
             return nil
         end
-        return "Steady Shot", "", "icon", 1000, 2000, false, false, sb.channel_spell
+        if sb.channel_idless then
+            return sb.channel_name or "Steady Shot", "", "icon", 1000, 2000, false, false, nil
+        end
+        return sb.channel_name or "Steady Shot", "", "icon", 1000, 2000, false, false, sb.channel_spell
     end
 
     -- Opt-in mana fixture for the OOM Viper probe (compat reads UnitPower through
@@ -943,6 +950,28 @@ do
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
     eq(ST.steady_shot_queued, false, "an unrelated channel id leaves the flag down")
 
+    -- R1 id-less channel: a live Steady channel with no numeric id still queues
+    -- through the client's localized name (the fixture book resolves the Steady
+    -- ranks); a foreign name with an unknown id queues nothing.
+    do
+        local function steady_book(id)
+            if id == 34120 or id == 56641 then
+                return "Steady Shot", nil, "icon_" .. id, 1500, 0, 0, id
+            end
+            return nil
+        end
+        local tbc = build({ project = 5, GetSpellInfo = steady_book })
+        tbc.class_db.enable_steady_shot_color = true
+        tbc.channel_idless = true
+        tbc.ST.steady_shot_queued = false
+        tbc.ST.HUNTER.on_current_spell_cast_changed(tbc.ST, false)
+        eq(tbc.ST.steady_shot_queued, true, "TBC: an id-less Steady channel queues by name")
+        tbc.channel_name = "Frostbolt"
+        tbc.ST.steady_shot_queued = false
+        tbc.ST.HUNTER.on_current_spell_cast_changed(tbc.ST, false)
+        eq(tbc.ST.steady_shot_queued, false, "TBC: a foreign channel name queues nothing")
+    end
+
     -- No live channel (nil payload): no error, flag down.
     sb.channel_spell = nil
     local ok2, err2 = pcall(ST.HUNTER.on_current_spell_cast_changed, ST, false)
@@ -1455,6 +1484,64 @@ do
     local no_ui = build()
     local ok2, err2 = pcall(no_ui.ST.HUNTER.on_spellcast_succeeded, no_ui.ST, "player", nil, 23989)
     check(ok2, "Readiness without hunter_ui does not error (" .. tostring(err2) .. ")")
+
+    -- R1 name-carrying payloads (the name rides the guid slot when the id is
+    -- absent): a TBC Feign Death by name clears the same display state, and a
+    -- TBC Readiness by name forces the same refresh. The fixture book resolves
+    -- both names, so these legs pin the live-resolution path (the English
+    -- fallback path is pinned on the WRATH build below). A foreign name changes
+    -- nothing.
+    do
+        local function tbc_book(id)
+            if id == 5384 then
+                return "Feign Death", nil, "icon_5384", 0, 0, 0, id
+            end
+            if id == 23989 then
+                return "Readiness", nil, "icon_23989", 0, 0, 0, id
+            end
+            return nil
+        end
+        local tbc = build({ project = 5, GetSpellInfo = tbc_book, st_extras = { hunter_ui = {
+            force_rapid_fire_refresh = function() refresh_calls = refresh_calls + 1 end,
+        } } })
+        local T = tbc.ST
+        T.ranged = {
+            auto_repeat_active = true,
+            hidden_window_start = 1.5,
+            hidden_window_duration = 0.55,
+            synced_duration = 2.4,
+            last_restart_at = 5,
+            start = 1.0, speed = 2.4, ends_at = 3.4,
+        }
+        T.HUNTER.on_spellcast_succeeded(T, "player", "Feign Death", nil)
+        eq(T.ranged.auto_repeat_active, false, "TBC: a name-carrying FD drops auto-repeat")
+        eq(T.ranged.hidden_window_start, nil, "TBC: a name-carrying FD drops the window")
+        eq(T.ranged.start, 1.0, "TBC: a name-carrying FD never touches the engine anchor")
+        local before = refresh_calls
+        T.HUNTER.on_spellcast_succeeded(T, "player", "Readiness", nil)
+        eq(refresh_calls, before + 1, "TBC: a name-carrying Readiness forces the refresh")
+        T.HUNTER.on_spellcast_succeeded(T, "player", "Scare Beast", nil)
+        eq(refresh_calls, before + 1, "TBC: an unrelated name never forces the refresh")
+        T.ranged.hidden_window_start = 1.5
+        T.HUNTER.on_spellcast_succeeded(T, "player", "Scare Beast", nil)
+        eq(T.ranged.hidden_window_start, 1.5, "TBC: an unrelated name never clears the window")
+    end
+
+    -- The English fallback path: a client whose book has not answered (the
+    -- minimal fixture resolves nothing) still matches both names through the
+    -- literals, so a cold book never drops the clear or the refresh.
+    do
+        local cold = build({ project = 5, st_extras = { hunter_ui = {
+            force_rapid_fire_refresh = function() refresh_calls = refresh_calls + 1 end,
+        } } })
+        local C = cold.ST
+        C.ranged = { auto_repeat_active = true, hidden_window_start = 1.5 }
+        C.HUNTER.on_spellcast_succeeded(C, "player", "Feign Death", nil)
+        eq(C.ranged.auto_repeat_active, false, "TBC: a cold book still drops auto-repeat by name")
+        local before = refresh_calls
+        C.HUNTER.on_spellcast_succeeded(C, "player", "Readiness", nil)
+        eq(refresh_calls, before + 1, "TBC: a cold book still forces the refresh by name")
+    end
 end
 
 --=========================================================================================
@@ -2076,8 +2163,9 @@ do
         check(sb.calls.in_range > 0, "the range helper still probes on the fallback path")
     end
 
-    -- 14h) the movement-safe cast zone: geometry, the safe/unsafe colour ladder, the
-    -- threshold marker and the off-gate.
+    -- 14h) the Auto Shot cast window (red zone): fixed geometry at the END of the
+    -- ranged bar, latency never added to the width (operator ruling 2026-10-22), the
+    -- green/red movement repaint, the threshold marker and the off-gate.
     do
         local sb = build_ui({ ranged_start = -1.6, ranged_speed = 2, world_ms = 100 })
         sb.class_db.hunter_cast_zone_enabled = true
@@ -2088,21 +2176,22 @@ do
         eq(ui.cast_zone.parent.name, "RangedVisualsFrame",
             "the cast zone parents to the ranged visuals frame")
         eq(ui.cast_zone.shown, true, "the cast zone shows with a live ranged cycle")
-        -- 0.5 base + 0.1 latency = 0.6 s window over a 2 s cycle on a 275 px bar.
-        near(ui.cast_zone.width, 0.3 * 275, "the zone width is the window fraction")
+        -- Fixed 0.5 s window over a 2 s cycle on a 275 px bar: 0.25 * 275, never
+        -- widened by the 100 ms latency.
+        near(ui.cast_zone.width, 0.25 * 275, "the zone width is the fixed 0.5 s window fraction")
         near(ui.cast_zone.color[1], 0.2,
             "standing still with no stop stamp reads the safe green")
         near(ui.cast_zone.color[2], 0.78, "the safe green's second channel")
         eq(ui.cast_zone_marker.shown, true, "the threshold marker shows with the zone")
-        near(ui.cast_zone_marker.points[1].x, 275 - 0.3 * 275 - 1.5,
-            "the marker sits on the window boundary")
+        near(ui.cast_zone_marker.points[1].x, 275 - 0.25 * 275 - 1.5,
+            "the marker sits on the window boundary at the end of the bar")
 
         -- Still moving: unsafe red.
         sb.ST.is_moving = true
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
         near(ui.cast_zone.color[1], 1, "still moving reads the unsafe red")
         near(ui.cast_zone.color[2], 0, "the unsafe red's second channel")
-        -- Stopped after the window opened (open = -1.6 + 2 - 0.6 = -0.2): still unsafe.
+        -- Stopped after the window opened (open = -1.6 + 2 - 0.5 = -0.1): still unsafe.
         sb.ST.is_moving = false
         sb.ST.last_stopped_moving_at = 0.5
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
@@ -4220,6 +4309,43 @@ do
         check(ok, "trap: expiry on a nil self does not error (" .. tostring(err) .. ")")
     end
 
+    -- R1 name-carrying payloads: the name rides the guid slot when the id is
+    -- absent, so the same cast arms the same key by name. The fixture book
+    -- resolves the trap names, so these legs pin the live-resolution path.
+    -- Both Explosive ranks share one English name, so the family picks the key
+    -- (Wrath takes the WotLK rank, TBC the classic rank). A foreign name arms
+    -- nothing.
+    do
+        local function trap_book(id)
+            local names = {
+                [1499] = "Freezing Trap",
+                [13813] = "Explosive Trap",
+                [13795] = "Immolation Trap",
+            }
+            if names[id] then
+                return names[id], nil, "icon_" .. id, 0, 0, 0, id
+            end
+            return nil
+        end
+        local tbc = build({ project = 5, GetSpellInfo = trap_book })
+        local T = tbc.ST
+        T.HUNTER.on_spellcast_succeeded(T, "player", "Freezing Trap", nil)
+        check(type(T.hunter_trap) == "table", "trap: a TBC name-carrying Freezing cast arms the tracker")
+        eq((T.hunter_trap or {}).key, "freezing", "trap: the Freezing name arms Freezing")
+        T.HUNTER.on_spellcast_succeeded(T, "player", "Explosive Trap", nil)
+        eq((T.hunter_trap or {}).key, "explosive", "trap: TBC takes the classic Explosive rank by name")
+        local wrath = build()
+        local W = wrath.ST
+        W.HUNTER.on_spellcast_succeeded(W, "player", "Explosive Trap", nil)
+        check(type(W.hunter_trap) == "table", "trap: a Wrath name-carrying Explosive cast arms the tracker")
+        eq((W.hunter_trap or {}).key, "explosive_trap", "trap: Wrath takes the WotLK Explosive rank by name")
+        T.HUNTER.on_spellcast_succeeded(T, "player", "Scare Beast", nil)
+        eq((T.hunter_trap or {}).key, "explosive", "trap: a foreign name replaces nothing")
+        local fresh = build()
+        fresh.ST.HUNTER.on_spellcast_succeeded(fresh.ST, "player", "Scare Beast", nil)
+        eq(fresh.ST.hunter_trap, nil, "trap: a foreign name arms nothing")
+    end
+
     -- Expiry: holds inside the window, clears on its edge; malformed clears, an
     -- unknown clock holds.
     do
@@ -5493,6 +5619,114 @@ do
         "font: the target-warning label is fonted before its first SetText (source order)")
     check(src:find(":SetFont(", 1, true) == nil,
         "font: hunter_ui.lua has no direct SetFont call (the shared chain owns every font)")
+end
+
+--=========================================================================================
+-- NILSWEEP (2026-10-22): nil class-table / slot guards on the per-frame and
+-- per-event entries. A nil get_class_table return means the profile has no table
+-- for the class; a nil slot means a caller that does not pass one. Neither may
+-- throw.
+--=========================================================================================
+do
+    -- H1: on_current_spell_cast_changed with no class table.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.HUNTER.on_current_spell_cast_changed, ST)
+    check(ok, "NILSWEEP H1 on_current_spell_cast_changed tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- H2: on_bar_update with no class table skips the settings block, never throws.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.HUNTER.on_bar_update, ST, "ranged")
+    check(ok, "NILSWEEP H2 on_bar_update tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- H3a: set_bar_color with no class table declines (false) and throws nothing.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, res = pcall(ST.HUNTER.set_bar_color, ST, "mainhand")
+    check(ok, "NILSWEEP H3a set_bar_color tolerates a nil class table")
+    if ok then
+        eq(res, false, "NILSWEEP H3a set_bar_color returns false without a class table")
+    end
+end
+
+do
+    -- H3b: set_bar_color with no visuals frame declines (false) and throws nothing.
+    -- The raptor queue is armed so the colour branch actually runs (otherwise neither
+    -- tree touches the missing frame and the leg would pass on unguarded code too).
+    local sb = build({ no_visuals = true })
+    local ST = sb.ST
+    ST.raptor_strike_queued = true
+    local ok, res = pcall(ST.HUNTER.set_bar_color, ST, "mainhand")
+    check(ok, "NILSWEEP H3b set_bar_color tolerates a nil visuals frame")
+    if ok then
+        eq(res, false, "NILSWEEP H3b set_bar_color returns false without a visuals frame")
+    end
+end
+
+do
+    -- H4a: get_hud_state with no class table skips the tints and throws nothing.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, s = pcall(ST.HUNTER.get_hud_state, ST, { key = "kill_command" }, 100)
+    check(ok, "NILSWEEP H4a get_hud_state tolerates a nil class table")
+    if ok then
+        eq(s.usable, nil, "NILSWEEP H4a get_hud_state leaves usable alone without a class table")
+        eq(s.in_range, nil, "NILSWEEP H4a get_hud_state leaves in_range alone without a class table")
+    end
+end
+
+do
+    -- H4b: get_hud_state with no slot hides instead of throwing.
+    local sb = build()
+    local ST = sb.ST
+    local ok, s = pcall(ST.HUNTER.get_hud_state, ST, nil, 100)
+    check(ok, "NILSWEEP H4b get_hud_state tolerates a nil slot")
+    if ok then
+        eq(s.hidden, true, "NILSWEEP H4b get_hud_state hides a nil slot")
+    end
+end
+
+--=========================================================================================
+-- NILSWEEP (2026-10-22): the hunter UI's boot and per-frame entries with no ranged
+-- hand row / no class row. Absence is legitimate (no configuration to build or paint),
+-- so build reports "not ready" and the tick hides; the unguarded code indexes the nil
+-- table and throws, so each leg is red-first.
+--=========================================================================================
+do
+    local sb = build_ui({})
+    sb.ST.get_hand_table = function() return nil end
+    local ok, res = pcall(sb.st.hunter_ui.build, sb.ST, sb.ranged_bar_frame)
+    check(ok, "NILSWEEP HU1 build tolerates a missing ranged hand row (error: " .. tostring(res) .. ")")
+    eq(res, false, "NILSWEEP HU1 build reports not-ready without a ranged hand row")
+end
+
+do
+    local sb = build_ui({})
+    sb.ST.HUNTER.post_init(sb.ST)
+    check(sb.st.hunter_ui.ready == true, "fixture: the hunter UI built")
+    sb.ST.get_class_table = function() return nil end
+    local ok, err = pcall(sb.ST.HUNTER.on_bar_update, sb.ST, "ranged")
+    check(ok, "NILSWEEP HU2 the ranged tick tolerates a missing class row (error: " .. tostring(err) .. ")")
+    check(sb.st.hunter_ui.cast_frame == nil or sb.st.hunter_ui.cast_frame:IsShown() == false,
+        "NILSWEEP HU2 the ranged tick hides the UI without a class row")
+    check(sb.ST.bar_hook_errors == nil or (sb.ST.bar_hook_errors.count or 0) == 0,
+        "NILSWEEP HU2 no sub-feature site runs (and none errors) without a class row")
+    -- The re-anchor branch reads the lock setting only while the cast bar is up, so
+    -- show it: that is the live state the guard protects (nil row = shipped locked).
+    if sb.st.hunter_ui.cast_frame then
+        sb.st.hunter_ui.cast_frame:Show()
+    end
+    local ok2, err2 = pcall(sb.ST.HUNTER.on_bar_update, sb.ST, "mainhand")
+    check(ok2, "NILSWEEP HU2 the mainhand tick tolerates a missing class row (error: " .. tostring(err2) .. ")")
 end
 
 if failures == 0 then

@@ -3665,6 +3665,170 @@ do
     eq(T.exo_on_cooldown, false, "TBC: an unrelated name leaves the latch alone")
 end
 
+--=========================================================================================
+-- NILSWEEP (2026-10-22): nil class-table / slot guards on the per-frame and
+-- per-event entries. A nil get_class_table return means the profile has no table
+-- for the class; a nil slot means a caller that does not pass one. Neither may
+-- throw.
+--=========================================================================================
+do
+    -- P1a: glow_start with no class table starts no glow and throws nothing.
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local n0 = #b.lcg_starts
+    local ok, err = pcall(b.ST.PALADIN.glow_start, b.ST)
+    check(ok, "NILSWEEP P1a glow_start tolerates a nil class table (error: " .. tostring(err) .. ")")
+    eq(#b.lcg_starts, n0, "NILSWEEP P1a glow_start starts no glow without a class table")
+end
+
+do
+    -- P1b: glow_start with no bar frame starts no glow and throws nothing.
+    local b = build({})
+    b.ST.get_bar_frame = function() return nil end
+    local n0 = #b.lcg_starts
+    local ok, err = pcall(b.ST.PALADIN.glow_start, b.ST)
+    check(ok, "NILSWEEP P1b glow_start tolerates a nil bar frame (error: " .. tostring(err) .. ")")
+    eq(#b.lcg_starts, n0, "NILSWEEP P1b glow_start starts no glow without a bar frame")
+end
+
+do
+    -- P1c: glow_start with no hand table falls back to thickness 1.
+    local b = build({})
+    b.ST.get_hand_table = function() return nil end
+    local ok, err = pcall(b.ST.PALADIN.glow_start, b.ST)
+    check(ok, "NILSWEEP P1c glow_start tolerates a nil hand table (error: " .. tostring(err) .. ")")
+    if ok and #b.lcg_starts > 0 then
+        eq(b.lcg_starts[#b.lcg_starts].frame ~= nil, true, "NILSWEEP P1c glow_start still glows with a fallback thickness")
+    end
+end
+
+do
+    -- P2: glow_stop with no bar frame stops nothing and throws nothing.
+    local b = build({})
+    b.ST.get_bar_frame = function() return nil end
+    local n0 = #b.lcg_stops
+    local ok, err = pcall(b.ST.PALADIN.glow_stop, b.ST)
+    check(ok, "NILSWEEP P2 glow_stop tolerates a nil bar frame (error: " .. tostring(err) .. ")")
+    eq(#b.lcg_stops, n0, "NILSWEEP P2 glow_stop stops no glow without a bar frame")
+end
+
+do
+    -- P3: process_aow with no class table is a no-op (all options read default).
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local ok, err = pcall(b.ST.PALADIN.process_aow, b.ST)
+    check(ok, "NILSWEEP P3 process_aow tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- P4a/P4b: set_bar_color with no class table (or no visuals frame) declines.
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local ok, res = pcall(b.ST.PALADIN.set_bar_color, b.ST, "mainhand")
+    check(ok, "NILSWEEP P4a set_bar_color tolerates a nil class table")
+    if ok then
+        eq(res, false, "NILSWEEP P4a set_bar_color returns false without a class table")
+    end
+end
+
+do
+    -- P4b: set_bar_color with no visuals frame declines (false) and throws nothing.
+    -- A seal is up so a colour branch actually runs (otherwise no tree touches the
+    -- missing frame and the leg would pass on unguarded code too).
+    local b = build({})
+    b.ST.get_visuals_frame = function() return nil end
+    b.ST.has_soc = true
+    local ok, res = pcall(b.ST.PALADIN.set_bar_color, b.ST, "mainhand")
+    check(ok, "NILSWEEP P4b set_bar_color tolerates a nil visuals frame")
+    if ok then
+        eq(res, false, "NILSWEEP P4b set_bar_color returns false without a visuals frame")
+    end
+end
+
+do
+    -- P5: twist_glow_start with no class table still glows (fallback colour).
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local n0 = #b.lcg_starts
+    local ok, err = pcall(b.ST.PALADIN.twist_glow_start, b.ST)
+    check(ok, "NILSWEEP P5 twist_glow_start tolerates a nil class table (error: " .. tostring(err) .. ")")
+    eq(#b.lcg_starts, n0 + 1, "NILSWEEP P5 twist_glow_start still glows with the fallback colour")
+end
+
+do
+    -- P6: get_twist_window with no class table reads the default lag calibration.
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local ok, window = pcall(b.ST.PALADIN.get_twist_window_time_before_swing, b.ST)
+    check(ok, "NILSWEEP P6 get_twist_window tolerates a nil class table")
+    if ok then
+        check(type(window) == "number", "NILSWEEP P6 get_twist_window still returns a number")
+    end
+end
+
+do
+    -- P7: on_bar_update with no class table skips the tick.
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local ok, err = pcall(b.ST.PALADIN.on_bar_update, b.ST, "mainhand")
+    check(ok, "NILSWEEP P7 on_bar_update tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- P9: on_twist_attempt with no class table still counts, never throws.
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local ok, err = pcall(b.ST.PALADIN.on_twist_attempt, b.ST)
+    check(ok, "NILSWEEP P9 on_twist_attempt tolerates a nil class table (error: " .. tostring(err) .. ")")
+    if ok then
+        eq(b.ST.twist_score_attempts, 1, "NILSWEEP P9 on_twist_attempt still counts the attempt")
+    end
+end
+
+do
+    -- P10: on_successful_twist with no class table still counts, never throws.
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local ok, err = pcall(b.ST.PALADIN.on_successful_twist, b.ST)
+    check(ok, "NILSWEEP P10 on_successful_twist tolerates a nil class table (error: " .. tostring(err) .. ")")
+    if ok then
+        eq(b.ST.twist_score_successes, 1, "NILSWEEP P10 on_successful_twist still counts the success")
+    end
+end
+
+do
+    -- P11: gather_guide_inputs with no class table reads option defaults.
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local ok, inputs = pcall(b.ST.PALADIN.gather_guide_inputs, b.ST, {})
+    check(ok, "NILSWEEP P11 gather_guide_inputs tolerates a nil class table")
+    if ok then
+        eq(inputs.reaction, 0.1, "NILSWEEP P11 gather_guide_inputs defaults reaction to 0.1")
+    end
+end
+
+do
+    -- P12a: get_hud_state with no class table skips the tints and throws nothing.
+    local b = build({})
+    b.ST.get_class_table = function() return nil end
+    local ok, s = pcall(b.ST.PALADIN.get_hud_state, b.ST, { key = "judgement" }, 100)
+    check(ok, "NILSWEEP P12a get_hud_state tolerates a nil class table")
+    if ok then
+        eq(s.usable, nil, "NILSWEEP P12a get_hud_state leaves usable alone without a class table")
+        eq(s.in_range, nil, "NILSWEEP P12a get_hud_state leaves in_range alone without a class table")
+    end
+end
+
+do
+    -- P12b: get_hud_state with no slot hides instead of throwing.
+    local b = build({})
+    local ok, s = pcall(b.ST.PALADIN.get_hud_state, b.ST, nil, 100)
+    check(ok, "NILSWEEP P12b get_hud_state tolerates a nil slot")
+    if ok then
+        eq(s.hidden, true, "NILSWEEP P12b get_hud_state hides a nil slot")
+    end
+end
+
 if failures == 0 then
     print("PASS  paladin_state.lua (" .. tostring(checks) .. " checks)")
 else

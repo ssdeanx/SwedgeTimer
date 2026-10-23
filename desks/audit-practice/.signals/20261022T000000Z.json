@@ -1,0 +1,18 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-22T00:00:00Z",
+  "agent_name": "audit-practice",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "bench-first read avoided re-searching answered questions (F-1, prepull contract, grader seam, neutral, persist); red-first leg reproduced the combat-pause MISS exactly",
+    "what_was_hard": "6825-line practice_ui.lua + 3819-line practice.lua required grep-mapped targeted reads; class files read-only by scope",
+    "skill_gap": "in-client proof still owed (operator copy + real-combat scenario run)"
+  },
+  "escalation": null
+}

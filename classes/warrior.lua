@@ -1190,6 +1190,12 @@ function ST.WARRIOR.on_current_spell_cast_changed(self, is_cancelled)
     -- This function detects when the player queues up a heroic strike or cleave
     -- and sets relevant flags for the func to set bar colors.
     local db = self:get_class_table()
+    if type(db) ~= "table" then
+        -- PROPER: no profile means no user preferences to honor (the active class
+        -- always has one in-game); the queue flags stay cleared and the bar keeps
+        -- its default colour instead of throwing.
+        return
+    end
 
     -- Only run this logic if special on-next-attack colors are enabled in the warrior settings.
     if (not db.enable_hs_color) and not (db.enable_cleave_color) then
@@ -1395,9 +1401,21 @@ end
 
 function ST.WARRIOR.glow_start(self)
     local db_class = self:get_class_table()
+    if type(db_class) ~= "table" then
+        -- PROPER: without a profile there are no glow preferences; starting no
+        -- glow is the fail-safe (never invent feedback).
+        return
+    end
     local frame = self:get_bar_frame("mainhand")
+    if frame == nil then
+        -- PROPER: an unbuilt hand (lazy bars) has no frame to glow; legitimate
+        -- transient, retried on a later tick.
+        return
+    end
     local db_hand = self:get_hand_table("mainhand")
-    local thickness = db_hand.border_width or 1
+    -- PROPER: a missing hand table falls back to thickness 1, this file's own
+    -- minimum (never a guessed colour, only the neutral width floor).
+    local thickness = (db_hand and db_hand.border_width) or 1
     -- if thickness == 0 then
     --     thickness = 1
     -- end
@@ -1415,6 +1433,11 @@ end
 
 function ST.WARRIOR.process_bloodsurge(self)
     local db = self:get_class_table()
+    if type(db) ~= "table" then
+        -- PROPER: freeze rather than transition — without preferences a glow
+        -- change would be invented, and the swing bar itself still renders.
+        return
+    end
     local should_glow = (self.has_bloodsurge and db.use_bloodsurge_glow) and true or false
     -- LibCustomGlow pools its glow frames: re-starting (or stopping twice) on every aura
     -- event churns the pool and can double-release the frame, so only transition when
@@ -1432,6 +1455,10 @@ end
 
 function ST.WARRIOR.glow_stop(self)
     local frame = self:get_bar_frame("mainhand")
+    if frame == nil then
+        -- PROPER: an unbuilt hand owns no glow to stop; stopping nothing is exact.
+        return
+    end
     LCG.PixelGlow_Stop(frame)
 end
 
@@ -1558,7 +1585,17 @@ function ST.WARRIOR.set_bar_color(self, hand)
     -- and will set a special color when the player has one of those queued up but has
     -- insufficient rage to cast them.
     local db_class = self:get_class_table()
+    if type(db_class) ~= "table" then
+        -- PROPER: false lets the parent draw the default colour; the bar still
+        -- shows, only the optional queue tint is withheld without preferences.
+        return false
+    end
     local frame = self:get_visuals_frame(hand)
+    if frame == nil then
+        -- PROPER: with no frame there is nothing to recolour; the bar itself is
+        -- drawn by bars.lua, which owns unbuilt-hand visibility.
+        return false
+    end
 
     self.WARRIOR.process_bloodsurge(self)
 
@@ -2489,7 +2526,10 @@ function ST.WARRIOR.on_spellcast_event(self, event, unit, cast_guid, spell_id)
     end
     if event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_DELAYED" then
         arm_warrior_slam_pause(self, spell_id, cast_guid)
-        if self:get_class_table().show_warrior_slam_cast_bar == false then
+        local event_db = self:get_class_table()
+        -- PROPER: the flag is opt-OUT (nil = show). A missing table cannot prove
+        -- the user opted out, so the default-visible behaviour (track) is kept.
+        if type(event_db) == "table" and event_db.show_warrior_slam_cast_bar == false then
             return
         end
         local now = api.get_time()
@@ -3290,6 +3330,12 @@ function ST.WARRIOR.on_bar_update(self, hand)
     -- that rebuild the frame (scale/position/lock) are applied when the class options
     -- change; the display toggles are read live by the UI.
     local db = self:get_class_table()
+    if type(db) ~= "table" then
+        -- PROPER: every widget below reads this table; with no profile there is
+        -- nothing configured to draw. The swing bars still render (bars.lua owns
+        -- them with its own guards), so skipping the tick hides nothing live.
+        return
+    end
     if db.nextaction_icon_size ~= self.guide_ui_icon_size
         or db.nextaction_x ~= self.guide_ui_x
         or db.nextaction_y ~= self.guide_ui_y
@@ -3658,7 +3704,10 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
     local now = api.get_time()
     local d = self.mainhand
     local gcd = self.gcd
-    local db = self:get_class_table()
+    local db = self:get_class_table() or {}
+    -- PROPER: {} reads every tunable as nil, which is exactly the engine's
+    -- documented default for each; the live api reads below still run, so the
+    -- guide degrades to defaults instead of dying.
 
     -- Swing and GCD, in the api.get_time() domain (ends_at and the GCD stamp share it).
     inputs.speed = (d and d.speed) or 0
@@ -4479,7 +4528,10 @@ local function hud_execute_range(self)
     if type(health) ~= "number" then
         return false
     end
-    local threshold = self:get_class_table().guide_execute_pct or 20
+    local range_db = self:get_class_table()
+    -- PROPER: 20 is the shipped execute threshold (the engine default); a missing
+    -- table reads as defaults, never as in-range.
+    local threshold = (range_db and range_db.guide_execute_pct) or 20
     return health / health_max * 100 < threshold
 end
 
@@ -4493,6 +4545,13 @@ function ST.WARRIOR.get_hud_state(self, slot, now)
     s.text_remaining, s.desaturate, s.usable, s.in_range = nil, nil, nil, nil
     s.glow, s.count, s.texture, s.hidden = nil, nil, nil, nil
     now = now or api.get_time()
+    if type(slot) ~= "table" or type(slot.key) ~= "string" then
+        -- PROPER: a slot without a key carries nothing renderable (no icon, no
+        -- cooldown); hiding draws the honest state instead of throwing. The
+        -- driver always passes a slot table, so this only fires for a caller bug.
+        s.hidden = true
+        return s
+    end
     -- The three display-only maintenance mirrors (W-21 - the guide slots for
     -- Sunder Armor, Rend and Hamstring already shipped; the HUD row now
     -- mirrors them). Each hides unless its hud_show_<key> toggle reads exactly
@@ -4531,10 +4590,12 @@ function ST.WARRIOR.get_hud_state(self, slot, now)
     end
 
     local db = self:get_class_table()
-    if db.hud_mana_tint and hud_no_mana(slot) then
+    -- PROPER: the tints are opt-in feedback; without a profile there is no opt-in
+    -- to honor, so the slot draws untinted rather than guessing.
+    if type(db) == "table" and db.hud_mana_tint and hud_no_mana(slot) then
         s.usable = false
     end
-    if db.hud_range_tint and hud_out_of_range(slot) then
+    if type(db) == "table" and db.hud_range_tint and hud_out_of_range(slot) then
         s.in_range = false
     end
 

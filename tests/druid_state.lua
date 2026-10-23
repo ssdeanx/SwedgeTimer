@@ -4181,6 +4181,103 @@ do
     eq(out.ff_debuff_remaining, false, "TBC: no FF aura reads absent, not unknown")
 end
 
+--=========================================================================================
+-- NILSWEEP (2026-10-22): nil class-table / slot guards on the per-frame and
+-- per-event entries. A nil get_class_table return means the profile has no table
+-- for the class; a nil slot means a caller that does not pass one. Neither may
+-- throw.
+--=========================================================================================
+do
+    -- D1: on_rage_update with no class table leaves the badge alone, never throws.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.DRUID.on_rage_update, ST)
+    check(ok, "NILSWEEP D1 on_rage_update tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- D2: on_current_spell_cast_changed with no class table.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.DRUID.on_current_spell_cast_changed, ST)
+    check(ok, "NILSWEEP D2 on_current_spell_cast_changed tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- D3a: set_bar_color with no class table declines (false) and throws nothing.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, res = pcall(ST.DRUID.set_bar_color, ST, "mainhand")
+    check(ok, "NILSWEEP D3a set_bar_color tolerates a nil class table")
+    if ok then
+        eq(res, false, "NILSWEEP D3a set_bar_color returns false without a class table")
+    end
+end
+
+do
+    -- D3b: set_bar_color with no visuals frame declines (false) and throws nothing.
+    -- The maul queue is armed so the colour branch actually runs (otherwise neither
+    -- tree touches the missing frame and the leg would pass on unguarded code too).
+    local sb = build({ no_visuals = true })
+    local ST = sb.ST
+    ST.maul_queued = true
+    ST.insufficient_rage = false
+    local ok, res = pcall(ST.DRUID.set_bar_color, ST, "mainhand")
+    check(ok, "NILSWEEP D3b set_bar_color tolerates a nil visuals frame")
+    if ok then
+        eq(res, false, "NILSWEEP D3b set_bar_color returns false without a visuals frame")
+    end
+end
+
+do
+    -- D4: on_bar_update with no class table skips the tick.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.DRUID.on_bar_update, ST, "mainhand")
+    check(ok, "NILSWEEP D4 on_bar_update tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- D5: gather_guide_inputs with no class table reads option defaults.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, inputs = pcall(ST.DRUID.gather_guide_inputs, ST, {})
+    check(ok, "NILSWEEP D5 gather_guide_inputs tolerates a nil class table")
+    if ok then
+        eq(inputs.rip_min_cp, nil, "NILSWEEP D5 gather_guide_inputs leaves rip_min_cp nil without a class table")
+        eq(inputs.rip_refresh, 4, "NILSWEEP D5 gather_guide_inputs defaults rip_refresh to 4")
+    end
+end
+
+do
+    -- D6a: get_hud_state with no class table skips the tints and throws nothing.
+    local sb = build()
+    local ST = sb.ST
+    ST.get_class_table = function() return nil end
+    local ok, s = pcall(ST.DRUID.get_hud_state, ST, { key = "maul" }, 100)
+    check(ok, "NILSWEEP D6a get_hud_state tolerates a nil class table")
+    if ok then
+        eq(s.usable, nil, "NILSWEEP D6a get_hud_state leaves usable alone without a class table")
+        eq(s.in_range, nil, "NILSWEEP D6a get_hud_state leaves in_range alone without a class table")
+    end
+end
+
+do
+    -- D6b: get_hud_state with no slot hides instead of throwing.
+    local sb = build()
+    local ST = sb.ST
+    local ok, s = pcall(ST.DRUID.get_hud_state, ST, nil, 100)
+    check(ok, "NILSWEEP D6b get_hud_state tolerates a nil slot")
+    if ok then
+        eq(s.hidden, true, "NILSWEEP D6b get_hud_state hides a nil slot")
+    end
+end
+
 if failures == 0 then
     print("PASS  druid_state.lua (" .. tostring(checks) .. " checks)")
 else

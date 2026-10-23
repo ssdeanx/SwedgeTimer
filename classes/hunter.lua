@@ -475,6 +475,42 @@ ST.HUNTER.SERPENT_STING_IDS = serpent_sting_ids
 -- the branch.
 local FEIGN_DEATH_ID = 5384
 local READINESS_ID = 23989
+-- English name fallbacks for the SUCCEEDED token match (R1 name-carrying
+-- payloads: the name rides the guid slot when the id is absent). The client's
+-- own localized name wins whenever the spell data has answered; the literal
+-- covers a cold book, exactly like the reference's `or "Auto Shot"` fallback.
+local FEIGN_DEATH_NAME_EN = "Feign Death"
+local READINESS_NAME_EN = "Readiness"
+
+-- R1 token match for the two SUCCEEDED branches: numeric id first (every id
+-- payload matches exactly as before), then the client's localized name plus
+-- the English fallback (a name-carrying payload with no id). Never a guess:
+-- a cold book and an unknown token both read false.
+local function is_feign_death_token(token)
+    if token == FEIGN_DEATH_ID then
+        return true
+    end
+    if type(token) ~= "string" then
+        return false
+    end
+    if token == FEIGN_DEATH_NAME_EN then
+        return true
+    end
+    return token == api.GetSpellInfo(FEIGN_DEATH_ID)
+end
+
+local function is_readiness_token(token)
+    if token == READINESS_ID then
+        return true
+    end
+    if type(token) ~= "string" then
+        return false
+    end
+    if token == READINESS_NAME_EN then
+        return true
+    end
+    return token == api.GetSpellInfo(READINESS_ID)
+end
 
 -- Improved Steady Shot (Wrath MM proc, wowsims/wotlk steady_shot.go SIM-CONFIRMED:
 -- Steady crits grant aura 53220, 12 s, +15% damage / -20% cost on Arcane/Aimed/
@@ -728,6 +764,8 @@ function ST.HUNTER.on_cooldown_update(self)
     ranged.hidden_window_duration = nil
     if reanchor then
         ranged.start = cooldown_start
+        local speed = (type(ranged.speed) == "number" and ranged.speed > 0) and ranged.speed or duration
+        ranged.ends_at = cooldown_start + (duration > 0 and duration or speed)
     end
 end
 
@@ -759,6 +797,8 @@ function ST.HUNTER.on_autorrepeat_event(self, is_start)
         return
     end
     ranged.start = now
+    local speed = (type(ranged.speed) == "number" and ranged.speed > 0) and ranged.speed or 2.0
+    ranged.ends_at = now + speed
     ranged.last_restart_at = now
     ranged.hidden_window_start = nil
     ranged.hidden_window_duration = nil
@@ -836,7 +876,7 @@ function ST.HUNTER.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id
         self.steady_shot_queued = false
         self:set_bar_color("mainhand")
     end
-    if spell_id == FEIGN_DEATH_ID then
+    if is_feign_death_token(token) then
         -- Feign Death (reference State.lua:1459-1461: hunterAutoRepeatActive=false,
         -- ResetTimer("ranged")). The shot is interrupted and the auto-repeat drops; the
         -- swing engine re-anchors its own ranged timer on the FD path (the vendored
@@ -857,7 +897,7 @@ function ST.HUNTER.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id
             ranged.last_restart_at = nil
         end
     end
-    if spell_id == READINESS_ID then
+    if is_readiness_token(token) then
         -- Readiness resets Rapid Fire's cooldown; the reference forces the Rapid Fire
         -- bar's next scan immediately (ForceHunterRapidFireRefresh, ClassMods.lua:
         -- 5951-5956). Here the bar scans from the ranged tick, so the force is a
@@ -872,13 +912,18 @@ function ST.HUNTER.on_spellcast_succeeded(self, unit_target, cast_guid, spell_id
     -- Trap placed arming (hunter_wa_map §6): a landed player trap cast arms the
     -- placed-phase tracker (a second trap replaces the first). Failed casts run
     -- through on_spellcast_failed_quiet, which never arms; foreign ids ignored.
-    ST.HUNTER.note_trap_cast(self, spell_id)
+    ST.HUNTER.note_trap_cast(self, token)
 end
 
 function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
     -- This function detects when the player queues up a raptor strike or a
     -- steady shot and sets relevant flags for the func to set bar colors.
     local db = self:get_class_table()
+    if type(db) ~= "table" then
+        -- PROPER: no profile means no user preferences to honor; the queue flags
+        -- stay cleared and the bar keeps its default colour instead of throwing.
+        return
+    end
     -- Only run the raptor logic if special on-next-attack colors are enabled in
     -- the hunter settings.
     if db.enable_raptor_strike_color then
@@ -908,9 +953,11 @@ function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
             end
         end
         -- UnitChannelInfo's payload differs from UnitCastingInfo: it has no castID
-        -- and returns the spell id as the 8th value (see compat.lua).
-        local _, _, _, _, _, _, _, channel_spell_id = api.UnitChannelInfo("player")
-        if channel_spell_id ~= nil and steady_shot_ids[channel_spell_id] ~= nil then
+        -- and returns the spell id as the 8th value (see compat.lua). R1: the
+        -- id may be absent on older payloads, so the channel name rides along
+        -- through the same id-primary name-secondary matcher as the live cast.
+        local channel_name, _, _, _, _, _, _, channel_spell_id = api.UnitChannelInfo("player")
+        if is_hunter_live_cast(steady_shot_ids, channel_spell_id, channel_name) then
             self.steady_shot_queued = true
             self:set_bar_color("mainhand")
             return
@@ -994,10 +1041,13 @@ function ST.HUNTER.on_bar_update(self, hand)
     -- Settings that rebuild the frame (scale/position/lock) are applied when the class
     -- options change; the display toggles are read live by the UI.
     local db = self:get_class_table()
-    if db.nextaction_icon_size ~= self.guide_ui_icon_size
+    -- PROPER: the settings block needs preferences; the rest of the tick (trap,
+    -- guide, HUD, weave prog) is db-free or self-guarded, so only the settings
+    -- apply is gated and everything that can run without a profile still runs.
+    if type(db) == "table" and (db.nextaction_icon_size ~= self.guide_ui_icon_size
         or db.nextaction_x ~= self.guide_ui_x
         or db.nextaction_y ~= self.guide_ui_y
-        or db.nextaction_locked ~= self.guide_ui_locked then
+        or db.nextaction_locked ~= self.guide_ui_locked) then
         self.guide_ui_icon_size = db.nextaction_icon_size
         self.guide_ui_x = db.nextaction_x
         self.guide_ui_y = db.nextaction_y
@@ -1098,7 +1148,17 @@ end
 
 function ST.HUNTER.set_bar_color(self, hand)
     local db_class = self:get_class_table()
+    if type(db_class) ~= "table" then
+        -- PROPER: false lets the parent draw the default colour; the bar still
+        -- shows, only the optional queue tint is withheld without preferences.
+        return false
+    end
     local frame = self:get_visuals_frame(hand)
+    if frame == nil then
+        -- PROPER: with no frame there is nothing to recolour; the bar itself is
+        -- drawn by bars.lua, which owns unbuilt-hand visibility.
+        return false
+    end
     if hand ~= "mainhand" then
         return false
     end
@@ -1530,8 +1590,10 @@ end
 -- (AURA_APPLIED; Frost also expires its active timer). Effect ids for the filed
 -- CLEU lane: Explosive 13812, Immolation 13797, Freezing 3355, Frost 13810.
 
--- Castable trap spells (numeric ids arrive in the spellcast event on every
--- family; an id missing here simply never arms). Snake Trap is TBC-only (34600
+-- Castable trap spells (id-primary: numeric ids arm on every family; an id
+-- missing here never arms by id. R1 name-carrying payloads arm by the client's
+-- localized name through trap_key_for_name below, so a TBC payload that rides
+-- the name with no id arms the same key). Snake Trap is TBC-only (34600
 -- never fires on Era); the other four arm on every classic family. The two Wrath
 -- traps are the Lock and Load sources the sim procs on (wowsims/wotlk
 -- sim/hunter/talents.go applyLockAndLoad: the Black Arrow / Explosive Trap ticks
@@ -1586,6 +1648,51 @@ function ST.HUNTER.get_trap_active_duration(trap_key, clever_rank)
     return base
 end
 
+-- English name fallbacks for the trap token match (R1 name-carrying payloads).
+-- The client's own localized name wins whenever the spell data has answered;
+-- the literal covers a cold book. Both Explosive ranks share one English name,
+-- so the family picks the key when the name matches both (see below).
+local TRAP_ENGLISH_NAMES = {
+    [34600] = "Snake Trap",
+    [13813] = "Explosive Trap",
+    [13795] = "Immolation Trap",
+    [1499] = "Freezing Trap",
+    [13809] = "Frost Trap",
+    [63672] = "Black Arrow",
+    [49067] = "Explosive Trap",
+}
+
+-- R1 token match for trap arming: numeric id first (every id payload arms
+-- exactly as before), then the client's localized name plus the English
+-- fallback. The Wrath family carries the WotLK Explosive rank (49067); every
+-- other family carries the classic rank (13813) - that family picks the key
+-- when the shared name matches both. A foreign name arms nothing.
+local function trap_key_for_name(token)
+    if type(token) ~= "string" then
+        return nil
+    end
+    local found_id = nil
+    for id in pairs(ST.HUNTER.TRAP_SPELLS) do
+        local name = api.GetSpellInfo(id)
+        if type(name) ~= "string" then
+            name = TRAP_ENGLISH_NAMES[id]
+        end
+        if name == token then
+            if found_id == nil then
+                found_id = id
+            elseif id == 49067 and st.family == "WRATH" then
+                found_id = id
+            elseif found_id == 49067 and st.family ~= "WRATH" and id == 13813 then
+                found_id = id
+            end
+        end
+    end
+    if found_id == nil then
+        return nil
+    end
+    return ST.HUNTER.TRAP_SPELLS[found_id]
+end
+
 -- Placed-phase tracker: nil (no live trap) or { key, phase, spell_id, placed_at,
 -- duration, active_duration } in the api.get_time() domain. Armed by
 -- note_trap_cast from on_spellcast_succeeded, expired by update_trap from
@@ -1597,6 +1704,9 @@ function ST.HUNTER.note_trap_cast(self, spell_id)
         return
     end
     local key = ST.HUNTER.TRAP_SPELLS[spell_id]
+    if key == nil then
+        key = trap_key_for_name(spell_id)
+    end
     if key == nil then
         return
     end
@@ -3355,6 +3465,13 @@ function ST.HUNTER.get_hud_state(self, slot, now)
     s.text_remaining, s.desaturate, s.usable, s.in_range = nil, nil, nil, nil
     s.glow, s.count, s.texture, s.hidden = nil, nil, nil, nil
     now = now or api.get_time()
+    if type(slot) ~= "table" or type(slot.key) ~= "string" then
+        -- PROPER: a slot without a key carries nothing renderable; hiding draws
+        -- the honest state instead of throwing. The driver always passes a slot
+        -- table, so this only fires for a caller bug.
+        s.hidden = true
+        return s
+    end
     local remaining, full = hud_ability_cooldown(self, slot, now)
     local on_cd = remaining > 0
     if on_cd then
@@ -3373,10 +3490,12 @@ function ST.HUNTER.get_hud_state(self, slot, now)
     end
 
     local db = self:get_class_table()
-    if db.hud_mana_tint and hud_no_mana(slot) then
+    -- PROPER: the tints are opt-in feedback; without a profile there is no opt-in
+    -- to honor, so the slot draws untinted rather than guessing.
+    if type(db) == "table" and db.hud_mana_tint and hud_no_mana(slot) then
         s.usable = false
     end
-    if db.hud_range_tint and hud_out_of_range(slot) then
+    if type(db) == "table" and db.hud_range_tint and hud_out_of_range(slot) then
         s.in_range = false
     end
 

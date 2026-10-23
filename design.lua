@@ -40,9 +40,9 @@ local D = st.design
 
 local floor, abs, min, max = math.floor, math.abs, math.min, math.max
 
-D.DEFAULT_MAGNET = 8    -- archive CENTER_MAGNET (editmode.lua:65)
-D.DEFAULT_REACH = 120   -- archive ALIGN_REACH (editmode.lua:66)
-D.MIN_GRID = 8          -- archive EM.grid_step(): steps below 8 are treated as off
+D.DEFAULT_MAGNET = 8  -- archive CENTER_MAGNET (editmode.lua:65)
+D.DEFAULT_REACH = 120 -- archive ALIGN_REACH (editmode.lua:66)
+D.MIN_GRID = 8        -- archive EM.grid_step(): steps below 8 are treated as off
 
 --=========================================================================================
 -- Numbers
@@ -388,6 +388,7 @@ function D.new_registry()
         self.by_key[norm.key] = norm
         return norm
     end
+
     function reg:each()
         local i = 0
         local list = self.list
@@ -399,6 +400,7 @@ function D.new_registry()
             end
         end
     end
+
     return reg
 end
 

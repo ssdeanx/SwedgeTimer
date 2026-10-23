@@ -1,7 +1,8 @@
 * text=auto eol=lf
-desks/
-bench/
-Media/
+desks/ export-ignore
+bench/ export-ignore
+Media/ export-ignore
+tests/ export-ignore
 
 # The attributes file itself.
 /.gitattributes export-ignore

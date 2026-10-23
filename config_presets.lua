@@ -439,6 +439,10 @@ ST.HUNTER.defaults = {
     hunter_cast_bar_enabled = true,
     hunter_cast_bar_height = 15,
     hunter_cast_bar_color = {0.35, 0.65, 0.95, 1.0},
+    -- The red Auto Shot cast window at the END of the ranged bar: a fixed 0.5 s band,
+    -- never widened by latency (operator ruling 2026-10-22). Ships on: the zone is the
+    -- stop-and-cast reference the hunter rotation is read against.
+    hunter_cast_zone_enabled = true,
     hunter_range_helper_enabled = true,
     hunter_rapid_fire_bar_enabled = true,
     hunter_aspect_icon_enabled = true,
@@ -496,8 +500,7 @@ ST.HUNTER.defaults = {
     practice_panel_y = 0,
 
     -- Nil-off keys (no entry ships: nil stays off, read with == true in
-    -- classes/hunter.lua and hunter_ui.lua): hunter_cast_zone_enabled,
-    -- hunter_target_warning_enabled, hunter_bw_badge_enabled,
+    -- classes/hunter.lua and hunter_ui.lua): hunter_target_warning_enabled, hunter_bw_badge_enabled,
     -- hunter_frenzy_stacks_enabled, hunter_multi_target,
     -- hunter_readiness_badge_enabled (Readiness 2x window),
     -- hunter_iss_badge_enabled (ISS tint), hunter_oom_viper_badge_enabled
@@ -507,8 +510,8 @@ ST.HUNTER.defaults = {
     -- Bar options
     ['**'] = ST.bar_defaults,
     mainhand = {
-        require_in_range = true,
-        show_condition = "both",
+        require_in_range = false,
+        show_condition = "either",
         bar_height = 14,
 		bar_width = 200,
         show_gcd_underlay = false,
@@ -519,8 +522,8 @@ ST.HUNTER.defaults = {
         y = -142,
     },
     offhand = {
-        require_in_range = true,
-        show_condition = "both",
+        require_in_range = false,
+        show_condition = "either",
 		bar_color_default = {13, 79, 115, 0.8},
         show_gcd_underlay = false,
         gcd1a_marker_enabled = false,
@@ -996,7 +999,7 @@ ST.ROGUE.defaults = {
         enabled = false,
         show_behaviour = "conditional",
         show_condition = "either",
-        require_in_range = true,
+        require_in_range = false,
 		bar_height = 15,
 		bar_width = 200,
         y = -166,
@@ -1176,11 +1179,16 @@ ST.SHAMAN.defaults = {
 -- per-spell weave toggles already ship as weave_families. WOTLK-flagged D2/D3
 -- are NOT gallery inputs.
 ST.SHAMAN.HUD_TEMPLATES = {
+    -- The three maintain mirrors (lightningshield/searing/coe, ship-false
+    -- defaults above) ride every template explicitly OFF: the full-set promise
+    -- (no stale slot on switch, exact dirty-detect) holds for all 11 slots,
+    -- and no template pick surfaces upkeep icons unasked.
     twist_core = {
         label = "S-T1 Twist Core",
         slots = {
             stormstrike = true, flameshock = true, weave = false,
             firenova = false, earthshock = true, twist = true,
+            lightningshield = false, searing = false, coe = false,
             trinket1 = false, trinket2 = false,
         },
         hud_icon_size = 36, hud_spacing = 2,
@@ -1191,6 +1199,7 @@ ST.SHAMAN.HUD_TEMPLATES = {
         slots = {
             stormstrike = true, flameshock = true, weave = true,
             firenova = true, earthshock = true, twist = true,
+            lightningshield = false, searing = false, coe = false,
             trinket1 = true, trinket2 = true,
         },
         hud_icon_size = 36, hud_spacing = 2,
@@ -1201,6 +1210,7 @@ ST.SHAMAN.HUD_TEMPLATES = {
         slots = {
             stormstrike = true, flameshock = true, weave = false,
             firenova = false, earthshock = false, twist = false,
+            lightningshield = false, searing = false, coe = false,
             trinket1 = false, trinket2 = false,
         },
         hud_icon_size = 28, hud_spacing = 2,
@@ -1369,7 +1379,7 @@ ST.WARRIOR.defaults = {
         enabled = false,
         show_behaviour = "conditional",
         show_condition = "either",
-        require_in_range = true,
+        require_in_range = false,
 		bar_height = 15,
 		bar_width = 200,
         y = -166,

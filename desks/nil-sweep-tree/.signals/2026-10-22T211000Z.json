@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-22T21:10:00Z",
+  "run_id": "nilsweep-tree-pinrecut-20261022",
+  "agent_name": "nil-sweep-tree",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "source-text pins recut to the selected-class presence-guard contract instead of deleted; a reverted-handler mutation proved all four new contract pins fail red-first while the init-guard pin stays green",
+    "what_was_hard": "keeping the two original pin intents (paladin chain + warrior hook) meaningful under a class-generic dispatch: the recut pins the resolution, guard, call and pre-pass order separately",
+    "skill_gap": "none - all four lane skills still present and applied"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "orchestrator: re-run full run.sh (warrior_state now 2098/0, main_init 1047/0, touched-file luacheck 0/0) and commit; scope held to tests/warrior_state.lua"
+  }
+}

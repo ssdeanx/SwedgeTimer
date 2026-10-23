@@ -3746,6 +3746,69 @@ do
     eq(ST.weave_family, before, "a foreign name leaves the family alone")
 end
 
+--=========================================================================================
+-- NILSWEEP (2026-10-22): nil class-table / slot guards on the per-frame entries.
+-- A nil get_class_table return means the profile has no table for the class; a
+-- nil slot means a caller that does not pass one. Neither may throw. ST is
+-- suite-shared, so every leg restores the stub it replaces.
+--=========================================================================================
+do
+    -- S1: get_weave_visual_spell with no class table falls back to the catalogue.
+    local saved = ST.get_class_table
+    ST.get_class_table = function() return nil end
+    local ok = pcall(ST.SHAMAN.get_weave_visual_spell, ST)
+    ST.get_class_table = saved
+    check(ok, "NILSWEEP S1 get_weave_visual_spell tolerates a nil class table")
+end
+
+do
+    -- S2: on_bar_update on the offhand with no class table hides the spark.
+    local saved = ST.get_class_table
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.SHAMAN.on_bar_update, ST, "offhand")
+    ST.get_class_table = saved
+    check(ok, "NILSWEEP S2 offhand on_bar_update tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- S3: on_bar_update on the mainhand with no class table skips the tick.
+    local saved = ST.get_class_table
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(ST.SHAMAN.on_bar_update, ST, "mainhand")
+    ST.get_class_table = saved
+    check(ok, "NILSWEEP S3 on_bar_update tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+do
+    -- S4: gather_guide_inputs with no class table reads option defaults.
+    local saved = ST.get_class_table
+    ST.get_class_table = function() return nil end
+    local ok, inputs = pcall(ST.SHAMAN.gather_guide_inputs, ST, {})
+    ST.get_class_table = saved
+    check(ok, "NILSWEEP S4 gather_guide_inputs tolerates a nil class table")
+    if ok then
+        eq(inputs.flameshock_refresh, 0, "NILSWEEP S4 gather_guide_inputs defaults flameshock_refresh to 0")
+    end
+end
+
+do
+    -- S5/S6: get_hud_state with no class table skips the tints; with no slot hides.
+    local saved = ST.get_class_table
+    ST.get_class_table = function() return nil end
+    local ok, s = pcall(ST.SHAMAN.get_hud_state, ST, { key = "lavaburst" }, 100)
+    ST.get_class_table = saved
+    check(ok, "NILSWEEP S5 get_hud_state tolerates a nil class table")
+    if ok then
+        eq(s.usable, nil, "NILSWEEP S5 get_hud_state leaves usable alone without a class table")
+        eq(s.in_range, nil, "NILSWEEP S5 get_hud_state leaves in_range alone without a class table")
+    end
+    local ok_hud, s_hud = pcall(ST.SHAMAN.get_hud_state, ST, nil, 100)
+    check(ok_hud, "NILSWEEP S6 get_hud_state tolerates a nil slot")
+    if ok_hud then
+        eq(s_hud.hidden, true, "NILSWEEP S6 get_hud_state hides a nil slot")
+    end
+end
+
 if failures == 0 then
     print("PASS  shaman_state.lua (" .. tostring(checks) .. " checks)")
 else

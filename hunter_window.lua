@@ -130,18 +130,14 @@ hunter_window.RANGED_START_DEDUPE_WINDOW = 0.25
 -- Cast window
 --------------------------------------------------------------------------------
 
--- Width of the hidden cast window: the base 0.5 s plus the player's latency, never
--- negative (reference GetRangedCastWindow, SuperSwingTimer_UI.lua:16-23). A non-number
--- latency reads as 0, mirroring the reference's `ns.cachedLatency or 0`.
-function hunter_window.cast_window(latency)
-    if type(latency) ~= "number" then
-        latency = 0
-    end
-    local window = hunter_window.BASE_CAST_WINDOW + latency
-    if window < 0 then
-        return 0
-    end
-    return window
+-- Width of the hidden cast window: the client's fixed 0.5 s Auto Shot cast window, at
+-- the END of the ranged cycle. Latency is deliberately NOT added to the width (operator
+-- ruling 2026-10-22): the red zone is the cast window itself, never wider. Latency is
+-- why a Steady Shot cast may land INSIDE that window without clipping, so it affects
+-- the cast-safety verdict (is_cast_safe), never the zone geometry. The `latency`
+-- argument is kept for call-site compatibility and ignored.
+function hunter_window.cast_window(_)
+    return hunter_window.BASE_CAST_WINDOW
 end
 
 -- The hidden cast window of a ranged cycle: the last `cast_window` seconds before the

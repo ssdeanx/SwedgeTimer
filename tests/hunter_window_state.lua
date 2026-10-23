@@ -3,7 +3,8 @@
 -- The module is WoW-free by design, so it needs no client stubs at all: it is loaded
 -- under a STRICT sandbox that grants only math/type and errors on every other global
 -- access, which makes "pure" an executable property rather than a comment. Every
--- function and boundary is exercised: cast_windows at 0/0.05/0.2 latency, hidden windows
+-- function and boundary is exercised: the fixed cast window (0.5 s, latency never
+-- added), hidden windows
 -- before and after the cycle end, cast-safety equal/just-above thresholds with the
 -- steady 0.5 and multi-shot 0 grace, stopped-position safety moving/before/after the
 -- window, time-until-shot with and without the cooldown fallback, the 0.009/0.01/0.011
@@ -87,16 +88,18 @@ eq(hw.MULTI_SHOT_GRACE, 0, "MULTI_SHOT_GRACE is 0")
 eq(hw.RANGED_START_DEDUPE_WINDOW, 0.25, "RANGED_START_DEDUPE_WINDOW is 0.25")
 
 --=========================================================================================
--- 1) cast_window: base 0.5 + latency, clamped at 0
+-- 1) cast_window: the fixed 0.5 s Auto Shot cast window, at the END of the cycle.
+--    Latency is NEVER added (operator ruling 2026-10-22): the red zone is the cast
+--    window itself. Latency only makes a cast landing inside it not clip.
 --=========================================================================================
-eq(call(hw.cast_window, 0), 0.5, "cast_window: zero latency -> the 0.5 base")
-near(call(hw.cast_window, 0.05), 0.55, "cast_window: 0.05 latency -> 0.55")
-near(call(hw.cast_window, 0.2), 0.7, "cast_window: 0.2 latency -> 0.7")
-near(call(hw.cast_window, 0.12), 0.62, "cast_window: latency is added to the base")
-eq(call(hw.cast_window, nil), 0.5, "cast_window: nil latency reads as 0")
-eq(call(hw.cast_window, "0.2"), 0.5, "cast_window: non-number latency reads as 0")
-eq(call(hw.cast_window, -0.5), 0, "cast_window: a zero result stays 0")
-eq(call(hw.cast_window, -0.7), 0, "cast_window: a negative result clamps to 0")
+eq(call(hw.cast_window, 0), 0.5, "cast_window: zero latency -> the 0.5 window")
+eq(call(hw.cast_window, 0.05), 0.5, "cast_window: 0.05 latency is NOT added")
+eq(call(hw.cast_window, 0.2), 0.5, "cast_window: 0.2 latency is NOT added")
+eq(call(hw.cast_window, 0.12), 0.5, "cast_window: latency never widens the zone")
+eq(call(hw.cast_window, nil), 0.5, "cast_window: nil latency -> the fixed window")
+eq(call(hw.cast_window, "0.2"), 0.5, "cast_window: non-number latency -> the fixed window")
+eq(call(hw.cast_window, -0.5), 0.5, "cast_window: negative latency cannot shrink the zone")
+eq(call(hw.cast_window), 0.5, "cast_window: no argument -> the fixed window")
 
 --=========================================================================================
 -- 2) hidden_window: the last cast_window seconds before the cycle end

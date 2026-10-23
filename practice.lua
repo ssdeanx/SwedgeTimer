@@ -84,15 +84,15 @@ st.practice.SEAL_FADE_SECONDS = 0.4
 -- cast("stop") routes to pause_attack(). Seals have no cooldown; hpot/abacus have their
 -- own activation rules; aw carries its buff duration.
 st.practice.ABILITIES = {
-    soc    = { name = "Seal of Command",        spell_id = 20375, type = "seal",    cooldown = 0, seal_label = "command" },
-    sob    = { name = "Seal of Blood",          spell_id = 31892, type = "seal",    cooldown = 0, seal_label = "blood" },
-    sotc   = { name = "Seal of the Crusader",   spell_id = 21082, type = "seal",    cooldown = 0, seal_label = "crusader" },
-    cs     = { name = "Crusader Strike",        spell_id = 35395, type = "ability", cooldown = 6 },
-    judge  = { name = "Judgement",              spell_id = 20271, type = "ability", cooldown = 8 },
-    consec = { name = "Consecration",           spell_id = 26573, type = "ability", cooldown = 8 },
-    aw     = { name = "Avenging Wrath",         spell_id = 31884, type = "buff",    cooldown = 180, duration = 20 },
-    hpot   = { name = "Haste Potion",           spell_id = 28507, type = "haste_consumable", cooldown = 0, duration = 15 },
-    abacus = { name = "Abacus of Violent Odds", spell_id = 33807, type = "haste_trinket",    cooldown = 120, duration = 10 },
+    soc    = { name = "Seal of Command", spell_id = 20375, type = "seal", cooldown = 0, seal_label = "command" },
+    sob    = { name = "Seal of Blood", spell_id = 31892, type = "seal", cooldown = 0, seal_label = "blood" },
+    sotc   = { name = "Seal of the Crusader", spell_id = 21082, type = "seal", cooldown = 0, seal_label = "crusader" },
+    cs     = { name = "Crusader Strike", spell_id = 35395, type = "ability", cooldown = 6 },
+    judge  = { name = "Judgement", spell_id = 20271, type = "ability", cooldown = 8 },
+    consec = { name = "Consecration", spell_id = 26573, type = "ability", cooldown = 8 },
+    aw     = { name = "Avenging Wrath", spell_id = 31884, type = "buff", cooldown = 180, duration = 20 },
+    hpot   = { name = "Haste Potion", spell_id = 28507, type = "haste_consumable", cooldown = 0, duration = 15 },
+    abacus = { name = "Abacus of Violent Odds", spell_id = 33807, type = "haste_trinket", cooldown = 120, duration = 10 },
     stop   = { name = "Stop Attack", texture = "Interface\\Icons\\Ability_DualWield", type = "stopattack", cooldown = 0 },
 }
 
@@ -102,7 +102,7 @@ st.practice.ABILITY_ORDER = { "soc", "sob", "cs", "judge", "sotc", "consec", "aw
 -- Locked-rotation presets (archive 122-127): speed/gcd pairs that force a rotation via
 -- determine_rotation(). While locked, apply_haste() uses these and ignores all haste.
 st.practice.PRESETS = {
-    ["1/2"] = { speed = 3.5, gcd = 1.5  },
+    ["1/2"] = { speed = 3.5, gcd = 1.5 },
     ["2/3"] = { speed = 2.3, gcd = 1.15 },
     ["2/4"] = { speed = 1.8, gcd = 1.15 },
 }
@@ -111,8 +111,16 @@ st.practice.PRESETS = {
 -- UI copies this into its own table at session start. Persistence (the archived
 -- practice_key_* db keys) needs new options and is deliberately not wired here.
 st.practice.DEFAULT_KEYBINDS = {
-    soc = "1", sob = "2", cs = "3", judge = "4", sotc = "5",
-    consec = "6", aw = "7", hpot = "8", abacus = "9", stop = "",
+    soc = "1",
+    sob = "2",
+    cs = "3",
+    judge = "4",
+    sotc = "5",
+    consec = "6",
+    aw = "7",
+    hpot = "8",
+    abacus = "9",
+    stop = "",
 }
 
 -- Timeline lane definitions (archive 148-160, minus the spell-id/texture lookups the
@@ -154,9 +162,15 @@ function st.practice.shorten_keybind(key)
 
     local mods = ""
     local base = key
-    if base:find("^CTRL%-") then mods = "C"; base = base:sub(6) end
-    if base:find("^SHIFT%-") then mods = "S"; base = base:sub(7) end
-    if base:find("^ALT%-") then mods = "A"; base = base:sub(5) end
+    if base:find("^CTRL%-") then
+        mods = "C"; base = base:sub(6)
+    end
+    if base:find("^SHIFT%-") then
+        mods = "S"; base = base:sub(7)
+    end
+    if base:find("^ALT%-") then
+        mods = "A"; base = base:sub(5)
+    end
 
     local np = base:match("^NUMPAD(.+)")
     if np then
@@ -166,22 +180,39 @@ function st.practice.shorten_keybind(key)
         base = "N" .. (np_map[np] or np)
     end
 
-    if base == "MOUSEWHEELUP" then base = "MU"
-    elseif base == "MOUSEWHEELDOWN" then base = "MD"
-    elseif base:match("^BUTTON(%d)") then base = "M" .. base:match("^BUTTON(%d)")
+    if base == "MOUSEWHEELUP" then
+        base = "MU"
+    elseif base == "MOUSEWHEELDOWN" then
+        base = "MD"
+    elseif base:match("^BUTTON(%d)") then
+        base = "M" .. base:match("^BUTTON(%d)")
     end
 
     local pad_map = {
-        PAD1 = "P1", PAD2 = "P2", PAD3 = "P3", PAD4 = "P4",
-        PADLSHOULDER = "LB", PADRSHOULDER = "RB",
-        PADLTRIGGER = "LT", PADRTRIGGER = "RT",
-        PADLSTICK = "LS", PADRSTICK = "RS",
-        PADDUP = "DU", PADDDOWN = "DD", PADDLEFT = "DL", PADDRIGHT = "DR",
-        PADFORWARD = "FW", PADBACK = "BK",
-        PADLSTICKUP = "LU", PADLSTICKDOWN = "LD",
-        PADLSTICKLEFT = "LL", PADLSTICKRIGHT = "LR",
-        PADRSTICKUP = "RU", PADRSTICKDOWN = "RD",
-        PADRSTICKLEFT = "RL", PADRSTICKRIGHT = "RR",
+        PAD1 = "P1",
+        PAD2 = "P2",
+        PAD3 = "P3",
+        PAD4 = "P4",
+        PADLSHOULDER = "LB",
+        PADRSHOULDER = "RB",
+        PADLTRIGGER = "LT",
+        PADRTRIGGER = "RT",
+        PADLSTICK = "LS",
+        PADRSTICK = "RS",
+        PADDUP = "DU",
+        PADDDOWN = "DD",
+        PADDLEFT = "DL",
+        PADDRIGHT = "DR",
+        PADFORWARD = "FW",
+        PADBACK = "BK",
+        PADLSTICKUP = "LU",
+        PADLSTICKDOWN = "LD",
+        PADLSTICKLEFT = "LL",
+        PADLSTICKRIGHT = "LR",
+        PADRSTICKUP = "RU",
+        PADRSTICKDOWN = "RD",
+        PADRSTICKLEFT = "RL",
+        PADRSTICKRIGHT = "RR",
     }
     if pad_map[base] then base = pad_map[base] end
 
@@ -222,15 +253,15 @@ end
 -- documented in the header). All times are in the caller's clock domain.
 function st.practice.new_sim()
     return {
-        active_seals = {},          -- [seal_label] = true
+        active_seals = {},       -- [seal_label] = true
         n_active_seals = 0,
-        seal_1_label = nil,         -- oldest seal (or only seal)
-        seal_2_label = nil,         -- newest seal (during the twist window)
-        fading_seal_label = nil,    -- seal fading after a new seal was cast
+        seal_1_label = nil,      -- oldest seal (or only seal)
+        seal_2_label = nil,      -- newest seal (during the twist window)
+        fading_seal_label = nil, -- seal fading after a new seal was cast
         fading_seal_expires = 0,
 
-        effective_speed = 3.5,      -- weapon speed after haste
-        effective_gcd = 1.5,        -- GCD after haste
+        effective_speed = 3.5, -- weapon speed after haste
+        effective_gcd = 1.5,   -- GCD after haste
 
         has_bloodlust = false,
         has_haste_pot = false,
@@ -256,9 +287,9 @@ function st.practice.new_sim()
 
         attack_paused = false,
         attack_pause_pending = false,
-        swing_held = false,         -- swing completed during stopattack, held until resume
+        swing_held = false,      -- swing completed during stopattack, held until resume
 
-        twist_attempted = false,    -- a seal swap armed a twist this swing cycle
+        twist_attempted = false, -- a seal swap armed a twist this swing cycle
 
         queued_ability = nil,
         queue_timestamp = 0,
@@ -513,7 +544,7 @@ function st.practice.begin_fight(sim, now, opts)
     end
 
     if sim.locked_rotation then
-        sim.fight_bl_fired = true      -- locked rotations never auto-Bloodlust
+        sim.fight_bl_fired = true -- locked rotations never auto-Bloodlust
     else
         sim.fight_bl_fired = false
     end
@@ -913,7 +944,7 @@ function st.practice.tick(sim, now, elapsed, out)
     if sim.fight_active then
         out.fight_elapsed = true
         if not sim.locked_rotation and not sim.fight_bl_fired and sim.fight_bl_delay > 0
-                and (now - sim.fight_start_time) >= sim.fight_bl_delay then
+            and (now - sim.fight_start_time) >= sim.fight_bl_delay then
             sim.fight_bl_fired = true
             sim.has_bloodlust = true
             sim.bl_buff_expires = now + 40
@@ -1019,7 +1050,7 @@ function st.practice.on_swing(sim, now, out)
     -- clamped at 0 against clock skew.
     local lead_ms = nil
     if sim.twist_attempted and sim.fading_seal_label and sim.fading_seal_expires
-            and sim.fading_seal_expires > 0 then
+        and sim.fading_seal_expires > 0 then
         lead_ms = (now - (sim.fading_seal_expires - st.practice.SEAL_FADE_SECONDS)) * 1000
         if lead_ms < 0 then
             lead_ms = 0
@@ -1368,8 +1399,8 @@ end
 -- practice session on the UI side).
 function st.practice.new_score()
     return {
-        attempts = 0,      -- twist attempts recorded (swings with no attempt are not attempts)
-        hits = 0,          -- successful twists (any grade but F)
+        attempts = 0,       -- twist attempts recorded (swings with no attempt are not attempts)
+        hits = 0,           -- successful twists (any grade but F)
         total_points = 0,   -- sum of GRADE_POINTS over all attempts
         error_sum_ms = 0,   -- sum of measured leads over successful twists
         error_count = 0,    -- successful twists with a measured lead
@@ -1862,10 +1893,10 @@ H.COMBO_DEFAULTS = { opener = "aw", pieces = { "hpot" }, window = 3 }
 -- Piece-lag bands in seconds: S tight ... D barely inside the window; an incomplete
 -- window grades F (see combo_evaluate).
 H.COMBO_LAG_BANDS = {
-    { max = 0.2, grade = "S" },
-    { max = 0.5, grade = "A" },
-    { max = 1.0, grade = "B" },
-    { max = 2.0, grade = "C" },
+    { max = 0.2,  grade = "S" },
+    { max = 0.5,  grade = "A" },
+    { max = 1.0,  grade = "B" },
+    { max = 2.0,  grade = "C" },
     { grade = "D" },
 }
 
@@ -1895,7 +1926,7 @@ function H.combo_open(combo, now, key)
         return false
     end
     if combo.open and type(now) == "number" and type(combo.opened_at) == "number"
-            and (now - combo.opened_at) <= combo.window then
+        and (now - combo.opened_at) <= combo.window then
         return false
     end
     combo.open = true
@@ -2178,11 +2209,11 @@ H.register_scenario({
 H.EXECUTE_DEFAULTS = { threshold = 0.20, entry_rage = 100 }
 
 H.EXECUTE_ENTRY_BANDS = {
-    { max = 0, grade = "S" },
+    { max = 0,    grade = "S" },
     { max = 0.25, grade = "A" },
-    { max = 0.5, grade = "B" },
+    { max = 0.5,  grade = "B" },
     { max = 0.75, grade = "C" },
-    { max = 1.0, grade = "D" },
+    { max = 1.0,  grade = "D" },
     { grade = "F" },
 }
 
@@ -2306,11 +2337,11 @@ H.POWERSHIFT_DEFAULTS = {
 }
 
 H.POWERSHIFT_BANDS = {
-    { max = 20, grade = "S" },
-    { max = 30, grade = "A" },
-    { max = 40, grade = "B" },
-    { max = 60, grade = "C" },
-    { max = 80, grade = "D" },
+    { max = 20,   grade = "S" },
+    { max = 30,   grade = "A" },
+    { max = 40,   grade = "B" },
+    { max = 60,   grade = "C" },
+    { max = 80,   grade = "D" },
     { grade = "F" },
 }
 
@@ -2842,7 +2873,7 @@ end
 -- design (the twist.lua / weave.lua discipline): every state arrives as an
 -- argument, and the presentation lives in practice_ui.lua.
 st.practice.HUNTER_PREPULL_STEPS = {
-    { key = "mark", label = "Hunter's Mark" },
+    { key = "mark",   label = "Hunter's Mark" },
     { key = "aspect", label = "Hawk aspect" },
     { key = "potion", label = "Haste potion" },
 }
@@ -2884,9 +2915,9 @@ end
 -- WoW-free by design (the twist.lua / weave.lua discipline), every state
 -- arrives as an argument, and the presentation lives in practice_ui.lua.
 st.practice.HUNTER_WEAVE_STEPS = {
-    { key = "trap", label = "Trap down before the pull" },
+    { key = "trap",  label = "Trap down before the pull" },
     { key = "melee", label = "Melee weave inside 5 yd" },
-    { key = "move", label = "Move on the swing gap" },
+    { key = "move",  label = "Move on the swing gap" },
 }
 
 -- Missing steps for a `have` map (key -> true when done), in checklist order.
@@ -3650,11 +3681,11 @@ H.ROTATION_RUN_STEPS = 10
 -- rotation wanted an action and the player did not cast it. [DESIGN] - addon
 -- policy, not a sim number (the audit's UNCONFIRMED ledger U-15).
 H.ROTATION_RUN_BANDS = {
-    { max = 0, grade = "S" },
-    { max = 1, grade = "A" },
-    { max = 2, grade = "B" },
-    { max = 3, grade = "C" },
-    { max = 5, grade = "D" },
+    { max = 0,    grade = "S" },
+    { max = 1,    grade = "A" },
+    { max = 2,    grade = "B" },
+    { max = 3,    grade = "C" },
+    { max = 5,    grade = "D" },
     { grade = "F" },
 }
 

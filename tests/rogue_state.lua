@@ -4077,6 +4077,32 @@ do
 end
 
 --=========================================================================================
+-- NILSWEEP (2026-10-22): nil class-table guard on the per-frame entries. A nil
+-- get_class_table return means the profile has no table for the class; the tick
+-- must skip (or read defaults), never throw.
+--=========================================================================================
+do
+    -- R1: gather_guide_inputs with no class table reads engine defaults.
+    local sb_nil = build()
+    local ST_nil = sb_nil.ST
+    ST_nil.get_class_table = function() return nil end
+    local ok, inputs = pcall(ST_nil.ROGUE.gather_guide_inputs, ST_nil, {})
+    check(ok, "NILSWEEP R1 gather_guide_inputs tolerates a nil class table")
+    if ok then
+        check(inputs.pool_pre == nil, "NILSWEEP R1 gather_guide_inputs leaves pool_pre nil without a class table")
+    end
+end
+
+do
+    -- R2: on_bar_update with no class table skips the tick.
+    local sb_nil = build()
+    local ST_nil = sb_nil.ST
+    ST_nil.get_class_table = function() return nil end
+    local ok, err = pcall(ST_nil.ROGUE.on_bar_update, ST_nil, "mainhand")
+    check(ok, "NILSWEEP R2 on_bar_update tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+--=========================================================================================
 -- Done
 --=========================================================================================
 print(string.format("%d checks, %d failures", checks, failures))

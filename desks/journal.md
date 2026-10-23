@@ -843,3 +843,55 @@ No git. No lint-config changes. Warning wiring per wire-not-strip (trace → WIR
   mutation reproduces the exact in-client signature.
 - Full suite BEFORE commit: 48/0, luacheck 2/0. Follow-up lane report
   reconciled (scope held, focused suites green, mutations kill).
+
+## HUD known-gate wave committed (2026-10-22, orchestrator)
+- Lane reconciled: scope held (hud.lua, paladin, shaman, hud_state +
+  bench/desk trail); lane also removed the stray luac.out. Per-class
+  verdicts accepted (paladin/shaman aligned; hunter/warrior/druid/rogue
+  proven clean, no change). Mutations M1/M2''/M3/M4 kill; searing revert
+  is behavior-identical (noted, accepted).
+- Full suite BEFORE commit: 48/0, luacheck 2/0 floor.
+- Owed in-client: U1 leveling hide/show + U2 blocked-call watch on the new
+  per-tick book probes (isolation-bounded, but watch the log).
+
+## Release audit dispatched (2026-10-22, operator: no buggy release)
+- audit-practice ses_e9a40e9d4ffeEs461fILQ8v4p1: practice_*.lua + practice tests.
+- audit-hud-options ses_e9a40e9d4ffd743vBH5iyaU0ay: hud/config/options + tests.
+- audit-core ses_e9a40e9c3ffenICsds1XQvH3fU: main/bars/compat/swing_source/diag/utils + core tests.
+- audit-hsp ses_e9a40e9c2ffef8L8jJODWWqmwB: hunter/shaman/paladin + guides.
+- audit-rwd ses_e9a40e9c2ffdbIckpziky0p7V8: rogue/warrior/druid + guides.
+- Scopes disjoint by file; all four skills explicit in every prompt; full
+  run.sh + commit stay orchestrator-owned.
+
+## Practice audit reconciled, held for wave commit (2026-10-22)
+- Lane DONE, trail complete (journal + done signal). Scope verified:
+  practice_ui.lua +9 (combat-pause deadline shift), practice_ui_state.lua
+  +38 (§22b1b, 10 asserts). Other Ms in tree (main/bars/hunter.lua +
+  hunter_state) belong to still-running lanes — not touched, commit waits
+  for all five. No bench file from this lane (detail in handoff + journal).
+- Accepting the fix; holding commit until hud-options/core/hsp/rwd land so
+  the wave commits once with one full 48-step proof.
+
+## HUD+options audit reconciled, held (2026-10-22)
+- Lane DONE, trail complete. Scope verified: config_presets (shaman
+  mirrors explicit-false x3), hud_templates_state (+37 pins), option_tables
+  comment-only reword. F1 template-stale-slot + F2 stale comment fixed with
+  red+green mutations. Rest verified-clean with file:line.
+- Noted, not mine: bench/hud_templates_2026-10-19.md §5 stale vs 11 slots
+  (bench = lanes' workspace); S-T2 mirrors on/off = operator design call.
+- Still running: core, hsp, rwd. Commit waits for all five.
+
+## HSP audit reconciled, held (2026-10-22)
+- Lane DONE, trail complete (journal + signal + bench report). Scope
+  verified: hunter.lua +104 (4 id-only sites → id-primary/name-secondary),
+  hunter_state +17 legs. Mutations kill exactly the name legs.
+- C3 confirmed-not-fixed (hunter guide dead at range — needs gated lane;
+  handoff, not a ruling ask). Shaman/paladin proven clean.
+- Still running: core, rwd. Commit waits for all five.
+
+## Core audit reconciled, held (2026-10-22)
+- Lane DONE, trail complete (journal + signal + bench/audit_core_2026-10-22.md).
+  Scope verified: main.lua +55 (6 hardenings incl. GCD guard region),
+  bars.lua +17, bars_lazy +75 (§6), main_init +13 (§4b-iii). F1 retracted
+  with byte evidence (no phantom fix). Mutations M1-M4 kill.
+- Still running: rwd only. Commit waits for all five.

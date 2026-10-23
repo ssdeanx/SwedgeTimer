@@ -1,5 +1,5 @@
 -- Get the name of a) this addon loaded seperately, or b) the addon that loaded this as an embedded library
-local loadedAddonName = ... 
+local loadedAddonName = ...
 local MAJOR, MINOR = "LibClassicSwingTimerAPI", 32
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then
@@ -11,39 +11,46 @@ local tooltip_name = loadedAddonName .. "Tooltip"
 local tooltip = CreateFrame("GameTooltip", tooltip_name, nil, "GameTooltipTemplate")
 
 local C_Timer, tonumber = C_Timer, tonumber
-local GetSpellInfo, CombatLogGetCurrentEventInfo, GetInventoryItemID = GetSpellInfo, CombatLogGetCurrentEventInfo, GetInventoryItemID
+local GetSpellInfo, CombatLogGetCurrentEventInfo, GetInventoryItemID = GetSpellInfo, CombatLogGetCurrentEventInfo,
+	GetInventoryItemID
 local GetTimePreciseSec = rawget(_G, "GetTimePreciseSec")
 local GetTimeBase = rawget(_G, "GetTime")
 
 local _preciseClockOffset
 local function EnsurePreciseClockOffset()
-    if _preciseClockOffset == nil and GetTimePreciseSec and GetTimeBase then
-        _preciseClockOffset = (GetTimeBase() or 0) - GetTimePreciseSec()
-    end
-    return _preciseClockOffset or 0
+	if _preciseClockOffset == nil and GetTimePreciseSec and GetTimeBase then
+		_preciseClockOffset = (GetTimeBase() or 0) - GetTimePreciseSec()
+	end
+	return _preciseClockOffset or 0
 end
 
 local function CanonicalGetTime()
-    if GetTimePreciseSec and GetTimeBase then
-        return GetTimePreciseSec() + EnsurePreciseClockOffset()
-    end
-    return GetTimeBase and GetTimeBase() or 0
+	if GetTimePreciseSec and GetTimeBase then
+		return GetTimePreciseSec() + EnsurePreciseClockOffset()
+	end
+	return GetTimeBase and GetTimeBase() or 0
 end
 
 local function GetTime()
-    return CanonicalGetTime()
+	return CanonicalGetTime()
 end
 
 local _cleuClockOffset
 
-local UnitAttackSpeed, UnitAura, UnitGUID, UnitRangedDamage, GetPlayerInfoByGUID = UnitAttackSpeed, UnitAura, UnitGUID, UnitRangedDamage, GetPlayerInfoByGUID
+local UnitAttackSpeed, UnitAura, UnitGUID, UnitRangedDamage, GetPlayerInfoByGUID = UnitAttackSpeed, UnitAura, UnitGUID,
+	UnitRangedDamage, GetPlayerInfoByGUID
 
+local exp_level = rawget(_G, "LE_EXPANSION_LEVEL_CURRENT")
 local isRetail = WOW_PROJECT_ID == WOW_PROJECT_MAINLINE
 local isClassic = WOW_PROJECT_ID == WOW_PROJECT_CLASSIC
-local isBCC = WOW_PROJECT_ID == WOW_PROJECT_BURNING_CRUSADE_CLASSIC and LE_EXPANSION_LEVEL_CURRENT == LE_EXPANSION_BURNING_CRUSADE
-local isWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC and LE_EXPANSION_LEVEL_CURRENT == LE_EXPANSION_WRATH_OF_THE_LICH_KING
-local isCata = WOW_PROJECT_ID == WOW_PROJECT_CATACLYSM_CLASSIC and LE_EXPANSION_LEVEL_CURRENT == LE_EXPANSION_CATACLYSM
-local isMists = WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC and LE_EXPANSION_MISTS_OF_PANDARIA == LE_EXPANSION_MISTS_OF_PANDARIA
+local isBCC = WOW_PROJECT_ID == WOW_PROJECT_BURNING_CRUSADE_CLASSIC and
+	(exp_level == nil or exp_level == LE_EXPANSION_BURNING_CRUSADE)
+local isWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC and
+	(exp_level == nil or exp_level == LE_EXPANSION_WRATH_OF_THE_LICH_KING)
+local isCata = WOW_PROJECT_ID == WOW_PROJECT_CATACLYSM_CLASSIC and
+	(exp_level == nil or exp_level == LE_EXPANSION_CATACLYSM)
+local isMists = WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC and
+	(exp_level == nil or exp_level == LE_EXPANSION_MISTS_OF_PANDARIA)
 local isClassicOrBCCOrWrathOrCata = isClassic or isBCC or isWrath or isCata
 
 local reset_swing_spells = {}
@@ -137,7 +144,7 @@ function Unit:SwingStart(hand, startTime, isReset)
 		end
 		self.lastOffSwing = startTime
 		local _, offSpeed = UnitAttackSpeed(self.id)
-		if(self.id == "target" and not self.isPlayer) then
+		if (self.id == "target" and not self.isPlayer) then
 			offSpeed = UnitAttackSpeed(self.id)
 		end
 		self.offSpeed = offSpeed or 0
@@ -197,7 +204,7 @@ function Unit:SwingEnd(hand)
 	self.callbacks:Fire("UNIT_SWING_TIMER_STOP", self.id, hand)
 	if (self.casting or self.channeling) and self.isAttacking and hand ~= "ranged" then
 		local now = GetTime()
-		if (isRetail or isMists) and hand == "mainhand" then		
+		if (isRetail or isMists) and hand == "mainhand" then
 			self:SwingStart(hand, now, true)
 			self.callbacks:Fire("UNIT_SWING_TIMER_CLIPPED", self.id, hand)
 		elseif isClassicOrBCCOrWrathOrCata or isMists then
@@ -254,7 +261,7 @@ end
 function lib:getUnit(unit)
 	if self.player.GUID == unit or self.player.id == unit then
 		return self.player
-	elseif self.target.GUID == unit  or self.player.id == unit then
+	elseif self.target.GUID == unit or self.target.id == unit then
 		return self.target
 	else
 		return nil
@@ -291,15 +298,15 @@ function lib:ADDON_LOADED(_, addOnName)
 		return
 	end
 
-	self.player = Unit:new({id="player"})
+	self.player = Unit:new({ id = "player" })
 	self.player.callbacks = self.callbacks
-	self.target = Unit:new({id="target", class="TARGET"})
+	self.target = Unit:new({ id = "target", class = "TARGET" })
 	self.target.callbacks = self.callbacks
 end
 
 function lib:PLAYER_ENTERING_WORLD()
 	self.player.GUID = UnitGUID("player")
-	self.player.class = select(2,GetPlayerInfoByGUID(self.player.GUID))
+	self.player.class = select(2, GetPlayerInfoByGUID(self.player.GUID))
 
 	local mainSpeed, offSpeed = UnitAttackSpeed("player")
 	local now = GetTime()
@@ -341,7 +348,7 @@ function lib:PLAYER_TARGET_CHANGED()
 	self.target.GUID = UnitGUID("target")
 
 	local mainSpeed, offSpeed = UnitAttackSpeed("target")
-	if(not self.isPlayer) then
+	if (not self.isPlayer) then
 		offSpeed = mainSpeed
 	end
 	local now = GetTime()
@@ -380,18 +387,15 @@ function lib:PLAYER_TARGET_CHANGED()
 	self.callbacks:Fire("UNIT_SWING_TIMER_INFO_INITIALIZED", self.target.id)
 end
 
-function lib:COMBAT_LOG_EVENT_UNFILTERED(_, ts, subEvent, _, sourceGUID, _, _, _, destGUID, _, _, _, amount, overkill, _, resisted, _, _, _, _, _, isOffHand)
-	local now
+function lib:COMBAT_LOG_EVENT_UNFILTERED(_, ts, subEvent, _, sourceGUID, _, _, _, destGUID, _, _, _, amount, overkill, _,
+										 resisted, _, _, _, _, _, isOffHand)
+	local now = CanonicalGetTime()
 	if type(ts) == "number" and ts > 0 then
-		if _cleuClockOffset == nil then
-			_cleuClockOffset = CanonicalGetTime() - ts
-		end
-		now = ts + _cleuClockOffset
-	else
-		now = CanonicalGetTime()
+		_cleuClockOffset = now - ts
 	end
 	local unit = lib:getUnit(sourceGUID)
-	if not unit then
+	local destUnit = lib:getUnit(destGUID)
+	if not unit and not destUnit then
 		return
 	end
 	if (subEvent == "SWING_DAMAGE" or subEvent == "SWING_MISSED") and unit then
@@ -412,8 +416,8 @@ function lib:COMBAT_LOG_EVENT_UNFILTERED(_, ts, subEvent, _, sourceGUID, _, _, _
 				unit:SwingStart("ranged", now, true)
 			end
 		end
-	elseif subEvent == "SWING_MISSED" and amount ~= nil and amount == "PARRY" and lib:getUnit(destGUID) then
-		unit = lib:getUnit(destGUID)
+	elseif subEvent == "SWING_MISSED" and amount ~= nil and amount == "PARRY" and destUnit then
+		unit = destUnit
 		if unit and unit.mainSpeed and unit.mainExpirationTime then
 			if unit.mainTimer then
 				unit.mainTimer:Cancel()
@@ -481,8 +485,8 @@ function lib:UNIT_ATTACK_SPEED(_, unitGUID)
 		return
 	end
 	local mainSpeedNew, offSpeedNew = UnitAttackSpeed(unit.id)
-	if(unit.id == "target" and not unit.isPlayer) then
-		offSpeed = mainSpeedNew
+	if (unit.id == "target" and not unit.isPlayer) then
+		offSpeedNew = mainSpeedNew
 	end
 	offSpeedNew = offSpeedNew or 0
 	if mainSpeedNew > 0 and unit.mainSpeed > 0 and mainSpeedNew ~= unit.mainSpeed then
@@ -568,9 +572,11 @@ function lib:UNIT_SPELLCAST_INTERRUPTED_OR_FAILED(_, unitType, _, spell)
 		end
 	end
 end
+
 function lib:UNIT_SPELLCAST_INTERRUPTED(...)
 	self:UNIT_SPELLCAST_INTERRUPTED_OR_FAILED(...)
 end
+
 function lib:UNIT_SPELLCAST_FAILED(...)
 	self:UNIT_SPELLCAST_INTERRUPTED_OR_FAILED(...)
 end
@@ -625,17 +631,17 @@ function lib:UNIT_SPELLCAST_SUCCEEDED(_, unitType, _, spell)
 				end)
 			end
 		end
-	end	
+	end
 	if spell ~= 6603 then -- 6603=Auto Attack prevent set preventSwingReset flag to false when auto attack is toggle on/off
 		unit.preventSwingReset = unit.auraPreventSwingReset or false
 	end
 	if unit.casting and spell ~= 6603 then -- 6603=Auto Attack prevent set casting flag to false when auto attack is toggle on
 		unit.casting = false
 	end
-	if spell == 5384 then -- 5384=Feign Death
+	if spell == 5384 then                                  -- 5384=Feign Death
 		unit.feignDeathTimer = C_Timer.NewTicker(0.1, function() -- Start watching FD CD
 			local start, _, enabled = GetSpellCooldown(spell)
-			if enabled == 1 then -- Reset ranged swing when FD CD start
+			if enabled == 1 then                           -- Reset ranged swing when FD CD start
 				unit:SwingStart("mainhand", start, true)
 				unit:SwingStart("offhand", start, true)
 				if isClassicOrBCCOrWrathOrCata then
@@ -647,11 +653,11 @@ function lib:UNIT_SPELLCAST_SUCCEEDED(_, unitType, _, spell)
 			end
 		end)
 	end
-	if isMists and spell == 114089 then  -- Wind Lash main hand cast
+	if isMists and spell == 114089 then -- Wind Lash main hand cast
 		unit.firstMainSwing = true
 		unit:SwingStart("mainhand", now, false)
 	end
-	if isMists and spell == 114093 then  -- Wind Lash off-hand cast
+	if isMists and spell == 114093 then -- Wind Lash off-hand cast
 		unit.firstOffSwing = true
 		unit:SwingStart("offhand", now, false)
 	end
@@ -713,7 +719,7 @@ function lib:UNIT_SPELLCAST_CHANNEL_STOP(_, unitType, _, spell)
 	unit.channeling = false
 	unit.preventSwingReset = unit.auraPreventSwingReset or false
 	if (spell and reset_swing_on_channel_stop_spells[spell]) then
-		if isRetail then		
+		if isRetail then
 			unit:SwingStart("mainhand", now, true)
 		else
 			unit:SwingStart("mainhand", now, true)
@@ -774,7 +780,8 @@ function lib:UNIT_SPELLCAST_FAILED_QUIET(_, unitType, _, spell)
 			self.player.rangedTimer:Cancel()
 		end
 		self.player.rangedExpirationTime = GetTime() + 0.5 + self.player.autoShotCastTime
-		self.player.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", self.player.id, self.player.rangedSpeed, self.player.rangedExpirationTime, "ranged")
+		self.player.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", self.player.id, self.player.rangedSpeed,
+			self.player.rangedExpirationTime, "ranged")
 		if self.player.rangedExpirationTime - GetTime() > 0 then
 			self.player.rangedTimer = C_Timer.NewTimer(self.player.rangedExpirationTime - GetTime(), function()
 				self.player:SwingEnd("ranged")
@@ -809,14 +816,14 @@ frame:SetScript("OnEvent", function(_, event, ...)
 	end
 end)
 
-tooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
+tooltip:SetOwner(WorldFrame --[[@as any]], "ANCHOR_NONE")
 
 --[[
 	Specific event handling
-]]--
+]] --
 local EventHandler = function(event, ...)
 	-- Backward compatibility continue to fire EVENTS with SWING_TIMER_ format for player unit.
-	local unitId = select(1,...)
+	local unitId = select(1, ...)
 	if unitId == "player" then
 		local legacyEvent = event:gsub("^UNIT_", "")
 		if legacyEvent ~= event then
@@ -825,7 +832,7 @@ local EventHandler = function(event, ...)
 	end
 	-- Fire EVENTS in Weakauras if the addon is loaded
 	if WeakAuras ~= nil then
-		WeakAuras.ScanEvents(event, select(1,...))
+		WeakAuras.ScanEvents(event, select(1, ...))
 	end
 end
 
@@ -838,7 +845,7 @@ lib.RegisterCallback(lib, "UNIT_SWING_TIMER_STOP", EventHandler)
 lib.RegisterCallback(lib, "UNIT_SWING_TIMER_DELTA", EventHandler)
 lib.RegisterCallback(lib, "SWING_TIMER_INFO_INITIALIZED", EventHandler)
 lib.RegisterCallback(lib, "SWING_TIMER_START", EventHandler)
-lib.RegisterCallback(lib, "SWING_TIMER_STOP",EventHandler)
+lib.RegisterCallback(lib, "SWING_TIMER_STOP", EventHandler)
 lib.RegisterCallback(lib, "SWING_TIMER_UPDATE", EventHandler)
 lib.RegisterCallback(lib, "SWING_TIMER_CLIPPED", EventHandler)
 lib.RegisterCallback(lib, "SWING_TIMER_DELTA", EventHandler)
@@ -846,7 +853,7 @@ lib.RegisterCallback(lib, "SWING_TIMER_PAUSED", EventHandler)
 
 --[[
 	Set table data based on current game version
-]]--
+]] --
 if isClassic then
 	reset_swing_spells = {
 		[16589] = true, -- Noggenfogger Elixir
@@ -855,22 +862,89 @@ if isClassic then
 		[20066] = true, -- Repentance
 		[2893] = true, -- Abolish Poison
 		[8946] = true, -- Cure Poison
-		[339] = true, [1062] = true, [5195] = true, [5196] = true, [9852] = true, [9853] = true, -- Entangling Roots
+		[339] = true,
+		[1062] = true,
+		[5195] = true,
+		[5196] = true,
+		[9852] = true,
+		[9853] = true, -- Entangling Roots
 		[770] = true, -- Faerie Fire
-		[21849] = true,	[21850] = true, -- Gift of the Wild
-		[5185] = true, [5186] = true, [5187] = true, [5188] = true, [5189] = true, [6778] = true, [8903] = true, [9758] = true, 
-			[9888] = true, [9889] = true, [25297] = true, -- Healing Touch
-		[2637] = true, [18657] = true, [18658] = true, -- Hibernate
-		[1126] = true, [5232] = true, [6756] = true, [5234] = true, [8907] = true, [9884] = true, [9885] = true,  -- Mark of the Wild
-		[8921] = true, [8924] = true, [8925] = true, [8926] = true, [8927] = true, [8928] = true, [8929] = true, [9833] = true, [9834] = true, [9835] = true, -- Moonfire
-		[20484] = true, [20739] = true, [20742] = true, [20747] = true, [20748] = true, -- Rebirth
-		[8936] = true, [8938] = true, [8939] = true, [8940] = true, [8941] = true, [9750] = true, [9856] = true, [9857] = true, [9858] = true, -- Regrowth
-		[774] = true, [1058] = true, [1430] = true, [2090] = true, [2091] = true, [3627] = true, [8910] = true, [9839] = true, [9840] = true,
-			[9841] = true, [25299] = true, -- Rejuvenation
+		[21849] = true,
+		[21850] = true, -- Gift of the Wild
+		[5185] = true,
+		[5186] = true,
+		[5187] = true,
+		[5188] = true,
+		[5189] = true,
+		[6778] = true,
+		[8903] = true,
+		[9758] = true,
+		[9888] = true,
+		[9889] = true,
+		[25297] = true, -- Healing Touch
+		[2637] = true,
+		[18657] = true,
+		[18658] = true, -- Hibernate
+		[1126] = true,
+		[5232] = true,
+		[6756] = true,
+		[5234] = true,
+		[8907] = true,
+		[9884] = true,
+		[9885] = true, -- Mark of the Wild
+		[8921] = true,
+		[8924] = true,
+		[8925] = true,
+		[8926] = true,
+		[8927] = true,
+		[8928] = true,
+		[8929] = true,
+		[9833] = true,
+		[9834] = true,
+		[9835] = true, -- Moonfire
+		[20484] = true,
+		[20739] = true,
+		[20742] = true,
+		[20747] = true,
+		[20748] = true, -- Rebirth
+		[8936] = true,
+		[8938] = true,
+		[8939] = true,
+		[8940] = true,
+		[8941] = true,
+		[9750] = true,
+		[9856] = true,
+		[9857] = true,
+		[9858] = true, -- Regrowth
+		[774] = true,
+		[1058] = true,
+		[1430] = true,
+		[2090] = true,
+		[2091] = true,
+		[3627] = true,
+		[8910] = true,
+		[9839] = true,
+		[9840] = true,
+		[9841] = true,
+		[25299] = true, -- Rejuvenation
 		[2782] = true, -- remove-curse
-		[2908] = true, [8955] = true, [9901] = true, -- Soothe Animal
-		[467] = true, [782] = true, [1075] = true, [8914] = true, [9756] = true, [9910] = true, -- Thorns
-		[5176] = true, [5177] = true, [5178] = true, [5179] = true, [5180] = true, [6780] = true, [8905] = true, [9912] = true, -- Wrath
+		[2908] = true,
+		[8955] = true,
+		[9901] = true, -- Soothe Animal
+		[467] = true,
+		[782] = true,
+		[1075] = true,
+		[8914] = true,
+		[9756] = true,
+		[9910] = true, -- Thorns
+		[5176] = true,
+		[5177] = true,
+		[5178] = true,
+		[5179] = true,
+		[5180] = true,
+		[6780] = true,
+		[8905] = true,
+		[9912] = true, -- Wrath
 	}
 
 	reset_swing_on_channel_stop_spells = {}
@@ -945,7 +1019,7 @@ if isClassic then
 		[12051] = true, -- Evocation
 		[14295] = true, -- Volley (rank 3)
 		[14294] = true, -- Volley (rank 2)
-		[1510] = true, -- Volley (rank 1)	
+		[1510] = true, -- Volley (rank 1)
 	}
 
 	prevent_reset_swing_auras = {}
@@ -962,7 +1036,7 @@ if isClassic then
 	reset_ranged_swing = {
 		[42245] = true, -- Volley (rank 3)
 		[42244] = true, -- Volley (rank 2)
-		[42243] = true,  -- Volley (rank 1)
+		[42243] = true, -- Volley (rank 1)
 	}
 elseif isBCC then
 	reset_swing_spells = {
@@ -1044,7 +1118,9 @@ elseif isBCC then
 		[35475] = true, -- Drums of War
 		[35477] = true, -- Drums of Speed
 		[35478] = true, -- Drums of Restoration
-		[56641] = true, -- Steady Shot (rank 1)
+		[34120] = true, -- Steady Shot (TBC rank 1)
+		[25258] = true, -- Steady Shot (TBC rank 2)
+		[56641] = true, -- Steady Shot (Wrath base/rank 1)
 		[27012] = true, -- Hurricane (rank 4)
 		[17402] = true, -- Hurricane (rank 3)
 		[17401] = true, -- Hurricane (rank 2)
@@ -1074,7 +1150,7 @@ elseif isBCC then
 		[42234] = true, -- Volley (rank 4)
 		[42245] = true, -- Volley (rank 3)
 		[42244] = true, -- Volley (rank 2)
-		[42243] = true,  -- Volley (rank 1)
+		[42243] = true, -- Volley (rank 1)
 	}
 elseif isWrath then
 	reset_swing_spells = {
@@ -1087,28 +1163,128 @@ elseif isWrath then
 		[75] = true, -- Auto Shot
 		[2893] = true, -- Abolish Poison
 		[8946] = true, -- Cure Poison
-		[339] = true, [1062] = true, [5195] = true, [5196] = true, [9852] = true, [9853] = true, [26989] = true, [53308] = true, -- Entangling Roots
+		[339] = true,
+		[1062] = true,
+		[5195] = true,
+		[5196] = true,
+		[9852] = true,
+		[9853] = true,
+		[26989] = true,
+		[53308] = true, -- Entangling Roots
 		[770] = true, -- Faerie Fire
-		[21849] = true,	[21850] = true,	[26991] = true,	[48470] = true, -- Gift of the Wild
-		[5185] = true, [5186] = true, [5187] = true, [5188] = true, [5189] = true, [6778] = true, [8903] = true, [9758] = true, 
-			[9888] = true, [9889] = true, [25297] = true, [26978] = true, [26979] = true, [58399] = true, [58378] = true, -- Healing Touch
-		[2637] = true, [18657] = true, [18658] = true, -- Hibernate
-		[33763] = true, [48450] = true, [48451] = true, -- Lifebloom
-		[1126] = true, [5232] = true, [6756] = true, [5234] = true, [8907] = true, [9884] = true, [9885] = true, [26990] = true, [48469] = true, -- Mark of the Wild
-		[8921] = true, [8924] = true, [8925] = true, [8926] = true, [8927] = true, [8928] = true, [8929] = true, [9833] = true, [9834] = true, 
-			[9835] = true, [26987] = true, [26988] = true, -- Moonfire
+		[21849] = true,
+		[21850] = true,
+		[26991] = true,
+		[48470] = true, -- Gift of the Wild
+		[5185] = true,
+		[5186] = true,
+		[5187] = true,
+		[5188] = true,
+		[5189] = true,
+		[6778] = true,
+		[8903] = true,
+		[9758] = true,
+		[9888] = true,
+		[9889] = true,
+		[25297] = true,
+		[26978] = true,
+		[26979] = true,
+		[58399] = true,
+		[58378] = true, -- Healing Touch
+		[2637] = true,
+		[18657] = true,
+		[18658] = true, -- Hibernate
+		[33763] = true,
+		[48450] = true,
+		[48451] = true, -- Lifebloom
+		[1126] = true,
+		[5232] = true,
+		[6756] = true,
+		[5234] = true,
+		[8907] = true,
+		[9884] = true,
+		[9885] = true,
+		[26990] = true,
+		[48469] = true, -- Mark of the Wild
+		[8921] = true,
+		[8924] = true,
+		[8925] = true,
+		[8926] = true,
+		[8927] = true,
+		[8928] = true,
+		[8929] = true,
+		[9833] = true,
+		[9834] = true,
+		[9835] = true,
+		[26987] = true,
+		[26988] = true, -- Moonfire
 		[50464] = true, -- Nourish
-		[20484] = true, [20739] = true, [20742] = true, [20747] = true, [20748] = true, [26994] = true, [48477] = true, -- Rebirth
-		[8936] = true, [8938] = true, [8939] = true, [8940] = true, [8941] = true, [9750] = true, [9856] = true, [9857] = true, [9858] = true,
-			[26980] = true, [48442] = true, [48443] = true, -- Regrowth
-		[774] = true, [1058] = true, [1430] = true, [2090] = true, [2091] = true, [3627] = true, [8910] = true, [9839] = true, [9840] = true,
-			[9841] = true, [25299] = true, [26981] = true, [26982] = true, [48440] = true, [48441] = true, -- Rejuvenation
+		[20484] = true,
+		[20739] = true,
+		[20742] = true,
+		[20747] = true,
+		[20748] = true,
+		[26994] = true,
+		[48477] = true, -- Rebirth
+		[8936] = true,
+		[8938] = true,
+		[8939] = true,
+		[8940] = true,
+		[8941] = true,
+		[9750] = true,
+		[9856] = true,
+		[9857] = true,
+		[9858] = true,
+		[26980] = true,
+		[48442] = true,
+		[48443] = true, -- Regrowth
+		[774] = true,
+		[1058] = true,
+		[1430] = true,
+		[2090] = true,
+		[2091] = true,
+		[3627] = true,
+		[8910] = true,
+		[9839] = true,
+		[9840] = true,
+		[9841] = true,
+		[25299] = true,
+		[26981] = true,
+		[26982] = true,
+		[48440] = true,
+		[48441] = true, -- Rejuvenation
 		[2782] = true, -- remove-curse
-		[50769] = true, [50768] = true, [50767] = true, [50766] = true, [50765] = true, [50764] = true, [50763] = true, -- Revive
-		[2908] = true, [8955] = true, [9901] = true, [26995] = true, -- Soothe Animal
-		[467] = true, [782] = true, [1075] = true, [8914] = true, [9756] = true, [9910] = true, [26992] = true, [53307] = true, -- Thorns
-		[5176] = true, [5177] = true, [5178] = true, [5179] = true, [5180] = true, [6780] = true, [8905] = true, [9912] = true, [26984] = true,
-			[26985] = true, [48459] = true, [48461] = true, -- Wrath
+		[50769] = true,
+		[50768] = true,
+		[50767] = true,
+		[50766] = true,
+		[50765] = true,
+		[50764] = true,
+		[50763] = true, -- Revive
+		[2908] = true,
+		[8955] = true,
+		[9901] = true,
+		[26995] = true, -- Soothe Animal
+		[467] = true,
+		[782] = true,
+		[1075] = true,
+		[8914] = true,
+		[9756] = true,
+		[9910] = true,
+		[26992] = true,
+		[53307] = true, -- Thorns
+		[5176] = true,
+		[5177] = true,
+		[5178] = true,
+		[5179] = true,
+		[5180] = true,
+		[6780] = true,
+		[8905] = true,
+		[9912] = true,
+		[26984] = true,
+		[26985] = true,
+		[48459] = true,
+		[48461] = true, -- Wrath
 		[53563] = true, -- Beacon of Light
 		[64382] = true, -- Shattering Throw
 		[57755] = true, -- Heroic Throw
@@ -1252,7 +1428,7 @@ elseif isWrath then
 		[42234] = true, -- Volley (rank 4)
 		[42245] = true, -- Volley (rank 3)
 		[42244] = true, -- Volley (rank 2)
-		[42243] = true,  -- Volley (rank 1)
+		[42243] = true, -- Volley (rank 1)
 	}
 elseif isCata then
 	reset_swing_spells = {
@@ -1435,10 +1611,10 @@ elseif isMists then
 		[56641] = true, -- Steady Shot
 		[1464] = true, -- Slam
 		[16914] = true, -- Hurricane
-		
+
 		[120360] = true, -- Barrage
 		[113656] = true, -- Fists of Fury
-		[123986] = true, -- Chi Burst	
+		[123986] = true, -- Chi Burst
 		[107270] = true, -- Spinning Crane Kick
 		[119996] = true, -- Transcendence: Transfer
 		[115176] = true, -- Zen Meditation
@@ -1486,7 +1662,7 @@ elseif isRetail then
 		[198013] = true, -- Eye Beam
 		[101546] = true, -- Spinning Crane Kick
 		[322729] = true, -- Spinning Crane Kick
-		[123986] = true, -- Chi Burst	
+		[123986] = true, -- Chi Burst
 	}
 
 	next_melee_spells = {}

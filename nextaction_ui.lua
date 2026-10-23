@@ -108,9 +108,9 @@ local ui = st.nextaction_ui
 -- Display constants (authored at the archive's WeakAura scale, then SetScale'd as one
 -- unit so every element keeps its exact relative size and position)
 --=========================================================================================
-local FADE_DURATION = 0.2               -- the WA's preset fade in/out time
-local BASE_ICON_SIZE = 45               -- everything is authored at WA scale
-local UPDATE_INTERVAL = 0.05            -- engine tick, matches the WA's aura poll cadence
+local FADE_DURATION = 0.2    -- the WA's preset fade in/out time
+local BASE_ICON_SIZE = 45    -- everything is authored at WA scale
+local UPDATE_INTERVAL = 0.05 -- engine tick, matches the WA's aura poll cadence
 -- Cooldown swipe lengths are slot data now (slot.swipe_duration): the paladin provider
 -- carries the archive's fallbacks (CS 6 s, Judgement 8 s, seals 30 s) and the real
 -- length the client reported rides in the gather inputs (<cooldown_key>_duration,
@@ -122,7 +122,7 @@ local UPDATE_INTERVAL = 0.05            -- engine tick, matches the WA's aura po
 -- profiles where the asset is missing; a missing texture file never raises.
 local HOLD_CIRCLE_ASSET = true
 local HOLD_CIRCLE_TEXTURE = "Interface\\AddOns\\SwedgeTimer\\Media\\Textures\\circle_smooth.tga"
-local HOLD_CIRCLE_COLOR = {0.090, 0.067, 0.039, 0.45}
+local HOLD_CIRCLE_COLOR = { 0.090, 0.067, 0.039, 0.45 }
 local HOLD_CIRCLE_SIZE = 40
 
 --=========================================================================================
@@ -441,6 +441,13 @@ end
 --=========================================================================================
 -- Display state
 --=========================================================================================
+-- One hand's swing state counts as live when the engine is reporting a real cycle
+-- (a zero/absent speed or a full bar is a stopped or never-started hand).
+local function has_live_swing(d)
+    return d ~= nil and d.speed ~= nil and d.speed > 0
+        and d.ends_at ~= nil and d.start ~= nil and d.is_full ~= true
+end
+
 -- True when the guide may be shown: a class provider exists, the guide is enabled, and
 -- either in combat or pinned always, with a live swing to guide. This is deliberately
 -- NOT an st.is_mainline gate: the Forever client is Mainline-code but must show the
@@ -451,6 +458,11 @@ function ui.should_show(self)
         return false
     end
     local db = self:get_class_table()
+    -- No class row means no guide settings: the guide stays hidden (the state a
+    -- switched-off guide paints). This runs on the guide's own per-frame update.
+    if type(db) ~= "table" then
+        return false
+    end
     if db.nextaction_enabled == false then
         return false
     end
@@ -461,11 +473,14 @@ function ui.should_show(self)
     if db.nextaction_visibility_key ~= "always" and not self.in_combat then
         return false
     end
-    local d = self.mainhand
-    if not (d and d.speed and d.speed > 0 and d.ends_at and d.start and not d.is_full) then
-        return false
+    -- A live swing on ANY hand keeps the guide up. The mainhand-only gate made the
+    -- guide dead for ranged play: a hunter at range never starts a mainhand cycle,
+    -- so the class that needs the prompt most never saw it. Melee classes still ride
+    -- their mainhand; the ranged hand only ever ticks when that class actually swings.
+    if has_live_swing(self.mainhand) or has_live_swing(self.ranged) then
+        return true
     end
-    return true
+    return false
 end
 
 -- Applies a started-or-updated cooldown swipe once per cooldown, following the
@@ -826,9 +841,11 @@ function ui.update(self)
 end
 
 function ui.on_bar_update(self, hand)
-    -- Driven from the class hook for the mainhand bar (the archive drove the
-    -- guide from the player module's per-frame update).
-    if hand ~= "mainhand" then
+    -- Drive from whichever hand the class actually swings: melee classes fire on the
+    -- mainhand tick, and the hunter at range only ever has a ranged cycle (its class
+    -- hook forwards both hands). The update is rate-limited by UPDATE_INTERVAL, so
+    -- the second hand costs a clock read on most frames.
+    if hand ~= "mainhand" and hand ~= "ranged" then
         return
     end
     ui.update(self)
@@ -846,6 +863,14 @@ function ui.apply_settings(self)
         return
     end
     local db = self:get_class_table()
+    -- No class row: there is nothing to apply. Hide the live frame (the same
+    -- fail-closed state as an unauthorised guide) and leave it built.
+    if type(db) ~= "table" then
+        if frame:IsShown() then
+            frame:Hide()
+        end
+        return
+    end
     local enabled = db.nextaction_enabled ~= false
     local locked = db.nextaction_locked ~= false
 

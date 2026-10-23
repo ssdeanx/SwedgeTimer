@@ -2226,6 +2226,36 @@ do
 end
 
 --=========================================================================================
+-- NILSWEEP (2026-10-22): enter with no class row refuses loudly instead of opening a
+-- session whose lock/grid reads (and every save path) would index nil. The unguarded
+-- enter throws inside unlock_elements, so the leg is red-first.
+--=========================================================================================
+do
+    local b = build()
+    local d, F, ST = b.st.designmode, b.sb, b.ST
+    ST.get_class_table = function() return nil end
+    local ok, err = pcall(d.enter)
+    check(ok, "NILSWEEP D1 enter tolerates a missing class row (error: " .. tostring(err) .. ")")
+    eq(d.is_active(), false, "NILSWEEP D1 design mode stays off without a class row")
+    check(#F.prints == 1 and F.prints[1]:find("no settings row", 1, true) ~= nil,
+        "NILSWEEP D1 the refusal says why (prints: " .. tostring(#F.prints) .. ")")
+    eq(layer_of(F), nil, "NILSWEEP D1 no design layer is built for a refused session")
+end
+
+do
+    -- D2: the bar overlay's double-click reset with no hand row: no stored position
+    -- to restore, so it resets nothing instead of writing through nil.
+    local b = build()
+    local d, ST = b.st.designmode, b.ST
+    local desc = d.registry.by_key.bar_mainhand
+    check(type(desc) == "table" and type(desc.reset) == "function",
+        "fixture: the mainhand bar descriptor exposes reset")
+    ST.get_hand_table = function() return nil end
+    local ok, err = pcall(desc.reset)
+    check(ok, "NILSWEEP D2 bar reset tolerates a missing hand row (error: " .. tostring(err) .. ")")
+end
+
+--=========================================================================================
 -- Summary
 --=========================================================================================
 print(string.format("%d checks, %d failed", checks, failures))

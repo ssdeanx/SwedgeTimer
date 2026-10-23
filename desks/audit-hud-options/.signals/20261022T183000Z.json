@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-22T18:30:00Z",
+  "run_id": "ses_e9a40e9d4ffd743vBH5iyaU0ay",
+  "agent_name": "audit-hud-options",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "systematic slot-key cross-check (HUD_SLOTS vs defaults vs widgets vs templates vs suite expectations) caught the one omission the green harness hid",
+    "what_was_hard": "resisting scope creep into class files and designmode polarity; both verified read-only and left untouched",
+    "skill_gap": "none for this lane"
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "reconcile; owed in-client U1/U2 to operator checklist"
+  }
+}

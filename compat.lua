@@ -940,7 +940,19 @@ function api.IsAutoRepeatSpell(spell)
 		return false
 	end
 	local ok, is_repeating = pcall(probe, spell)
-	return ok and is_repeating == true
+	if ok and is_repeating == true then
+		return true
+	end
+	if type(spell) == "number" and api.GetSpellInfo then
+		local name = api.GetSpellInfo(spell)
+		if name and name ~= spell then
+			local ok2, is_repeating2 = pcall(probe, name)
+			if ok2 and is_repeating2 == true then
+				return true
+			end
+		end
+	end
+	return false
 end
 
 -- Mounted state; false on a client without the global. Read through _G for the same

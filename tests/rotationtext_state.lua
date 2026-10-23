@@ -818,6 +818,28 @@ do
         "the rotation wording stays at the call site")
 end
 
+--=========================================================================================
+-- NILSWEEP (2026-10-22): the label driver with no class row. No row means no label
+-- settings: a live label hides and the tick returns, never a nil read out of
+-- layout_changed/apply_settings. The unguarded code throws, so the leg is red-first.
+--=========================================================================================
+do
+    local saved_frame, saved_counter, saved_inert = RT.frame, RT.update_counter, RT.inert
+    local shown = true
+    local fake_frame = {}
+    function fake_frame:IsShown() return shown end
+    function fake_frame:Hide() shown = false end
+    local fake_self = { db = { profile = { enabled = true } } }
+    function fake_self:get_class_table() return nil end
+    RT.inert = false
+    RT.update_counter = 0
+    RT.frame = fake_frame
+    local r1ok, r1err = pcall(RT.on_update, fake_self, 2)
+    check(r1ok, "NILSWEEP R1 on_update tolerates a missing class row (error: " .. tostring(r1err) .. ")")
+    eq(shown, false, "NILSWEEP R1 the label hides without a class row")
+    RT.frame, RT.update_counter, RT.inert = saved_frame, saved_counter, saved_inert
+end
+
 if failures == 0 then
     print("PASS  rotationtext_state.lua (" .. tostring(checks) .. " checks)")
 else

@@ -886,6 +886,19 @@ do
 end
 
 --=========================================================================================
+-- 4b-iii) audit-core: main.lua getters never index through nil (bars.lua absent)
+--=========================================================================================
+do
+    -- This fixture does not load bars.lua, so these are main.lua's own getters.
+    local b = boot({ class = "HUNTER" })
+    local T = b.ST
+    eq(T:get_anchor_frame("nope"), nil, "unknown hand has no anchor frame")
+    eq(T:get_hiding_anchor_frame("nope"), nil, "unknown hand has no hiding anchor")
+    eq(T:get_bar_frame("nope"), nil, "unknown hand has no bar frame")
+    eq(T:get_visuals_frame("nope"), nil, "unknown hand has no visuals frame")
+end
+
+--=========================================================================================
 -- 4c) Callback fan-out isolation (H3): one throwing handler is contained and counted
 --=========================================================================================
 do
@@ -2284,6 +2297,172 @@ do
     eq(b.ST.interfaces_are_initialised, true, "init completes without any class module")
     eq(#b.sb.notices, 0, "Auto without a module prints no notice")
     eq(b.sb.hooks.post_init, nil, "no class post_init hook ran")
+end
+
+--=========================================================================================
+-- NILSWEEP (2026-10-22): nil class/hand rows and the inactive class module on the
+-- per-event and per-tick entry points. A missing class row is the accessors'
+-- documented nil answer (unsupported class / pre-AceDB caller); an inactive module is
+-- the operator's selected-class rule (only the selected module is populated). Each leg
+-- asserts both "no throw" and the fail-safe state; the unguarded code throws, so the
+-- leg is red-first.
+--=========================================================================================
+do
+    -- N1: the accessors answer nil, they never index through the missing row.
+    local b = boot()
+    local T, F = b.ST, b.sb
+    F.profile["PALADIN"] = nil
+    local ok, got = pcall(T.get_class_table, T)
+    check(ok, "NILSWEEP N1 get_class_table tolerates a missing class row (error: " .. tostring(got) .. ")")
+    eq(got, nil, "NILSWEEP N1 get_class_table answers nil for a missing class row")
+    local ok2, got2 = pcall(T.get_hand_table, T, "mainhand")
+    check(ok2, "NILSWEEP N1 get_hand_table tolerates a missing class row (error: " .. tostring(got2) .. ")")
+    eq(got2, nil, "NILSWEEP N1 get_hand_table answers nil for a missing class row")
+end
+
+do
+    -- N2: the 0.05 s visibility pass hides every hand with no class row (the
+    -- disabled-bar state), instead of indexing db_class.class_enabled.
+    local b = boot({ class = "HUNTER" })
+    local T, F = b.ST, b.sb
+    F.profile["HUNTER"] = nil
+    local mark = #F.touches
+    local ok, err = pcall(T.set_bar_visibilities, T)
+    check(ok, "NILSWEEP N2 set_bar_visibilities tolerates a missing class row (error: " .. tostring(err) .. ")")
+    check(touched_since(b, mark, "mainhand.bar:Hide"), "NILSWEEP N2 the mainhand bar hides with no class row")
+    check(touched_since(b, mark, "ranged.bar:Hide"), "NILSWEEP N2 the ranged bar hides with no class row")
+end
+
+do
+    -- N3/N4/N5: the per-hand visibility path answers "disabled" and hides; the
+    -- enable check declines. No hand row means no hand configuration.
+    local b = boot({ class = "HUNTER" })
+    local T, F = b.ST, b.sb
+    F.profile["HUNTER"] = nil
+    local ok3, enabled = pcall(T.bar_is_enabled, T, "mainhand")
+    check(ok3, "NILSWEEP N3 bar_is_enabled tolerates a missing hand row (error: " .. tostring(enabled) .. ")")
+    eq(enabled, false, "NILSWEEP N3 bar_is_enabled answers false for a missing hand row")
+    local mark = #F.touches
+    local ok4, err4 = pcall(T.handle_bar_visibility, T, "mainhand")
+    check(ok4, "NILSWEEP N4 handle_bar_visibility tolerates a missing hand row (error: " .. tostring(err4) .. ")")
+    check(touched_since(b, mark, "mainhand.bar:Hide"), "NILSWEEP N4 handle_bar_visibility hides without settings")
+    local ok5, res5 = pcall(T.check_bar_enable_settings, T, nil, "mainhand")
+    check(ok5, "NILSWEEP N5 check_bar_enable_settings tolerates a nil class row (error: " .. tostring(res5) .. ")")
+    eq(res5, false, "NILSWEEP N5 check_bar_enable_settings declines a nil class row")
+end
+
+do
+    -- N6: a form change with no class row leaves the flag false (hidden), no throw.
+    local b = boot({ class = "DRUID" })
+    local T, F = b.ST, b.sb
+    F.profile["DRUID"] = nil
+    T.should_show_bar_this_form = true
+    local ok, err = pcall(T.determine_form_visibility_flag, T)
+    check(ok, "NILSWEEP N6 determine_form_visibility_flag tolerates a missing class row (error: " .. tostring(err) .. ")")
+    eq(T.should_show_bar_this_form, false, "NILSWEEP N6 the form flag fails closed (hidden)")
+end
+
+do
+    -- N7: the init arc (lib ready -> init_libs -> post_init) completes with no class
+    -- row, keeps the shipped locked default, and still publishes the class hook.
+    local b = boot({ class = "HUNTER" })
+    local T, F = b.ST, b.sb
+    F.profile["HUNTER"] = nil
+    local ok, err = pcall(function()
+        fire_stl_ready(b)
+        fire_lrc_checkers(b)
+    end)
+    check(ok, "NILSWEEP N7 init completes with no class row (error: " .. tostring(err) .. ")")
+    eq(T.interfaces_are_initialised, true, "NILSWEEP N7 the interfaces initialised")
+    check(touched_since(b, 0, "mainhand.anchor:SetMovable(false)"),
+        "NILSWEEP N7 the shipped locked default keeps the frames locked")
+    eq(F.hook_order[#F.hook_order], "post_init", "NILSWEEP N7 the class post_init still runs")
+end
+
+do
+    -- N8: class activation with no class row reads "Auto" (nil selection) and
+    -- activates the class being played.
+    local b = boot()
+    local T, F = b.ST, b.sb
+    F.profile["PALADIN"] = nil
+    T.class_activated = nil
+    local ok, res = pcall(T.activate_class, T)
+    check(ok, "NILSWEEP N8 activate_class tolerates a missing class row (error: " .. tostring(res) .. ")")
+    eq(res, true, "NILSWEEP N8 activate_class falls back to Auto")
+    eq(T.active_class, "PALADIN", "NILSWEEP N8 Auto activates the playing class")
+end
+
+do
+    -- N9: CLEU with the playing class's module empty (another class selected). The
+    -- neutral pre-pass still runs; the class dispatch is skipped, never a nil call.
+    local b = boot()
+    local T = b.ST
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    T.PALADIN = {}
+    local ok, err = pcall(T.COMBAT_LOG_EVENT_UNFILTERED, T, "COMBAT_LOG_EVENT_UNFILTERED")
+    check(ok, "NILSWEEP N9 CLEU tolerates an inactive playing-class module (error: " .. tostring(err) .. ")")
+    local dispatched = 0
+    T.PALADIN = { on_combat_log_unfiltered = function() dispatched = dispatched + 1 end }
+    local ok2, err2 = pcall(T.COMBAT_LOG_EVENT_UNFILTERED, T, "COMBAT_LOG_EVENT_UNFILTERED")
+    check(ok2, "NILSWEEP N9 control: CLEU dispatches to a present hook (error: " .. tostring(err2) .. ")")
+    eq(dispatched, 1, "NILSWEEP N9 control: the present hook runs exactly once")
+end
+
+do
+    -- N10: rage updates with the playing class's module empty.
+    local b = boot({ class = "WARRIOR" })
+    local T = b.ST
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    T.WARRIOR = {}
+    local ok, err = pcall(T.UNIT_POWER_FREQUENT, T, "UNIT_POWER_FREQUENT", "player", "RAGE")
+    check(ok, "NILSWEEP N10 UNIT_POWER_FREQUENT tolerates an inactive class module (error: " .. tostring(err) .. ")")
+    local handled = 0
+    T.WARRIOR = { on_rage_update = function() handled = handled + 1 end }
+    local ok2, err2 = pcall(T.UNIT_POWER_FREQUENT, T, "UNIT_POWER_FREQUENT", "player", "RAGE")
+    check(ok2, "NILSWEEP N10 control: the rage hook runs when present (error: " .. tostring(err2) .. ")")
+    eq(handled, 1, "NILSWEEP N10 control: the rage hook ran exactly once")
+    -- No class token at all (the dispatch table itself may not be indexed).
+    T.player_class = nil
+    local ok3, err3 = pcall(T.UNIT_POWER_FREQUENT, T, "UNIT_POWER_FREQUENT", "player", "RAGE")
+    check(ok3, "NILSWEEP N10 UNIT_POWER_FREQUENT tolerates no class token (error: " .. tostring(err3) .. ")")
+end
+
+do
+    -- N11: the three class-dispatch helpers (aura / queue colour / spellcast) with
+    -- no class token: nothing to dispatch to, no throw. Nil here is the "no class"
+    -- contract (a token-less caller); the table lookup itself may not be indexed.
+    local b = boot()
+    local T = b.ST
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    T.player_class = nil
+    local ok1, err1 = pcall(T.class_on_aura_change, T)
+    check(ok1, "NILSWEEP N11 class_on_aura_change tolerates no class token (error: " .. tostring(err1) .. ")")
+    local ok2, err2 = pcall(T.class_on_current_spell_cast_changed, T, false)
+    check(ok2, "NILSWEEP N11 class_on_current_spell_cast_changed tolerates no class token (error: " .. tostring(err2) .. ")")
+    local ok3, err3 = pcall(T.class_on_spellcast_event, T, "UNIT_SPELLCAST_START", "player", 0, 75)
+    check(ok3, "NILSWEEP N11 class_on_spellcast_event tolerates no class token (error: " .. tostring(err3) .. ")")
+    -- The two spellcast lifecycle handlers dispatch through the same guarded shape.
+    local ok4, err4 = pcall(T.UNIT_SPELLCAST_FAILED_QUIET, T, "UNIT_SPELLCAST_FAILED_QUIET", "player", 0, 75)
+    check(ok4, "NILSWEEP N11 UNIT_SPELLCAST_FAILED_QUIET tolerates no class token (error: " .. tostring(err4) .. ")")
+    local ok5, err5 = pcall(T.UNIT_SPELLCAST_SUCCEEDED, T, "UNIT_SPELLCAST_SUCCEEDED", "player", 0, 75)
+    check(ok5, "NILSWEEP N11 UNIT_SPELLCAST_SUCCEEDED tolerates no class token (error: " .. tostring(err5) .. ")")
+end
+
+do
+    -- N12: post_init with no class token still completes and still publishes the
+    -- shared widgets; the class post_init hook is simply absent (no class -> no hook).
+    local b = boot({ class = "HUNTER" })
+    local T, F = b.ST, b.sb
+    T.player_class = nil
+    local hooks_before = F.hooks.post_init or 0
+    local ok, err = pcall(T.post_init, T)
+    check(ok, "NILSWEEP N12 post_init tolerates no class token (error: " .. tostring(err) .. ")")
+    eq(F.hooks.post_init or 0, hooks_before, "NILSWEEP N12 no class hook runs without a class token")
+    eq(T.should_show_bar_this_form, false,
+        "NILSWEEP N12 the shared widget pass still ran (the form flag was reset)")
 end
 
 if failures == 0 then

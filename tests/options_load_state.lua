@@ -778,7 +778,7 @@ do
             "show_warrior_bank_cue", "show_warrior_battle_shout_badge",
             "show_warrior_desync_alert", "show_warrior_commanding_suppression" } },
         { pretty = "Hunter", token = "HUNTER", keys = {
-            "hunter_cast_zone_enabled", "hunter_bw_badge_enabled",
+            "hunter_bw_badge_enabled",
             "hunter_frenzy_stacks_enabled", "hunter_multi_target",
             "hunter_target_warning_enabled", "hunter_readiness_badge_enabled",
             "hunter_iss_badge_enabled", "hunter_oom_viper_badge_enabled",
@@ -792,8 +792,11 @@ do
             "show_druid_omen_glow", "show_druid_gcd_tick", "show_druid_ttd_readout" } },
     }
     -- Hide-on-false keys: true mirrors the sibling slot toggles and changes no behaviour.
+    -- hunter_cast_zone_enabled ships true by operator ruling 2026-10-22 (the red Auto
+    -- Shot cast window is the stop reference the hunter rotation is read against).
     local DEFAULT_ON = {
         { pretty = "Druid", token = "DRUID", keys = { "hud_show_tf", "hud_show_berserk" } },
+        { pretty = "Hunter", token = "HUNTER", keys = { "hunter_cast_zone_enabled" } },
     }
     local f = assert(io.open(ROOT .. "config_presets.lua", "r"))
     local presets_src = f:read("*a")

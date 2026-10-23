@@ -65,7 +65,7 @@ lib.current_spell_haste = nil
 lib.cast_time_1500ms_spell_id = 19750
 
 function lib:Fire(event, ...)
-	self.callbacks:Fire(event, ...)
+    self.callbacks:Fire(event, ...)
 end
 
 -----------------------------------------------------------
@@ -83,23 +83,23 @@ function lib:calculate_expected_spell_gcd()
     local reduction_from_haste_rating = 100 / (100 + rating_percent_reduction)
     local current = spell_gcd * reduction_from_haste_rating
     if lib.has_bloodlust then
-        current = current * (1/1.3)
+        current = current * (1 / 1.3)
     end
     if lib.has_breath_haste then
-        current = current * (1/1.25)
+        current = current * (1 / 1.25)
     end
 
-	-- Flash of Light has a 1.5s cast time so can be used to check
+    -- Flash of Light has a 1.5s cast time so can be used to check
     -- for the spell GCD duration, in case we miss any multiplicative buffs.
     -- If there are any debuffs decreasing cast speed, this will be wrong,
     -- and we'll fallback on the first principles calc.
-	local cast_time_test = select(4, GetSpellInfo(self.cast_time_1500ms_spell_id))
-	cast_time_test = cast_time_test or 1500
-	cast_time_test = cast_time_test / 1000 -- change from ms to s
+    local cast_time_test = select(4, GetSpellInfo(self.cast_time_1500ms_spell_id))
+    cast_time_test = cast_time_test or 1500
+    cast_time_test = cast_time_test / 1000 -- change from ms to s
 
-	-- Get the minimum of the 2 methods, which should be the more accurate.
+    -- Get the minimum of the 2 methods, which should be the more accurate.
     -- print(current, cast_time_test)
-	current = math.min(current, cast_time_test)
+    current = math.min(current, cast_time_test)
 
     -- The minimum GCD for all classes is 1 second.
     if current < 1 then
@@ -119,7 +119,7 @@ end
 
 function lib:release_gcd_lock()
     self.gcd_duration = nil
-	self.gcd_started = nil
+    self.gcd_started = nil
     self:Fire(self.GCD_OVER)
 end
 
@@ -133,15 +133,15 @@ function lib:poll_gcd()
     if duration_reported == 0 then
         return
     end
-	local t = GetTime()
+    local t = GetTime()
     local duration_actual = duration_reported - (t - time_started)
     local expires = t + duration_actual
     self.gcd_duration = duration_reported
-	self.gcd_started = time_started
-	self.gcd_expires = expires
+    self.gcd_started = time_started
+    self.gcd_expires = expires
     -- print(duration_reported)
     self:Fire(self.GCD_STARTED, duration_actual, expires)
-	C_Timer.After(duration_actual, function() self:release_gcd_lock() end)
+    C_Timer.After(duration_actual, function() self:release_gcd_lock() end)
 end
 
 -----------------------------------------------------------
@@ -243,8 +243,9 @@ function lib:activate()
         frame:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED", "player")
     end
     self.frame:SetScript("OnEvent", function(_, event, ...)
-            lib[event](lib, event, ...)
-        end
+        lib[event](lib, event, ...)
+    end
     )
 end
+
 lib:activate()

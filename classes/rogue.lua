@@ -951,7 +951,9 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 	local rg = st.rogue_guide
 	local inputs = out or ST.ROGUE.guide_inputs
 	local now = api.get_time()
-	local db = self:get_class_table()
+	local db = self:get_class_table() or {}
+	-- PROPER: {} reads every tunable as nil, which is exactly the engine's
+	-- documented default for each; the live energy/cp/aura reads below still run.
 
 	-- Energy, cap and combo points: the classic-line rogue powers (3 = energy,
 	-- 4 = combo points). An unreadable pool stays nil and the engine's unknown rule
@@ -1953,6 +1955,12 @@ function ST.ROGUE.on_bar_update(self, hand)
 	-- Settings that rebuild the guide frame (scale/position/lock) are applied when
 	-- the class options change; the display toggles are read live by the UI.
 	local db = self:get_class_table()
+	if type(db) ~= "table" then
+		-- PROPER: every widget below reads this table; with no profile there is
+		-- nothing configured to draw. The swing bars still render (bars.lua owns
+		-- them), so skipping the tick hides nothing live.
+		return
+	end
 	if db.nextaction_icon_size ~= self.guide_ui_icon_size
 		or db.nextaction_x ~= self.guide_ui_x
 		or db.nextaction_y ~= self.guide_ui_y

@@ -113,9 +113,11 @@ local BADGE_GLOW_WINDOW = 4
 -- at the pulse's midpoint is used here instead - same signal, no per-frame colour
 -- churn (documented deviation in the build-out report).
 local BADGE_GLOW_COLOR = {1, 0.85, 0, 0.35}
--- Movement-safe cast zone: the final cast-window fraction of the ranged swing, green
--- when standing still is safe (stopped at or before the window opened), red otherwise
--- (autoShotSafe / autoShotUnsafe, Constants:977-978; same values as the clip tint).
+-- Auto Shot cast window: the final 0.5 s of the ranged swing, at the END of the bar.
+-- The width is the client's cast window and is NEVER widened by latency (operator
+-- ruling 2026-10-22: latency is why a Steady Shot cast may land inside the zone, not
+-- extra zone). The repaint stays: green when stopping here is safe (stopped at or
+-- before the window opened), red while moving through it or after a late stop.
 local CAST_ZONE_SAFE = {0.2, 0.78, 0.25, 0.4}
 local CAST_ZONE_UNSAFE = {1, 0, 0, 0.4}
 local CAST_ZONE_MARKER_WIDTH = 3            -- the reference's threshold marker (UI.lua:834)
@@ -369,6 +371,12 @@ end
 
 function ui.build(self, ranged_frame)
     local db_hand = self:get_hand_table("ranged")
+    -- No ranged row means no configuration to build the hunter UI from. Report
+    -- "not ready" so ui.init's per-tick retry can pick it up (profile switch),
+    -- instead of throwing out of the class hook on a nil field.
+    if type(db_hand) ~= "table" then
+        return false
+    end
     local texture = LSM:Fetch("statusbar", db_hand.bar_texture_key)
     -- The font path is resolved through the shared chain (utils.lua): a key that no
     -- longer resolves (the font lives in another addon's LSM registration) must not
@@ -500,8 +508,11 @@ end
 function ui.sync_melee_anchor(self)
     -- The re-anchor is skipped while the bars are unlocked for positioning, so a drag can
     -- never save a shifted position as the new normal.
+    local class_db = self:get_class_table()
+    -- No class row reads as the shipped default (timers locked): the re-anchor is
+    -- skipped, which is exactly the unlocked=false behaviour.
     local anchored = frame_visible(ui.cast_frame)
-        and self:get_class_table().timers_locked ~= false
+        and (type(class_db) ~= "table" or class_db.timers_locked ~= false)
     if ui.melee_anchored == anchored then
         return
     end
@@ -619,6 +630,10 @@ local function hide_cast_bar()
     frame.tint:Hide()
     frame.latency:Hide()
     ui.tint_key = nil
+    -- The cast is gone: drop the fill anchor so the next cast re-anchors on its own
+    -- first tick instead of inheriting the previous cast's elapsed time.
+    ui.cast_key = nil
+    ui.cast_anchor = nil
 end
 
 local function update_cast_text(mode, name, remaining, spell_id)
@@ -678,8 +693,27 @@ function ui.update_cast_bar(self, db, now)
     local duration, elapsed
     if mode == "cast" then
         duration = cast_end - cast_start
-        elapsed = now - cast_start
+        -- Fill anchor on OUR clock. The cast's absolute start stamp sits on the client
+        -- clock; when that axis sits at any offset from api.get_time(), now - cast_start
+        -- is negative and the bar freezes at zero while the label sits on the full
+        -- duration - the "bar comes up but does nothing" shape. A cast is identified by
+        -- (name, spell id, end stamp); on first sight the anchor is back-dated by the
+        -- elapsed the two clocks agree on, or starts now when they do not.
+        local cast_key = tostring(cast_name) .. "|" .. tostring(cast_spell_id)
+            .. "|" .. tostring(cast_end)
+        if ui.cast_key ~= cast_key then
+            ui.cast_key = cast_key
+            local stamped = now - cast_start
+            if type(stamped) == "number" and stamped > 0 and stamped <= duration then
+                ui.cast_anchor = now - stamped
+            else
+                ui.cast_anchor = now
+            end
+        end
+        elapsed = now - (ui.cast_anchor or now)
     else
+        ui.cast_key = nil
+        ui.cast_anchor = nil
         duration = window_duration
         elapsed = now - window_start
         cast_name = nil
@@ -753,16 +787,17 @@ function ui.update_cast_bar(self, db, now)
 end
 
 --=========================================================================================
--- Movement-safe cast zone (reference UI.lua:204-225, 805-850)
+-- Auto Shot cast window (red zone; reference UI.lua:204-225, 805-850)
 --=========================================================================================
--- The final cast-window fraction of the ranged swing, tinted green when standing still
--- right now is safe (the player stopped at or before the window opened) and red when
--- still moving through it or stopped too late - the WeaponSwingTimer/SuperSwingTimer
--- "safe to move" standard (bench/verify_bank.md §5.1). The maths are the pure
--- hunter_window kernels (cast_window + is_stopped_position_safe); the movement state
--- (self.is_moving / self.last_stopped_moving_at) is main.lua's. Option-gated:
--- hunter_cast_zone_enabled strictly true shows it (nil = off; the options pass wires
--- the default), and a disabled zone performs no reads at all.
+-- The final 0.5 s of the ranged swing, drawn at the END of the bar. Two separate
+-- contracts (operator ruling 2026-10-22):
+--   width  - the client's cast window, fixed at 0.5 s. Latency is NEVER added: latency
+--            is why a Steady Shot cast may land inside the zone without clipping, not
+--            extra zone. A cast must still land before the window closes.
+--   colour - repainted green when stopping right now is safe (stopped at or before the
+--            window opened) and red while still moving through it or after a late stop.
+-- Option-gated: hunter_cast_zone_enabled shows it (ships on), and a disabled zone
+-- performs no reads at all.
 function ui.update_cast_zone(self, db, now)
     local zone = ui.cast_zone
     if not zone then
@@ -791,7 +826,7 @@ function ui.update_cast_zone(self, db, now)
         end
         return
     end
-    local cast_window = st.hunter_window.cast_window(world_latency_seconds(self))
+    local cast_window = st.hunter_window.cast_window()
     local bar_width = (ui.ranged_frame and ui.ranged_frame:GetWidth()) or 0
     local width = math.min((cast_window / cycle_duration) * bar_width, bar_width)
     if width < 0 then
@@ -1544,6 +1579,13 @@ function ui.update(self)
         return
     end
     local db = self:get_class_table()
+    -- No class row means no hunter settings: every updater below reads db, so the
+    -- honest state is "hidden" (the same state a switched-off HUD paints), not a
+    -- guard-quarantine storm from a nil read.
+    if type(db) ~= "table" then
+        ui.hide_all(self)
+        return
+    end
     local now = api.get_time()
     -- R3 (2026-10-21): every sub-feature is its own guarded site, so one throwing
     -- updater cannot take the rest of the hunter UI down - the retired

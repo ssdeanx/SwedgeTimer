@@ -588,7 +588,7 @@ st.hunter_guide.ROTATION_TIERS_STANDARD = {
     { speed_gt = 0.90, label = "2:3" },
     { speed_gt = 0.70, label = "1:2" },
     { speed_gt = 0.57, label = "2:5" },
-    { speed_gt = 0, label = "1:3" },
+    { speed_gt = 0,    label = "1:3" },
 }
 -- The "3w/2w/1w" suffixes are the WA's own cycle notation, UNCONFIRMED beyond
 -- the labels (hunter_wa_map §5).
@@ -597,7 +597,7 @@ st.hunter_guide.ROTATION_TIERS_WEAVE = {
     { speed_gt = 1.62, label = "2:2 1w" },
     { speed_gt = 1.22, label = "6:9:1:1 3w" },
     { speed_gt = 0.94, label = "6:11:1:1 3w" },
-    { speed_gt = 0, label = "3:7 2w" },
+    { speed_gt = 0,    label = "3:7 2w" },
 }
 
 -- Pure: the WA tier lookup verbatim. Returns the label, or nil when the speed
@@ -704,7 +704,7 @@ end
 local function cast_is_clip_safe(inputs)
     local hunter_window = st.hunter_window
     if not (hunter_window and hunter_window.time_until_next_shot
-        and hunter_window.is_cast_safe) then
+            and hunter_window.is_cast_safe) then
         return false
     end
     local cycle_duration = inputs.synced_duration
@@ -742,7 +742,7 @@ end
 local function multi_is_clip_safe(inputs)
     local hunter_window = st.hunter_window
     if not (hunter_window and hunter_window.time_until_next_shot
-        and hunter_window.is_cast_safe) then
+            and hunter_window.is_cast_safe) then
         return false
     end
     local cycle_duration = inputs.synced_duration
@@ -780,7 +780,7 @@ end
 local function aimed_is_clip_safe(inputs)
     local hunter_window = st.hunter_window
     if not (hunter_window and hunter_window.time_until_next_shot
-        and hunter_window.is_cast_safe) then
+            and hunter_window.is_cast_safe) then
         return false
     end
     local cycle_duration = inputs.synced_duration
@@ -818,7 +818,7 @@ end
 local function sniper_is_clip_safe(inputs)
     local hunter_window = st.hunter_window
     if not (hunter_window and hunter_window.time_until_next_shot
-        and hunter_window.is_cast_safe) then
+            and hunter_window.is_cast_safe) then
         return false
     end
     local cycle_duration = inputs.synced_duration

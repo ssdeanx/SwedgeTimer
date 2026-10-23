@@ -820,30 +820,67 @@ end
 -- The utility line's input names (the tick path never builds a string: the names live
 -- here). `rage_max` is present only on the rows whose APL row carries a rage ceiling.
 st.warrior_guide.UTILITY_LINES = {
-    bloodrage = { remaining = "bloodrage_remaining", duration = "bloodrage_duration",
-        buff = "bloodrage_buff", known = "bloodrage_known",
-        rage_max = "bloodrage_rage_max" },
-    battle_shout = { remaining = "battle_shout_remaining", duration = "battle_shout_duration",
-        buff = "battle_shout_buff", known = "battle_shout_known" },
-    recklessness = { remaining = "recklessness_remaining", duration = "recklessness_duration",
-        buff = "recklessness_buff", known = "recklessness_known" },
-    death_wish = { remaining = "death_wish_remaining", duration = "death_wish_duration",
-        buff = "death_wish_buff", known = "death_wish_known" },
-    sweeping_strikes = { remaining = "sweeping_strikes_remaining",
-        duration = "sweeping_strikes_duration", buff = "sweeping_strikes_buff",
-        known = "sweeping_strikes_known" },
-    thunder_clap = { remaining = "thunder_clap_remaining", duration = "thunder_clap_duration",
-        buff = "thunder_clap_buff", known = "thunder_clap_known" },
-    shattering_throw = { remaining = "shattering_throw_remaining",
-        duration = "shattering_throw_duration", buff = "shattering_throw_buff",
-        known = "shattering_throw_known" },
-    heroic_throw = { remaining = "heroic_throw_remaining", duration = "heroic_throw_duration",
-        buff = "heroic_throw_buff", known = "heroic_throw_known" },
-    berserker_rage = { remaining = "berserker_rage_remaining",
-        duration = "berserker_rage_duration", buff = "berserker_rage_buff",
-        known = "berserker_rage_known" },
-    blood_fury = { remaining = "blood_fury_remaining", duration = "blood_fury_duration",
-        buff = "blood_fury_buff", known = "blood_fury_known" },
+    bloodrage = {
+        remaining = "bloodrage_remaining",
+        duration = "bloodrage_duration",
+        buff = "bloodrage_buff",
+        known = "bloodrage_known",
+        rage_max = "bloodrage_rage_max"
+    },
+    battle_shout = {
+        remaining = "battle_shout_remaining",
+        duration = "battle_shout_duration",
+        buff = "battle_shout_buff",
+        known = "battle_shout_known"
+    },
+    recklessness = {
+        remaining = "recklessness_remaining",
+        duration = "recklessness_duration",
+        buff = "recklessness_buff",
+        known = "recklessness_known"
+    },
+    death_wish = {
+        remaining = "death_wish_remaining",
+        duration = "death_wish_duration",
+        buff = "death_wish_buff",
+        known = "death_wish_known"
+    },
+    sweeping_strikes = {
+        remaining = "sweeping_strikes_remaining",
+        duration = "sweeping_strikes_duration",
+        buff = "sweeping_strikes_buff",
+        known = "sweeping_strikes_known"
+    },
+    thunder_clap = {
+        remaining = "thunder_clap_remaining",
+        duration = "thunder_clap_duration",
+        buff = "thunder_clap_buff",
+        known = "thunder_clap_known"
+    },
+    shattering_throw = {
+        remaining = "shattering_throw_remaining",
+        duration = "shattering_throw_duration",
+        buff = "shattering_throw_buff",
+        known = "shattering_throw_known"
+    },
+    heroic_throw = {
+        remaining = "heroic_throw_remaining",
+        duration = "heroic_throw_duration",
+        buff = "heroic_throw_buff",
+        known = "heroic_throw_known"
+    },
+    berserker_rage = {
+        remaining = "berserker_rage_remaining",
+        duration = "berserker_rage_duration",
+        buff = "berserker_rage_buff",
+        known = "berserker_rage_known"
+    },
+    blood_fury = {
+        remaining = "blood_fury_remaining",
+        duration = "blood_fury_duration",
+        buff = "blood_fury_buff",
+        known = "blood_fury_known"
+    },
 }
 
 -- Pure: the utility row's verdict. True only when the APL's row asks for the line
@@ -1580,9 +1617,9 @@ function st.warrior_guide.evaluate(inputs, out)
         action = "op"
     elseif action == nil and not wrath_arms then
         if not wrath_fury and ((type(inputs.target_health_pct) == "number"
-            and (inputs.target_health_pct < execute_pct
-                or (sod and sd)))
-            or inputs.victory_rush == true)
+                    and (inputs.target_health_pct < execute_pct
+                        or (sod and sd)))
+                or inputs.victory_rush == true)
             and is_off_cooldown(inputs.execute_remaining)
             and (inputs.execute_spam == true
                 or not core_reserves_rage(inputs, EXECUTE_RAGE_SPEND))
@@ -1623,7 +1660,7 @@ function st.warrior_guide.evaluate(inputs, out)
             hold = true
             hold_text = "RIDE"
         elseif st.warrior_guide.should_refresh_sunder(inputs.sunder_stacks,
-            inputs.sunder_remaining) then
+                inputs.sunder_remaining) then
             -- S. Sunder upkeep (TBC + Forever APL groups): re-stack below 5,
             -- refresh inside the final 10 s. Yields to procs, Execute range
             -- and a queued ride; outranks the core rotation and the HS dump
@@ -1631,7 +1668,7 @@ function st.warrior_guide.evaluate(inputs, out)
             -- on every other family (unknown hides).
             action = "sunder"
         elseif st.warrior_guide.should_maintain_rend_outside_arms(
-            inputs.rend_remaining, inputs.rend_upkeep_enabled) then
+                inputs.rend_remaining, inputs.rend_upkeep_enabled) then
             -- R. Rend upkeep outside arms (SoD rune-gated; the Forever toggle
             -- is filed with the options lane, so the rule stays dormant on
             -- Forever). Missing applies once enabled; yields to the same
@@ -1704,7 +1741,7 @@ function st.warrior_guide.evaluate(inputs, out)
             -- I. Arms Mortal Strike filler (known reading required, like BT/WW).
             action = "ms"
         elseif st.warrior_guide.should_weave_hamstring(inputs.rage,
-            inputs.hamstring_known, inputs.hamstring_rage_threshold) then
+                inputs.hamstring_known, inputs.hamstring_rage_threshold) then
             -- W. Hamstring rage-dump weave (Era 80 live; every other family
             -- feeds a nil threshold until its number/toggle lands). Below the
             -- core (BT/WW fire first), above the HS dump: excess rage weaves

@@ -773,9 +773,21 @@ end
 
 function ST.PALADIN.glow_start(self)
     local db_class = self:get_class_table()
+    if type(db_class) ~= "table" then
+        -- PROPER: without a profile there are no glow preferences; starting no
+        -- glow is the fail-safe (never invent feedback).
+        return
+    end
     local frame = self:get_bar_frame("mainhand")
+    if frame == nil then
+        -- PROPER: an unbuilt hand (lazy bars) has no frame to glow; legitimate
+        -- transient, retried on a later tick.
+        return
+    end
     local db_hand = self:get_hand_table("mainhand")
-    local thickness = db_hand.border_width
+    -- PROPER: a missing hand table falls back to thickness 1, this file's own
+    -- minimum (never a guessed colour, only the neutral width floor).
+    local thickness = (db_hand and db_hand.border_width) or 1
     if thickness == 0 then
         thickness = 1
     end
@@ -795,11 +807,18 @@ end
 
 function ST.PALADIN.glow_stop(self)
     local frame = self:get_bar_frame("mainhand")
+    if frame == nil then
+        -- PROPER: an unbuilt hand owns no glow to stop; stopping nothing is exact.
+        return
+    end
     LCG.PixelGlow_Stop(frame)
 end
 
 function ST.PALADIN.process_aow(self)
-    local db = self:get_class_table()
+    local db = self:get_class_table() or {}
+    -- PROPER: {} preserves this function's own nil-option semantics exactly
+    -- (exo_holds/glow_on read falsy, the pulse gate reads off); only the
+    -- transition logic is skipped, never invented.
     -- Same three stops / one start as before, expressed as a single readiness
     -- flag so the AoW+Exorcism overlap below reuses the exact shape: "stop"
     -- everywhere the old nested gates stopped (no AoW, glow disabled, or the
@@ -835,7 +854,17 @@ function ST.PALADIN.set_bar_color(self, hand)
     -- to revert to default behaviour.
     -- Will set appropriate colors for seals and AoW procs if requested.
     local db_class = self:get_class_table()
+    if type(db_class) ~= "table" then
+        -- PROPER: false lets the parent draw the default colour; the bar still
+        -- shows, only the optional seal tint is withheld without preferences.
+        return false
+    end
     local frame = self:get_visuals_frame(hand)
+    if frame == nil then
+        -- PROPER: with no frame there is nothing to recolour; the bar itself is
+        -- drawn by bars.lua, which owns unbuilt-hand visibility.
+        return false
+    end
 
     -- Art of War glow
     self.PALADIN.process_aow(self)
@@ -1562,7 +1591,9 @@ function ST.PALADIN.twist_glow_start(self)
     if not frame then
         return
     end
-    local db = self:get_class_table()
+    local db = self:get_class_table() or {}
+    -- PROPER: {} makes twist_color fall back to its spec'd fallback colour, so a
+    -- real twist attempt still flashes (feedback preserved) instead of dying.
     LCG.PixelGlow_Start(frame,
         {self:convert_color(twist_color(db, "twist_success_glow_color", ST.PALADIN.twist_colors.glow))},
         ST.PALADIN.twist_glow.lines,
@@ -1660,7 +1691,9 @@ function ST.PALADIN.get_twist_window_time_before_swing(self)
     -- here is calibrated from the player's raw world latency with the twist lag
     -- settings (the archived build's lag_calibrated_ms), not the deadzone
     -- calibration, so the two features stay independent.
-    local db = self:get_class_table()
+    local db = self:get_class_table() or {}
+    -- PROPER: {} reads exactly the file's own calibration defaults (lag 1.4/15,
+    -- no padding, no lust override), identical to unset options.
     local raw_ms = (self.latency and self.latency.world_ms) or 0
     local lag_ms = raw_ms * (db.lag_multiplier or 1.4) + (db.lag_offset or 15)
     local window = st.twist.get_window_seconds(
@@ -1838,6 +1871,12 @@ function ST.PALADIN.on_bar_update(self, hand)
     -- Settings that rebuild the frame (scale/position/lock) are applied when the class
     -- options change; the display toggles are read live by the UI.
     local gdb = self:get_class_table()
+    if type(gdb) ~= "table" then
+        -- PROPER: every widget below reads this table; with no profile there is
+        -- nothing configured to draw. The swing bars still render (bars.lua owns
+        -- them), so skipping the tick hides nothing live.
+        return
+    end
     if gdb.nextaction_icon_size ~= self.guide_ui_icon_size
         or gdb.nextaction_x ~= self.guide_ui_x
         or gdb.nextaction_y ~= self.guide_ui_y
@@ -2107,11 +2146,16 @@ function ST.PALADIN.on_twist_attempt(self)
     -- the badge numbers stay truthful even with all feedback toggled off.
     -- Practice sessions never reach this handler (the CLEU path early-returns).
     self.twist_score_attempts = (self.twist_score_attempts or 0) + 1
-    if self:get_class_table().twist_score_persist == true then
-        local score_db = self:get_class_table()
-        score_db.twist_score_attempts = (score_db.twist_score_attempts or 0) + 1
+    local persist_probe = self:get_class_table()
+    -- PROPER: the attempt count below is player truth and is kept regardless; only
+    -- the persisted copy is gated on a readable profile (never invent stored state).
+    if type(persist_probe) == "table" and persist_probe.twist_score_persist == true then
+        persist_probe.twist_score_attempts = (persist_probe.twist_score_attempts or 0) + 1
     end
-    local db = self:get_class_table()
+    local db = self:get_class_table() or {}
+    -- PROPER: {} preserves this handler's own nil-option semantics (sound opt-in
+    -- stays off, glow opt-out stays on with fallback timing); the attempt is still
+    -- counted and stamped above.
     -- Attempt sound is its own toggle and stays independent of the visual feedback
     -- gates below (archive parity: the archived build played it at the top of its
     -- attempt handler, ahead of the glow effect).
@@ -2138,11 +2182,16 @@ function ST.PALADIN.on_successful_twist(self)
     -- stamp arms the ICD attempt discipline for the next swings.
     self.twist_last_proc_at = api.get_time()
     self.twist_score_successes = (self.twist_score_successes or 0) + 1
-    if self:get_class_table().twist_score_persist == true then
-        local score_db = self:get_class_table()
-        score_db.twist_score_successes = (score_db.twist_score_successes or 0) + 1
+    local persist_probe = self:get_class_table()
+    -- PROPER: the success count below is player truth and is kept regardless; only
+    -- the persisted copy is gated on a readable profile (never invent stored state).
+    if type(persist_probe) == "table" and persist_probe.twist_score_persist == true then
+        persist_probe.twist_score_successes = (persist_probe.twist_score_successes or 0) + 1
     end
-    local db = self:get_class_table()
+    local db = self:get_class_table() or {}
+    -- PROPER: {} preserves this handler's own nil-option semantics (all feedback
+    -- gates read off except the glow/text opt-outs, which fire with fallback
+    -- timing); the success is still counted and stamped above.
     if db.twist_enabled == false
         or db.twist_feedback_enabled == false
         or db.twist_success_text_enabled == false then
@@ -3198,8 +3247,10 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     local now = api.get_time()
     local d = self.mainhand
     local gcd = self.gcd
-    local db = self:get_class_table()
+    local db = self:get_class_table() or {}
     local inputs = out or self.PALADIN.guide_inputs
+    -- PROPER: {} reads every tunable as nil, which is exactly the engine's
+    -- documented default for each; the live swing/GCD/aura reads below still run.
 
     -- Swing state and clock (seconds). ends_at and the GCD/aura stamps all live in
     -- the GetTime() domain, which api.get_time() shares, so the comparisons hold.
@@ -4087,6 +4138,13 @@ function ST.PALADIN.get_hud_state(self, slot, now)
     s.text_remaining, s.desaturate, s.usable, s.in_range = nil, nil, nil, nil
     s.glow, s.count, s.texture, s.hidden = nil, nil, nil, nil
     now = now or api.get_time()
+    if type(slot) ~= "table" or type(slot.key) ~= "string" then
+        -- PROPER: a slot without a key carries nothing renderable; hiding draws
+        -- the honest state instead of throwing. The driver always passes a slot
+        -- table, so this only fires for a caller bug.
+        s.hidden = true
+        return s
+    end
     -- The WotLK APL's UTILITY BAND (bench/paladin_apl_utility_build_2026-10-20.md
     -- §2): the two display-only mirrors (hor, how_wrath). Three gates, in this
     -- order, before ANY read:
@@ -4151,10 +4209,12 @@ function ST.PALADIN.get_hud_state(self, slot, now)
     end
 
     local db = self:get_class_table()
-    if db.hud_mana_tint and hud_no_mana(slot) then
+    -- PROPER: the tints are opt-in feedback; without a profile there is no opt-in
+    -- to honor, so the slot draws untinted rather than guessing.
+    if type(db) == "table" and db.hud_mana_tint and hud_no_mana(slot) then
         s.usable = false
     end
-    if db.hud_range_tint and hud_out_of_range(slot) then
+    if type(db) == "table" and db.hud_range_tint and hud_out_of_range(slot) then
         s.in_range = false
     end
 

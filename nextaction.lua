@@ -158,24 +158,24 @@ local _, st = ...
 st.nextaction = st.nextaction or {}
 
 -- Spell ids (archived nextaction.lua:35-42; SOC/SOB were the texture ids).
-st.nextaction.CS_SPELL_ID = 35395           -- Crusader Strike
-st.nextaction.JUDGEMENT_SPELL_ID = 20271    -- Judgement
+st.nextaction.CS_SPELL_ID = 35395        -- Crusader Strike
+st.nextaction.JUDGEMENT_SPELL_ID = 20271 -- Judgement
 st.nextaction.CONSECRATION_SPELL_ID = 26573
 st.nextaction.EXORCISM_SPELL_ID = 879
-st.nextaction.SOC_ID = 20375                -- Seal of Command
-st.nextaction.SOB_ID = 31892                -- Seal of Blood / Martyr
+st.nextaction.SOC_ID = 20375 -- Seal of Command
+st.nextaction.SOB_ID = 31892 -- Seal of Blood / Martyr
 
 -- Rotation definitions (archived rotation.lua:37-70), ported verbatim; the eight keys
 -- are also the priority order of calculate_rotation below.
 st.nextaction.sequences = {
-    ["1/2"] = {"cs", "twist"},
-    ["2/3"] = {"cs", "twist", "twist"},
-    ["2/2/5"] = {"cs", "twist", "cs_late", "blood_auto", "twist"},
-    ["2/4"] = {"cs", "twist", "blood_auto", "twist"},
-    ["1/3"] = {"cs", "blood_auto", "twist"},
-    ["2/5_blood"] = {"cs", "blood_auto", "twist", "blood_auto", "twist"},
-    ["2/5_command"] = {"cs", "cmd_auto", "twist", "cmd_auto", "twist"},
-    ["2007"] = {"blood_auto", "cs"},
+    ["1/2"] = { "cs", "twist" },
+    ["2/3"] = { "cs", "twist", "twist" },
+    ["2/2/5"] = { "cs", "twist", "cs_late", "blood_auto", "twist" },
+    ["2/4"] = { "cs", "twist", "blood_auto", "twist" },
+    ["1/3"] = { "cs", "blood_auto", "twist" },
+    ["2/5_blood"] = { "cs", "blood_auto", "twist", "blood_auto", "twist" },
+    ["2/5_command"] = { "cs", "cmd_auto", "twist", "cmd_auto", "twist" },
+    ["2007"] = { "blood_auto", "cs" },
 }
 
 st.nextaction.descriptions = {
@@ -204,15 +204,24 @@ st.nextaction.display_names = {
 -- client locales the archived build shipped (archived nextaction.lua:51-61). Unknown
 -- locales fall back to the Consecration suggestion.
 st.nextaction.exorcism_target_types = {
-    ["Undead"] = true, ["Demon"] = true,
-    ["Untoter"] = true, ["Dämon"] = true,
-    ["Mort-vivant"] = true, ["Démon"] = true,
-    ["No-muerto"] = true, ["Demonio"] = true,
-    ["Morto-vivo"] = true, ["Demônio"] = true,
-    ["Нежить"] = true, ["Демон"] = true,
-    ["언데드"] = true, ["악마"] = true,
-    ["亡灵"] = true, ["恶魔"] = true,
-    ["不死族"] = true, ["惡魔"] = true,
+    ["Undead"] = true,
+    ["Demon"] = true,
+    ["Untoter"] = true,
+    ["Dämon"] = true,
+    ["Mort-vivant"] = true,
+    ["Démon"] = true,
+    ["No-muerto"] = true,
+    ["Demonio"] = true,
+    ["Morto-vivo"] = true,
+    ["Demônio"] = true,
+    ["Нежить"] = true,
+    ["Демон"] = true,
+    ["언데드"] = true,
+    ["악마"] = true,
+    ["亡灵"] = true,
+    ["恶魔"] = true,
+    ["不死族"] = true,
+    ["惡魔"] = true,
 }
 
 -- Pure: GCD duration from the base cast time in seconds, clamped to [1.0, 1.5]
@@ -262,31 +271,24 @@ function st.nextaction.calculate_rotation(attack_speed, gcd)
     if attack_speed > 2.6 then
         -- Slowest weapons: simple 1 twist per CS cycle
         rotation = "1/2"
-
     elseif attack_speed >= math.max(1.9, 2 * gcd - 0.35) and haste > 0.1 then
         -- Fast enough with high haste: 2 twists per CS cycle
         rotation = "2/3"
-
     elseif attack_speed >= 2.4 or (attack_speed >= 2.3 and haste > 0.05) then
         -- Medium speed: complex pattern with late CS
         rotation = "2/2/5"
-
     elseif attack_speed >= math.max(1.5, 1.5 * gcd + 0.05) and haste > 0.1 then
         -- Fast with high haste: 2 twists in 4 actions
         rotation = "2/4"
-
     elseif attack_speed >= 1.9 then
         -- Standard rotation: 1 twist per 3 actions
         rotation = "1/3"
-
     elseif attack_speed >= (gcd + 0.07) then
         -- Very fast: ride Blood between twists
         rotation = "2/5_blood"
-
     elseif attack_speed > 1.0 then
         -- Extremely fast: ride Command for procs
         rotation = "2/5_command"
-
     elseif attack_speed >= 0.01 then
         -- Ludicrous speed (full Bloodlust + haste): just ride Blood and CS
         rotation = "2007"
@@ -536,7 +538,7 @@ function st.nextaction.evaluate(inputs, out)
 
     local prediction_land = gcd_remaining + G
 
-    local action = out.action      -- seeded like the archive's last action; every branch overwrites it
+    local action = out.action -- seeded like the archive's last action; every branch overwrites it
     local hold = false
     local filler = false
     local riding = false
@@ -1307,7 +1309,7 @@ function st.nextaction.evaluate_fcfs(inputs, out)
     end
     local stack_expiring = mode == "sod_stack"
         and ((soc_left ~= nil
-            and soc_left < st.nextaction.SOD_STACK_SEAL_RESEAL_SECONDS)
+                and soc_left < st.nextaction.SOD_STACK_SEAL_RESEAL_SECONDS)
             or (som_left ~= nil
                 and som_left < st.nextaction.SOD_STACK_SEAL_RESEAL_SECONDS))
     -- Shockadin Sunlight/Templar maintenance (bench §4): Aura Mastery + Holy

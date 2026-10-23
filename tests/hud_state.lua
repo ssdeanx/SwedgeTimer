@@ -2961,6 +2961,37 @@ do
         "the HUD wording lives in the shared module's parameter, not in a second copy")
 end
 
+--=========================================================================================
+-- NILSWEEP (2026-10-22): a missing class row on the boot entry and on both per-frame
+-- entries. No row means no HUD settings: the row is not created / is hidden, never a
+-- nil read out of the driver or the class hook. The unguarded code throws in
+-- apply_settings/layout_changed, so each leg is red-first.
+--=========================================================================================
+do
+    local nb = build()
+    local NHUD, NST = nb.st.hud, nb.ST
+    NST.get_class_table = function() return nil end
+    local ok, err = pcall(NHUD.init, NST)
+    check(ok, "NILSWEEP H1 init tolerates a missing class row (error: " .. tostring(err) .. ")")
+    eq(NHUD.frame, nil, "NILSWEEP H1 no HUD frame is created without a class row")
+end
+
+do
+    -- The main sandbox already has the HUD built: prove the two per-frame entries
+    -- stop cleanly and hide the live row.
+    local saved = ST.get_class_table
+    ST.get_class_table = function() return nil end
+    HUD.frame:Show()
+    local ok, err = pcall(HUD.on_update, ST, 0.2)
+    check(ok, "NILSWEEP H2 on_update tolerates a missing class row (error: " .. tostring(err) .. ")")
+    eq(HUD.frame:IsShown(), false, "NILSWEEP H2 on_update hides the row without a class row")
+    HUD.frame:Show()
+    local h3ok, h3err = pcall(HUD.on_bar_update, ST, "mainhand")
+    check(h3ok, "NILSWEEP H3 on_bar_update tolerates a missing class row (error: " .. tostring(h3err) .. ")")
+    eq(HUD.frame:IsShown(), true, "NILSWEEP H3 on_bar_update leaves the row alone (no layout pass)")
+    ST.get_class_table = saved
+end
+
 if failures == 0 then
     print("PASS  hud_state.lua (" .. tostring(checks) .. " checks)")
 else
