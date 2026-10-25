@@ -65,6 +65,7 @@ local function make_texture(sb)
     function t:SetDrawLayer(layer, sub) t.draw_layer = { layer, sub } end
     function t:SetAllPoints() end
     function t:SetAlpha(a) t.alpha = a end
+    function t:SetBlendMode(mode) t.blend_mode = mode end
     return t
 end
 

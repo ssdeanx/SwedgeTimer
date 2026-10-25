@@ -196,7 +196,8 @@
         "tostring",
         "type",
         "unpack",
-        "xpcall"
+        "xpcall",
+        "debug"
     ],
     "Lua.runtime.builtin": {
         "basic": "disable",

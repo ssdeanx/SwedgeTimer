@@ -1,0 +1,8 @@
+------------------------------------------------------------------------
+r244 | mitch | 2023-11-24 07:51:50 +0000 (Fri, 24 Nov 2023) | 1 line
+Changed paths:
+   M /trunk/LibRangeCheck-2.0/LibRangeCheck-2.0.lua
+
+fix missing argument, thanks to logicalhs
+------------------------------------------------------------------------
+

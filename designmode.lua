@@ -761,7 +761,12 @@ register(bar_descriptor("ranged"))
 register({
     key = "hud",
     title = "Cooldown HUD",
-    get_frame = function() return st.hud and st.hud.frame end,
+    get_frame = function()
+        if st.hud and not st.hud.frame and type(st.hud.ensure_created) == "function" then
+            st.hud.ensure_created(ST)
+        end
+        return st.hud and st.hud.frame
+    end,
     save = function(x, y)
         local hdb = db()
         hdb.hud_x = floor(x + 0.5)

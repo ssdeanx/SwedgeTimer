@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.1.1"
+local version = "2.1.2"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -1487,6 +1487,9 @@ function ST:SWING_TIMER_STOP(_, hand)
 		end
 		return
 	end
+	if self.trigger_swing_flash then
+		self:trigger_swing_flash(hand)
+	end
 	local db_shared = self.db and self.db.profile
 	local bar_full_delay = db_shared and db_shared.bar_full_delay
 	if bar_full_delay == nil then
@@ -1530,6 +1533,9 @@ function ST:SWING_TIMER_UPDATE(_, speed, expiration_time, hand)
 	if t >= expiration_time then
 		bar.is_full = true
 		self:on_bar_inactive(hand)
+		if self.trigger_swing_flash then
+			self:trigger_swing_flash(hand)
+		end
 	else
 		bar.is_full = false
 	end

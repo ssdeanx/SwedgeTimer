@@ -469,7 +469,11 @@ local function create_icon(parent, slot, index, db)
     f.slot = slot
     f.texture = f:CreateTexture(nil, "ARTWORK")
     f.texture:SetAllPoints()
-    f.texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    if (not db) or db.hud_zoom ~= false then
+        f.texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    else
+        f.texture:SetTexCoord(0, 1, 0, 1)
+    end
     f.default_texture = slot.texture or spell_icon(slot.spell)
     if f.default_texture then
         f.texture:SetTexture(f.default_texture)
@@ -850,12 +854,18 @@ end
 -- (a dead spell, runeless-Era Mangle) draws nothing and reserves no row width.
 -- icon.wanted is toggle-level (set by apply_settings / refresh_layout_cache);
 -- icon.last_hidden is liveness-level (observed by update_display).
-local function icon_effective(icon)
+local function icon_effective(icon, designing)
+    if designing then
+        return icon.wanted == true
+    end
     return icon.wanted and icon.last_hidden ~= true
 end
 
 function HUD.apply_settings(self)
     self = self or ST
+    if not HUD.frame and type(HUD.ensure_created) == "function" then
+        HUD.ensure_created(self)
+    end
     local frame = HUD.frame
     if not frame then
         return
@@ -881,14 +891,14 @@ function HUD.apply_settings(self)
     frame:ClearAllPoints()
     frame:SetPoint("CENTER", UIParent, "CENTER",
         (db.hud_x or DEFAULT_X) / scale, (db.hud_y or DEFAULT_Y) / scale)
-    frame:SetMovable(not designing and enabled)
-    frame:EnableMouse(not designing and enabled)
+    frame:SetMovable(designing and enabled)
+    frame:EnableMouse(designing and enabled)
 
     local count = 0
     for i = 1, #HUD.icons do
         local icon = HUD.icons[i]
         icon.wanted = HUD.icon_should_show(self, icon, designing)
-        if icon_effective(icon) then
+        if icon_effective(icon, designing) then
             count = count + 1
         end
     end
@@ -908,11 +918,17 @@ function HUD.apply_settings(self)
     local border_color = color_or(db.hud_border_color, BORDER_COLOR_FALLBACK)
     local br, bg, bb, ba = self:convert_color(border_color)
     local offset = 0
+    local zoom = db.hud_zoom ~= false
     for i = 1, #HUD.icons do
         local icon = HUD.icons[i]
         icon:SetSize(size, size)
         icon:ClearAllPoints()
-        if icon_effective(icon) then
+        if zoom then
+            icon.texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        else
+            icon.texture:SetTexCoord(0, 1, 0, 1)
+        end
+        if icon_effective(icon, designing) then
             if vertical then
                 icon:SetPoint("TOP", frame, "TOP", 0, -offset)
             else
@@ -969,12 +985,13 @@ function HUD.reflow_row(self)
         return
     end
     local db = self:get_class_table()
+    local designing = db.hud_locked == false
     local size = db.hud_icon_size or DEFAULT_ICON_SIZE
     local spacing = db.hud_spacing or DEFAULT_SPACING
     local vertical = db.hud_orientation == "vertical"
     local count = 0
     for i = 1, #HUD.icons do
-        if icon_effective(HUD.icons[i]) then
+        if icon_effective(HUD.icons[i], designing) then
             count = count + 1
         end
     end
@@ -995,7 +1012,7 @@ function HUD.reflow_row(self)
         local icon = HUD.icons[i]
         icon:SetSize(size, size)
         icon:ClearAllPoints()
-        if icon_effective(icon) then
+        if icon_effective(icon, designing) then
             if vertical then
                 icon:SetPoint("TOP", frame, "TOP", 0, -offset)
             else
@@ -1293,6 +1310,19 @@ function HUD.update_display(self)
                 -- client that cannot answer keeps the icon). The hide rides the
                 -- existing hidden-flip path below, so the row reflows.
                 s.hidden = true
+            end
+            if preview and (not s or s.hidden) then
+                s = PREVIEW_STATE
+                s.remaining, s.duration, s.start, s.reverse = nil, nil, nil, nil
+                s.text_remaining, s.desaturate, s.usable, s.in_range = nil, nil, nil, nil
+                s.glow, s.count, s.texture, s.hidden = nil, nil, nil, nil
+                local k = tostring(icon.slot.key or "")
+                local loop = (now + (k:byte(1) or 0)) % 10
+                if loop < 4 then
+                    s.start, s.duration = now - loop, 8
+                    s.remaining, s.text_remaining = 8 - loop, 8 - loop
+                    s.desaturate = true
+                end
             end
             if s and not s.hidden then
                 -- First observation baselines without reflowing (a live row never

@@ -29,7 +29,7 @@ ST.class_defaults = {
     timers_locked = true,
     bar_movement_mode = "all",
     enable_spec1 = true,
-    enable_spec2 = true,
+    enable_spec2 = false,
 
     -- Cooldown HUD (hud.lua): shared defaults for every class. The per-slot toggles
     -- (hud_show_<key>) and any class-specific descriptors live in the class's own
@@ -62,6 +62,7 @@ ST.class_defaults = {
     hud_desaturate = true,
     hud_mana_tint = true,
     hud_range_tint = true,
+    hud_zoom = true,
 
     -- Rotation label (rotationtext.lua): shared defaults for every class - the module
     -- stays inert for classes that do not provide get_rotation_key, so the keys are
@@ -152,7 +153,7 @@ ST.bar_defaults = {
     -- IS the gate for the default-visible change). "Wglass" is registered as a
     -- statusbar medium in main.lua, so it is selectable in the texture dropdown.
     bar_texture_key = "Wglass",
-    bar_color_default = {93, 58, 207, 0.6},
+    bar_color_default = {93, 58, 207, 0.85},
 
     -- Background and border appearance
     background_color = {0.0, 0.0, 0.0, 0.85},
@@ -224,6 +225,66 @@ ST.bar_defaults = {
     -- Show range
     show_range_finder = false,
 
+    -- Leading edge spark & completion flash (visual brainstorm items 1 & 2)
+    show_spark = true,
+    spark_width = 4,
+    spark_color = {255, 255, 255, 1.0},
+
+    enable_flash = true,
+    flash_duration = 0.15,
+    flash_color = {255, 255, 255, 0.6},
+    theme_preset = nil,
+
+}
+
+-- Ready-made visual theme presets (visual brainstorm item 3)
+ST.THEME_PRESETS = {
+    midnight = {
+        name = "Midnight Velvet",
+        desc = "Deep navy/velvet dark background, crisp slate borders, bright white leading edge spark.",
+        bar_texture_key = "Wglass",
+        background_color = {15, 18, 25, 0.90},
+        border_color = {45, 55, 72, 1.0},
+        border_width = 2,
+        show_spark = true,
+        spark_color = {255, 255, 255, 1.0},
+        enable_flash = true,
+        flash_color = {200, 220, 255, 0.6},
+    },
+    glass = {
+        name = "Clean Glassmorphic",
+        desc = "Modern frosted translucent look with clean light borders and responsive pulse.",
+        bar_texture_key = "Wglass",
+        background_color = {20, 25, 35, 0.65},
+        border_color = {160, 175, 200, 0.8},
+        border_width = 1,
+        show_spark = true,
+        spark_color = {230, 245, 255, 0.95},
+        enable_flash = true,
+        flash_color = {255, 255, 255, 0.5},
+    },
+    elvui = {
+        name = "Minimalist / Flat",
+        desc = "Flat statusbar with sharp 1px black outline and razor-sharp feedback.",
+        bar_texture_key = "Flat",
+        background_color = {10, 10, 10, 0.95},
+        border_color = {0, 0, 0, 1.0},
+        border_width = 1,
+        show_spark = true,
+        spark_color = {255, 255, 255, 1.0},
+        enable_flash = true,
+        flash_color = {255, 255, 255, 0.7},
+    },
+    classic = {
+        name = "Classic Retro",
+        desc = "Traditional Blizzard styling with classic solid textures and gray borders.",
+        bar_texture_key = "Blizzard",
+        background_color = {0, 0, 0, 0.85},
+        border_color = {128, 128, 128, 1.0},
+        border_width = 2,
+        show_spark = false,
+        enable_flash = false,
+    },
 }
 
 ------------------------------------------------------------------------------------
@@ -512,6 +573,7 @@ ST.HUNTER.defaults = {
     mainhand = {
         require_in_range = false,
         show_condition = "either",
+        bar_color_default = {93, 58, 207, 0.9},
         bar_height = 14,
 		bar_width = 200,
         show_gcd_underlay = false,
@@ -524,7 +586,7 @@ ST.HUNTER.defaults = {
     offhand = {
         require_in_range = false,
         show_condition = "either",
-		bar_color_default = {13, 79, 115, 0.8},
+		bar_color_default = {13, 79, 115, 0.9},
         show_gcd_underlay = false,
         gcd1a_marker_enabled = false,
         gcd1b_marker_enabled = false,
@@ -538,7 +600,7 @@ ST.HUNTER.defaults = {
         enable_deadzone = true,
         require_in_range = false,
         force_show_in_combat = false,
-		bar_color_default = {6, 143, 47, 0.8},
+		bar_color_default = {6, 143, 47, 0.9},
         gcd1a_marker_enabled = false,
         gcd1b_marker_enabled = false,
         show_gcd_underlay = true,

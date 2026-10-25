@@ -87,7 +87,14 @@ there is no account, no telemetry and no export.
 
 ## HUD & designer
 
-Every class ships a cooldown HUD: ability slots with swipe, glow, and tint (queue states, procs, OOM), plus counters where they matter. Instead of configuring every element, pick a ready-made layout template per class in options — three curated templates for each of the six classes (18 in all, plus a Custom fallback), setting slots, sizes, and spacing in one click; any manual tweak drops back to Custom. `/st design` previews and arranges bars, HUD, rotation text and the practice elements live. Template looks were researched from popular WeakAuras layouts (links only, nothing copied).
+Every class ships a cooldown HUD: ability slots with swipe, glow, and tint (queue states, procs, OOM), plus counters where they matter. Instead of configuring every element, pick a ready-made layout template per class in options — three curated templates for each of the six classes (18 in all, plus a Custom fallback), setting slots, sizes, and spacing in one click; any manual tweak drops back to Custom. `/st design` previews and arranges bars, HUD, rotation text and the practice elements live, with on-the-fly HUD template switching and style adjustment directly inside the Design Mode options menu. Template looks were researched from popular WeakAuras layouts (links only, nothing copied).
+
+## Visuals & Themes
+
+- **One-Click Theme Presets:** Choose from curated aesthetic presets (Midnight Velvet, Clean Glassmorphic, Minimalist / ElvUI, and Classic Retro) under Bar Appearance options for instant modern styling.
+- **Animated Leading Edge Spark:** A luminous spark highlights the advancing front of each swing bar, giving clear real-time timing clarity.
+- **Completion Flash Pulse:** A subtle visual feedback flash triggers as each swing or shot finishes, providing crisp confirmation.
+- **Zoomed / Borderless Icons:** Cooldown HUD icons can be cleanly cropped (`hud_zoom`) to remove the default 5% Blizzard border for an edge-to-edge square look.
 
 <span style="color:#FFA500">Retail bars are intentionally static; HUD, rotation label, design mode, and options still work there. The addon never invents a reading: an unknown value is reported as unknown, and a practice step that cannot be decided scores nothing rather than a wrong grade.</span>
 

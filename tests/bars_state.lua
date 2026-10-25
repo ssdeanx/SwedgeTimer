@@ -190,6 +190,7 @@ local function make_texture(sb)
     function t:SetDrawLayer(layer, sub) t.draw_layer = { layer, sub } end
     function t:SetAllPoints() end
     function t:SetAlpha(a) t.alpha = a end
+    function t:SetBlendMode(mode) t.blend_mode = mode end
     return t
 end
 
@@ -971,6 +972,8 @@ local function check_hand_regions(b, hand)
         hand .. ": gcd1a marker thickness from the db")
     eq(vf.gcd1b_marker.thickness, hand_db(b, hand).gcd1b_marker_width,
         hand .. ": gcd1b marker thickness from the db")
+    check(vf.spark ~= nil, hand .. ": spark texture created")
+    check(vf.flash ~= nil, hand .. ": flash texture created")
 end
 
 for i = 1, #CLASSES do
@@ -983,7 +986,7 @@ for i = 1, #CLASSES do
         local hands = spec.built or spec.hands
 
         -- Non-vacuity floor: every built hand built its full documented region set.
-        local per_hand = { frames = 4, textures = 3, fontstrings = 3, lines = 2 }
+        local per_hand = { frames = 4, textures = 5, fontstrings = 3, lines = 2 }
         eq(sb.frames_created, BOOT_FRAMES + #hands * per_hand.frames + spec.extra_frames,
             spec.key .. ": exactly the documented frames were created")
         eq(sb.textures_created, #hands * per_hand.textures + spec.textures,

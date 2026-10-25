@@ -1,0 +1,44 @@
+[
+  {
+    "id": "UG-1",
+    "goal": "Increase bar alpha defaults (especially Hunter)",
+    "status": "completed",
+    "verification_criteria": "ST.bar_defaults.bar_color_default raised from 0.6 to 0.85; Hunter mainhand, offhand, and ranged bar colors set with 0.9 alpha; tests pass",
+    "evidence": "ST.bar_defaults.bar_color_default raised to 0.85; Hunter mainhand, offhand, and ranged bar colors set to 0.9 alpha in config_presets.lua; all 48 test steps in bash tests/run.sh passed with 0 failures."
+  },
+  {
+    "id": "UG-2",
+    "goal": "Make Cooldown HUD selectable and movable in Design Mode",
+    "status": "completed",
+    "verification_criteria": "HUD responds to design mode drag overlay without collapsing to 1px width; inverted SetMovable logic resolved; design mode and HUD state tests pass",
+    "evidence": "Fixed inverted SetMovable/EnableMouse in hud.lua; updated icon_effective and reflow_row to preserve wanted icons in design mode; provided preview fallback sample states in update_display; hooked ensure_created in designmode.lua get_frame; verified with tests/hud_state.lua assertions and full 48-step run.sh."
+  },
+  {
+    "id": "UG-3",
+    "goal": "HUD lock/relock wiring and Single Spec Selection",
+    "status": "in-progress",
+    "verification_criteria": "HUD locks/relocks immediately through class options setter; Spec 1 and Spec 2 are mutually exclusive (only 1 selected at a time); tests pass",
+    "evidence": ""
+  },
+  {
+    "id": "UG-4",
+    "goal": "Design Mode HUD template dropdown and live style controls",
+    "status": "todo",
+    "verification_criteria": "Design Mode options panel contains HUD template dropdown and live style sliders; changing template or style updates HUD and design overlay live",
+    "evidence": ""
+  },
+  {
+    "id": "UG-5",
+    "goal": "Visual enhancements: Spark, Flash, Theme Presets, and Zoomed Icons",
+    "status": "todo",
+    "verification_criteria": "Leading edge spark, completion flash, 4 visual theme presets, and 5% zoomed icon mask implemented with options toggles; all tests pass",
+    "evidence": ""
+  },
+  {
+    "id": "UG-6",
+    "goal": "Version bump to v2.1.2, Changelog, and Readme update",
+    "status": "todo",
+    "verification_criteria": "All TOCs and main.lua updated to 2.1.2; README and CHANGELOG updated; bash tests/run.sh passes all 48 steps",
+    "evidence": ""
+  }
+]

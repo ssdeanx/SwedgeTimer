@@ -1,12 +1,13 @@
-## Interface: 11509, 20506, 38002
+## Interface: 11509, 20506, 38002, 120105, 120107, 16001
 ## Title: SwedgeTimer
 ## Notes: General purpose swing timer addon for all WoW clients.
 ## IconTexture: SwedgeTimer_v2_transparent.tga
 ## Author: AcidBomb
-## Version: "2.1.1"
+## Version: "2.1.2"
 ## DefaultState: enabled
 ## OptDeps: Ace3, LibSharedMedia-3.0, LibStub
 ## SavedVariables: SwedgeTimerDB
+## IconTexture: Interface\Addons\SwedgeTimer\Logo.tga
 ## X-Wago-ID: aNerkM62
 ## X-WoWI-ID: 26295
 ## X-Curse-Project-ID: 1753984

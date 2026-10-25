@@ -40,25 +40,12 @@ License: Public Domain
 -- @class file
 -- @name LibRangeCheck-2.0
 local MAJOR_VERSION = "LibRangeCheck-2.0"
-local MINOR_VERSION = 10000000000001 -- mistakes were made...
+local MINOR_VERSION = 10000000000003 -- mistakes were made...
 
 local lib, oldminor = LibStub:NewLibrary(MAJOR_VERSION, MINOR_VERSION)
 if not lib then
   return
 end
-
--- VENDORED CHANGE (2026-10-21): this copy builds NO interaction-distance checkers.
--- CheckInteractDistance is a PROTECTED function on TBC Anniversary 2.5.x: every call
--- raises ADDON_ACTION_BLOCKED for addon code (operator in-client BugGrabber dump,
--- 2026-10-21 - the hunter range helper called it every frame and the blocked call took
--- the whole hunter class hook down). A block is not a catchable Lua error, so no pcall
--- can contain it. Blizzard's only call sites are secure popup code
--- (UnitPopupSharedUtils.lua:194, classic_anniversary); the addon restriction is
--- runtime/client-side, not documented. The addon's own range state now reads exact yards
--- (compat.api.UnitDistance), so the library's interact ladder - and its min-range
--- fallback - is retired here: every checker-list consumer reports "no checker" (nil)
--- instead of reaching a protected client API. Reverting this file = restore from
--- upstream; the rest of the addon does not need the interact bands.
 
 local IsClassicVanilla = (_G.WOW_PROJECT_ID == _G.WOW_PROJECT_CLASSIC)
 local IsClassicBC = (_G.WOW_PROJECT_ID == _G.WOW_PROJECT_BURNING_CRUSADE_CLASSIC)
@@ -70,9 +57,26 @@ local IsMainline = (_G.WOW_PROJECT_ID == _G.WOW_PROJECT_MAINLINE)
 local UpdateDelay = .5
 local ItemRequestTimeout = 10.0
 
--- Interact-distance bands: GONE (vendored change 2026-10-21, see the header).
--- The call these tables fed (CheckInteractDistance) is protected on the shipped
--- clients, so there is no checker to build from them and the tables are not kept.
+-- interact distance based checks. ranges are based on my own measurements (thanks for all the folks who helped me with this)
+local DefaultInteractList = {
+  [3] = 8,
+  -- [2] = 9,
+  [4] = 28,
+}
+
+-- interact list overrides for races
+local InteractLists = {
+  ["Tauren"] = {
+    [3] = 6,
+    -- [2] = 7,
+    [4] = 25,
+  },
+  ["Scourge"] = {
+    [3] = 7,
+    -- [2] = 8,
+    [4] = 27,
+  },
+}
 
 local MeleeRange = 2
 
@@ -175,6 +179,7 @@ FriendSpells["WARLOCK"] = {
 HarmSpells["WARLOCK"] = {
   686, -- ["Shadow Bolt"], -- 40
   5019, -- ["Shoot"], -- 30
+  6789, -- ["Mortal Coil"], -- 20
 }
 
 -- Items [Special thanks to Maldivia for the nice list]
@@ -395,58 +400,28 @@ local wipe = wipe
 local tinsert = tinsert
 local tremove = tremove
 local BOOKTYPE_SPELL = BOOKTYPE_SPELL
-local function GetSpellInfo(spellId)
-  if C_Spell and C_Spell.GetSpellInfo then
-    local info = C_Spell.GetSpellInfo(spellId)
-    if info then
-      return info.name, nil, nil, nil, info.minRange, info.maxRange, info.spellID
-    end
-  elseif _G.GetSpellInfo then
-    return _G.GetSpellInfo(spellId)
-  end
-end
-local GetSpellBookItemName = _G.GetSpellBookItemName
-local GetNumSpellTabs = _G.GetNumSpellTabs
-local GetSpellTabInfo = _G.GetSpellTabInfo
-local GetItemInfo = (C_Item and C_Item.GetItemInfo) or _G.GetItemInfo -- newer clients moved the global into C_Item
+local GetSpellInfo = GetSpellInfo
+local GetSpellBookItemName = GetSpellBookItemName
+local GetNumSpellTabs = GetNumSpellTabs
+local GetSpellTabInfo = GetSpellTabInfo
+local GetItemInfo = GetItemInfo
+local UnitAura = UnitAura
 local UnitCanAttack = UnitCanAttack
 local UnitCanAssist = UnitCanAssist
 local UnitExists = UnitExists
 local UnitIsDeadOrGhost = UnitIsDeadOrGhost
+local CheckInteractDistance = CheckInteractDistance
 local IsSpellInRange = IsSpellInRange
-local IsItemInRange = (C_Item and C_Item.IsItemInRange) or _G.IsItemInRange
+local IsItemInRange = IsItemInRange
 local UnitClass = UnitClass
 local UnitRace = UnitRace
-local GetInventoryItemLink = (C_Inventory and C_Inventory.GetInventoryItemLink) or _G.GetInventoryItemLink
+local GetInventoryItemLink = GetInventoryItemLink
+local GetSpecialization = GetSpecialization
+local GetSpecializationInfo = GetSpecializationInfo
 local GetTime = GetTime
-local HandSlotId = GetInventorySlotInfo("HANDSSLOT")
+local HandSlotId = GetInventorySlotInfo("HandsSlot")
 local math_floor = math.floor
 local UnitIsVisible = UnitIsVisible
--- Secret values (Mainline-code clients): a restricted reading still reports "number" to
--- type(), so the spell-range checkers below must also reject it. The lib loads before
--- compat.lua, so probe the global here; on every classic client it is absent and the
--- guards below are exact no-ops.
-local issecretvalue = rawget(_G, "issecretvalue")
--- Item-range guard (2026-10-21): every supported client exposes C_Item.IsItemInRange,
--- and the client BLOCKS that call for addon code (a block is not a catchable Lua error,
--- the addon's pcall cannot help; on classic_era the legacy IsItemInRange global IS this
--- same function, see Blizzard_DeprecatedItemScript/Deprecated_ItemScript.lua:29). So the
--- item checkers are not built at all where this API exists; only a client with the legacy
--- global and no C_Item replacement keeps the old item checkers.
-local modernItemRange = (C_Item and C_Item.IsItemInRange) ~= nil
--- Spell-range guards (2026-10-21): the lib's spell checkers use the LEGACY index/
--- bookType call shape. FrameXML defines no IsSpellInRange global on any supported
--- branch, but a global implemented in the client BINARY would not appear there, so
--- presence is probed at runtime rather than assumed; on a client that still has it the
--- spell checkers would otherwise be built with a call shape that is superseded there.
-local spellRangeAvailable = type(IsSpellInRange) == "function"
--- The index-form modern replacement (C_SpellBook.IsSpellBookItemInRange) only exists on
--- the 11.0-spellbook-revamp clients (live/forever), NOT on the classic branches, so a
--- client that ships the modern range API gets no spell checkers at all: that makes the
--- ladder identical on every family (interact bands only) and calls ZERO client range
--- APIs. C_Spell.IsSpellInRange itself is deliberately not used here (deferred pending
--- one in-client confirmation); only its presence is probed.
-local modernSpellRange = (C_Spell and C_Spell.IsSpellInRange) ~= nil
 
 -- temporary stuff
 
@@ -458,29 +433,13 @@ local friendItemRequests
 local harmItemRequests
 local lastUpdate = 0
 
--- minRangeCheck is a function to check if spells with minimum range are really out of
--- range, or fail due to range < minRange. See :init() for its setup. It is nil until
--- init() finds a NON-protected source for it: the old interact fallback called
--- CheckInteractDistance, which is protected on TBC Anniversary (vendored change
--- 2026-10-21), so init may now leave it nil. Every caller must tolerate that: a nil
--- min-check simply means "a minimum-range spell that reports out of range is out of
--- range" - no min-range refinement, and no client call.
-local minRangeCheck = nil
+local function null() end
+local useCombatCheckers = IsMainline and InCombatLockdown or null
 
 local checkers_Spell = setmetatable({}, {
   __index = function(t, spellIdx)
     local func = function(unit)
-      -- IsSpellInRange was removed on Mainline-code clients (C_Spell.IsSpellInRange
-      -- replaces it): report "unknown" (nil) instead of calling a missing global, and
-      -- reject a restricted reading the same way.
-      if type(IsSpellInRange) ~= "function" then
-        return nil
-      end
-      local r = IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit)
-      if type(r) ~= "number" or (issecretvalue and issecretvalue(r)) then
-        return nil
-      end
-      if r == 1 then
+      if IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit) == 1 then
          return true
       end
     end
@@ -488,26 +447,7 @@ local checkers_Spell = setmetatable({}, {
     return func
   end
 })
-local checkers_SpellWithMin = setmetatable({}, {
-  __index = function(t, spellIdx)
-    local func = function(unit)
-      if type(IsSpellInRange) ~= "function" then
-        return nil
-      end
-      local r = IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit)
-      if type(r) ~= "number" or (issecretvalue and issecretvalue(r)) then
-        return nil
-      end
-      if r == 1 then
-        return true
-      elseif minRangeCheck and minRangeCheck(unit) then
-        return true, true
-      end
-    end
-    t[spellIdx] = func
-    return func
-  end
-})
+local checkers_SpellWithMin = {} -- see getCheckerForSpellWithMinRange()
 local checkers_Item = setmetatable({}, {
   __index = function(t, item)
     local func = function(unit)
@@ -517,9 +457,17 @@ local checkers_Item = setmetatable({}, {
     return func
   end
 })
--- Interact checkers: REMOVED (vendored change 2026-10-21). The checker this table
--- built called CheckInteractDistance, a protected function on TBC Anniversary (see the
--- header); it is not defined here at all, so no caller can reach that API through it.
+local checkers_Interact = setmetatable({}, {
+  __index = function(t, index)
+    local func = function(unit)
+      if CheckInteractDistance(unit, index) then
+         return true
+      end
+    end
+    t[index] = func
+    return func
+  end
+})
 
 -- helper functions
 
@@ -545,12 +493,6 @@ local function initItemRequests(cacheAll)
 end
 
 local function getNumSpells()
-  -- GetNumSpellTabs/GetSpellTabInfo were removed on Mainline-code clients
-  -- (C_SpellBook.GetNumSpellBookSkillLines/GetSpellBookSkillLineInfo replace them).
-  -- Report an empty spellbook so findSpellIdx's loop no-ops instead of throwing.
-  if type(GetSpellTabInfo) ~= "function" or type(GetNumSpellTabs) ~= "function" then
-    return 0
-  end
   local _, _, offset, numSpells = GetSpellTabInfo(GetNumSpellTabs())
   return offset + numSpells
 end
@@ -581,11 +523,51 @@ local function addChecker(t, range, minRange, checker, info)
   tinsert(t, rc)
 end
 
-local function createCheckerList(spellList, itemList)
+local function fixRange(range)
+  if range then
+    return math_floor(range + 0.5)
+  end
+end
+
+local function getSpellData(sid)
+  local name, _, _, _, minRange, range = GetSpellInfo(sid)
+  return name, fixRange(minRange), fixRange(range), findSpellIdx(name)
+end
+
+local function findMinRangeChecker(origMinRange, origRange, spellList)
+  for i = 1, #spellList do
+    local sid = spellList[i]
+    local name, minRange, range, spellIdx = getSpellData(sid)
+    -- print("### checking minChecker: " .. tostring(name) .. ", idx: " .. tostring(spellIdx) .. ", " .. tostring(minRange) .. " - " ..  tostring(range) .. " for range " .. origMinRange .. " - " .. origRange)
+    if range and spellIdx and origMinRange <= range and range <= origRange and minRange == 0 then
+      -- print("### using minChecker: " .. tostring(name) .. ", " .. tostring(minRange) .. " - " ..  tostring(range) .. " for range " .. origMinRange .. " - " .. origRange)
+      return checkers_Spell[findSpellIdx(name)]
+    end
+  end
+end
+
+local function getCheckerForSpellWithMinRange(spellIdx, minRange, range, spellList)
+  local checker = checkers_SpellWithMin[spellIdx]
+  if checker then
+    return checker
+  end
+  local minRangeChecker = findMinRangeChecker(minRange, range, spellList)
+  if minRangeChecker then
+    checker = function(unit)
+      if IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit) == 1 then
+        return true
+      elseif minRangeChecker(unit) then
+        return true, true
+      end
+    end
+    checkers_SpellWithMin[spellIdx] = checker
+    return checker
+  end
+end
+
+local function createCheckerList(spellList, itemList, interactList)
   local res = {}
-  -- Item checkers are suppressed where the modern item API exists (modernItemRange):
-  -- the client blocks the call for addon code there.
-  if itemList and not modernItemRange then
+  if itemList then
     for range, items in pairs(itemList) do
       for i = 1, #items do
         local item = items[i]
@@ -597,20 +579,11 @@ local function createCheckerList(spellList, itemList)
     end
   end
 
-  -- Skip the spell list where the legacy global is absent (it could only answer
-  -- "unknown") and where the client ships the modern range API (the legacy index/
-  -- bookType shape is superseded there and has no modern index-form counterpart on the
-  -- classic branches): such a list ends up empty, and every consumer treats an empty
-  -- checker list as "no estimate" (vendored change 2026-10-21: there is no interaction
-  -- fallback ladder any more, see the header).
-  if spellList and spellRangeAvailable and not modernSpellRange then
+  if spellList then
     for i = 1, #spellList do
       local sid = spellList[i]
-      local name, _, _, _, minRange, range = GetSpellInfo(sid)
-      local spellIdx = findSpellIdx(name)
+      local name, minRange, range, spellIdx = getSpellData(sid)
       if spellIdx and range then
-        minRange = math_floor(minRange + 0.5)
-        range = math_floor(range + 0.5)
         -- print("### spell: " .. tostring(name) .. ", " .. tostring(minRange) .. " - " ..  tostring(range))
         if minRange == 0 then -- getRange() expects minRange to be nil in this case
           minRange = nil
@@ -619,11 +592,20 @@ local function createCheckerList(spellList, itemList)
           range = MeleeRange
         end
         if minRange then
-          addChecker(res, range, minRange, checkers_SpellWithMin[spellIdx], "spell:" .. sid .. ":" .. tostring(name))
+          local checker = getCheckerForSpellWithMinRange(spellIdx, minRange, range, spellList)
+          if checker then
+            addChecker(res, range, minRange, checker, "spell:" .. sid .. ":" .. tostring(name))
+          end
         else
           addChecker(res, range, minRange, checkers_Spell[spellIdx], "spell:" .. sid .. ":" .. tostring(name))
         end
       end
+    end
+  end
+
+  if interactList and not next(res) then
+    for index, range in pairs(interactList) do
+      addChecker(res, range, nil,  checkers_Interact[index], "interact:" .. index)
     end
   end
 
@@ -632,12 +614,10 @@ end
 
 -- returns minRange, maxRange  or nil
 local function getRange(unit, checkerList)
-  -- Vendored change (2026-10-21): an empty list means "no estimate" (nil), never a
-  -- bogus 0..unbounded reading and never an index error on checkerList[0]/[#+1].
-  if not checkerList or #checkerList == 0 then
+  local lo, hi = 1, #checkerList
+  if hi == 0 then
     return nil
   end
-  local lo, hi = 1, #checkerList
   while lo <= hi do
     local mid = math_floor((lo + hi) / 2)
     local rc = checkerList[mid]
@@ -713,9 +693,6 @@ local function getChecker(checkerList, range)
   end
 end
 
-local function null()
-end
-
 local function createSmartChecker(friendChecker, harmChecker, miscChecker)
   miscChecker = miscChecker or null
   friendChecker = friendChecker or miscChecker
@@ -745,9 +722,14 @@ end
 -- friendRC and harmRC will be properly initialized later when we have all the necessary data for them
 lib.checkerCache_Spell = lib.checkerCache_Spell or {}
 lib.checkerCache_Item = lib.checkerCache_Item or {}
-lib.miscRC = createCheckerList(nil, nil)
-lib.friendRC = createCheckerList(nil, nil)
-lib.harmRC = createCheckerList(nil, nil)
+
+lib.miscRC = createCheckerList(nil, nil, DefaultInteractList)
+lib.friendRC = createCheckerList(nil, nil, DefaultInteractList)
+lib.harmRC = createCheckerList(nil, nil, DefaultInteractList)
+
+lib.miscRCInCombat = createCheckerList(nil, nil, nil)
+lib.friendRCInCombat = createCheckerList(nil, nil, nil)
+lib.harmRCInCombat = createCheckerList(nil, nil, nil)
 
 lib.failedItemRequests = {}
 
@@ -788,77 +770,19 @@ function lib:init(forced)
   end
   self.initialized = true
   local _, playerClass = UnitClass("player")
+  local _, playerRace = UnitRace("player")
 
-  ---@diagnostic disable-next-line: assign-type-mismatch, cast-local-type
-  minRangeCheck = nil
-  -- first try to find a nice item we can use for minRangeCheck
-  -- Never build the item-based minRangeCheck where the modern item API exists: the
-  -- client blocks that call for addon code.
-  if HarmItems[15] and not modernItemRange then
-    local items = HarmItems[15]
-    for i = 1, #items do
-      local item = items[i]
-      if GetItemInfo(item) then
-        minRangeCheck = function(unit)
-          return IsItemInRange(item, unit)
-        end
-        break
-      end
-    end
-  end
-  if not minRangeCheck then
-    -- ok, then try to find some class specific spell
-    if playerClass == "WARRIOR" then
-      -- for warriors, use Intimidating Shout if available
-      local name = GetSpellInfo(5246) -- ["Intimidating Shout"]
-      local spellIdx = findSpellIdx(name)
-      if spellIdx then
-        minRangeCheck = function(unit)
-          if type(IsSpellInRange) ~= "function" then
-            return nil
-          end
-          local r = IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit)
-          if type(r) ~= "number" or (issecretvalue and issecretvalue(r)) then
-            return nil
-          end
-          return r == 1
-        end
-      end
-    elseif playerClass == "ROGUE" then
-      -- for rogues, use Blind if available
-      local name = GetSpellInfo(2094) -- ["Blind"]
-      local spellIdx = findSpellIdx(name)
-      if spellIdx then
-        minRangeCheck = function(unit)
-          if type(IsSpellInRange) ~= "function" then
-            return nil
-          end
-          local r = IsSpellInRange(spellIdx, BOOKTYPE_SPELL, unit)
-          if type(r) ~= "number" or (issecretvalue and issecretvalue(r)) then
-            return nil
-          end
-          return r == 1
-        end
-      end
-    end
-  end
-  -- Vendored change (2026-10-21): there is no interaction-distance fallback any more.
-  -- That fallback called CheckInteractDistance, a protected function on TBC Anniversary
-  -- (a blocked call is not catchable, see the header), so when the item/spell sources
-  -- above do not exist minRangeCheck simply stays nil and min-range spells get no
-  -- refinement.
-
+  local interactList = InteractLists[playerRace] or DefaultInteractList
   self.handSlotItem = GetInventoryItemLink("player", HandSlotId)
+
   local changed = false
-  if updateCheckers(self.friendRC, createCheckerList(FriendSpells[playerClass], FriendItems)) then
-    changed = true
-  end
-  if updateCheckers(self.harmRC, createCheckerList(HarmSpells[playerClass], HarmItems)) then
-    changed = true
-  end
-  if updateCheckers(self.miscRC, createCheckerList(nil, nil)) then
-    changed = true
-  end
+  changed = updateCheckers(self.friendRC, createCheckerList(FriendSpells[playerClass], FriendItems, interactList)) or changed
+  changed = updateCheckers(self.friendRCInCombat, createCheckerList(FriendSpells[playerClass], nil, nil)) or changed
+  changed = updateCheckers(self.harmRC, createCheckerList(HarmSpells[playerClass], HarmItems, interactList)) or changed
+  changed = updateCheckers(self.harmRCInCombat, createCheckerList(HarmSpells[playerClass], nil, nil)) or changed
+  changed = updateCheckers(self.miscRC, createCheckerList(nil, nil, interactList)) or changed
+  changed = updateCheckers(self.miscRCInCombat, createCheckerList(nil, nil, nil)) or changed
+
   if changed and self.callbacks then
     self.callbacks:Fire(self.CHECKERS_CHANGED)
   end
@@ -990,14 +914,14 @@ function lib:GetRange(unit, checkVisible)
     return nil
   end
   if UnitIsDeadOrGhost(unit) then
-    return getRange(unit, self.miscRC)
+    return getRange(unit, useCombatCheckers() and self.miscRCInCombat or self.miscRC)
   end
   if UnitCanAttack("player", unit) then
-    return getRange(unit, self.harmRC)
+    return getRange(unit, useCombatCheckers() and self.harmRCInCombat or self.harmRC)
   elseif UnitCanAssist("player", unit) then
-    return getRange(unit, self.friendRC)
+    return getRange(unit, useCombatCheckers() and self.friendRCInCombat or self.friendRC)
   else
-    return getRange(unit, self.miscRC)
+    return getRange(unit, useCombatCheckers() and self.miscRCInCombat or self.miscRC)
   end
 end
 
@@ -1091,10 +1015,7 @@ function lib:processItemRequests(itemRequests)
         if cacheAllItems then
           print(MAJOR_VERSION .. ": timeout for item: " .. tostring(item))
         end
-        if item ~= nil then
-          self.failedItemRequests = self.failedItemRequests or {}
-          self.failedItemRequests[item] = true
-        end
+        self.failedItemRequests[item] = true
         itemRequestTimeoutAt = nil
         pendingItemRequest = nil
         tremove(items, i)
@@ -1145,19 +1066,10 @@ function lib:activate()
   if not self.frame then
     local frame = CreateFrame("Frame")
     self.frame = frame
-    -- LEARNED_SPELL_IN_TAB was removed from modern clients; registering an unknown
-    -- event throws and would abort activate() before the scripts are installed below,
-    -- killing range checking silently. This guard mirrors the maintained fork
-    -- (LibRangeCheck-3.0, WeakAuras); clients without C_EventUtils keep the old
-    -- unconditional registration.
-    if not C_EventUtils or C_EventUtils.IsEventValid("LEARNED_SPELL_IN_TAB") then
-      frame:RegisterEvent("LEARNED_SPELL_IN_TAB")
-    end
+    frame:RegisterEvent("LEARNED_SPELL_IN_TAB")
     frame:RegisterEvent("CHARACTER_POINTS_CHANGED")
     if IsMainline or IsClassicWrath then
-      if not C_EventUtils or C_EventUtils.IsEventValid("PLAYER_TALENT_UPDATE") then
-        frame:RegisterEvent("PLAYER_TALENT_UPDATE")
-      end
+      frame:RegisterEvent("PLAYER_TALENT_UPDATE")
     end
     frame:RegisterEvent("SPELLS_CHANGED")
     local _, playerClass = UnitClass("player")

@@ -264,6 +264,27 @@ function ST:construct_bar_appearance_settings_table()
         },
 
 
+        theme_preset_header = {
+            order = 0.9,
+            type = "header",
+            name = "Visual Theme Presets",
+        },
+        theme_preset = {
+            order = 0.91,
+            type = "select",
+            name = "Theme Preset",
+            desc = "One-click modern themes (textures, borders, spark & flash pulse). Selecting a theme applies it to the bar.",
+            values = {
+                custom = "Custom",
+                midnight = "Midnight Velvet",
+                glass = "Clean Glassmorphic",
+                elvui = "Minimalist / Flat",
+                classic = "Classic Retro",
+            },
+            get = "getter",
+            set = "theme_preset_setter",
+        },
+
         bar_header = {
             order = 1.0,
             type = "header",
@@ -355,6 +376,46 @@ function ST:construct_bar_appearance_settings_table()
             step = 0.1,
             get = "getter",
             set = "bar_setter",
+        },
+
+        effects_header = {
+            order = 3.5,
+            type = "header",
+            name = "Visual Effects (Spark & Flash)",
+        },
+        show_spark = {
+            order = 3.6,
+            type = "toggle",
+            name = "Leading Edge Spark",
+            desc = "Show an animated glowing spark riding the front edge of the swing progress bar.",
+            get = "getter",
+            set = "bar_setter",
+        },
+        spark_color = {
+            order = 3.7,
+            type = "color",
+            name = "Spark Color",
+            desc = "The color and glow intensity of the leading edge spark.",
+            hasAlpha = true,
+            get = "color_getter",
+            set = "color_setter",
+        },
+        enable_flash = {
+            order = 3.8,
+            type = "toggle",
+            name = "Completion Flash",
+            desc = "Flash a subtle highlight across the bar when a swing or shot lands / completes.",
+            get = "getter",
+            set = "bar_setter",
+        },
+        flash_color = {
+            order = 3.9,
+            type = "color",
+            name = "Flash Color",
+            desc = "The color and intensity of the completion flash pulse.",
+            hasAlpha = true,
+            get = "color_getter",
+            set = "color_setter",
         },
     }
 end

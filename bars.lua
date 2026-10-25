@@ -146,6 +146,28 @@ function ST:init_visuals_template(hand)
     -- Create the deadzone bar
     visuals_frame.deadzone = visuals_frame:CreateTexture(nil, "ARTWORK")
 
+    -- Create the spark texture (visual brainstorm item 1)
+    visuals_frame.spark = visuals_frame:CreateTexture(nil, "OVERLAY")
+    visuals_frame.spark:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+    if visuals_frame.spark.SetBlendMode then
+        visuals_frame.spark:SetBlendMode("ADD")
+    end
+    visuals_frame.spark:Hide()
+
+    -- Create the completion flash overlay (visual brainstorm item 2)
+    visuals_frame.flash = visuals_frame:CreateTexture(nil, "OVERLAY")
+    visuals_frame.flash:SetAllPoints(visuals_frame)
+    if visuals_frame.flash.SetColorTexture then
+        visuals_frame.flash:SetColorTexture(1, 1, 1, 1)
+    else
+        visuals_frame.flash:SetTexture("Interface\\Buttons\\WHITE8X8")
+        visuals_frame.flash:SetVertexColor(1, 1, 1, 1)
+    end
+    if visuals_frame.flash.SetBlendMode then
+        visuals_frame.flash:SetBlendMode("ADD")
+    end
+    visuals_frame.flash:Hide()
+
     -- Create the attack speed/swing timer texts and init them
     visuals_frame.left_text = visuals_frame:CreateFontString(nil, "OVERLAY")
     visuals_frame.center_text = visuals_frame:CreateFontString(nil, "OVERLAY")
@@ -778,6 +800,38 @@ function ST:onupdate_common(hand, elapsed)
         frame.bar:SetTexCoord(0, progress, 0, 1)
     end
 
+    -- Leading edge spark (visual brainstorm item 1)
+    if frame.spark then
+        if db.show_spark ~= false and not d.is_full and progress > 0 and progress < 1 then
+            local spark_w = db.spark_width or (h * 0.7)
+            if spark_w < 4 then spark_w = 4 end
+            local spark_h = h * 2.2
+            frame.spark:SetSize(spark_w, spark_h)
+            frame.spark:ClearAllPoints()
+            frame.spark:SetPoint("CENTER", frame.bar, "RIGHT", 0, 0)
+            local sc = db.spark_color or {255, 255, 255, 1}
+            local sr, sg, sb, sa = self:convert_color(sc)
+            frame.spark:SetVertexColor(sr, sg, sb, sa)
+            frame.spark:Show()
+        else
+            frame.spark:Hide()
+        end
+    end
+
+    -- Completion flash fade (visual brainstorm item 2)
+    if frame.flash and frame.flash:IsShown() then
+        local flash_elapsed = t - (frame.flash_start or t)
+        local dur = frame.flash_duration or 0.15
+        if flash_elapsed >= dur then
+            frame.flash:Hide()
+        else
+            local alpha_pct = 1 - (flash_elapsed / dur)
+            local fc = db.flash_color or {255, 255, 255, 0.6}
+            local fr, fg, fb, fa = self:convert_color(fc)
+            frame.flash:SetVertexColor(fr, fg, fb, fa * alpha_pct)
+        end
+    end
+
     -- Update the GCD underlay if necessary.
     if db.show_gcd_underlay and self.gcd and self.gcd.expires then
         self:set_gcd_width(hand, timer_width, progress)
@@ -965,6 +1019,30 @@ function ST:on_bar_inactive(hand)
     if db.right_text_hide_inactive and frame.right_text then
         frame.right_text:Hide()
     end
+    if frame.spark then
+        frame.spark:Hide()
+    end
+end
+
+-- Tactile visual feedback pulse (visual brainstorm item 2)
+function ST:trigger_swing_flash(hand)
+    if not self:bar_is_built(hand) then
+        return
+    end
+    local db = self:get_hand_table(hand)
+    if not db or db.enable_flash == false then
+        return
+    end
+    local frame = self:get_visuals_frame(hand)
+    if not frame or not frame.flash then
+        return
+    end
+    frame.flash_start = st.api.get_time()
+    frame.flash_duration = db.flash_duration or 0.15
+    local fc = db.flash_color or {255, 255, 255, 0.6}
+    local fr, fg, fb, fa = self:convert_color(fc)
+    frame.flash:SetVertexColor(fr, fg, fb, fa)
+    frame.flash:Show()
 end
 
 --=========================================================================================

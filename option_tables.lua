@@ -125,6 +125,8 @@ ST.opts_funcs.global.strata_setter = function(_, info, value)
     end
 end
 
+local hud_template_matches
+
 function ST:generate_top_level_options_table()
     -- Set the top-level options that are displayed above the settings menu.
     self.opts_table.handler = self.opts_funcs.global
@@ -146,12 +148,21 @@ function ST:generate_top_level_options_table()
         type = "toggle",
         order = 1.11,
         name = "Spec 1",
-        desc = "Enables the timer when Talent Specialization 1 is active.",
+        desc = "Enables the timer when Talent Specialization 1 is active (only one spec active at a time).",
         get = function()
-            return ST:get_class_table().enable_spec1
+            return ST:get_class_table().enable_spec1 == true
         end,
         set = function(_, value)
-            ST:get_class_table().enable_spec1 = value
+            local cdb = ST:get_class_table()
+            cdb.enable_spec1 = value and true or false
+            if value then
+                cdb.enable_spec2 = false
+            end
+            if ST.iter_hands and ST.handle_bar_visibility then
+                for h in ST:iter_hands() do
+                    ST:handle_bar_visibility(h)
+                end
+            end
         end,
         disabled = function()
             return not ST:get_class_table().class_enabled
@@ -161,12 +172,21 @@ function ST:generate_top_level_options_table()
         type = "toggle",
         order = 1.12,
         name = "Spec 2",
-        desc = "Enables the timer when Talent Specialization 2 is active.",
+        desc = "Enables the timer when Talent Specialization 2 is active (only one spec active at a time).",
         get = function()
-            return ST:get_class_table().enable_spec2
+            return ST:get_class_table().enable_spec2 == true
         end,
         set = function(_, value)
-            ST:get_class_table().enable_spec2 = value
+            local cdb = ST:get_class_table()
+            cdb.enable_spec2 = value and true or false
+            if value then
+                cdb.enable_spec1 = false
+            end
+            if ST.iter_hands and ST.handle_bar_visibility then
+                for h in ST:iter_hands() do
+                    ST:handle_bar_visibility(h)
+                end
+            end
         end,
         disabled = function()
             return not ST:get_class_table().class_enabled
@@ -421,6 +441,221 @@ function ST:generate_top_level_options_table()
                 order = 1.6,
                 name = "\nElements only exist while their module has built them - a class with no "..
                     "Cooldown HUD slots or a hidden practice panel will not offer one to position.",
+            },
+            hud_header = {
+                type = "header",
+                order = 2.0,
+                name = "Cooldown HUD Quick Styling & Templates",
+            },
+            hud_desc = {
+                type = "description",
+                order = 2.01,
+                name = "Choose a layout template or fine-tune HUD geometry and style live while positioning overlays.",
+            },
+            hud_template = {
+                type = "select",
+                order = 2.1,
+                name = "HUD layout template",
+                desc = "Load a curated HUD template for your class (Custom leaves current settings unchanged).",
+                values = function()
+                    local vals = { custom = "Custom" }
+                    local class_token = ST.player_class
+                    local class_tbl = class_token and ST[class_token]
+                    local tmpls = class_tbl and class_tbl.HUD_TEMPLATES
+                    if type(tmpls) == "table" then
+                        for k, v in pairs(tmpls) do
+                            vals[k] = v.label or k
+                        end
+                    end
+                    return vals
+                end,
+                get = function()
+                    local db = ST:get_class_table()
+                    local stored = db and db.hud_template or nil
+                    if type(stored) ~= "string" then
+                        return "custom"
+                    end
+                    local class_token = ST.player_class
+                    local class_tbl = class_token and ST[class_token]
+                    local tmpls = class_tbl and class_tbl.HUD_TEMPLATES
+                    local template = tmpls and tmpls[stored] or nil
+                    if template == nil then
+                        return "custom"
+                    end
+                    if hud_template_matches and hud_template_matches(db, template) then
+                        return stored
+                    end
+                    return "custom"
+                end,
+                set = function(_, value)
+                    local db = ST:get_class_table()
+                    if not db then return end
+                    if value == nil or value == "custom" then
+                        db.hud_template = nil
+                        return
+                    end
+                    local class_token = ST.player_class
+                    local class_tbl = class_token and ST[class_token]
+                    local tmpls = class_tbl and class_tbl.HUD_TEMPLATES
+                    local template = tmpls and tmpls[value] or nil
+                    if template == nil then
+                        db.hud_template = nil
+                        return
+                    end
+                    if type(template.slots) == "table" then
+                        for slot_key, show in pairs(template.slots) do
+                            db["hud_show_" .. slot_key] = show and true or false
+                        end
+                    end
+                    if template.hud_icon_size ~= nil then
+                        db.hud_icon_size = template.hud_icon_size
+                    end
+                    if template.hud_spacing ~= nil then
+                        db.hud_spacing = template.hud_spacing
+                    end
+                    if template.hud_orientation ~= nil then
+                        db.hud_orientation = template.hud_orientation
+                    end
+                    if template.hud_match_bar_width ~= nil then
+                        db.hud_match_bar_width = template.hud_match_bar_width
+                    end
+                    db.hud_template = value
+                    if st.hud and type(st.hud.apply_settings) == "function" then
+                        st.hud.apply_settings(ST)
+                    end
+                    if st.designmode and type(st.designmode.refresh) == "function" then
+                        st.designmode.refresh()
+                    end
+                end,
+            },
+            hud_orientation = {
+                type = "select",
+                order = 2.2,
+                name = "Orientation",
+                desc = "Arrange icons in a horizontal row or vertical column.",
+                values = { horizontal = "Horizontal row", vertical = "Vertical column" },
+                get = function()
+                    local db = ST:get_class_table()
+                    return (db and db.hud_orientation) or "horizontal"
+                end,
+                set = function(_, value)
+                    local db = ST:get_class_table()
+                    if db then db.hud_orientation = value end
+                    if st.hud and type(st.hud.apply_settings) == "function" then
+                        st.hud.apply_settings(ST)
+                    end
+                    if st.designmode and type(st.designmode.refresh) == "function" then
+                        st.designmode.refresh()
+                    end
+                end,
+            },
+            hud_icon_size = {
+                type = "range",
+                order = 2.3,
+                name = "Icon size",
+                desc = "Size of each cooldown icon in pixels.",
+                min = 16, max = 64, step = 1,
+                get = function()
+                    local db = ST:get_class_table()
+                    return tonumber(db and db.hud_icon_size) or 36
+                end,
+                set = function(_, value)
+                    local db = ST:get_class_table()
+                    if db then db.hud_icon_size = value end
+                    if st.hud and type(st.hud.apply_settings) == "function" then
+                        st.hud.apply_settings(ST)
+                    end
+                    if st.designmode and type(st.designmode.refresh) == "function" then
+                        st.designmode.refresh()
+                    end
+                end,
+                disabled = function()
+                    local db = ST:get_class_table()
+                    return db and db.hud_match_bar_width and db.hud_orientation ~= "vertical"
+                end,
+            },
+            hud_spacing = {
+                type = "range",
+                order = 2.4,
+                name = "Icon spacing",
+                desc = "Space between icons in pixels.",
+                min = 0, max = 16, step = 1,
+                get = function()
+                    local db = ST:get_class_table()
+                    return tonumber(db and db.hud_spacing) or 2
+                end,
+                set = function(_, value)
+                    local db = ST:get_class_table()
+                    if db then db.hud_spacing = value end
+                    if st.hud and type(st.hud.apply_settings) == "function" then
+                        st.hud.apply_settings(ST)
+                    end
+                    if st.designmode and type(st.designmode.refresh) == "function" then
+                        st.designmode.refresh()
+                    end
+                end,
+            },
+            hud_match_bar_width = {
+                type = "toggle",
+                order = 2.5,
+                name = "Match bar width",
+                desc = "Automatically scale icon size so the horizontal row exactly spans the swing bar width.",
+                get = function()
+                    local db = ST:get_class_table()
+                    return db and db.hud_match_bar_width == true
+                end,
+                set = function(_, value)
+                    local db = ST:get_class_table()
+                    if db then db.hud_match_bar_width = value end
+                    if st.hud and type(st.hud.apply_settings) == "function" then
+                        st.hud.apply_settings(ST)
+                    end
+                    if st.designmode and type(st.designmode.refresh) == "function" then
+                        st.designmode.refresh()
+                    end
+                end,
+                disabled = function()
+                    local db = ST:get_class_table()
+                    return db and db.hud_orientation == "vertical"
+                end,
+            },
+            hud_scale = {
+                type = "range",
+                order = 2.6,
+                name = "HUD overall scale",
+                desc = "Scale multiplier applied to the entire Cooldown HUD.",
+                min = 0.5, max = 2.0, step = 0.05,
+                get = function()
+                    local db = ST:get_class_table()
+                    return tonumber(db and db.hud_scale) or 1.0
+                end,
+                set = function(_, value)
+                    local db = ST:get_class_table()
+                    if db then db.hud_scale = value end
+                    if st.hud and type(st.hud.apply_settings) == "function" then
+                        st.hud.apply_settings(ST)
+                    end
+                    if st.designmode and type(st.designmode.refresh) == "function" then
+                        st.designmode.refresh()
+                    end
+                end,
+            },
+            hud_zoom = {
+                type = "toggle",
+                order = 2.7,
+                name = "Zoomed / Borderless icons",
+                desc = "Trim the 5% Blizzard outer icon border for a clean, modern edge-to-edge square look.",
+                get = function()
+                    local db = ST:get_class_table()
+                    return db and db.hud_zoom ~= false
+                end,
+                set = function(_, value)
+                    local db = ST:get_class_table()
+                    if db then db.hud_zoom = value end
+                    if st.hud and type(st.hud.apply_settings) == "function" then
+                        st.hud.apply_settings(ST)
+                    end
+                end,
             },
         },
     }
@@ -1080,6 +1315,31 @@ function ST:set_opts_funcs()
             end
         end
 
+        -- A setter for theme presets (visual brainstorm item 3)
+        ST.opts_funcs[hand].theme_preset_setter = function(_, info, value)
+            for h in ST:generic_iter(settings.hands) do
+                local db = ST:get_hand_table(h)
+                if value == "custom" or value == nil then
+                    db.theme_preset = nil
+                else
+                    local preset = ST.THEME_PRESETS and ST.THEME_PRESETS[value]
+                    if preset then
+                        db.theme_preset = value
+                        if preset.bar_texture_key then db.bar_texture_key = preset.bar_texture_key end
+                        if preset.background_color then db.background_color = {unpack(preset.background_color)} end
+                        if preset.border_color then db.border_color = {unpack(preset.border_color)} end
+                        if preset.border_width then db.border_width = preset.border_width end
+                        if preset.show_spark ~= nil then db.show_spark = preset.show_spark end
+                        if preset.spark_color then db.spark_color = {unpack(preset.spark_color)} end
+                        if preset.enable_flash ~= nil then db.enable_flash = preset.enable_flash end
+                        if preset.flash_color then db.flash_color = {unpack(preset.flash_color)} end
+                    end
+                end
+                ST:configure_bar_appearances(h)
+                ST:configure_bar_outline(h)
+            end
+        end
+
         -- A getter for colors. Colors are stored in SwedgeTimer's
         -- db as 0-255 ranges, and need converted to the expected
         -- 0-1 ranges for the client.
@@ -1264,6 +1524,9 @@ function ST:generate_class_getters_setters()
             ST:configure_gcd_markers(h)
             ST:set_gcd_marker_positions(h)
             ST:handle_bar_visibility(h)
+        end
+        if st.hud and type(st.hud.apply_settings) == "function" then
+            st.hud.apply_settings(ST)
         end
     end
 
@@ -1842,7 +2105,7 @@ end
 -- Dirty-detect is derived state, not a setter chain: get returns the stored id
 -- only while the db still matches that template's set; any manual
 -- toggle/geometry tweak reads back as Custom (reselect to re-apply).
-local function hud_template_matches(db, template)
+hud_template_matches = function(db, template)
     if type(db) ~= "table" or type(template) ~= "table" then
         return false
     end

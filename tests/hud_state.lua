@@ -143,7 +143,7 @@ end
 local function make_texture()
     local t = { hidden = true }
     function t:SetAllPoints() end
-    function t:SetTexCoord() end
+    function t:SetTexCoord(...) t.texcoord = { ... } end
     function t:SetTexture(tex) t.texture = tex end
     function t:SetDesaturated(flag) t.desaturated = flag end
     function t:SetVertexColor(r, g, b, a) t.color = { r, g, b, a } end
@@ -1363,10 +1363,28 @@ do
     eq(HUD.should_show(ST), false, "a disabled HUD is hidden even unlocked")
     class_db.hud_enabled = true
     eq(HUD.should_show(ST), true, "an unlocked HUD stays visible for positioning")
+    HUD.apply_settings(ST)
+    eq(HUD.frame.movable, true, "an unlocked HUD is movable")
+    eq(HUD.frame.mouse, true, "an unlocked HUD has mouse enabled")
     class_db.class_enabled = false
     eq(HUD.should_show(ST), false, "a disabled class hides the HUD")
     class_db.class_enabled = true
     class_db.hud_locked = true
+    HUD.apply_settings(ST)
+    eq(HUD.frame.movable, false, "a locked HUD is not movable")
+    eq(HUD.frame.mouse, false, "a locked HUD is click-through")
+
+    -- hud_zoom edge masking (visual brainstorm item 5)
+    class_db.hud_zoom = true
+    HUD.apply_settings(ST)
+    near(HUD.icons[1].texture.texcoord[1], 0.07, 1e-6, "hud_zoom true crops icon 0.07")
+    near(HUD.icons[1].texture.texcoord[2], 0.93, 1e-6, "hud_zoom true crops icon 0.93")
+    class_db.hud_zoom = false
+    HUD.apply_settings(ST)
+    near(HUD.icons[1].texture.texcoord[1], 0.0, 1e-6, "hud_zoom false uncrops icon 0.0")
+    near(HUD.icons[1].texture.texcoord[2], 1.0, 1e-6, "hud_zoom false uncrops icon 1.0")
+    class_db.hud_zoom = true
+    HUD.apply_settings(ST)
 
     -- design mode renders the archive's sample states
     local preview = HUD.preview_state(ST, slot_by_key.cs, 2)

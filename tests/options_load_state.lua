@@ -2599,10 +2599,15 @@ do
                 design_grid_enabled = "toggle", design_grid = "range",
                 design_snap = "toggle", design_snap_threshold = "range",
                 design_mouse_anchor = "toggle", design_note = "description",
+                hud_header = "header", hud_desc = "description",
+                hud_template = "select", hud_orientation = "select",
+                hud_icon_size = "range", hud_spacing = "range",
+                hud_match_bar_width = "toggle", hud_scale = "range",
+                hud_zoom = "toggle",
             }
             local n = 0
             for _ in pairs(group.args or {}) do n = n + 1 end
-            check(n == 8, "SODOPT: the Design Mode group carries 8 widgets (got "
+            check(n == 17, "SODOPT: the Design Mode group carries 17 widgets (got "
                 .. n .. ")")
             for key, wtype in pairs(want) do
                 local w = (group.args or {})[key]

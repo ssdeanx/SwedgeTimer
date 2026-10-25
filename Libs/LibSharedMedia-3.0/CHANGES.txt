@@ -1,0 +1,14 @@
+------------------------------------------------------------------------
+r184 | funkehdude | 2026-10-21 15:01:23 +0000 (Wed, 21 Oct 2026) | 1 line
+Changed paths:
+   M /trunk/LibSharedMedia-3.0/LibSharedMedia-3.0.lua
+
+Tweak error messages and add more of them for failed validation
+------------------------------------------------------------------------
+r183 | funkehdude | 2026-10-21 14:39:20 +0000 (Wed, 21 Oct 2026) | 1 line
+Changed paths:
+   M /trunk/LibSharedMedia-3.0.toc
+
+Bump toc
+------------------------------------------------------------------------
+

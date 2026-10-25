@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.1.2]
+
+### Added
+- One-Click Modern Theme Presets: instant visual styling under Bar Appearance options:
+  - Midnight Velvet (deep midnight blue/black bar with subtle outline)
+  - Clean Glassmorphic (semi-translucent modern glass with refined border)
+  - Minimalist / ElvUI (flat, high-contrast borderless aesthetic)
+  - Classic Retro (traditional Blizzard UI styling)
+- Animated Leading Edge Spark: an active glowing spark traveling at the swing bar's leading edge for crisp timing feedback (configurable width and color, enabled by default).
+- Swing & Shot Completion Flash: a smooth tactile flash pulse on swing completion and shot releases providing instant visual confirmation (configurable duration and color, enabled by default).
+- Cooldown HUD Quick Styling & Template Switcher in Design Mode:
+  - Curated layout template dropdown ("Custom", class-specific presets) accessible directly within `/st design`.
+  - Live HUD geometry and appearance controls in Design Mode (Orientation, Icon Size, Icon Spacing, Match Bar Width, Scale, and Zoomed Icons) with immediate visual feedback while positioning overlays.
+- Zoomed / Borderless Icons: opt-in edge-to-edge icon display (`hud_zoom`) that cleanly trims the 5% Blizzard outer icon border.
+
+### Changed
+- Refined default bar transparency to 0.85 across all hands, and 0.90 for Hunter ranged/melee bars.
+- Cooldown HUD frame is now selectable, highlighted, and freely draggable in Design Mode (`/st design`) without collapsing, with robust lock and relock state preservation.
+- Talent Specialization Selection: enforced mutual exclusivity between Spec 1 and Spec 2 (`enable_spec1` vs `enable_spec2`) so only one spec profile is active at a time (defaults to Spec 1 on, Spec 2 off).
+
 ## [2.1.1]
 
 ### Added
