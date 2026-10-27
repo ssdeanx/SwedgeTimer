@@ -1,0 +1,25 @@
+{
+  "agent_name": "bars-range-hunter",
+  "signal_type": "execution",
+  "subtype": "checkpoint",
+  "timestamp": "2026-10-25T19:05:00Z",
+  "run_id": "bars-range-hunter-2026-10-25",
+  "completeness": 5,
+  "self_assessment": {
+    "accuracy": 5,
+    "completeness": 5,
+    "confidence": 5,
+    "intent": 5
+  },
+  "patterns": {
+    "what_worked": "The cross-lane enable contract is now a single delegation point: weave_range.lua's wr.class_default_on(ST) calls ST.weave_range_default_enabled(ST.player_class) (config_presets.lua:1599-1604), and wr.enabled_for stays pure on the resolved boolean. The options getter (option_tables.lua:195-224) falls back to the same reader, so a fresh profile, a pre-key nil profile, the settings UI and the runtime gate cannot disagree.",
+    "what_was_hard": "Nothing structural: the only trap was the helper's dot-style definition (no self), which the first test stub called colon-style and briefly broke 25 pins in the new suite; the stub now matches the shipped call shape.",
+    "skill_gap": "None for this pass.",
+    "what_is_filed": "Bench report Sec.5.1 row and Sec.8 mutations M8/M9 updated; no other lane owes anything for this contract. The options desc replacement from Sec.6 is still owed by appearance-options (it still promises a band fallback), and that is the only open cross-lane item."
+  },
+  "escalation": {
+    "blocked_on": null,
+    "reason": null,
+    "recommendation": null
+  }
+}

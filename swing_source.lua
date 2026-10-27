@@ -4,13 +4,17 @@
 -- WoW Forever is a Mainline-code client: it has no classic combat log, so the vendored
 -- LibClassicSwingTimerAPI is not shipped there (see the _Mainline TOC). The client does
 -- expose PLAYER_SWING, documented in the forever UI source
--- (Blizzard_APIDocumentationGenerated/SwingTimerDocumentation.lua):
+-- (origin/forever:Interface/AddOns/Blizzard_APIDocumentationGenerated/
+-- SwingTimerDocumentation.lua:43-52):
 --   PLAYER_SWING(swingDuration:number, swingType:Enum.PlayerSwingType), SynchronousEvent
---   Enum.PlayerSwingType = { MainHand = 0, OffHand = 1, Ranged = 2 }
+--   Enum.PlayerSwingType = { MainHand = 0, OffHand = 1, Ranged = 2 } (:71-82)
 -- and Blizzard's own swing timer reads it the same way this module does
--- (Blizzard_SwingTimer/Blizzard_SwingTimer.lua: ResetSwingTimer sets
--- swingEndTime = GetTime() + duration on PLAYER_SWING, and GetEquippedSwingDuration
--- reads all three UnitAttackSpeed returns).
+-- (origin/forever:Interface/AddOns/Blizzard_SwingTimer/Blizzard_SwingTimer.lua):
+--   :141-161  the event arms (PLAYER_SWING starts a cycle, WEAPON_SLOT_CHANGED
+--             restarts it at the equipped duration, combat/target/range arms only
+--             touch presentation)
+--   :184-192  GetEquippedSwingDuration reads all three UnitAttackSpeed returns
+--   :319-330  ResetSwingTimerForEquippedWeapon restarts the live cycle on a swap
 --
 -- This module mirrors the surface main.lua consumes from the classic library -
 -- SwingTimerInfo(hand) and the CallbackHandler Register/UnregisterCallback pair firing
@@ -279,10 +283,16 @@ local function on_unit_attack_speed(unit)
 end
 
 local function on_weapon_slot_changed()
-	-- A weapon swap re-times live cycles to the newly equipped speeds and ends
-	-- cycles whose hand the swap invalidated (no usable speed: weapon removed),
-	-- mirroring the combat-exit clear shape below. A swap-clear is not a reject,
-	-- so the H5 reject counters are untouched.
+	-- Mirror Blizzard's own WEAPON_SLOT_CHANGED arm (origin/forever
+	-- Blizzard_SwingTimer.lua:151-153 + :319-330): a swap re-reads the equipped
+	-- speeds and RESTARTS each live cycle at the newly equipped duration
+	-- (ResetSwingTimerForEquippedWeapon -> ResetSwingTimer(GetEquippedSwingDuration)),
+	-- and a hand the swap invalidated (no usable speed: weapon removed) ends like a
+	-- combat-exit clear. The classic library's equipment path restarts the same way
+	-- (LibClassicSwingTimerAPI.lua:732-744, SwingStart(..., true) for all three hands),
+	-- so this is also the shape main.lua's handlers already understand (an UPDATE
+	-- re-anchors bar.start = expiration - speed, i.e. a full cycle from now).
+	-- A swap-clear is not a reject, so the H5 reject counters are untouched.
 	if type(UnitAttackSpeed) ~= "function" then
 		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
@@ -293,7 +303,7 @@ local function on_weapon_slot_changed()
 		return
 	end
 	-- A restricted reading keeps every cycle on its scheduled speed: an opaque value
-	-- must never reach the rescale arithmetic below.
+	-- must never reach the restart arithmetic below.
 	if is_secret(main_speed) or is_secret(off_speed) or is_secret(ranged_speed) then
 		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
@@ -309,19 +319,13 @@ local function on_weapon_slot_changed()
 		if cycle then
 			local new_speed = speeds[hand]
 			if new_speed and new_speed > 0 then
-				if new_speed ~= cycle.speed then
-					-- Same rescale as the attack-speed path: the REMAINING time
-					-- scales by new/old instead of moving the whole cycle.
-					local t = now()
-					local old_speed = cycle.speed
-					local remaining = cycle.expiration - t
-					if remaining < 0 then
-						remaining = 0
-					end
-					cycle.speed = new_speed
-					cycle.expiration = t + remaining * (new_speed / old_speed)
-					callbacks:Fire("SWING_TIMER_UPDATE", cycle.speed, cycle.expiration, hand)
-				end
+				-- Restart, not rescale: equipping a weapon resets the client's swing
+				-- cycle, so the bar must show a full cycle of the equipped speed.
+				local t = now()
+				cycle.start = t
+				cycle.speed = new_speed
+				cycle.expiration = t + new_speed
+				callbacks:Fire("SWING_TIMER_UPDATE", cycle.speed, cycle.expiration, hand)
 			else
 				-- No usable speed for this hand after the swap: the cycle is
 				-- invalid, so end it like a combat-exit clear. Its scheduled stop
@@ -353,9 +357,15 @@ local info_initialized = false
 
 local function on_player_entering_world()
 	-- A reload/zone change drops any in-flight swings; the counters keep stale stop
-	-- timers from matching later cycles.
+	-- timers from matching later cycles. A live cycle is STOPped before it is dropped:
+	-- clearing it silently would leave main.lua's bar frozen on a cycle whose scheduled
+	-- stop can no longer match (the same contract as the combat-exit clear above).
 	for i = 1, #HANDS do
-		clear_cycle(HANDS[i])
+		local hand = HANDS[i]
+		if active_cycles[hand] then
+			clear_cycle(hand)
+			callbacks:Fire("SWING_TIMER_STOP", hand)
+		end
 	end
 	-- One report per session, on the first world entry (main.lua's registration
 	-- exists by then).
@@ -401,8 +411,15 @@ if swing_source.available then
 	local frame = CreateFrame("Frame", "SwedgeTimer_SwingSourceFrame")
 	frame:Hide()
 
-	-- PLAYER_TARGET_CHANGED and PLAYER_SWING_RANGE_UPDATE are deliberately not
-	-- registered: both carry target/range display inputs, never swing-cycle state.
+	-- PLAYER_TARGET_CHANGED and PLAYER_SWING_RANGE_UPDATE are deliberately NOT
+	-- registered, verified against Blizzard's own engine (origin/forever
+	-- Blizzard_SwingTimer.lua:141-161): both are display-only arms - PLAYER_TARGET_CHANGED
+	-- calls UpdateRangeState (the out-of-range alpha) and PLAYER_SWING_RANGE_UPDATE calls
+	-- SetOutOfRange; neither touches swingDuration/swingEndTime, so neither can start,
+	-- retime or end a cycle. The addon's range state comes from main.lua's exact-yard
+	-- poll (compat.api.UnitDistance), and PLAYER_SWING_RANGE_UPDATE additionally requires
+	-- C_SwingTimer.EnableRangeCheck (SwingTimerDocumentation.lua:11-20), which the addon
+	-- does not call. Registering either would be dead wiring.
 	local engine_events = {
 		"PLAYER_SWING",
 		"UNIT_ATTACK_SPEED",

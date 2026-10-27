@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-26T00:24:58Z",
+  "run_id": "version-docs-2026-10-25",
+  "agent_name": "version-docs",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Every CHANGELOG claim was checked against the tree before writing (weave_range frame, practice playhead constants, compat.get_spell_query, hunter shot guard, backdrop migration, LRC vendored header, swing_source swap/world-entry). Version fields and all three docs verified with the prescribed commands: TOCs only 2.1.3, main.lua:5 2.1.3, toc_check 1082/0, smoke 232/0, CHANGELOG 2.1.2 only in history.",
+    "what_was_hard": "Two dispatch details did not match the tree: /st diag has no swing-wire START counters (the TESTING bullet uses a /dump of ST.swing_wire_counts instead), and the Wrath/Titanforge library-level reset_swing_spells[75] overrides the our-side guard, so the CHANGELOG names that residual rather than over-claiming.",
+    "skill_gap": "None material for a docs lane."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-25T17:02:19Z",
+  "run_id": "cross-client-engine-2026-10-25-hunter-cast-reset",
+  "agent_name": "cross-client-engine",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the shipped v32 tables per family settled the lead: Auto Shot is the every-cycle reset on Era/BCC (class guard now gates it by range) and is forced through reset_swing_spells on Wrath; Steady is already exempt; Multi/Aimed/Arcane/Serpent were not exempt anywhere, and upstream MINOR 39 has the same gap. Extending the lib's own noreset mechanism was the only fix with a synchronous, ordering-free decision point; the real-lib real_wire leg gives a red->green proof plus live controls (Raptor Strike and a neutral cast still reset).",
+    "what_was_hard": "The concurrent bars-range-hunter lane already wrote an Auto Shot range-gated guard in classes/hunter.lua, so the lib fix had to stay id-disjoint and keep 75 out of noreset; it also exposed that Wrath's reset_swing_spells[75] defeats that guard (filed, not taken). Aimed Shot's 3s cast makes the exemption an accepted tradeoff, justified by the lib's own Wrath rank-1 entry.",
+    "skill_gap": "The real cast events and the client's actual rank ids remain in-client checks; wowhead redirects confirm the ids' names, not that a given client has that rank."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Orchestrator: add tests/engine_matrix_state.lua to run.sh and run the full suite. Operator: in-client hunter check (Multi/Aimed/Arcane/Serpent at range must not move the melee bars; Raptor Strike must), plus decide on the filed Titanforge Auto Shot entry (LibClassicSwingTimerAPI.lua:1161)."
+  }
+}

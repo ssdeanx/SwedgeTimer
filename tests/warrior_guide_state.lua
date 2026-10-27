@@ -1320,6 +1320,13 @@ end
 --=========================================================================================
 local SPELL_INFOS = {
     [7384] = { name = "Overpower", icon = "icon_op" },
+    -- The utility spine's spells: present in a real client's spell data (learned
+    -- or not), so the Wrath name resolution caches them instead of retrying the
+    -- GetSpellInfo name leg on every gather.
+    [2458] = { name = "Berserker Stance", icon = "icon_zerk" },
+    [2687] = { name = "Battle Shout", icon = "icon_shout" },
+    [64382] = { name = "Shattering Throw", icon = "icon_throw" },
+    [57755] = { name = "Heroic Throw", icon = "icon_throw2" },
     [5308] = { name = "Execute", icon = "icon_execute" },
     [1464] = { name = "Slam", icon = "icon_slam_r1" },
     [47475] = { name = "Slam", icon = "icon_slam" },
@@ -1550,14 +1557,39 @@ local function build(opts)
     env.WOW_PROJECT_MAINLINE = 1
     env.GetTimePreciseSec = function() return sb.clock end
     env.GetTime = function() return sb.clock end
+    -- Name back-map for the book below (name-family queries read the same
+    -- id-keyed fixtures). Several ranks share one name, so a name query returns
+    -- EVERY id that carries it - a real client answers a name regardless of rank.
+    -- Every query shape is logged for the name-vs-id pins.
+    local function ids_for_book_name(name)
+        local ids = {}
+        if type(name) ~= "string" then
+            return ids
+        end
+        for id, info in pairs(book) do
+            if info.name == name then
+                ids[#ids + 1] = id
+            end
+        end
+        return ids
+    end
     env.IsSpellKnown = function(spell)
         sb.known_query_log[#sb.known_query_log + 1] = spell
         if known_spells[spell] == true then
             return true
         end
         if type(spell) == "string" then
-            local id = id_for_book_name(spell)
-            return id ~= nil and known_spells[id] == true
+            -- A name-capable client answers a name query by the spell NAME; the
+            -- fixture's book carries several ranks under one name, so any known
+            -- rank of that name answers true (a real client does not care which
+            -- rank id the name maps to).
+            local ids = ids_for_book_name(spell)
+            for i = 1, #ids do
+                if known_spells[ids[i]] == true then
+                    return true
+                end
+            end
+            return false
         end
         return false
     end
@@ -1592,26 +1624,16 @@ local function build(opts)
         end
         return nil
     end
-    -- Name back-map for the book below (TBC name queries read the same
-    -- id-keyed fixtures). Every query shape is logged for the name-vs-id pins.
-    local function id_for_book_name(name)
-        if type(name) ~= "string" then
-            return nil
-        end
-        for id, info in pairs(book) do
-            if info.name == name then
-                return id
-            end
-        end
-        return nil
-    end
     env.GetSpellCooldown = function(spell)
         sb.cooldown_query_log[#sb.cooldown_query_log + 1] = spell
         local cd = sb.cooldowns[spell]
         if cd == nil and type(spell) == "string" then
-            local id = id_for_book_name(spell)
-            if id ~= nil then
-                cd = sb.cooldowns[id]
+            local ids = ids_for_book_name(spell)
+            for i = 1, #ids do
+                cd = sb.cooldowns[ids[i]]
+                if cd ~= nil then
+                    break
+                end
             end
         end
         if cd then
@@ -1624,14 +1646,16 @@ local function build(opts)
         sb.cost_queries = sb.cost_queries + 1
         sb.last_cost_id = id
         sb.cost_query_log[#sb.cost_query_log + 1] = id
-        local key = id
+        local keys = { id }
         if type(id) == "string" then
-            key = id_for_book_name(id)
+            keys = ids_for_book_name(id)
         end
-        if key ~= nil and sb.cost_by_id then
-            local c = sb.cost_by_id[key]
-            if c ~= nil then
-                return { { cost = c } }
+        if sb.cost_by_id then
+            for i = 1, #keys do
+                local c = sb.cost_by_id[keys[i]]
+                if c ~= nil then
+                    return { { cost = c } }
+                end
             end
         end
         return sb.rage_cost
@@ -1974,7 +1998,7 @@ eq(gathered.bladestorm_remaining, nil, "gather: no Bladestorm reader on fury")
 eq(gathered.bladestorm_known, nil, "gather: no Bladestorm probe on fury")
 eq(gathered.raging_blow_remaining, nil, "gather: no Raging Blow reader on Wrath")
 eq(sandbox.cost_queries, 4, "gather: all four rage costs are queried once")
-eq(sandbox.last_cost_id, 1680, "gather: the WW cost is read through the base id")
+eq(sandbox.last_cost_id, "Whirlwind", "gather: the WW cost is read by NAME on Wrath")
 
 -- Every slot's cooldown key resolves into the gathered inputs.
 local cooldowns_resolve = true

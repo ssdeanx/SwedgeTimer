@@ -195,14 +195,27 @@ function ST:generate_top_level_options_table()
     self.opts_table.args.weave_range_enabled = {
         type = "toggle",
         order = 1.13,
-        name = "Melee-weave proximity bar",
-        desc = "Show a vertical bar next to the player frame that fills as the distance to "..
-            "your attackable target closes (melee to 30 yd) and drains as it grows; the "..
-            "label prints the current range band in yards. Off by default. When enabled "..
-            "with no target or no range reading the bar hides rather than guessing - an "..
-            "empty bar means unknown, not zero.",
+        name = "Ranged distance bar",
+        desc = "Show the standalone horizontal ranged-distance bar: it fills as the "..
+            "distance to your attackable target closes to melee (full at 5 yd or "..
+            "closer) and drains as the target moves away, labelling the exact distance "..
+            "in yards plus MELEE / IN RANGE / OUT. It hides when there is no attackable "..
+            "target or the client cannot answer a distance, so an empty bar means "..
+            "unknown, never zero. ON by default for hunters (35 yd band, Auto Shot "..
+            "range); every other class opts in here (30 yd band).",
         get = function()
-            return ST:get_class_table().weave_range_enabled == true
+            local class_db = ST:get_class_table()
+            -- An explicit saved value wins in BOTH directions: true shows the bar,
+            -- false hides it.
+            if class_db.weave_range_enabled ~= nil then
+                return class_db.weave_range_enabled == true
+            end
+            -- nil = the class's own shipped default (ON for hunters, off for everyone
+            -- else), read from the defaults table so the two can never disagree.
+            if type(ST.weave_range_default_enabled) ~= "function" then
+                return false
+            end
+            return ST.weave_range_default_enabled(ST.player_class)
         end,
         set = function(_, value)
             ST:get_class_table().weave_range_enabled = value
@@ -692,14 +705,16 @@ function ST:generate_top_level_options_table()
                 name = function()
                     if st.practice_ui and type(st.practice_ui.is_active) == "function"
                         and st.practice_ui.is_active() then
-                        return "Stop Practice"
+                        return "Open Practice Panel"
                     end
                     return "Start Practice"
                 end,
-                desc = "Toggle the practice session (same session as /st practice and the class panel button). A session can only be started out of combat.",
+                desc = "Open the practice trainer (same session as /st practice and the class panel button). Closing options leaves the session running; only the practice panel's X stops it. A session can only be started out of combat.",
                 func = function()
-                    if st.practice_ui and type(st.practice_ui.toggle) == "function" then
-                        st.practice_ui.toggle(ST)
+                    if st.practice_ui and type(st.practice_ui.open) == "function" then
+                        st.practice_ui.open(ST)
+                    elseif st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                        st.practice_ui.toggle(ST) -- half-loaded fallback
                     end
                 end,
             },
@@ -2994,14 +3009,16 @@ function ST.class_opts_funcs.PALADIN(self)
             name = function()
                 if st.practice_ui and type(st.practice_ui.is_active) == "function"
                     and st.practice_ui.is_active() then
-                    return "Stop Practice"
+                    return "Open Practice Panel"
                 end
                 return "Start Practice"
             end,
-            desc = "Toggle the practice session. A session can only be started out of combat.",
+            desc = "Open the practice trainer. Closing options leaves the session running; only the practice panel's X stops it. A session can only be started out of combat.",
             func = function()
-                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
-                    st.practice_ui.toggle(ST)
+                if st.practice_ui and type(st.practice_ui.open) == "function" then
+                    st.practice_ui.open(ST)
+                elseif st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST) -- half-loaded fallback
                 end
             end,
         },
@@ -4225,14 +4242,16 @@ function ST.class_opts_funcs.WARRIOR(self)
                 -- throwing name blanks the whole options page in AceConfig.
                 if st.practice_ui and type(st.practice_ui.is_active) == "function"
                     and st.practice_ui.is_active() then
-                    return "Stop Practice"
+                    return "Open Practice Panel"
                 end
                 return "Start Practice"
             end,
-            desc = "Toggle the practice session. A session can only be started out of combat.",
+            desc = "Open the practice trainer. Closing options leaves the session running; only the practice panel's X stops it. A session can only be started out of combat.",
             func = function()
-                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
-                    st.practice_ui.toggle(ST)
+                if st.practice_ui and type(st.practice_ui.open) == "function" then
+                    st.practice_ui.open(ST)
+                elseif st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST) -- half-loaded fallback
                 end
             end,
         },
@@ -4875,14 +4894,16 @@ function ST.class_opts_funcs.HUNTER(self)
             name = function()
                 if st.practice_ui and type(st.practice_ui.is_active) == "function"
                     and st.practice_ui.is_active() then
-                    return "Stop Practice"
+                    return "Open Practice Panel"
                 end
                 return "Start Practice"
             end,
-            desc = "Toggle the practice session. A session can only be started out of combat.",
+            desc = "Open the practice trainer. Closing options leaves the session running; only the practice panel's X stops it. A session can only be started out of combat.",
             func = function()
-                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
-                    st.practice_ui.toggle(ST)
+                if st.practice_ui and type(st.practice_ui.open) == "function" then
+                    st.practice_ui.open(ST)
+                elseif st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST) -- half-loaded fallback
                 end
             end,
         },
@@ -5446,14 +5467,16 @@ function ST.class_opts_funcs.DRUID(self)
             name = function()
                 if st.practice_ui and type(st.practice_ui.is_active) == "function"
                     and st.practice_ui.is_active() then
-                    return "Stop Practice"
+                    return "Open Practice Panel"
                 end
                 return "Start Practice"
             end,
-            desc = "Toggle the practice session. A session can only be started out of combat.",
+            desc = "Open the practice trainer. Closing options leaves the session running; only the practice panel's X stops it. A session can only be started out of combat.",
             func = function()
-                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
-                    st.practice_ui.toggle(ST)
+                if st.practice_ui and type(st.practice_ui.open) == "function" then
+                    st.practice_ui.open(ST)
+                elseif st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST) -- half-loaded fallback
                 end
             end,
         },
@@ -6033,14 +6056,16 @@ function ST.class_opts_funcs.SHAMAN(self)
             name = function()
                 if st.practice_ui and type(st.practice_ui.is_active) == "function"
                     and st.practice_ui.is_active() then
-                    return "Stop Practice"
+                    return "Open Practice Panel"
                 end
                 return "Start Practice"
             end,
-            desc = "Toggle the practice session. A session can only be started out of combat.",
+            desc = "Open the practice trainer. Closing options leaves the session running; only the practice panel's X stops it. A session can only be started out of combat.",
             func = function()
-                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
-                    st.practice_ui.toggle(ST)
+                if st.practice_ui and type(st.practice_ui.open) == "function" then
+                    st.practice_ui.open(ST)
+                elseif st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST) -- half-loaded fallback
                 end
             end,
         },
@@ -6753,14 +6778,16 @@ function ST.class_opts_funcs.ROGUE(self)
             name = function()
                 if st.practice_ui and type(st.practice_ui.is_active) == "function"
                     and st.practice_ui.is_active() then
-                    return "Stop Practice"
+                    return "Open Practice Panel"
                 end
                 return "Start Practice"
             end,
-            desc = "Toggle the practice session. A session can only be started out of combat.",
+            desc = "Open the practice trainer. Closing options leaves the session running; only the practice panel's X stops it. A session can only be started out of combat.",
             func = function()
-                if st.practice_ui and type(st.practice_ui.toggle) == "function" then
-                    st.practice_ui.toggle(ST)
+                if st.practice_ui and type(st.practice_ui.open) == "function" then
+                    st.practice_ui.open(ST)
+                elseif st.practice_ui and type(st.practice_ui.toggle) == "function" then
+                    st.practice_ui.toggle(ST) -- half-loaded fallback
                 end
             end,
         },
@@ -7359,6 +7386,21 @@ end
 function ST:set_opts()
     -- Finally, a function to be run on init that will dynamically generate
     -- all the requested panel tables on a per-hand/per-class basis.
+
+    -- One-time appearance migration BEFORE any widget can read a colour (the getters
+    -- read lazily when a panel renders): the bar backdrop default became opaque and
+    -- AceDB never overwrites a saved key (config.lua owns the pure function and the
+    -- versioned flag). main.lua creates AceDB and then calls set_opts()
+    -- (main.lua:416-424), and bars.lua builds the backdrops later in init_libs, so this
+    -- is the first settings-aware seam on the init path. Both calls are pcall'd: a bad
+    -- profile or a migration fault must never abort the options build (or login).
+    if type(self.migrate_appearance_defaults) == "function"
+        and type(self.get_profile_table) == "function" then
+        local read_ok, profile = pcall(self.get_profile_table, self)
+        if read_ok then
+            pcall(self.migrate_appearance_defaults, profile)
+        end
+    end
 
     -- Sets a dict for hand/collection-based case switching.
     self:set_opts_case_dict()

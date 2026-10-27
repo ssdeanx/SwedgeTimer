@@ -1517,13 +1517,26 @@ local function build(opts)
         sb.frames = sb.frames + 1
         return make_frame(select(2, ...))
     end
+    -- Spell data is bidirectional, like a real client: the name an id answers with is
+    -- itself a query form. TBC Anniversary and Wrath/Titanforge state queries take that
+    -- localized NAME (operator ruling), so an id-only fixture would model a client that
+    -- cannot exist.
+    local name_to_id = {}
     env.GetSpellInfo = function(spell)
         if sb.hide_spells then
             return nil
         end
-        local info = (opts.spell_infos or SPELL_INFOS)[spell]
+        local query = spell
+        if type(query) == "string" then
+            query = name_to_id[query]
+            if query == nil then
+                return nil
+            end
+        end
+        local info = (opts.spell_infos or SPELL_INFOS)[query]
         if info then
-            return info.name, nil, info.icon, info.cast_ms, 0, 0, spell
+            name_to_id[info.name] = query
+            return info.name, nil, info.icon, info.cast_ms, 0, 0, query
         end
         return nil
     end
@@ -1531,7 +1544,7 @@ local function build(opts)
         sb.cooldown_queries = sb.cooldown_queries + 1
         local cd = sb.cooldowns[spell]
         if not cd and type(spell) == "string" then
-            -- TBC queries by localized name (never a bare id): match the id
+            -- TBC queries by localized name, falling back to the id: match the id
             -- whose spell data carries that name, mirroring the client's own
             -- mapping. Id-keyed fixtures keep working unchanged.
             for id, entry in pairs(sb.cooldowns) do
@@ -1594,10 +1607,23 @@ local function build(opts)
     env.IsAutoRepeatSpell = function() return true end
     -- Spell knowledge for the Wrath spec detector (Chimera = MM, Explosive = SV)
     -- and the SoD rune detector: opts.known_spells maps id -> true, defaulting
-    -- to "nothing learned" so the old fixtures resolve nothing new.
+    -- to "nothing learned" so the old fixtures resolve nothing new. A NAME token
+    -- resolves through the client's own spell data (the TBC/Wrath query form).
     env.IsSpellKnown = function(spell)
         local known = opts.known_spells
-        return known ~= nil and known[spell] == true
+        if known == nil then
+            return false
+        end
+        if known[spell] == true then
+            return true
+        end
+        if type(spell) == "string" then
+            local _, _, _, _, _, _, id = env.GetSpellInfo(spell)
+            if type(id) == "number" then
+                return known[id] == true
+            end
+        end
+        return false
     end
     -- Target health for the Wrath Kill Shot execute read (nil = unknown).
     env.UnitHealth = function() return sb.health end
@@ -2007,6 +2033,9 @@ do
 end
 eq(sandbox.cast_reads, 1, "gather: the live cast is read once per call")
 eq(sandbox.range_queries, 1, "gather: the range probe is one client call per call")
+-- RE-CUT back (2026-10-25, operator: "i never banned fallback to ids"): a name-family
+-- prompt whose name this fixture's spell data does not carry falls back to its id, so
+-- every prompt resolves again and every resolved prompt spends one cooldown read.
 eq(sandbox.cooldown_queries, 5, "gather: one cooldown read per prompt (steady/kc/bw/rf/multi)")
 
 -- Every slot's cooldown_key resolves into the gathered inputs.
@@ -2609,6 +2638,13 @@ do
         [53301] = { name = "Explosive Shot", icon = "icon_explosive", cast_ms = 0 },
         [49050] = { name = "Aimed Shot", icon = "icon_aimed_wrath", cast_ms = 0 },
         [49045] = { name = "Arcane Shot", icon = "icon_arcane", cast_ms = 0 },
+        -- The base abilities the gather always reads a cooldown for. Their DATA is on
+        -- every real client (the name token needs it on Wrath/Titanforge); knowledge
+        -- stays in known_spells, which is what gates a prompt.
+        [2643] = { name = "Multi-Shot", icon = "icon_multi", cast_ms = 500 },
+        [34026] = { name = "Kill Command", icon = "icon_kill_command", cast_ms = 0 },
+        [19574] = { name = "Bestial Wrath", icon = "icon_bestial_wrath", cast_ms = 0 },
+        [3045] = { name = "Rapid Fire", icon = "icon_rapid_fire", cast_ms = 0 },
     }
     local function fresh_wrath(known)
         local w = build({ project = 11, spell_infos = WRATH_SPELLS, known_spells = known })

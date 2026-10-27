@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.1.2"
+local version = "2.1.3"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -983,8 +983,10 @@ function ST:post_init()
 	end
 
 	-- Melee-weave proximity bar (weave_range.lua): creates its hidden frame and driver
-	-- here; the bar itself stays invisible until the class's weave_range_enabled toggle
-	-- is on (off by default). Absent module (harness sandboxes) stays a no-op.
+	-- here. The enable rule lives in weave_range.lua: the hunter default is ON
+	-- (ST.weave_range_default_enabled), the other classes default off, and an explicit
+	-- per-class toggle always wins. The driver gates and drives itself through
+	-- init()/poll(); an absent module (harness sandboxes) stays a no-op here.
 	if st.weave_range then
 		st.weave_range.init(self)
 	end
@@ -2689,6 +2691,17 @@ end
 -- that engine is the live one (H5). print-only, like diag.lua.
 function ST:print_runtime_diag()
 	local parts = {}
+	-- The active swing engine and why it won (engine-selection ladder in this file's
+	-- header: a shipped vendored library always wins; otherwise the Forever source when
+	-- it reports itself available; otherwise the inert stand-in). diag.lua's config line
+	-- carries the same field, but this line prints even when the diag module is absent.
+	local engine_names = {
+		["vendored-lib"] = "vendored-lib(lib)",
+		["forever-source"] = "swing_source(PLAYER_SWING)",
+		["inert-standin"] = "inert(no-feed)",
+	}
+	local engine = tostring(self.swing_engine)
+	parts[#parts + 1] = "swing_engine=" .. (engine_names[engine] or engine)
 	local bar = self.bar_hook_errors
 	if type(bar) == "table" then
 		parts[#parts + 1] = "bar_hook_errors=" .. tostring(bar.count or 0)

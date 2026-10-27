@@ -79,20 +79,25 @@ local maul_ids = get_tab({
 -- Cached current-rank id, resolved once on first use.
 local maul_current_id
 
--- Name-vs-id rule (bench/lessons.md): TBC Anniversary resolves by NAME never
--- bare id; Classic Era by id. spell_query branches every direct spell read
--- (GetSpellInfo / GetSpellCooldown / is_spell_known / IsSpellUsable /
--- IsSpellInRange / IsCurrentSpell / GetSpellPowerCost) via st.family.
--- Nil-safe: a nil id/name stays nil so unknown-hides is preserved.
+-- Name-vs-id rule (bench/lessons.md; operator 2026-10-19 for TBC, 2026-10-25 for
+-- Titanforge; each family gated on its own): TBC Anniversary and Wrath/Titanforge
+-- prefer the NAME for state queries, with the id as the approved fallback (name
+-- first, then the id); Classic Era resolves by id. spell_query branches every direct
+-- spell read (GetSpellInfo / GetSpellCooldown / is_spell_known / IsSpellUsable /
+-- IsSpellInRange / IsCurrentSpell / GetSpellPowerCost) via st.family. Nil-safe: a
+-- nil name falls back to the id on a name family (operator-approved), so unknown
+-- only when both are nil.
 local function spell_query(id, name)
     if st.family == "TBC" then
-        return name
+        return name or id
+    elseif st.family == "WRATH" then
+        return name or id
     end
     return id
 end
 
--- English names for the TBC name path (rank-invariant; the localized name is
--- shared across ranks, so a single literal covers the whole rank table).
+-- English names for the name path (rank-invariant; the localized name is shared
+-- across ranks, so a single literal covers the whole rank table).
 local MAUL_NAME = "Maul"
 local MANGLE_NAME = "Mangle"
 local RIP_NAME = "Rip"
@@ -354,8 +359,10 @@ function ST.DRUID.on_current_spell_cast_changed(self, is_cancelled)
         return
     end
 
-    if st.family == "TBC" then
-        -- Name-vs-id: a single NAME probe covers all Maul ranks on TBC.
+    if st.family == "TBC" or st.family == "WRATH" then
+        -- Name-vs-id: a single NAME probe covers all Maul ranks on TBC Anniversary
+        -- and on Wrath/Titanforge (state queries take names there, one gate per
+        -- family).
         if api.IsCurrentSpell(MAUL_NAME) then
             self.maul_queued = true
             self:set_bar_color("mainhand")

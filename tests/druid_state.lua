@@ -613,7 +613,9 @@ do
 
     sb.power = 5
     ST.DRUID.on_rage_update(ST)
-    eq(sb.last_cost_id, 48480, "the queued Maul rank is the cost that gets queried")
+    -- RE-CUT (2026-10-25, operator ruling): Wrath/Titanforge state queries carry the
+    -- localized NAME, so the cost read is the rank-invariant name - never the bare id.
+    eq(sb.last_cost_id, "Maul", "the queued Maul cost is queried by NAME on Wrath")
     eq(ST.insufficient_rage, true, "5 rage < 10 cost -> insufficient")
     eq(sb.bar_color_calls, 1, "going insufficient recolours the bar")
     eq(sb.last_hand, "mainhand", "the recolour targets the mainhand bar")
@@ -648,7 +650,10 @@ end
 do
     -- 4a) A client where no Maul rank resolves: the cost must never be queried and the
     -- state degrades to "sufficient" instead of claiming a shortage.
-    local sb = build({ known = {} })
+    -- RE-CUT (2026-10-25, operator ruling): this is the Era shape. On a name family the
+    -- cost read is the rank-invariant NAME and is valid even while the rank is
+    -- unresolved; a name family cannot report "no rank" the way an id client can.
+    local sb = build({ project = 2, known = {} })
     local ST = sb.ST
     ST.interfaces_are_initialised = true
     ST.maul_queued = true
@@ -709,8 +714,12 @@ end
 --=========================================================================================
 -- 6) Rank latch: the resolver runs once, and a negative result stays latched
 --=========================================================================================
+-- RE-CUT (2026-10-25, operator ruling): a NEGATIVE rank verdict is only reachable on a
+-- family whose state queries take ids (Era). On TBC Anniversary and Wrath/Titanforge a
+-- name the client cannot answer is "unresolved" (retryable), so nothing may latch -
+-- that shape is pinned in the F4 block below and in the new family-query suite.
 do
-    local sb = build({ known = {} })
+    local sb = build({ project = 2, known = {} })
     local ST = sb.ST
     ST.interfaces_are_initialised = true
     ST.maul_queued = true
@@ -744,7 +753,11 @@ end
 do
     -- The rank table must resolve the highest id the client knows (WotLK) and the only
     -- id it knows (vanilla rank 1), otherwise the latch would lock in the wrong cost.
-    local sb = build({ known = { [6807] = true, [8972] = true, [48479] = true, [48480] = true } })
+    -- RE-CUT (2026-10-25, operator ruling): the RANK a cost read points at is only
+    -- observable where the query is the id (Era). A name-family query is rank-invariant
+    -- by design, so these two rank-selection pins run on Era; the name-family cost token
+    -- is pinned above and in the new family-query suite.
+    local sb = build({ project = 2, known = { [6807] = true, [8972] = true, [48479] = true, [48480] = true } })
     local ST = sb.ST
     ST.interfaces_are_initialised = true
     ST.maul_queued = true
@@ -753,7 +766,7 @@ do
     ST.DRUID.on_rage_update(ST)
     eq(sb.last_cost_id, 48480, "the highest known Maul rank is the one queried")
 
-    local sb2 = build({ known = { [6807] = true } })
+    local sb2 = build({ project = 2, known = { [6807] = true } })
     local ST2 = sb2.ST
     ST2.interfaces_are_initialised = true
     ST2.maul_queued = true
@@ -767,7 +780,10 @@ end
 -- 7) Option gating: the Maul colour off must stop the probe and the flag
 --=========================================================================================
 do
-    local sb = build({ known = { [48480] = true }, current_spell = 48480 })
+    -- RE-CUT (2026-10-25, operator ruling): the queued-Maul probe is the family-correct
+    -- token. On Wrath/Titanforge that is the rank-invariant NAME (one probe covers every
+    -- rank), so the fixture's "current spell" is the name the client answers.
+    local sb = build({ known = { [48480] = true }, current_spell = "Maul" })
     local ST = sb.ST
     ST.interfaces_are_initialised = true
 
@@ -2650,7 +2666,9 @@ end
 do
     -- (a) ABSENT: the client refutes every Maul rank. The negative is FINAL - it
     --     latches and the table is never walked again, not even after the retry window.
-    local ab = build({ known = {} })
+    --     Pinned on Era, where the id form is the query and a refutation is final
+    --     (name families resolve by name first, then fall back to the id).
+    local ab = build({ project = 2, known = {} })
     local ABT = ab.ST
     ABT.interfaces_are_initialised = true
     ABT.maul_queued = true
@@ -2665,7 +2683,10 @@ do
     -- (b) UNRESOLVED: the client cannot answer (its GetSpellInfo raises). Nothing is
     --     latched, so the next attempt asks again once the retry backoff has passed -
     --     a cold spell book can no longer poison the rank for the rest of the session.
-    local us = build({ known = {} })
+    --     RE-CUT (2026-10-25, operator ruling): pinned on Era for the same reason as
+    --     (a) - "no cost read without a resolved rank" belongs to the id query form; a
+    --     name-family cost read is rank-invariant and stays valid while unresolved.
+    local us = build({ project = 2, known = {} })
     local UST = us.ST
     UST.interfaces_are_initialised = true
     UST.maul_queued = true

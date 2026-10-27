@@ -1497,11 +1497,12 @@ end
 
 -- The client's own name for a spell id.
 --
--- Name-vs-id rule (operator-confirmed 2026-10-19; bench/lessons.md:29-32): the TBC
--- Anniversary client resolves spells by NAME, never by a bare id; Classic Era resolves
--- by id. The name for a candidate id therefore has to come out of the client's own
--- spell data first, because the id form is exactly the form the TBC client does not
--- answer. Two sources, in order:
+-- Name-vs-id rule (operator 2026-10-19 for TBC, 2026-10-25 for Titanforge; each
+-- family gated on its own): the TBC Anniversary (classic_anniversary) and
+-- Wrath/Titanforge (classic_titan) clients take state queries by NAME (the id is the
+-- approved fallback); Classic Era takes ids. The name for a candidate id therefore
+-- has to come out of the client's own spell data first, because the id form is not
+-- the query form on those clients. Two sources, in order:
 --
 --  1. The native global's id form. On the classic-line clients the global returns the
 --     spell name as its first value, and Blizzard's own code reads it that way:
@@ -1567,13 +1568,15 @@ end
 --   false - the client's own spell data refutes it (definitive absence)
 --   nil   - the client could not answer either way (cold or unreadable client)
 local function family_spell_exists(id)
-	if st.family ~= "TBC" then
+	if st.family ~= "TBC" and st.family ~= "WRATH" then
 		local ok, info = pcall(api.GetSpellInfo, id)
 		return spell_data_present(ok, info)
 	end
-	-- TBC: the name path is the query form (operator rule). The name comes from the
-	-- client's own data; a name the client does not index falls back to the id form,
-	-- so a client whose global answers ids still resolves here too.
+	-- TBC Anniversary (classic_anniversary) and Wrath/Titanforge (classic_titan): the
+	-- name path is the preferred query form (operator rule, one gate per family). The
+	-- name comes from the client's own data; a name the client does not index falls
+	-- back to the id form (operator-approved - the id fallback was never banned), so
+	-- a client whose global answers ids still resolves here too.
 	local name = client_spell_name(id)
 	local query = api.get_spell_query(name, id) or id
 	local ok, info = pcall(api.GetSpellInfo, query)
@@ -1603,12 +1606,13 @@ end
 -- lookup table (st.utils.convert_lookup_table) or a plain list of ids; order does not
 -- matter. Returns nil when none of the ids exist on this client.
 --
--- Name-vs-id rule: on TBC the walk asks the client by NAME (the id form is what that
--- client does not answer - bench/lessons.md:29-32), so a rank the client knows
--- resolves there exactly as it does on Era. The state variant below tells "the client
--- says this spell is not here" apart from "the client could not answer", so a caller
--- that latches a negative can tell the two apart and retry instead of caching a false
--- negative.
+-- Name-vs-id rule: on TBC Anniversary and Wrath/Titanforge the walk asks the client
+-- by NAME first (the form those clients prefer - operator rule; each family gated on
+-- its own) and falls back to the id when the name is not indexed; the id fallback is
+-- operator-approved. A rank the client knows therefore resolves there exactly as it
+-- does on Era. The state variant below tells "the client says this spell is not here"
+-- apart from "the client could not answer", so a caller that latches a negative can
+-- tell the two apart and retry instead of caching a false negative.
 function api.get_family_spell_id_state(id_table)
 	local best
 	local refuted = false
@@ -1652,15 +1656,36 @@ function api.get_family_spell_id(id_table)
 	return id
 end
 
--- Spell query (name-vs-id rule, operator-confirmed 2026-10-19): TBC Anniversary
--- takes spell NAMES, never bare ids; Classic Era needs ids. Returns the
--- family-correct query for GetSpellCooldown / is_spell_known / IsSpellUsable /
--- aura matching: the English name on TBC, the numeric id elsewhere. Callers pass
--- both from their resolved entry; the helper picks. No new client probe, family
--- branching only.
+-- Spell query (name-vs-id rule). Each client family answers state queries in its OWN
+-- form - there is no combined "classic-line" branch (operator 2026-10-19 for TBC;
+-- operator 2026-10-25 for Titanforge: "titanforge aka wotlk doesnt use spell ids
+-- either. stop guessing. each has their own client."):
+--
+--   ERA     classic_era 1.15.9 (SoD runes are the SAME client: extra ids, same family)
+--           -> numeric IDS.
+--   TBC     classic_anniversary 2.5.6 -> localized NAMES.
+--   WRATH   classic_titan 3.80.2 (Titanforge) -> localized NAMES. The API docs say
+--           number; the operator's in-client behaviour is the authority.
+--   FOREVER / CATA / MISTS / RETAIL / UNKNOWN -> numeric ids, unchanged (no client
+--           behaviour has proven otherwise for these).
+--
+-- Returns the family-correct query for GetSpellCooldown / is_spell_known /
+-- IsSpellUsable / IsSpellInRange / IsCurrentSpell / GetSpellPowerCost / aura
+-- matching. Callers pass both from their resolved entry; the helper picks. On a
+-- name family the localized name is tried FIRST, then the id is the fallback:
+-- the id fallback is operator-approved ("i never banned fallback to ids") and is
+-- never removed - a cold name degrades to the id form instead of a nil query. No
+-- new client probe, family branching only.
 function api.get_spell_query(name, id)
-	if st.family == "TBC" then
-		return name
+	local client_family = st.family
+	if client_family == "TBC" then
+		-- classic_anniversary 2.5.6: localized NAME first, id fallback.
+		return name or id
+	elseif client_family == "WRATH" then
+		-- classic_titan 3.80.2 (Titanforge): localized NAME first, id fallback.
+		return name or id
 	end
+	-- ERA (1.15.9, SoD included): ids. FOREVER 1.60.1 / CATA / MISTS / RETAIL /
+	-- UNKNOWN: ids, unchanged until that client is proven to take names.
 	return id
 end

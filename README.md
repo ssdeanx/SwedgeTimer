@@ -42,7 +42,7 @@ PENDING — screenshots to be added. No images yet.
 | :--- | :--- | :--- | :--- |
 | <span style="color:#C79C6E">Warrior</span> | Slam / Execute / Overpower, Sunder / Rend upkeep, stance-dance | HS / Cleave queue tints, Blood Surge, Slam, Overpower | Core order, Core window, Sunder upkeep, Execute burn, HS/Cleave queue, Pre-pull opener |
 | <span style="color:#F58CBA">Paladin</span> | Seal-twist window, next-action (CS / Command / Blood / twist), SoD variants | Holy Shock, Aura Mastery, seals, How | Twist timing, FCFS priority, Prepull seal, Judgement fit |
-| <span style="color:#ABD473">Hunter</span> | Steady / weave / LnL prompts, trap tracking, distance band | Steady, Raptor, Rapid Fire, LnL / OOM badges | Shot priority, Clip, Cooldown pops, Opener |
+| <span style="color:#ABD473">Hunter</span> | Steady / weave / LnL prompts, trap tracking, standalone ranged-distance bar | Steady, Raptor, Rapid Fire, LnL / OOM badges | Shot priority, Clip, Cooldown pops, Opener |
 | <span style="color:#FFF569">Rogue</span> | Pool-vs-spend, Eviscerate-first / Rupture-first, Shiv / Tea context | SnD, Rupture, EA, AR, BF, Cold Blood | Finisher order, Combo-point decision, SnD upkeep, Opener |
 | <span style="color:#FF7D0A">Druid</span> | Bite / Rip, FF fishing, RipCP override | Maul queue, TF / Berserk, Claw, energy trackers | Cat priority, Shift rule, Roar upkeep, Execute |
 | <span style="color:#0070DE">Shaman</span> | Weave fits, sub-5 LB / LvB, totem upkeep | Shocks, Stormstrike, totems, Searing | Enhancement priority, Stack decision, Stormstrike decision, Totem upkeep |
@@ -55,7 +55,7 @@ that publishes no drills of its own is refused rather than handed someone else's
 
 ## Practice
 
-`/st practice` runs drills against the same sim rotations the guides use (sourced from the [wowsims](https://github.com/wowsims) APLs — run your own numbers at [<span style="color:#1E90FF">wowsims.com</span>](https://www.wowsims.com)). Each drill grades <span style="color:#FFD700">S</span> through <span style="color:#808080">F</span> and stays unscored when the setup can't be judged — a safe place to rehearse pooling, swing timing, and windows before raid. Nothing in practice affects your live bars.
+`/st practice` runs drills against the same sim rotations the guides use (sourced from the [wowsims](https://github.com/wowsims) APLs — run your own numbers at [<span style="color:#1E90FF">wowsims.com</span>](https://www.wowsims.com)). Each drill grades <span style="color:#FFD700">S</span> through <span style="color:#808080">F</span> and stays unscored when the setup can't be judged — a safe place to rehearse pooling, swing timing, and windows before raid. Nothing in practice affects your live bars. Drills now show a moving cue strip with a fixed playhead (upcoming cues travel to it while the run is live), spanning the screen like the reference practice timeline: a left rail with an icon and name per lane, a scrolling `m:ss` ruler, lane rows, the current rotation band and a close button. Practice opens both frames — the timeline and the trainer panel — and every point of XP comes from a graded, timed press on that timeline: the paladin session waits for **Start Fight**, which starts the fight and the timeline, and **Stop Fight** freezes both. Closing the options window leaves practice running; only the practice panel's X ends it. The old post-fight log does the same full-width job behind an opt-in **Timeline** button; the panel itself matches the reference (bind hint under the grid, a **(Reset)** link, the Bloodlust / Haste Pot pair above the rotation picker, then **Start Fight** and **Timeline**).
 
 Three practice modes, chosen in options → Practice: the **class session** (the default), the
 **rotation scenario** (your class's own rotation, ten decisions, graded as a sequence), and
@@ -95,12 +95,15 @@ Every class ships a cooldown HUD: ability slots with swipe, glow, and tint (queu
 - **Animated Leading Edge Spark:** A luminous spark highlights the advancing front of each swing bar, giving clear real-time timing clarity.
 - **Completion Flash Pulse:** A subtle visual feedback flash triggers as each swing or shot finishes, providing crisp confirmation.
 - **Zoomed / Borderless Icons:** Cooldown HUD icons can be cleanly cropped (`hud_zoom`) to remove the default 5% Blizzard border for an edge-to-edge square look.
+- **Opaque Bar Backdrop:** the swing-bar backdrop is fully opaque by default (alpha 1.0); a one-time migration raises an untouched old profile, while custom colours and theme presets are left as saved.
 
 <span style="color:#FFA500">Retail bars are intentionally static; HUD, rotation label, design mode, and options still work there. The addon never invents a reading: an unknown value is reported as unknown, and a practice step that cannot be decided scores nothing rather than a wrong grade.</span>
 
 ## Links
 
 Project pages — CurseForge (search `SwedgeTimer` at [<span style="color:#FF8000">curseforge.com</span>](https://www.curseforge.com)), with Wago and WoWInterface listings. Exact project-page URLs unconfirmed; no links invented here. The addon itself integrates with none of them.
+
+**Paladin seal-twist credit:** forktale — [SwedgeTimer TBC Anniversary Update](https://www.curseforge.com/wow/addons/swedgetimer-tbc-anniversary-update).
 
 ## Repository map
 

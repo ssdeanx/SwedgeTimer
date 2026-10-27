@@ -298,6 +298,16 @@ local function build(opts)
     env.UnitAttackSpeed = function(unit) return sb.attack_speed[1], sb.attack_speed[2] end
     sb.attack_speed = { 2.6, opts.off_speed or 0 } -- default: no offhand weapon
     env.UnitRangedDamage = function(unit) return 3.0 end
+    -- Cast-reset leg only: the lib's UNIT_SPELLCAST_START stores the cast's
+    -- name/range through the captured GetSpellInfo global. Off by default, because
+    -- every other leg runs the fixture's original shape (the lib captured nil).
+    if opts.spell_info then
+        env.GetSpellInfo = function(spell)
+            local row = opts.spell_info[spell]
+            if not row then return nil end
+            return row.name, "Rank 1", 1, row.cast or 0, row.min or 0, row.max or 0, spell
+        end
+    end
     -- unpack must name the length explicitly: CLEU shapes carry positional
     -- nils (the offhand SWING_DAMAGE flag sits at index 22), and a bare
     -- unpack stops at the first hole.
@@ -979,6 +989,150 @@ do
             eq(wire_updates(b, "ranged"), pre_updates, tag .. ": FAILED_QUIET fires no ranged UPDATE")
             eq(T.ranged.ends_at, pre_exp, tag .. ": the ranged expiration is untouched")
         end
+        eq(#F.cb_errors, 0, tag .. ": no callback-bus error was swallowed")
+    end
+end
+
+--=========================================================================================
+-- HUNTER CAST RESET (2026-10-25, CORRECTED): the STOCK vendored lib resets BOTH melee
+-- hands when a tracked cast completes (LibClassicSwingTimerAPI.lua:596-604) and ships
+-- no hunter exemption. The fix is OUR side (operator ruling: upstream-clean lib): the
+-- hunter module arms the engine's own `preventSwingReset` for every hunter shot id, at
+-- UNIT_SPELLCAST_START (event arm; the only arm that covers instants) and per tick
+-- (cast-time belt). See classes/hunter.lua "Shot cast guard".
+--
+-- Driven end-to-end through the REAL lib + REAL v7 + REAL dispatcher + the REAL
+-- classes/hunter.lua guard: hunter_window and the class module are loaded into the same
+-- sandbox after init, exactly as the TOC loads them. The event order mirrors the client
+-- (lib frame registers at file load, the AceEvent handler at OnInitialize), so the lib's
+-- START handler runs first and the class arm survives to SUCCEEDED.
+--
+-- Controls prove the reset branch is ALIVE:
+--   * 2973 Raptor Strike (next_melee) still resets the mainhand;
+--   * 999999 neutral cast still takes the blanket reset.
+-- Titanforge Auto Shot 75 is EXPECTED-FAIL: the stock lib also lists 75 in
+-- reset_swing_spells (:1196) and that OR's first clause ignores preventSwingReset. No
+-- our-side filter can prove a START is that reset rather than a real melee swing, so the
+-- residual is documented, not hacked. Every other shot on Titanforge is guarded.
+--=========================================================================================
+do
+    local tags = { era = "era-castreset", anniv = "tbc-castreset", titan = "titan-castreset" }
+    local shot_rows = {
+        { id = 2643, label = "Multi-Shot r1" },
+        { id = 49048, label = "Multi-Shot r8" },
+        { id = 19434, label = "Aimed Shot r1" },
+        { id = 49050, label = "Aimed Shot r9" },
+        { id = 3044, label = "Arcane Shot r1" },
+        { id = 27019, label = "Arcane Shot r9" },
+        { id = 1978, label = "Serpent Sting r1" },
+        { id = 13554, label = "Serpent Sting (Era rank)" },
+        { id = 34120, label = "Steady Shot r2" },
+    }
+    for _, profile in ipairs({ "era", "anniv", "titan" }) do
+        local tag = tags[profile]
+        local spell_info = {}
+        for _, row in ipairs(shot_rows) do
+            spell_info[row.id] = { name = row.label, min = 8, max = 35 }
+        end
+        spell_info[75] = { name = "Auto Shot", min = 8, max = 35 }
+        spell_info[2973] = { name = "Raptor Strike", min = 0, max = 5 }
+        spell_info[999999] = { name = "Neutral Cast", min = 0, max = 5 }
+
+        local b = build({ profile = profile, spell_info = spell_info, off_speed = 1.8 })
+        assert(b ~= nil, tag .. ": the sandbox builds")
+        local T, F = b.ST, b.sb
+        T:OnInitialize()
+        report_login(b)
+        addon_loaded(b)
+        pew(b)
+        fire_lrc(b)
+        eq(T.interfaces_are_initialised, true, tag .. ": init completes")
+
+        -- The guard under test: the real class module, loaded the way the TOC does.
+        local hw = assert(loadfile(ROOT .. "hunter_window.lua"))
+        setfenv(hw, b.env)
+        hw("SwedgeTimer", b.st)
+        local hm = assert(loadfile(ROOT .. "classes/hunter.lua"))
+        setfenv(hm, b.env)
+        hm("SwedgeTimer", b.st)
+        check(type(b.st.class_loaders) == "table"
+            and type(b.st.class_loaders["HUNTER"]) == "function",
+            tag .. ": classes/hunter.lua registers its loader")
+        b.st.class_loaders["HUNTER"]()
+        check(type(T.HUNTER) == "table" and type(T.HUNTER.on_spellcast_event) == "function",
+            tag .. ": the hunter guard hook is live on ST.HUNTER")
+
+        -- One live cycle per melee hand, then the shot casts. The cast order mirrors
+        -- the client: the lib's START handler, then the addon's (class arm), then the
+        -- lib's SUCCEEDED (which reads preventSwingReset).
+        cleu_mh_swing(b)
+        cleu_oh_swing(b)
+        advance(b, 0.5)
+        local mh_start = T.mainhand.start
+        local function cast(spell_id)
+            lib_event(b, "UNIT_SPELLCAST_START", "player", "cast-" .. spell_id, spell_id)
+            T:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-" .. spell_id, spell_id)
+            succeeded(b, spell_id)
+        end
+
+        for _, row in ipairs(shot_rows) do
+            local starts = wire_starts(b, "mainhand")
+            local off_starts = wire_starts(b, "offhand")
+            T.in_melee_range = false
+            cast(row.id)
+            eq(wire_starts(b, "mainhand"), starts,
+                tag .. ": " .. row.label .. " does not restart the mainhand")
+            eq(wire_starts(b, "offhand"), off_starts,
+                tag .. ": " .. row.label .. " does not restart the offhand")
+            eq(T.mainhand.start, mh_start,
+                tag .. ": " .. row.label .. " keeps the mainhand anchor")
+        end
+
+        -- Auto Shot: at range AND in melee on Era/Anniversary (the ruling removed the
+        -- in-melee exception). Titanforge is the documented stock-lib residual.
+        if profile ~= "titan" then
+            for _, melee in ipairs({ false, true }) do
+                local starts = wire_starts(b, "mainhand")
+                local off_starts = wire_starts(b, "offhand")
+                T.in_melee_range = melee
+                cast(75)
+                eq(wire_starts(b, "mainhand"), starts,
+                    tag .. ": Auto Shot (in_melee=" .. tostring(melee)
+                    .. ") does not restart the mainhand")
+                eq(wire_starts(b, "offhand"), off_starts,
+                    tag .. ": Auto Shot (in_melee=" .. tostring(melee)
+                    .. ") does not restart the offhand")
+            end
+        else
+            local starts = wire_starts(b, "mainhand")
+            T.in_melee_range = false
+            cast(75)
+            if wire_starts(b, "mainhand") == starts then
+                eq(true, true, "titan-castreset: Auto Shot is suppressed - pin the new shape")
+            else
+                xfail("titan-castreset: Auto Shot 75 still resets (stock lib "
+                    .. "reset_swing_spells[75], :1196)")
+            end
+        end
+
+        -- Control 1: a real melee cast still resets the mainhand (next_melee_spells;
+        -- the lib may fire both that arm and the blanket arm for an instant melee
+        -- ability, so assert "moved", not an exact count).
+        local starts = wire_starts(b, "mainhand")
+        lib_event(b, "UNIT_SPELLCAST_START", "player", "cast-y", 2973)
+        T:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-y", 2973)
+        succeeded(b, 2973)
+        check(wire_starts(b, "mainhand") > starts,
+            tag .. ": Raptor Strike still resets the mainhand (control)")
+
+        -- Control 2: a neutral cast still takes the blanket reset path.
+        advance(b, 0.5)
+        starts = wire_starts(b, "mainhand")
+        lib_event(b, "UNIT_SPELLCAST_START", "player", "cast-z", 999999)
+        T:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "cast-z", 999999)
+        succeeded(b, 999999)
+        eq(wire_starts(b, "mainhand"), starts + 1,
+            tag .. ": a normal cast still resets the mainhand (blanket path alive)")
         eq(#F.cb_errors, 0, tag .. ": no callback-bus error was swallowed")
     end
 end
@@ -2294,7 +2448,7 @@ do
 end
 
 print("")
-print(string.format("%d checks, %d failures (%d expected-fail pending HU-29)",
+print(string.format("%d checks, %d failures (%d expected-fail: 2 HU-29, 1 Wrath Auto Shot residual)",
     checks, failures, expected_failures))
 if failures > 0 then
     os.exit(1)

@@ -212,10 +212,11 @@ local function resolve_named_spell(key, name, now)
 		ST.ROGUE.spell_retry_at = (type(now) == "number" and now or 0) + ROGUE_SPELL_RETRY
 		return nil
 	end
-	-- Name-vs-id rule (operator 2026-10-19): TBC resolves by NAME never bare id,
-	-- Era by id. A TBC entry is usable with the name alone (the id may be absent
-	-- on that client); an Era entry needs the numeric id.
-	if st.family == "TBC" then
+	-- Name-vs-id rule (operator 2026-10-19 for TBC, 2026-10-25 for Titanforge): TBC
+	-- Anniversary and Wrath/Titanforge resolve by NAME never bare id; Era by id. A
+	-- name-family entry is usable with the name alone (the id may be absent on that
+	-- client); an Era entry needs the numeric id.
+	if st.family == "TBC" or st.family == "WRATH" then
 		if type(spell_id) ~= "number" then
 			spell_id = nil
 		end
@@ -229,10 +230,12 @@ local function resolve_named_spell(key, name, now)
 	return entry
 end
 
--- Family-correct spell query (operator name-vs-id rule): TBC passes the resolved
--- English name, every other family passes the numeric id. Uses the shared compat
--- helper when present; the inline family branch is the fallback so the module
--- never depends on load order.
+-- Family-correct spell query (operator name-vs-id rule, each family gated on its
+-- own): TBC Anniversary and Wrath/Titanforge pass the resolved name first, with the
+-- id as the approved fallback (the id fallback is operator-approved and stays);
+-- every other family passes the numeric id. Uses the shared compat helper when
+-- present; the inline family branch is the fallback so the module never depends on
+-- load order.
 local function rogue_query(entry)
 	if type(entry) ~= "table" then
 		return nil
@@ -240,8 +243,8 @@ local function rogue_query(entry)
 	if type(api.get_spell_query) == "function" then
 		return api.get_spell_query(entry.name, entry.id)
 	end
-	if st.family == "TBC" then
-		return entry.name
+	if st.family == "TBC" or st.family == "WRATH" then
+		return entry.name or entry.id
 	end
 	return entry.id
 end
@@ -379,8 +382,9 @@ end
 
 -- One ability cooldown: remaining + full duration, nil when idle. Durations at/below the
 -- GCD (1.5 s) read as idle - the standard rule from the other class modules.
--- Name-vs-id rule (operator 2026-10-19): the query is the English name on TBC,
--- the numeric id elsewhere (callers pass rogue_query(entry)).
+-- Name-vs-id rule (operator 2026-10-19 for TBC, 2026-10-25 for Titanforge): the
+-- query is the English name on TBC Anniversary and Wrath/Titanforge, the numeric id
+-- elsewhere (callers pass rogue_query(entry)).
 local function spell_cooldown(self, query, now)
 	if type(query) ~= "number" and type(query) ~= "string" then
 		return nil

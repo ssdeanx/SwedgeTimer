@@ -156,14 +156,15 @@ local is_era_family = st.family == "ERA"
 local is_tbc_family = st.family == "TBC"
 local twist_seal_icon_id = is_era_family and ERA_TWIST_SEAL_ID or 31892
 
--- Name-vs-id rule (operator 2026-10-19; bench/lessons.md): TBC Anniversary
--- resolves by NAME, never bare id; every other family (Classic Era included)
--- resolves by id. Branch on st.family, never a version string. Names resolve
--- once per id through the client's own GetSpellInfo and are cached (a rank's
--- name never changes); cold spell data retries on the next call. Queries go
--- through compat's api.get_spell_query (inline family branch as fallback so
--- the module never depends on load order); a nil name falls back to the id so
--- a cold book degrades to today's behavior instead of a nil query.
+-- Name-vs-id rule (operator 2026-10-19 for TBC, 2026-10-25 for Titanforge; each
+-- family gated on its own): TBC Anniversary and Wrath/Titanforge prefer the NAME for
+-- state queries; Classic Era (SoD included) resolves by id and Forever keeps the id.
+-- The id FALLBACK is operator-approved ("i never banned fallback to ids") and stays:
+-- name first, then the id. Branch on st.family, never a version string. Names resolve
+-- once per id through the client's own GetSpellInfo and are cached (a rank's name
+-- never changes); cold spell data retries on the next call. Queries go through
+-- compat's api.get_spell_query (inline family branch as fallback so the module never
+-- depends on load order); a cold name degrades to the id query instead of nil.
 local tbc_spell_names = {}
 
 local function resolve_spell_name(spell_id)
@@ -182,7 +183,11 @@ local function resolve_spell_name(spell_id)
 end
 
 local function spell_query(spell_id)
-    if st.family ~= "TBC" then
+    if st.family ~= "TBC" and st.family ~= "WRATH" then
+        return spell_id
+    end
+    if type(spell_id) == "string" then
+        -- Already a name token (a caller that resolved its own localized name).
         return spell_id
     end
     local name = resolve_spell_name(spell_id)
@@ -193,8 +198,9 @@ local function spell_query(spell_id)
 end
 
 -- Known-spell probe through the family-correct query (the rogue
--- api.is_spell_known(rogue_query(...)) discipline): the English name on TBC,
--- the numeric id elsewhere; a cold TBC book probes the id fallback, never nil.
+-- api.is_spell_known(rogue_query(...)) discipline): the name first on TBC and
+-- Wrath/Titanforge with the id fallback (operator-approved), the numeric id
+-- elsewhere; a cold name-family book probes the id instead of nil.
 local function is_spell_known_query(spell_id)
     return api.is_spell_known(spell_query(spell_id)) == true
 end

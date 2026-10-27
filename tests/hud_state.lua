@@ -1150,8 +1150,13 @@ do
     -- shows, and the next tick asks again).
     class_db.hud_show_hor = true
     class_db.hud_show_how_wrath = true
+    -- RE-CUT (2026-10-25, operator ruling): the Wrath/Titanforge book probe carries
+    -- the localized NAME, so "unknown" must clear BOTH forms - the fixture's default
+    -- book knows every spell's id AND name.
     known_spells[67485] = nil
     known_spells[48806] = nil
+    known_spells["Hand of Reckoning"] = nil
+    known_spells["Hammer of Wrath"] = nil
     s = W.PALADIN.get_hud_state(W, wby_key.hor, clock)
     eq(s.hidden, true, "mirror Wrath: an unknown Hand of Reckoning hides (no signal)")
     eq(W.PALADIN.hud_band_spell_state.hor, "not_known",
@@ -1171,6 +1176,8 @@ do
     known_declines = false
     known_spells[67485] = true
     known_spells[48806] = true
+    known_spells["Hand of Reckoning"] = true
+    known_spells["Hammer of Wrath"] = true
 
     -- Known + enabled: the cooldown reads BY NAME (rank-agnostic) and the client's
     -- own duration drives the swipe.

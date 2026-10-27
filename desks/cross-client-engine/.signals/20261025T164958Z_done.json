@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-25T16:49:58Z",
+  "run_id": "cross-client-engine-2026-10-25",
+  "agent_name": "cross-client-engine",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "The repo's own history held the post-HU-23 library: git log -S found 29f1731, whose file is the full patch. Using it as a reference implementation rather than copying it preserved the 2026-10-25 upstream changes while restoring every guard the tests pin. Reading Blizzard's origin/forever SwingTimer end to end turned TASK B from guesswork into a per-arm comparison and exposed one real defect (a weapon swap rescaled the live cycle instead of restarting it, unlike both Blizzard's bar and the classic lib).",
+    "what_was_hard": "The patched library had a different internal architecture from the 2026-10-25 upstream base (minRangeCheck vs findMinRangeChecker), so the guards had to be re-expressed, not pasted; the min-range checker had to stay in the list even when no fallback exists or the hybrid profile loses its band. The mutation runner also needed CRLF-aware matching for the vendored file.",
+    "skill_gap": "No client is available offline: the Forever feed, Retail stand-in notice, and the HU-23 no-block confirmation remain in-client observations. Cross-branch API presence was answered from /home/sam/wow-ui-source with shell git (read-only)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Orchestrator: add `lua5.1 tests/engine_matrix_state.lua` to tests/run.sh and run the full suite. Operator: in-client checklist in bench/cross_client_engine_2026-10-25.md §4 (Forever engine line + bars + swap; Retail inert + one notice; Anniversary no ADDON_ACTION_BLOCKED)."
+  }
+}

@@ -103,6 +103,16 @@ Record: every diag line per client, verbatim (including the secrets line).
 - [ ] Druid: Maul queue tint; form colours in cat/bear/travel; energy tick column in cat form.
 - [ ] Hunter: auto-shot cycle syncs the ranged bar; queue Raptor Strike → yellow tint; the hunter
       cast bar shows the "Auto Shot" window label in the last ~0.5 s + latency.
+- [ ] Hunter shot guard (in-client): at range, auto-shooting must **not** move the mainhand/offhand
+      bars; a real melee swing must still start mainhand. `/st diag` prints the wire counters as
+      `swing_mainhand=<start>/<update>/<stop>` (same for offhand/ranged) plus `swing_last=<kind>:<hand>:<age>s`;
+      `swing_mainhand`'s START count must stay flat between real melee swings (an Auto Shot must not bump
+      it). On Wrath/Titanforge the stock library's own Auto Shot reset entry is the documented residual:
+      record whether the melee bars still restart there.
+- [ ] Ranged-distance bar (in-client): full at melee range, empty past **35 yd** for a hunter (**30 yd**
+      for other classes), with the exact-yards label plus **MELEE / IN RANGE / OUT**. It hides with no
+      target or an unreadable distance (never paints a false 0). Hunter default is on; other classes
+      opt in.
 
 ### Rogue (Era / TBC / Wrath / Forever — all in-client, UNCONFIRMED; nothing below is proven offline)
 - [ ] (in-client) Energy tick accuracy: the rogue energy-tick spark tracks the real 2 s tick
@@ -154,6 +164,32 @@ Everything above (including the R1 `/dump` and the P3/H2 lust checks), plus:
 - [ ] Practice: start a fight, make a twist, stop; enter combat mid-session → "paused", leave →
       resumes with timers shifted, no instant expiries; the panel reset button visibly
       re-anchors the panel; the timeline drags and persists, and its X button closes it.
+- [ ] Practice timeline (in-client): `/st practice` shows BOTH frames — the moving cue strip near the
+      top of the screen and the trainer panel. The strip is a full-width band (the track spans the
+      client; the 600 px track is only the fallback when the client reports no screen width) with a left
+      rail (icon + name per lane: SoB / Melee / CS / Consec / SoC / Judge on the paladin), a ruler whose
+      `m:ss` labels and full-height second gridlines scroll under the fixed playhead, the rotation band
+      (label + sequence icons) top-centre, and banded 30 px lane rows.
+      The paladin session opens **stopped**: the cues, ruler and playhead do not move until **Start
+      Fight**; **Stop Fight** freezes them in place; a second Start re-anchors and runs them again.
+      Cues cross the playhead while the fight runs. The strip's **X** hides it (the next fight or the
+      **Timeline** toggle brings it back); **Timeline** opens the old post-fight log, and closing it
+      brings the strip back while the session still runs.
+- [ ] Practice panel chrome (in-client): the panel reads like the reference — bind hint under the grid
+      ("Right-click icon to map to action bar"), a **(Reset)** link under it that restores the session
+      keybinds (labels go back to 1-9), a hairline between each block, **Bloodlust** and **Haste Pot** as
+      two equal halves, then the **Practice Rotation** picker (Raid Pull / 1-2 / 2-3 / 2-4), **Start
+      Fight** and **Timeline**. The fight timer, score, resource, DST toggle and the live hint sit below
+      that block. A class drill panel (hunter / shaman / rogue / druid / warrior) shows its own icon grid
+      with the same bind hint but no **(Reset)** link and no separators, and no DST/rotation rows.
+- [ ] Practice XP by timing (in-client): with practice open but no fight running, the XP bar does not
+      move; after **Start Fight**, a correct timed press (a twist on the swing, a class drill's graded
+      cast) adds XP immediately (badge/Progress page), and a missed or idle press adds nothing.
+      Closing the options window leaves practice running; only the practice panel's X stops it. On the
+      options page the entry reads **Open Practice Panel** and raises the trainer instead of stopping it.
+- [ ] Bar backdrop (in-client): a fresh profile **and** a profile migrated from 2.1.2 both render an
+      opaque bar backdrop (alpha 1.0). A hand-set custom colour and the **Classic Retro** preset keep
+      their saved alpha — the one-time migration raises only the untouched old default.
 - [ ] Practice drills, all six classes (start each three ways: `/st practice`, the class-panel
       Start/Stop toggle, the top-level Practice toggle — one session; starts only out of combat).
       Every drill grades S–F into the shared running score with persistent bests; unknown
@@ -310,6 +346,10 @@ Everything above (including the R1 `/dump` and the P3/H2 lust checks), plus:
       **guide**'s Sunder icon — its swipe follows the upkeep window the class feeds
       (`classes/warrior.lua:3252-3253,3737-3747`), and that window is fed only on TBC/Forever.
       On Era/SoD expect no Sunder row at all.
+- [ ] Spell state queries on **TBC Anniversary and WotLK Titanforge** (in-client check, **NOT proven
+      offline**): state queries use localized spell names first, with the id kept as the fallback.
+      Record `/st diag` (the `family=` and `ids` lines) and any guide or state behaviour that looks
+      id-only.
 
 ### Enemy swing (classic line only: Era / TBC / Wrath / Cata / Mists)
 - [ ] With `enemy_swing_enabled` on and a hostile target selected: the enemy swing bar

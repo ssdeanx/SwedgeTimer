@@ -1095,6 +1095,9 @@ do
     eq(F.counts.source_info, 1, "the source engine served the one hand")
     check(F.source_cb["SWING_TIMER_UPDATE"] ~= nil, "the timer callbacks register on the source engine")
     eq(#F.notices, 0, "a working source engine prints no engine notice")
+    T:print_runtime_diag()
+    contains(F.notices[#F.notices], "swing_engine=swing_source(PLAYER_SWING)",
+        "the diag runtime line names the Forever source engine")
     check(not F.events["COMBAT_LOG_EVENT_UNFILTERED"], "no classic combat log on Mainline-code clients")
     check(not F.events["PLAYER_TARGET_SET_ATTACKING"], "no PLAYER_TARGET_SET_ATTACKING on Mainline-code clients")
     check(not F.events["START_AUTOREPEAT_SPELL"], "no auto-repeat events on Mainline-code clients")
@@ -1123,6 +1126,9 @@ do
     fire_lrc_checkers(b)
     eq(T.interfaces_are_initialised, true, "init completes without any swing engine")
     eq(#F.notices, 1, "the Retail stand-in prints the engine notice once")
+    T:print_runtime_diag()
+    contains(F.notices[#F.notices], "swing_engine=inert(no-feed)",
+        "the diag runtime line names the inert stand-in on Retail")
 end
 
 --=========================================================================================
@@ -1802,6 +1808,8 @@ do
     contains(F.notices[#F.notices], "proj=5", "wire: the diag line carries the project id")
     contains(F.notices[#F.notices], "exp=1", "wire: the diag line carries the expansion level")
     contains(F.notices[#F.notices], "bcc=5", "wire: the diag line carries the BCC project constant")
+    contains(F.notices[#F.notices], "swing_engine=vendored-lib(lib)",
+        "wire: the diag line names the active engine and why it won")
 end
 
 --=========================================================================================

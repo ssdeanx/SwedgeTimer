@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-26T03:03:57Z",
+  "agent_name": "practice-audit",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Route-by-route trace of ui.start/scenario/drill-list/drill begin exposed two hidden-frame defects and a permanently missing Start Fight button; the /tmp copy mutation harness (13 mutations, all killed) kept every fix honest. The family-gated rotation slice (practice_rotation_for) was already published by all six classes but unused by the strip.",
+    "what_was_hard": "The strip is a cadence preview, not the graded press schedule: the paladin grades the swing twist and the drills grade their own windows, while the preview cycles a fixed 1.5s/3.5s cadence. 8 of 14 paladin APL rows also have no art source (per-family id maps, no single spell_id). Both are class-contract follow-ups, not shared-layer guesses.",
+    "skill_gap": "None in this lane; the pre-existing dead test block (section 7 after the PASS report) is a reminder to check suite report placement when auditing new pins."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

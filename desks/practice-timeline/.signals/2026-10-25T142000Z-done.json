@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-25T14:20:00Z",
+  "run_id": "practice-timeline-pin-recut-2026-10-25",
+  "agent_name": "practice-timeline",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Verified the call shape first (one api.get_time() read at practice_ui.lua:5784 feeding practice_begin_fight, playhead_refresh and playhead_draw), then grepped tests/ for the old literal - exactly one stale pin (tests/rogue_state.lua:2614). Re-cut it to assert the source read plus every consumer, so the pin now proves the single-clock contract rather than a call spelling.",
+    "what_was_hard": "Keeping the pin's check count predictable: replacing one check with four moves the suite from 1134 to 1137 checks, so the orchestrator's expected 1134/0 becomes 1137/0 - reported explicitly rather than hidden.",
+    "skill_gap": "None for this fix; three mutations on a /tmp/opencode copy (old literal, second clock read, stale source) all kill the new pin."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Re-run run.sh: the 1 failure (stale rogue_state pin) is re-cut; no production code changed. Expect 1137/0 for rogue_state and an unchanged practice_ui_state (2608/0)."
+  }
+}

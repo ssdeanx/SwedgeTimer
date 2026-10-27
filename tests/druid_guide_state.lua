@@ -456,21 +456,43 @@ local function build(opts)
         sb.frames = sb.frames + 1
         return make_frame(select(2, ...))
     end
+    -- Spell data is bidirectional on the NAME families, like a real client: a name the
+    -- id form answered is itself a query form. TBC Anniversary and Wrath/Titanforge
+    -- state queries take that localized NAME (operator ruling). Era (and the other id
+    -- families) keep the old shape: a name answers only through known_names, which is
+    -- how this fixture models the SoD rune's spell-data presence.
+    local name_query_family = opts.project == 5 or opts.project == 11 or opts.project == nil
+    local name_to_id = {}
     env.GetSpellInfo = function(spell)
         sb.get_spell_info_calls = sb.get_spell_info_calls + 1
         if sb.hide_spells then
             return nil
         end
+        if sb.missing_spells and sb.missing_spells[spell] then
+            return nil
+        end
+        if type(spell) == "string" and sb.missing_names and sb.missing_names[spell] then
+            return nil
+        end
         if type(spell) == "string" then
-            -- Knowledge-level: a name answers only for a known spell (the SoD
-            -- rune probe and the TF/Berserk known gates).
+            -- Knowledge-level: a name answers for a known spell (the SoD rune probe
+            -- and the TF/Berserk known gates), and the client also answers the name
+            -- its own id form handed out (spell data is bidirectional).
             if sb.known_names[spell] then
                 return spell, nil, "icon_" .. spell, 0, 0, 0, 0
+            end
+            local id = name_query_family and name_to_id[spell] or nil
+            if id ~= nil then
+                local info = SPELL_INFOS[id]
+                if info then
+                    return info.name, nil, info.icon, 0, 0, 0, id
+                end
             end
             return nil
         end
         local info = SPELL_INFOS[spell]
         if info then
+            name_to_id[info.name] = spell
             return info.name, nil, info.icon, 0, 0, 0, spell
         end
         return nil
@@ -481,10 +503,17 @@ local function build(opts)
         return sb.rage_cost
     end
     -- Knowledge-level id probe (compat resolves IsSpellKnown dynamically
-    -- through _G, like the warrior fixture): only known_ids answers true.
+    -- through _G, like the warrior fixture): only known_ids answers true. A NAME token
+    -- resolves through the client's own spell data first (the TBC/Wrath query form).
     env.IsSpellKnown = function(id)
         if sb.known_ids[id] then
             return true
+        end
+        if type(id) == "string" then
+            local _, _, _, _, _, _, resolved = env.GetSpellInfo(id)
+            if type(resolved) == "number" and sb.known_ids[resolved] then
+                return true
+            end
         end
         return nil
     end
@@ -793,7 +822,9 @@ eq(gathered.mangle_remaining, nil, "gather: no tracker answer yet -> nil Mangle"
 eq(gathered.rip_refresh, 4, "gather: the Rip refresh default")
 eq(gathered.rake_refresh, 4, "gather: the Rake refresh default")
 eq(sandbox.cost_queries, 1, "gather: the Maul cost is queried once")
-eq(sandbox.last_cost_id, 48480, "gather: the cost is read through the current rank")
+-- RE-CUT (2026-10-25, operator ruling): the Wrath/Titanforge cost read carries the
+-- localized NAME (rank-invariant), never the bare id the old fixture expected.
+eq(sandbox.last_cost_id, "Maul", "gather: the cost is read by NAME on Wrath")
 eq(sandbox.last_power_type, 1, "gather: the bear read passes the rage power type")
 
 -- Every slot's cooldown key resolves into the gathered inputs.
@@ -2456,6 +2487,13 @@ do
     ST.DRUID.on_bar_update(ST, "mainhand")
     -- Defaults on the WRATH sandbox (no player buffs, no known cooldowns, no
     -- runes): every new input is the unknown shape, and stale values clear.
+    -- RE-CUT (2026-10-25, operator ruling): the TF/Berserk read is gated on the client
+    -- answering the spell's NAME (the Wrath/Titanforge query form). Pin the UNKNOWN
+    -- shape by modelling a client whose spell data does not carry them - BOTH forms
+    -- removed, because the id walk would otherwise derive the name itself.
+    sandbox.missing_spells = { [5217] = true, [6793] = true, [9845] = true,
+        [9846] = true, [50213] = true, [417045] = true, [50334] = true, [417141] = true }
+    sandbox.missing_names = { ["Tiger's Fury"] = true, ["Berserk"] = true }
     local g = ST.DRUID.guide.gather(ST, {})
     eq(g.sr_remaining, nil, "gather: no Savage Roar tracked -> nil")
     eq(g.clearcast, nil, "gather: no Omen proc -> nil")
@@ -2475,6 +2513,8 @@ do
     eq(g2.tf_cd_remaining, nil, "a stale TF cooldown is cleared")
     eq(g2.berserk_ready, nil, "a stale Berserk ready is cleared")
     eq(g2.sod_runes, nil, "a stale rune flag is cleared off-token")
+    sandbox.missing_spells = nil
+    sandbox.missing_names = nil
 
     -- The player scan feeds the buff inputs (two ticks: scan, then evaluate).
     sandbox.player_auras = {
@@ -2514,13 +2554,19 @@ do
     eq(cleared.tf_active, nil, "a vanished Tiger's Fury clears the buff")
     sandbox.player_auras = {}
 
-    -- The cooldown inputs: knowledge-gated (GetSpellCooldown alone never proves
-    -- ready - the fixture answers 0,0 for everything unlisted).
+    -- The cooldown inputs: RE-CUT (2026-10-25, operator ruling) - the gate is the
+    -- client answering the spell's NAME (spell data), not known_names. Model no data
+    -- for the unknown leg; restore it for the ready leg.
     sandbox.known_names = {}
     sandbox.cooldowns_by_query = {}
+    sandbox.missing_spells = { [5217] = true, [6793] = true, [9845] = true,
+        [9846] = true, [50213] = true, [417045] = true, [50334] = true, [417141] = true }
+    sandbox.missing_names = { ["Tiger's Fury"] = true, ["Berserk"] = true }
     local unknown = ST.DRUID.guide.gather(ST, {})
-    eq(unknown.tf_ready, nil, "a 0,0 cooldown without spell knowledge stays nil")
+    eq(unknown.tf_ready, nil, "no TF spell data reads nil (never a guess)")
     eq(unknown.berserk_ready, nil, "an unproven Berserk never reads ready")
+    sandbox.missing_spells = nil
+    sandbox.missing_names = nil
     sandbox.known_names = { ["Tiger's Fury"] = true, ["Berserk"] = true }
     local ready = ST.DRUID.guide.gather(ST, {})
     eq(ready.tf_ready, true, "a known TF with no cooldown reads ready")

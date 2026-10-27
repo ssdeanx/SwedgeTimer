@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-25T13:55:00Z",
+  "run_id": "practice-timeline-2026-10-25",
+  "agent_name": "practice-timeline",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 3
+  },
+  "patterns": {
+    "what_worked": "Pure-first split: the playhead geometry and the cadence schedule went into practice.lua (WoW-free), so 49 pins landed in practice_state and the new self-contained practice_timeline suite before any frame existed. The strip then reused those helpers verbatim, and 19/19 mutations died on /tmp/opencode copies.",
+    "what_was_hard": "The archive's log looked like a timeline but is a post-fight review (icons at past fight time, scrollbar pinned to the newest end) - the operator's 'doesn't work' is that there was never a cue. And class drills had NO timeline at all: no frame shown, no toggle built, so the fix had to be a new default view, not a tweak of the existing renderer.",
+    "skill_gap": "The class lanes still publish no 'upcoming' provider, so the operator's hunter sees the neutral rotation-cadence preview (labelled as such) rather than the real forced-move windows. That wiring needs classes/hunter.lua, outside this lane's scope."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Operator in-client read of the strip (bench §D); then dispatch the hunter 'upcoming' provider follow-up against the contract in bench §B; orchestrator adds the run.sh line for tests/practice_timeline_state.lua."
+  }
+}

@@ -3081,11 +3081,16 @@ do
     eq(ST.SHAMAN.guide.gather(ST, gathered_target).weave_sub5_ready, nil,
         "M1 gather: 0 stacks never feed the fit on Wrath")
     ST.weave_mw_stacks = 3
-    -- Known gate: an unknown 49238 feeds nil (never prompts on a guess),
+    -- Known gate: RE-CUT (2026-10-25, operator ruling - Wrath state queries carry the
+    -- localized NAME), so "unknown LB" means the client knows NO Lightning Bolt rank;
+    -- the cited 49238 id is not the query form. Clear both rank ids the name leg reads,
     -- even with the SoD catalogue rank present.
     sandbox.known[49238] = nil
+    sandbox.known[25449] = nil
+    sandbox.known[25448] = nil
     eq(ST.SHAMAN.guide.gather(ST, gathered_target).weave_sub5_ready, nil,
         "M1 gather: an unknown Wrath LB never feeds the fit")
+    sandbox.known[25449] = true
     sandbox.known[49238] = true
     -- The Wrath branch needs no MW latch (Wrath has the talent, not the SoD
     -- rune): unobserved still feeds.

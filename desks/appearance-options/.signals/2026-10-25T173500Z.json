@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-25T17:35:00Z",
+  "run_id": "appearance-options-2026-10-25-rangeddesc",
+  "agent_name": "appearance-options",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Applied the bars lane's verbatim desc, then verified every factual claim against the landed weave_range.lua before shipping it - the exact mistake being corrected was copy that outlived its module. Bound the band numbers in the copy to the module constants (NEAR/FAR/HUNTER_FAR = 5/30/35) so a retune or a copy edit reds the same pin.",
+    "what_was_hard": "The follow-up asked the pin to reject the substring 'band' while the mandated copy itself says '35 yd band'/'30 yd band'. Applied the copy verbatim (it is the owning lane's sanctioned text) and pinned the actual defect wording ('banded' / 'range checks' / the library name), stating the conflict on the bench rather than silently dropping either instruction.",
+    "skill_gap": "None. Reminder for copy fixes: a desc is a claim about code - cite the module lines before writing it."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Operator: if the word 'band' must disappear from the desc entirely, the copy has to be reissued by bars-range-hunter. Otherwise nothing is blocked; run.sh registration for the appearance suite is still orchestrator-owned."
+  }
+}

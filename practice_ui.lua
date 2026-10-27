@@ -2,10 +2,13 @@
 -- Twist Practice: the playable UI for the pure st.practice simulation engine (port phase 2).
 --
 -- Ported from the archived build's practice UI (docs/swedge/SwedgeTimer_Forever/practice.lua):
---   * control panel        558-914    (panel rows: title, speed/GCD + rotation lines,
---                                      two icon rows, hint, fight timer, fight button,
---                                      Bloodlust/Haste-pot/DST buttons, rotation selector,
---                                      timeline toggle - archive 558-914)
+--   * control panel        558-914    (panel rows in the reference screenshot's order:
+--                                      title, speed/GCD + rotation lines, two icon rows,
+--                                      the bind hint and the (Reset) link, the
+--                                      Bloodlust/Haste-pot pair, the rotation selector,
+--                                      Start Fight and the Timeline toggle; this port's
+--                                      own readouts - fight timer, score, resource, DST,
+--                                      live hint - follow below that block)
 --   * haste buttons        761-796    (Bloodlust/Haste-pot countdown buttons, minus the
 --                                      archived sound hook; DST rides a session-local
 --                                      toggle since its db option is out of scope)
@@ -17,7 +20,7 @@
 --                                      this port mirrors the simulation onto the addon's own
 --                                      bar state instead - see sync_to_addon)
 --   * start_fight          2807-2889  (reduced to the engine's fight lifecycle + the
---                                      timeline/band reset and the always-show timeline)
+--                                      timeline/band reset and the cue strip's re-anchor)
 --   * icon state updates   3535-3610  (cooldown swipes kept on the addon's set-once
 --                                      pattern per nextaction_ui.lua, plus the archived
 --                                      buff/active-seal border highlights)
@@ -26,7 +29,8 @@
 --   * rotation tracking    1554-1579  (band logging into the ui-owned band array; the
 --                                      engine helper track_rotation_band is pure)
 --   * timeline data        1881-1898  (event/band collection on the ui-owned arrays;
---                                      rendering below is a trimmed port of 1900-2510)
+--                                      rendering below is a trimmed port of 1900-2510;
+--                                      the LOG is now the opt-in Timeline view)
 --   * keybind capture      261-332 + 4142-4196 (fullscreen capture overlay; bindings live
 --                                      in the session-local ui.keybinds table and are
 --                                      applied with SetOverrideBindingClick)
@@ -71,9 +75,13 @@
 --     the GCD is free. Both ride the Practice page toggles (nil = off).
 --   * practice_weapon_speed is read at session/fight start; changing it mid-session
 --     takes effect at the next start_fight.
---   * The timeline has no db options here: it always shows on fight start (the archive's
---     "always" default), pixels-per-second and width are constants below, and the
---     position is session-local.
+--   * The session's timeline is the MOVING cue strip: a fixed playhead a quarter of
+--     the way in, with the upcoming actions travelling right-to-left toward it (the
+--     operator's practice request). It has no db options here - the horizon, the
+--     playhead fraction and the geometry are constants (the maths live in the pure
+--     engine as st.practice.TL_* / timeline_*), and the position is session-local.
+--     The archived post-fight LOG stays available behind the panel's Timeline button
+--     (default off), because what had already happened is a review, not a cue.
 --   * The rotation display has no enable option: it shows during the session whenever
 --     the rotation resolves. Its position is session-local (default CENTER + 0, +100).
 --   * The DST proc rides the session-local ui.dst_enabled toggle, seeded from
@@ -142,6 +150,11 @@ local RESULT_COLOR_MISS = { 1, 0.2, 0.2, 1 }
 local HINT_ACTIVE = "Click an icon to cast. /st practice or the X button stops."
 local HINT_STOPPED = "Press Start Fight, or cast seals with the icon grid."
 local HINT_PAUSED = "Paused: in combat. Practice resumes when combat ends."
+-- The reference panel's static rows (operator's screenshot): the bind instruction
+-- under the icon grid and the (Reset) link under it. They are chrome, not status -
+-- the dynamic hint (HINT_STOPPED and friends) keeps its own row at the panel's foot.
+local HINT_BIND = "Right-click icon to map to action bar"
+local HINT_RESET = "(Reset)"
 -- Drill hints are the ACTIVE class's own wording: each class's practice_panel
 -- carries hint_active / hint_stopped (class-isolation 2026-10-21), so the shared
 -- module keeps no per-class strings.
@@ -196,6 +209,10 @@ local ROT_DISPLAY_DEFAULT_X = 0
 local ROT_DISPLAY_DEFAULT_Y = 100
 
 -- Timeline (archive 162-166 + 2369+, trimmed; no db options in this lane).
+-- `TIMELINE_WIDTH` is now the FALLBACK track width: both timeline frames size
+-- themselves from the screen (the operator's reference is a full-width band across
+-- the top), and a sandbox/client that reports no UIParent width falls back to this
+-- constant so the geometry stays deterministic offline.
 local TIMELINE_WIDTH = 600
 local TIMELINE_PPS = 80
 local TIMELINE_LANE_HEIGHT = 24
@@ -203,10 +220,70 @@ local TIMELINE_ICON_SIZE = 20
 local TIMELINE_LABEL_WIDTH = 60
 local TIMELINE_RULER_HEIGHT = 46
 local TIMELINE_DEFAULT_X = 0 -- session-local default centre offset (archive layout)
-local TIMELINE_DEFAULT_Y = -200
+local TIMELINE_DEFAULT_Y = 300 -- near the top of the screen (operator's reference layout)
+local TIMELINE_SCREEN_MARGIN = 10 -- left/right gap of a full-width frame
+local TIMELINE_MAX_TRACK = 2000 -- never wider than a 2K client needs
 local ROTATION_BAND_ICON_SIZE = 14
 local ROTATION_BAND_ICON_SPACING = 2
 local ROTATION_BAND_MAX_ICONS = 5
+
+-- Moving cue strip geometry (see "Moving cue strip" below). The strip wears the
+-- archive timeline's clothes (operator 2026-10-26: "Practice should look like this"):
+-- a left lane-label column, a ruler with second ticks, alternating lane rows and a
+-- horizontal scrollbar, with the same fixed playhead a quarter of the way in. The
+-- playhead fraction and horizon live in the pure engine
+-- (st.practice.TL_PLAYHEAD_FRACTION / TL_HORIZON_SECONDS) so the suites can pin the
+-- maths without frames.
+--
+-- Scale: the reference screenshot is a wide band (roughly 13 s visible, the playhead
+-- a quarter in, chunky lane rows with room above/below the icons). The track is the
+-- screen width, so the row/ruler/icon sizes below are absolute and the visible
+-- horizon (`TL_HORIZON_SECONDS`) is what fixes the pixels-per-second at any width.
+local PLAYHEAD_LABEL_WIDTH = 110 -- left lane-label column (one icon + name per lane)
+local PLAYHEAD_RULER_HEIGHT = 56 -- top ruler band (rotation band + second ticks)
+local PLAYHEAD_ICON_SIZE = 24
+local PLAYHEAD_ROW_HEIGHT = 30 -- one lane row (the reference's chunky rows)
+local PLAYHEAD_POOL = 20 -- cues drawn per frame (the soonest ones; a denser provider caps here)
+local PLAYHEAD_RULER_POOL = 26 -- second ticks drawn per frame (a 13 s window needs ~14)
+local PLAYHEAD_SCHEDULE_INTERVAL = 0.1 -- schedule rebuild throttle (the tick drives it)
+
+--=========================================================================================
+-- Screen-sized timeline geometry
+--=========================================================================================
+-- The screen width the client reports, or 0 when it reports none (the offline suites
+-- build UIParent without a size, and a client can answer before UIParent is laid out).
+local function screen_width()
+    local parent = UIParent
+    if not parent or type(parent.GetWidth) ~= "function" then
+        return 0
+    end
+    local ok, width = pcall(parent.GetWidth, parent)
+    if not ok or type(width) ~= "number" or width <= 0 then
+        return 0
+    end
+    return width
+end
+
+-- The track width of one timeline frame (the strip and the log share the maths):
+-- the screen width minus the frame margins and `rail` (the frame's own label
+-- column), clamped to the fallback geometry and a sane maximum. The screen width
+-- is an argument, so the suites pin the scale without frames.
+function ui.timeline_track_width(rail, minimum, width)
+    minimum = tonumber(minimum) or TIMELINE_WIDTH
+    rail = tonumber(rail) or 0
+    width = tonumber(width) or screen_width()
+    if width <= 0 then
+        return minimum
+    end
+    local track = width - 2 * TIMELINE_SCREEN_MARGIN - rail - 12
+    if track < minimum then
+        return minimum
+    end
+    if track > TIMELINE_MAX_TRACK then
+        return TIMELINE_MAX_TRACK
+    end
+    return math.floor(track + 0.5)
+end
 
 -- Timeline lane -> spell id for lane icons and split-seal textures.
 local LANE_SPELL_IDS = {
@@ -870,6 +947,12 @@ function ui.begin_drill_session(self, now)
     ui.update_keybind_labels(self)
     ui.rebind_keys(self)
     ui.apply_settings(self)
+    -- The moving cue strip: the drill's own timeline. Before this the class drills
+    -- had NO timeline at all (the log's toggle button was only built for the sim
+    -- session), so nothing told the player what to press next.
+    -- A drill session that opened its own fight runs the strip from here; one that
+    -- opens stopped waits for Start Fight (the operator's start/stop rule).
+    ui.playhead_session_open(self, now, ui.practice_drill_active() == true)
     ui.panel:Show()
     ui.driver:Show()
     ui.sync_to_addon(self)
@@ -1706,6 +1789,15 @@ local function create_button(parent, label)
     return btn
 end
 
+-- A hairline section divider (the reference panel divides its blocks with one).
+local function create_separator(parent, y)
+    local line = parent:CreateTexture(nil, "ARTWORK")
+    line:SetColorTexture(0.45, 0.45, 0.45, 0.7)
+    line:SetSize(PANEL_WIDTH - 18, 1)
+    line:SetPoint("TOP", parent, "TOP", 0, y)
+    return line
+end
+
 -- One clickable ability icon (archive create_ability_row body 634-691, minus the
 -- action-bar linking: right-click assigns a session-local key through the capture
 -- overlay, left-click casts): icon texture, border, ability-cooldown swipe,
@@ -1835,6 +1927,7 @@ function ui.init(self)
     ui.build_key_buttons(self)
     ui.build_rotation_display(self)
     ui.build_timeline(self)
+    ui.build_playhead(self)
     ui.build_proc_icons(self)
     ui.apply_settings(self)
 end
@@ -2036,65 +2129,62 @@ function ui.build_panel(self)
     end
     y = y - 2
 
-    -- Hint line: doubles as the real-combat pause notice.
-    panel.hint_text = panel:CreateFontString(nil, "OVERLAY")
-    panel.hint_text:SetPoint("TOP", panel, "TOP", 0, y)
-    panel.hint_text:SetWidth(PANEL_WIDTH - 16)
-    panel.hint_text:SetWordWrap(true)
-    panel.hint_text:SetJustifyH("CENTER")
-    st.utils.apply_font(panel.hint_text, STANDARD_TEXT_FONT, 9, "")
-    panel.hint_text:SetTextColor(0.5, 0.5, 0.5, 0.8)
-    panel.hint_text:SetText(HINT_STOPPED)
-    y = y - 26
+    -- Reference chrome (operator's screenshot 2026-10-26): directly under the grid
+    -- sit the static bind hint and the (Reset) link, then the haste pair, the
+    -- rotation picker and the fight/timeline buttons, each block divided by a
+    -- hairline. The port's own readouts (fight timer, score, resource, DST and the
+    -- live status hint) follow BELOW that block, so the controls read exactly like
+    -- the reference while nothing this port already shipped was taken away.
+    panel.hint_bind = panel:CreateFontString(nil, "OVERLAY")
+    panel.hint_bind:SetPoint("TOP", panel, "TOP", 0, y)
+    st.utils.apply_font(panel.hint_bind, STANDARD_TEXT_FONT, 9, "")
+    panel.hint_bind:SetTextColor(0.55, 0.55, 0.55, 1)
+    panel.hint_bind:SetText(HINT_BIND)
+    y = y - 13
 
-    -- Start/Stop Fight button.
-    panel.fight_btn = create_button(panel, "Start Fight")
-    panel.fight_btn:SetPoint("TOP", panel, "TOP", 0, y)
-    panel.fight_btn:SetScript("OnClick", function()
-        ui.toggle_fight(ST)
-    end)
-    y = y - 22
+    -- (Reset): the reference link that restores the session keybinds through
+    -- ui.reset_keybinds. Built only on the sim panel - the grid those binds belong
+    -- to exists only there, and on a class drill the paladin defaults would be wrong.
+    local sim_controls = practice_class_runs_sim_session() and not class_drill
+    if sim_controls then
+        local reset_btn = CreateFrame("Button", nil, panel)
+        reset_btn:SetSize(PANEL_WIDTH - 20, 11)
+        reset_btn:SetPoint("TOP", panel, "TOP", 0, y)
+        reset_btn.label = reset_btn:CreateFontString(nil, "OVERLAY")
+        reset_btn.label:SetPoint("CENTER", 0, 0)
+        st.utils.apply_font(reset_btn.label, STANDARD_TEXT_FONT, 9, "")
+        reset_btn.label:SetTextColor(0.95, 0.45, 0.35, 1)
+        reset_btn.label:SetText(HINT_RESET)
+        reset_btn:SetScript("OnClick", function()
+            ui.reset_keybinds(ST)
+        end)
+        panel.reset_btn = reset_btn
+        y = y - 13
+    end
 
-    -- Fight timer text (archive 875-879; empty outside fights).
-    panel.fight_timer_text = panel:CreateFontString(nil, "OVERLAY")
-    panel.fight_timer_text:SetPoint("TOP", panel, "TOP", 0, y)
-    panel.fight_timer_text:SetFontObject(GameFontHighlightSmall)
-    panel.fight_timer_text:SetText("")
-    y = y - 14
-
-    -- Session score line (scoring section below; empty until the first attempt).
-    panel.score_text = panel:CreateFontString(nil, "OVERLAY")
-    panel.score_text:SetPoint("TOP", panel, "TOP", 0, y)
-    panel.score_text:SetFontObject(GameFontHighlightSmall)
-    panel.score_text:SetText("")
-    y = y - 14
-
-    -- Session resource line (sim-resources lane): empty unless a drill owns a
-    -- resource pool (set explicitly through the setters below; no pool runs
-    -- the panel exactly as before - no default-visible change).
-    panel.resource_text = panel:CreateFontString(nil, "OVERLAY")
-    panel.resource_text:SetPoint("TOP", panel, "TOP", 0, y)
-    panel.resource_text:SetFontObject(GameFontHighlightSmall)
-    panel.resource_text:SetText("")
-    panel.resource_text:Hide()
-    y = y - 14
+    panel.separators = {}
+    local function add_separator(at_y)
+        panel.separators[#panel.separators + 1] = create_separator(panel, at_y)
+    end
 
     -- Paladin sim widgets below (haste, DST, rotation presets, timeline): the hunter
     -- drill panel skips them - same panel frame and session flow, drill contents.
-    -- The shaman drill skips them too (no twist sim, no locked rotations, the drill
-    -- swing is the only clock and the score line is the only readout).
-    -- The rogue drill skips them too (no twist sim, no locked rotations, the drill
-    -- tick and swing are the only clocks and the score line is the only readout).
-    -- The druid drill skips them too (no twist sim, no locked rotations, the drill
-    -- energy pool is the only clock and the score line is the only readout).
+    -- The shaman / rogue / druid / warrior drill panels skip them too (no twist sim,
+    -- no locked rotations, the drill's own clock and score line are the readout).
     -- A class that runs no sim session at all (its own drills are its session)
     -- skips them too: the twist sim's widgets are not its practice.
-    if practice_class_runs_sim_session() and not ui.practice_class_drill() then
-        -- Haste buttons (archive 761-796): Bloodlust left, Haste Pot right, each with a
-        -- countdown label. Bloodlust is silent during a fight (auto-controlled there).
+    if sim_controls then
+        add_separator(y - 4)
+        y = y - 10
+
+        -- Haste buttons (archive 761-796): Bloodlust left, Haste Pot right, equal
+        -- halves of the panel with their countdowns, like the reference pair.
+        local haste_w = math.floor((PANEL_WIDTH - 12 - 8) / 2)
+        panel.haste_width = haste_w
         panel.bl_btn = create_button(panel, "Bloodlust")
+        panel.bl_btn:SetSize(haste_w, 22)
         panel.bl_btn:ClearAllPoints()
-        panel.bl_btn:SetPoint("TOPRIGHT", panel, "TOP", -2, y)
+        panel.bl_btn:SetPoint("TOPLEFT", panel, "TOPLEFT", 6, y)
         panel.bl_btn:SetScript("OnClick", function()
             ui.click_haste(ST, "bl")
         end)
@@ -2104,8 +2194,9 @@ function ui.build_panel(self)
         panel.bl_btn.countdown:SetText("")
 
         panel.hp_btn = create_button(panel, "Haste Pot")
+        panel.hp_btn:SetSize(haste_w, 22)
         panel.hp_btn:ClearAllPoints()
-        panel.hp_btn:SetPoint("TOPLEFT", panel, "TOP", 2, y)
+        panel.hp_btn:SetPoint("TOPLEFT", panel, "TOPLEFT", 6 + haste_w + 8, y)
         panel.hp_btn:SetScript("OnClick", function()
             ui.click_haste(ST, "hpot")
         end)
@@ -2113,16 +2204,10 @@ function ui.build_panel(self)
         panel.hp_btn.countdown:SetPoint("RIGHT", panel.hp_btn, "RIGHT", -4, 0)
         panel.hp_btn.countdown:SetFontObject(GameFontHighlightSmall)
         panel.hp_btn.countdown:SetText("")
-        y = y - 28
+        y = y - 26
 
-        -- DST proc toggle (session-local; the archived practice_dst_enabled option is out
-        -- of scope, so the toggle lives on the panel instead of in the options).
-        panel.dst_btn = create_button(panel, "DST: Off")
-        panel.dst_btn:SetPoint("TOP", panel, "TOP", 0, y)
-        panel.dst_btn:SetScript("OnClick", function()
-            ui.click_haste(ST, "dst")
-        end)
-        y = y - 28
+        add_separator(y - 4)
+        y = y - 10
 
         -- Rotation selector (archive 807-862): Raid Pull (auto) plus the three locked
         -- presets. Clicking the active preset reverts to auto (engine toggle semantics
@@ -2172,7 +2257,22 @@ function ui.build_panel(self)
         end
         y = y - (#ROT_GRID * (rot_btn_h + rot_btn_spacing) + 4)
 
-        -- Timeline toggle button (archive 895-899).
+        add_separator(y - 4)
+        y = y - 10
+    end
+
+    -- Start/Stop Fight button.
+    panel.fight_btn = create_button(panel, "Start Fight")
+    panel.fight_btn:SetPoint("TOP", panel, "TOP", 0, y)
+    panel.fight_btn:SetScript("OnClick", function()
+        ui.toggle_fight(ST)
+    end)
+    y = y - 26
+
+    -- Timeline toggle button (archive 895-899 + the reference's "Timeline"): the
+    -- fight LOG. The moving cue strip is the session's default view; the log is
+    -- opt-in, and opening it swaps the two frames in the same spot.
+    if sim_controls then
         panel.timeline_btn = create_button(panel, "Timeline")
         panel.timeline_btn:ClearAllPoints()
         panel.timeline_btn:SetPoint("TOP", panel, "TOP", 0, y)
@@ -2181,6 +2281,56 @@ function ui.build_panel(self)
         end)
         y = y - 28
     end
+
+    -- Fight timer text (archive 875-879; empty outside fights).
+    panel.fight_timer_text = panel:CreateFontString(nil, "OVERLAY")
+    panel.fight_timer_text:SetPoint("TOP", panel, "TOP", 0, y)
+    panel.fight_timer_text:SetFontObject(GameFontHighlightSmall)
+    panel.fight_timer_text:SetText("")
+    y = y - 14
+
+    -- Session score line (scoring section below; empty until the first attempt).
+    panel.score_text = panel:CreateFontString(nil, "OVERLAY")
+    panel.score_text:SetPoint("TOP", panel, "TOP", 0, y)
+    panel.score_text:SetFontObject(GameFontHighlightSmall)
+    panel.score_text:SetText("")
+    y = y - 14
+
+    -- Session resource line (sim-resources lane): empty unless a drill owns a
+    -- resource pool (set explicitly through the setters below; no pool runs
+    -- the panel exactly as before - no default-visible change).
+    panel.resource_text = panel:CreateFontString(nil, "OVERLAY")
+    panel.resource_text:SetPoint("TOP", panel, "TOP", 0, y)
+    panel.resource_text:SetFontObject(GameFontHighlightSmall)
+    panel.resource_text:SetText("")
+    panel.resource_text:Hide()
+    y = y - 14
+
+    if sim_controls then
+        -- DST proc toggle (session-local; the archived practice_dst_enabled option is
+        -- out of scope, so the toggle lives on the panel instead of in the options).
+        -- Kept below the reference block: the reference carries no DST control, and
+        -- the sim needs the toggle reachable.
+        panel.dst_btn = create_button(panel, "DST: Off")
+        panel.dst_btn:SetPoint("TOP", panel, "TOP", 0, y)
+        panel.dst_btn:SetScript("OnClick", function()
+            ui.click_haste(ST, "dst")
+        end)
+        y = y - 28
+    end
+
+    -- Hint line: doubles as the real-combat pause notice. It sits at the panel's
+    -- foot (the reference has no status row of its own) so the controls above it
+    -- keep the reference's rows.
+    panel.hint_text = panel:CreateFontString(nil, "OVERLAY")
+    panel.hint_text:SetPoint("TOP", panel, "TOP", 0, y)
+    panel.hint_text:SetWidth(PANEL_WIDTH - 16)
+    panel.hint_text:SetWordWrap(true)
+    panel.hint_text:SetJustifyH("CENTER")
+    st.utils.apply_font(panel.hint_text, STANDARD_TEXT_FONT, 9, "")
+    panel.hint_text:SetTextColor(0.5, 0.5, 0.5, 0.8)
+    panel.hint_text:SetText(HINT_STOPPED)
+    y = y - 26
 
     panel:SetHeight(math.abs(y) + 8)
     -- The panel's shipped height: the practice row (the scenario / drill strip)
@@ -2888,6 +3038,43 @@ end
 -- Fight timeline (archive 1900-2510, trimmed)
 --=========================================================================================
 
+-- The ACTIVE class's timeline lanes. The class publishes them when it has a route
+-- worth logging (`practice_panel.timeline_lanes`); a class that runs the shipped
+-- twist sim uses the engine's own lane table (the sim's lanes ARE its events), and
+-- a class drill with neither gets no log at all (never another class's lanes).
+function ui.timeline_lanes()
+    local panel = ui.practice_panel()
+    if panel and type(panel.timeline_lanes) == "table" and #panel.timeline_lanes > 0 then
+        return panel.timeline_lanes
+    end
+    if ui.practice_class_drill() then
+        return {}
+    end
+    local pr = st.practice
+    return (pr and pr.TIMELINE_LANES) or {}
+end
+
+-- lane key -> row index, derived from the resolved lane list (one source for the
+-- log renderer and the cue strip). Cached per ACTIVE class: a class switch (the
+-- addon's class mirror) re-derives it, so an event can never be dropped by a stale
+-- index from the class that was active at init.
+function ui.timeline_lane_index()
+    if ui.timeline_lane_index_cache and ui.timeline_lane_index_class == ST.active_class then
+        return ui.timeline_lane_index_cache
+    end
+    local index = {}
+    local lanes = ui.timeline_lanes()
+    for i = 1, #lanes do
+        local lane = lanes[i]
+        if type(lane) == "table" and type(lane.key) == "string" then
+            index[lane.key] = i
+        end
+    end
+    ui.timeline_lane_index_cache = index
+    ui.timeline_lane_index_class = ST.active_class
+    return index
+end
+
 -- Timeline icon pool entry (archive get_timeline_icon 1901-1991, minus the
 -- twist-overlay badge sub-frame: twists reuse the error-border-free split look).
 local function get_timeline_icon(parent)
@@ -3112,7 +3299,7 @@ local function render_timeline_bands(scroll_child, total_width)
     end
     local content_time = math.max(pr.timeline_max_time(
         ui.timeline_events, ui.timeline_event_count) + 2, 10)
-    local num_lanes = #(pr.TIMELINE_LANES or {})
+    local num_lanes = #ui.timeline_lanes()
     local lane_area_height = num_lanes * TIMELINE_LANE_HEIGHT
     local na = st.nextaction
 
@@ -3223,10 +3410,11 @@ function ui.render_timeline()
 
     local analysis = pr.analyze(ui.timeline_events, ui.timeline_event_count,
         ui.timeline_bands, ui.timeline_band_count)
-    local num_lanes = #(pr.TIMELINE_LANES or {})
+    local lane_index = ui.timeline_lane_index()
+    local num_lanes = #ui.timeline_lanes()
     for i = 1, (ui.timeline_event_count or 0) do
         local event = ui.timeline_events[i]
-        local lane_idx = event and pr.TIMELINE_LANE_INDEX[event.lane]
+        local lane_idx = event and lane_index[event.lane]
         if lane_idx then
             local x = event.time * TIMELINE_PPS
             local y = -(TIMELINE_RULER_HEIGHT + (lane_idx - 1) * TIMELINE_LANE_HEIGHT
@@ -3285,7 +3473,7 @@ function ui.render_timeline()
 
     if frame.scrollbar and frame.scroll_frame then
         local visible_width = frame.scroll_frame.GetWidth
-            and frame.scroll_frame:GetWidth() or TIMELINE_WIDTH
+            and frame.scroll_frame:GetWidth() or ui.timeline_width or TIMELINE_WIDTH
         local max_scroll = math.max(total_width - visible_width, 0)
         frame.scrollbar:SetMinMaxValues(0, max_scroll)
         if ui.timeline_auto_scroll then
@@ -3298,23 +3486,32 @@ function ui.render_timeline()
 end
 
 -- Builds the timeline frame hierarchy (archive create_timeline 2369-2510, trimmed).
+-- The lane list is the ACTIVE class's (ui.timeline_lanes). A class with no log lanes
+-- gets no log frame at all: the moving cue strip is its timeline.
 function ui.build_timeline(self)
-    if not ui.panel then
+    if not ui.panel or ui.timeline_frame then
         return
     end
     local pr = st.practice
     if not pr then
         return
     end
-    local lanes = pr.TIMELINE_LANES or {}
+    local lanes = ui.timeline_lanes()
     local num_lanes = #lanes
+    if num_lanes == 0 then
+        return
+    end
     local content_height = TIMELINE_RULER_HEIGHT + num_lanes * TIMELINE_LANE_HEIGHT
     local frame_height = content_height + 30
+    -- The log is a full-width band too (the reference's window): the viewport is the
+    -- screen, the content inside it still scrolls at the archive's 80 px/s.
+    local track_width = ui.timeline_track_width(TIMELINE_LABEL_WIDTH, TIMELINE_WIDTH)
+    ui.timeline_width = track_width
 
     local frame = CreateFrame("Frame", addon_name .. "PracticeTimeline", UIParent,
         "BackdropTemplate")
     ui.timeline_frame = frame
-    frame:SetSize(TIMELINE_WIDTH + TIMELINE_LABEL_WIDTH + 16, frame_height)
+    frame:SetSize(track_width + TIMELINE_LABEL_WIDTH + 16, frame_height)
     ui.timeline_x = ui.timeline_x or TIMELINE_DEFAULT_X
     ui.timeline_y = ui.timeline_y or TIMELINE_DEFAULT_Y
     frame:SetPoint("CENTER", UIParent, "CENTER", ui.timeline_x, ui.timeline_y)
@@ -3364,20 +3561,26 @@ function ui.build_timeline(self)
         lane_icon:SetSize(16, 16)
         lane_icon:SetPoint("LEFT", label_area, "TOPLEFT", 2, y - TIMELINE_LANE_HEIGHT / 2)
         lane_icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-        local spell_id = LANE_SPELL_IDS[lane.key]
-        if spell_id then
-            local tex = spell_texture(spell_id)
-            if tex then
-                lane_icon:SetTexture(tex)
-            end
-        elseif lane.key == "melee" then
-            lane_icon:SetTexture(pr.MELEE_TEXTURE)
+        -- The lane's OWN art first (a class that publishes its lanes names its own
+        -- icons); the sim engine's id table is the fallback for a lane without one.
+        local tex = (type(lane.texture) == "string" and lane.texture ~= "") and lane.texture or nil
+        if not tex and lane.spell_id then
+            tex = spell_texture(lane.spell_id)
+        end
+        if not tex and LANE_SPELL_IDS[lane.key] then
+            tex = spell_texture(LANE_SPELL_IDS[lane.key])
+        end
+        if not tex and lane.key == "melee" then
+            tex = pr.MELEE_TEXTURE
+        end
+        if tex then
+            lane_icon:SetTexture(tex)
         end
         local lane_label = label_area:CreateFontString(nil, "OVERLAY")
         st.utils.apply_font(lane_label, STANDARD_TEXT_FONT, 9, "OUTLINE")
         lane_label:SetPoint("LEFT", lane_icon, "RIGHT", 3, 0)
         lane_label:SetTextColor(0.8, 0.8, 0.8, 1)
-        lane_label:SetText(lane.name)
+        lane_label:SetText(lane.name or lane.key or "")
     end
 
     local scroll_frame = CreateFrame("ScrollFrame", addon_name .. "PracticeTimelineSF", frame)
@@ -3387,7 +3590,7 @@ function ui.build_timeline(self)
 
     local scroll_child = CreateFrame("Frame", nil, scroll_frame)
     scroll_child:SetHeight(content_height)
-    scroll_child:SetWidth(TIMELINE_WIDTH)
+    scroll_child:SetWidth(track_width)
     if scroll_frame.SetScrollChild then
         scroll_frame:SetScrollChild(scroll_child)
     end
@@ -3401,7 +3604,7 @@ function ui.build_timeline(self)
         bg:SetHeight(TIMELINE_LANE_HEIGHT)
         bg:SetPoint("TOPLEFT", scroll_child, "TOPLEFT", 0,
             -(TIMELINE_RULER_HEIGHT + (i - 1) * TIMELINE_LANE_HEIGHT))
-        bg:SetWidth(TIMELINE_WIDTH)
+        bg:SetWidth(track_width)
         frame.lane_bgs[i] = bg
     end
 
@@ -3456,9 +3659,10 @@ function ui.build_timeline(self)
 end
 
 -- Stores the dragged timeline position as a center offset (session-local, like the
--- rotation display).
-function ui.save_timeline_position(self)
-    local frame = ui.timeline_frame
+-- rotation display). The optional frame lets the moving cue strip save its own drag
+-- into the same offsets (both views share one place on screen).
+function ui.save_timeline_position(self, frame)
+    frame = frame or ui.timeline_frame
     if not frame or not UIParent then
         return
     end
@@ -3476,7 +3680,9 @@ function ui.save_timeline_position(self)
     frame:SetPoint("CENTER", UIParent, "CENTER", ui.timeline_x, ui.timeline_y)
 end
 
--- Toggles the timeline frame (archive toggle_timeline 2513-2537).
+-- Toggles the fight LOG (the archive's post-fight review). The moving cue strip is
+-- the session's default view; opening the Timeline log replaces it in the same
+-- spot, and closing it brings the strip back while a session still runs.
 function ui.toggle_timeline()
     local frame = ui.timeline_frame
     if not frame then
@@ -3485,15 +3691,23 @@ function ui.toggle_timeline()
     if ui.timeline_visible then
         frame:Hide()
         ui.timeline_visible = false
+        if ui.active and ui.playhead_frame then
+            ui.playhead_frame:Show()
+        end
     else
         frame:Show()
         ui.timeline_visible = true
         ui.timeline_needs_render = true
+        if ui.playhead_frame then
+            ui.playhead_frame:Hide()
+        end
     end
     ui.update_timeline_button()
 end
 
--- Refreshes just the timeline toggle button (fight start reuses it).
+-- Refreshes just the Timeline toggle button (fight start reuses it). The label is
+-- the reference's "Timeline" (green while the log is open, plain while the strip is
+-- the visible surface).
 function ui.update_timeline_button()
     local panel = ui.panel
     if not panel or not panel.timeline_btn then
@@ -3506,6 +3720,807 @@ function ui.update_timeline_button()
         panel.timeline_btn:SetBackdropColor(0.15, 0.15, 0.15, 0.9)
         panel.timeline_btn.label:SetText("Timeline")
     end
+end
+
+--=========================================================================================
+-- Moving cue strip: the timeline that MOVES (the operator's practice request)
+--=========================================================================================
+-- The strip the operator asked for: a FIXED vertical playhead a quarter of the way
+-- into the visible strip, and the upcoming actions scrolling right-to-left toward
+-- it. An icon crosses the playhead at the second the drill wants that action - the
+-- "press now" cue - instead of the archive's post-fight log (which only ever showed
+-- what had already happened, scrolled to the newest end).
+--
+-- Data contract, read from the ACTIVE class's practice_panel (both members OPTIONAL):
+--   * timeline_lanes = array of { key = "<lane>", name = "<label>",
+--                                 texture = <string|nil>, spell_id = <number|nil> }
+--   * upcoming(ui, now, horizon) -> array of
+--       { at = <absolute clock>, key = "<action key>", label = "<text>",
+--         texture = <string|nil>, lane = "<lane key>|nil",
+--         spell_id = <number|nil> }
+--     ascending by `at`, future events only (a past event is dropped).
+-- A class that publishes no `upcoming` gets the neutral "Rotation cadence
+-- (preview)" built from its OWN published rotation table through
+-- st.practice.timeline_cadence: never another class's rotation, never a guess.
+--
+-- One OnUpdate, on the strip's own frame, and it only repositions pooled icons from
+-- the small schedule array (no allocation, no rebuild, no full re-render). The
+-- schedule itself is rebuilt on the throttled compute tick and only while a
+-- session runs, so an idle addon costs nothing.
+--
+-- The strip's position is session-local and shared with the log (ui.timeline_x/y):
+-- exactly one of the two views is on screen, so they never overlap.
+
+-- The strip's lane rows: the class's published timeline_lanes, else the same lane
+-- list the log uses (the shipped sim's six lanes for the paladin, the class's own
+-- for a drill), else nil (one row). The log's lanes are the ones the operator's
+-- reference screenshot shows (SoB / Melee / CS / Consec / SoC / Judge).
+function ui.playhead_lanes()
+    local panel = ui.practice_panel()
+    if panel and type(panel.timeline_lanes) == "table" and #panel.timeline_lanes > 0 then
+        return panel.timeline_lanes
+    end
+    local lanes = ui.timeline_lanes()
+    if type(lanes) == "table" and #lanes > 0 then
+        return lanes
+    end
+    return nil
+end
+
+-- rows, lane index: the values fixed at build time (a per-frame read must never
+-- allocate, so the index is built once).
+function ui.playhead_rows()
+    return ui.playhead_row_count or 1, ui.playhead_lane_index
+end
+
+-- Is there a timeline to show at all? A class with no `upcoming`, no sim session and
+-- no published rotation table has nothing to cue - the strip stays hidden (never a
+-- blank frame, never another class's rotation).
+-- The ACTIVE class's own ability order, whatever session shape it uses. This is
+-- the strip's last-resort cadence source (never the paladin sim's order for a
+-- class that publishes no order of its own).
+local function playhead_class_order()
+    local panel = ui.practice_panel()
+    if not panel or type(panel.order) ~= "function" then
+        return nil
+    end
+    local ok, order = pcall(panel.order)
+    if ok and type(order) == "table" and #order > 0 then
+        return order
+    end
+    return nil
+end
+
+function ui.playhead_available()
+    local panel = ui.practice_panel()
+    if panel and type(panel.upcoming) == "function" then
+        return true
+    end
+    if practice_class_runs_sim_session() then
+        return true
+    end
+    local module = practice_class_module()
+    if type(module) ~= "table" then
+        return false
+    end
+    if type(module.practice_rotation) == "table" and #module.practice_rotation > 0 then
+        return true
+    end
+    -- A class with neither a sim session nor a rotation table still gets BOTH
+    -- practice frames: its own published order is the neutral cadence.
+    return playhead_class_order() ~= nil
+end
+
+-- The ACTIVE class's rotation table for the strip's sim cadence: its FAMILY-GATED
+-- slice when it publishes one (the same slice its panel vocabulary uses), else the
+-- full published table. A row another family's APL plays is not a cue this client
+-- can act on - the paladin's WotLK Hammer of Wrath on TBC is the canonical case
+-- (the panel gate was fixed by the deep audit; the strip must not re-admit it).
+-- A throwing/empty slice falls back to the full table (never a blank strip).
+function ui.practice_rotation_rows(module)
+    if type(module) ~= "table" then
+        return nil
+    end
+    if type(module.practice_rotation_for) == "function" then
+        local ok, rows = pcall(module.practice_rotation_for)
+        if ok and type(rows) == "table" and #rows > 0 then
+            return rows
+        end
+    end
+    return module.practice_rotation
+end
+
+-- The cadence rows for a class that publishes no practice_rotation table: its own
+-- practice order, labelled and illustrated through its own provider
+-- (`practice_class_def`). Cached per active class, so a class switch re-derives and
+-- a drill never shows another class's actions.
+function ui.playhead_cadence_rotation(module)
+    if ui.playhead_cadence_class == ST.active_class and ui.playhead_cadence_rows then
+        return ui.playhead_cadence_rows
+    end
+    local rows = {}
+    local order = playhead_class_order() or {}
+    for i = 1, #order do
+        local key = order[i]
+        local def = ui.practice_class_def(key)
+        if def then
+            rows[#rows + 1] = {
+                action = key,
+                label = def.name or key,
+                spell_id = def.spell_id,
+                live = true,
+                engine = true,
+            }
+        end
+    end
+    ui.playhead_cadence_class = ST.active_class
+    ui.playhead_cadence_rows = rows
+    return rows
+end
+
+-- Builds the strip (called once from init, out of combat).
+function ui.build_playhead(self)
+    if ui.playhead_frame or not ui.panel then
+        return
+    end
+    local lanes = ui.playhead_lanes()
+    local rows, lane_index = 1, nil
+    if lanes then
+        rows = #lanes
+        lane_index = {}
+        for i = 1, rows do
+            local lane = lanes[i]
+            if type(lane) == "table" and type(lane.key) == "string" then
+                lane_index[lane.key] = i
+            end
+        end
+    end
+    ui.playhead_row_count = rows
+    ui.playhead_lane_index = lane_index
+    local row_height = PLAYHEAD_ROW_HEIGHT
+    local track_height = rows * row_height
+    -- The reference's band spans the screen: the strip's track is the screen width
+    -- minus its own rail and the frame margins (clamped; the offline fallback is
+    -- TIMELINE_WIDTH). Stored, so the per-frame draw uses the built geometry.
+    local track_width = ui.timeline_track_width(PLAYHEAD_LABEL_WIDTH, TIMELINE_WIDTH)
+    ui.playhead_track_width = track_width
+    local frame = CreateFrame("Frame", addon_name .. "PracticeCueStrip", UIParent,
+        "BackdropTemplate")
+    ui.playhead_frame = frame
+    frame:SetSize(PLAYHEAD_LABEL_WIDTH + track_width + 12,
+        PLAYHEAD_RULER_HEIGHT + track_height + 14)
+    ui.timeline_x = ui.timeline_x or TIMELINE_DEFAULT_X
+    ui.timeline_y = ui.timeline_y or TIMELINE_DEFAULT_Y
+    frame:SetPoint("CENTER", UIParent, "CENTER", ui.timeline_x, ui.timeline_y)
+    frame:SetFrameStrata("HIGH")
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetClampedToScreen(true)
+    frame:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    frame:SetBackdropColor(0.05, 0.05, 0.05, 0.92)
+    frame:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
+    frame:SetScript("OnDragStart", function(f)
+        if InCombatLockdown and InCombatLockdown() then
+            return
+        end
+        f:StartMoving()
+    end)
+    frame:SetScript("OnDragStop", function(f)
+        f:StopMovingOrSizing()
+        ui.save_timeline_position(self, f)
+    end)
+
+    -- Close button (the reference's X): hides the strip; the next session's
+    -- playhead_show brings it back.
+    local close_btn = CreateFrame("Button", nil, frame)
+    close_btn:SetSize(16, 16)
+    close_btn:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
+    close_btn.label = close_btn:CreateFontString(nil, "OVERLAY")
+    close_btn.label:SetPoint("CENTER", 0, 0)
+    close_btn.label:SetFontObject(GameFontHighlightSmall)
+    close_btn.label:SetText("X")
+    close_btn:SetScript("OnClick", function()
+        ui.playhead_frame:Hide()
+    end)
+
+    -- Source line (the class's own cues vs the cadence preview), right-aligned in
+    -- the ruler band, clear of the X.
+    frame.title = frame:CreateFontString(nil, "OVERLAY")
+    frame.title:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -3)
+    st.utils.apply_font(frame.title, STANDARD_TEXT_FONT, 9, "OUTLINE")
+    frame.title:SetTextColor(0.75, 0.75, 0.75, 1)
+    frame.title:SetJustifyH("RIGHT")
+    frame.title:SetText("")
+
+    -- Rotation band (the reference's top-centre "1/2" + its seal sequence): the same
+    -- rotation the practice display names, painted over the ruler so the drill's
+    -- current route reads from the timeline itself.
+    frame.band_label = frame:CreateFontString(nil, "OVERLAY")
+    frame.band_label:SetPoint("TOP", frame, "TOP", 0, -2)
+    st.utils.apply_font(frame.band_label, STANDARD_TEXT_FONT, 10, "OUTLINE")
+    frame.band_label:SetTextColor(0.95, 0.85, 0.45, 1)
+    frame.band_label:SetText("")
+    frame.band_icons = {}
+    for i = 1, 5 do
+        local icon = CreateFrame("Frame", nil, frame)
+        icon:SetSize(16, 16)
+        icon.texture = icon:CreateTexture(nil, "ARTWORK")
+        icon.texture:SetAllPoints()
+        icon.texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        icon.twist_left = icon:CreateTexture(nil, "ARTWORK")
+        icon.twist_left:SetPoint("TOPLEFT", 0, 0)
+        icon.twist_left:SetPoint("BOTTOMLEFT", 0, 0)
+        icon.twist_left:SetWidth(8)
+        icon.twist_left:SetTexCoord(0.07, 0.5, 0.07, 0.93)
+        icon.twist_left:Hide()
+        icon.twist_right = icon:CreateTexture(nil, "ARTWORK")
+        icon.twist_right:SetPoint("TOPRIGHT", 0, 0)
+        icon.twist_right:SetPoint("BOTTOMRIGHT", 0, 0)
+        icon.twist_right:SetWidth(8)
+        icon.twist_right:SetTexCoord(0.5, 0.93, 0.07, 0.93)
+        icon.twist_right:Hide()
+        icon:Hide()
+        frame.band_icons[i] = icon
+    end
+
+    -- Left lane-label column (the reference's SoB / Melee / CS / ... rail): one
+    -- icon and one name per lane, outside the scrolling cue area.
+    local label_area = CreateFrame("Frame", nil, frame)
+    label_area:SetPoint("TOPLEFT", frame, "TOPLEFT", 6,
+        -(6 + PLAYHEAD_RULER_HEIGHT))
+    label_area:SetSize(PLAYHEAD_LABEL_WIDTH, track_height)
+    local pr = st.practice
+    frame.lane_labels = {}
+    for i = 1, rows do
+        local lane = lanes and lanes[i] or nil
+        local y = -((i - 1) * row_height)
+        local lane_icon = label_area:CreateTexture(nil, "ARTWORK")
+        lane_icon:SetSize(16, 16)
+        lane_icon:SetPoint("LEFT", label_area, "TOPLEFT", 2, y - row_height / 2)
+        lane_icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        local tex = (type(lane) == "table" and type(lane.texture) == "string"
+            and lane.texture ~= "") and lane.texture or nil
+        if not tex and type(lane) == "table" and lane.spell_id then
+            tex = spell_texture(lane.spell_id)
+        end
+        if not tex and type(lane) == "table" and lane.key
+            and LANE_SPELL_IDS[lane.key] then
+            tex = spell_texture(LANE_SPELL_IDS[lane.key])
+        end
+        if not tex and type(lane) == "table" and lane.key == "melee" and pr then
+            tex = pr.MELEE_TEXTURE
+        end
+        if tex then
+            lane_icon:SetTexture(tex)
+        end
+        local lane_label = label_area:CreateFontString(nil, "OVERLAY")
+        st.utils.apply_font(lane_label, STANDARD_TEXT_FONT, 9, "OUTLINE")
+        lane_label:SetPoint("LEFT", lane_icon, "RIGHT", 3, 0)
+        lane_label:SetTextColor(0.8, 0.8, 0.8, 1)
+        lane_label:SetText((type(lane) == "table" and (lane.name or lane.key)) or "Rotation")
+        frame.lane_labels[i] = { icon = lane_icon, label = lane_label }
+    end
+
+    frame.track = frame:CreateTexture(nil, "BACKGROUND")
+    frame.track:SetPoint("TOPLEFT", frame, "TOPLEFT",
+        6 + PLAYHEAD_LABEL_WIDTH, -(6 + PLAYHEAD_RULER_HEIGHT))
+    frame.track:SetSize(track_width, track_height)
+    frame.track:SetColorTexture(0, 0, 0, 0.35)
+
+    -- Alternating lane strips behind the cues (the reference's banded rows).
+    frame.lane_bgs = {}
+    for i = 1, rows do
+        local bg = frame:CreateTexture(nil, "BACKGROUND")
+        local shade = (i % 2 == 0) and 0.08 or 0.04
+        bg:SetColorTexture(shade, shade, shade, 1)
+        bg:SetSize(track_width, row_height)
+        bg:SetPoint("TOPLEFT", frame.track, "TOPLEFT", 0, -((i - 1) * row_height))
+        frame.lane_bgs[i] = bg
+    end
+
+    -- The fixed playhead: placed once, never moved (the CUES move, not the line).
+    frame.cursor = frame:CreateTexture(nil, "ARTWORK")
+    frame.cursor:SetSize(2, track_height + 6)
+    frame.cursor:SetPoint("BOTTOMLEFT", frame.track, "BOTTOMLEFT",
+        st.practice.timeline_playhead_x(track_width, st.practice.TL_PLAYHEAD_FRACTION), 0)
+    frame.cursor:SetColorTexture(1, 0.85, 0.2, 0.9)
+
+    -- Ruler pool: one tick + one time label per second in the visible window. The
+    -- labels ride the cues (same event_x maths), so the clock scrolls left under a
+    -- fixed playhead exactly like the reference strip.
+    ui.playhead_ruler_pool = {}
+    for i = 1, PLAYHEAD_RULER_POOL do
+        local tick = frame:CreateTexture(nil, "ARTWORK")
+        tick:SetColorTexture(0.42, 0.42, 0.42, 0.3)
+        tick:SetSize(1, track_height)
+        local label = frame:CreateFontString(nil, "OVERLAY")
+        st.utils.apply_font(label, STANDARD_TEXT_FONT, 9, "OUTLINE")
+        label:SetTextColor(0.7, 0.7, 0.7, 1)
+        label:SetText("")
+        tick:Hide()
+        label:Hide()
+        ui.playhead_ruler_pool[i] = { tick = tick, label = label }
+    end
+    ui.playhead_ruler_used = 0
+
+    -- The icon pool is created here, out of combat, so a tick never creates a frame.
+    ui.playhead_icons = {}
+    for i = 1, PLAYHEAD_POOL do
+        local icon = CreateFrame("Frame", nil, frame)
+        icon:SetSize(PLAYHEAD_ICON_SIZE, PLAYHEAD_ICON_SIZE)
+        icon.border = icon:CreateTexture(nil, "BACKGROUND")
+        icon.border:SetPoint("TOPLEFT", -1, 1)
+        icon.border:SetPoint("BOTTOMRIGHT", 1, -1)
+        icon.border:SetColorTexture(0.25, 0.25, 0.25, 0.9)
+        icon.texture = icon:CreateTexture(nil, "ARTWORK")
+        icon.texture:SetAllPoints()
+        icon.texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        icon.texture:Hide()
+        -- Split halves for the twist cue (the practice display's own Command/Blood
+        -- art, set_step_texture): the main texture hides and these two show.
+        icon.twist_left = icon:CreateTexture(nil, "ARTWORK")
+        icon.twist_left:SetPoint("TOPLEFT", 0, 0)
+        icon.twist_left:SetPoint("BOTTOMLEFT", 0, 0)
+        icon.twist_left:SetWidth(PLAYHEAD_ICON_SIZE / 2)
+        icon.twist_left:SetTexCoord(0.07, 0.5, 0.07, 0.93)
+        icon.twist_left:Hide()
+        icon.twist_right = icon:CreateTexture(nil, "ARTWORK")
+        icon.twist_right:SetPoint("TOPRIGHT", 0, 0)
+        icon.twist_right:SetPoint("BOTTOMRIGHT", 0, 0)
+        icon.twist_right:SetWidth(PLAYHEAD_ICON_SIZE / 2)
+        icon.twist_right:SetTexCoord(0.5, 0.93, 0.07, 0.93)
+        icon.twist_right:Hide()
+        icon.label = icon:CreateFontString(nil, "OVERLAY")
+        st.utils.apply_font(icon.label, STANDARD_TEXT_FONT, 9, "OUTLINE")
+        -- The reference rows carry no icon captions: the lane name on the left and
+        -- the art carry the meaning. The text seam is kept (providers still set it),
+        -- just never painted over a 24 px row.
+        icon.label:SetPoint("TOP", icon, "BOTTOM", 0, -1)
+        icon.label:SetTextColor(0.9, 0.9, 0.9, 1)
+        icon.label:SetText("")
+        icon.label:Hide()
+        icon:Hide()
+        ui.playhead_icons[i] = icon
+    end
+    ui.playhead_icons_used = 0
+    ui.playhead_row_height = row_height
+    ui.playhead_track_height = track_height
+
+    frame:SetScript("OnUpdate", function()
+        ui.playhead_draw(api.get_time())
+    end)
+
+    frame:Hide()
+end
+
+-- Reuses the schedule slot array (never a fresh table per refresh).
+function ui.playhead_schedule_slot(index)
+    local sched = ui.timeline_sched
+    if type(sched) ~= "table" then
+        sched = {}
+        ui.timeline_sched = sched
+    end
+    local slot = sched[index]
+    if type(slot) ~= "table" then
+        slot = {}
+        sched[index] = slot
+    end
+    return slot
+end
+
+-- Copies a class's `upcoming` answer into the reused schedule. Only the cues on the
+-- visible horizon are kept: the contract asks for future events, and a provider that
+-- ignores the horizon cannot inflate the schedule past the pool.
+function ui.playhead_copy_upcoming(events, now, horizon)
+    local count = 0
+    local limit = now + (horizon or st.practice.TL_HORIZON_SECONDS)
+    for i = 1, #events do
+        local event = events[i]
+        local at = type(event) == "table" and tonumber(event.at) or nil
+        if at and at == at and at >= now and at <= limit and count < PLAYHEAD_POOL then
+            count = count + 1
+            local slot = ui.playhead_schedule_slot(count)
+            slot.at = at
+            slot.key = event.key
+            slot.label = event.label or event.key
+            slot.texture = event.texture
+            slot.spell_id = event.spell_id
+            slot.lane = event.lane
+        end
+    end
+    return count
+end
+
+-- The absolute clock the cadence preview anchors to: the drill's own fight clock when
+-- it has one, else the session start. A fixed origin is what makes the cues MOVE
+-- (re-anchoring on `now` would pin every cue in place).
+function ui.playhead_anchor(now)
+    now = now or api.get_time()
+    local panel = ui.practice_panel()
+    if panel and type(panel.fight_elapsed) == "function" then
+        local ok, elapsed = pcall(panel.fight_elapsed, ui, now)
+        if ok and type(elapsed) == "number" and elapsed == elapsed and elapsed >= 0 then
+            return now - elapsed
+        end
+    end
+    local sim = ui.sim
+    if sim and sim.fight_active and type(ui.playhead_origin) ~= "number"
+        and type(sim.fight_start_time) == "number" then
+        -- Old-session fallback only: the anchor is normally the strip's own origin
+        -- (set at Start Fight / session open and shifted by a real-combat pause).
+        return sim.fight_start_time
+    end
+    return ui.playhead_origin or now
+end
+
+-- Latches the strip's title (the source line: the class's own cues or the preview).
+function ui.playhead_set_title(text)
+    local frame = ui.playhead_frame
+    if not frame or type(frame.title) ~= "table" then
+        return
+    end
+    if frame.title_text == text then
+        return
+    end
+    frame.title_text = text
+    frame.title:SetText(text or "")
+end
+
+-- Rebuilds the cue schedule. Never runs without a session, never while the strip is
+-- off screen (no provider reads for a hidden strip), reuses every slot.
+function ui.playhead_refresh(self, now, force)
+    if not ui.active or not ui.playhead_frame or not ui.playhead_frame:IsShown() then
+        return
+    end
+    now = now or api.get_time()
+    -- Start/Stop Fight is the strip's own clock: stopped freezes the cues where they
+    -- are (the frozen stamp), running uses the live clock.
+    if ui.playhead_running ~= true and type(ui.playhead_frozen_at) == "number" then
+        now = ui.playhead_frozen_at
+    end
+    if not force and type(ui.timeline_sched_at) == "number"
+        and now - ui.timeline_sched_at < PLAYHEAD_SCHEDULE_INTERVAL then
+        return
+    end
+    ui.timeline_sched_at = now
+    local horizon = st.practice.TL_HORIZON_SECONDS
+    local panel = ui.practice_panel()
+    local count
+    if panel and type(panel.upcoming) == "function" then
+        local ok, events = pcall(panel.upcoming, ui, now, horizon)
+        if ok and type(events) == "table" then
+            count = ui.playhead_copy_upcoming(events, now, horizon)
+            ui.playhead_set_title(
+                (type(panel.timeline_title) == "string" and panel.timeline_title ~= "")
+                    and panel.timeline_title or "Upcoming actions")
+            ui.timeline_sched_source = "upcoming"
+        end
+    end
+    if count == nil then
+        local module = practice_class_module()
+        local rotation
+        if ui.practice_class_drill() then
+            -- A class drill's strip previews the abilities its OWN panel can press
+            -- (the provider's order). The class's APL rotation table also carries
+            -- rows the drill cannot cast at all (hunter Rapid Fire / Serpent beside
+            -- its three shots): a cue that can never become the graded press is a
+            -- trap, not a preview, so the order comes first here.
+            rotation = ui.playhead_cadence_rotation(module)
+            if type(rotation) ~= "table" or #rotation == 0 then
+                rotation = ui.practice_rotation_rows(module)
+            end
+        else
+            -- The sim path keeps the class's APL rotation (the twist sim's cadence
+            -- preview), through its FAMILY-GATED slice when it publishes one: a row
+            -- another family's APL plays can never be this client's cue.
+            rotation = ui.practice_rotation_rows(module)
+            if type(rotation) ~= "table" or #rotation == 0 then
+                rotation = ui.playhead_cadence_rotation(module)
+            end
+        end
+        local gcd = (type(module) == "table") and module.PRACTICE_GCD_SECONDS or nil
+        local cycle = (type(module) == "table") and module.PRACTICE_CYCLE_SECONDS or nil
+        local sched
+        sched, count = st.practice.timeline_cadence(ui.timeline_sched, rotation,
+            ui.playhead_anchor(now), now, horizon, gcd, cycle)
+        ui.timeline_sched = sched
+        ui.playhead_set_title("Rotation cadence (preview)")
+        ui.timeline_sched_source = "cadence"
+    end
+    ui.timeline_sched_count = count or 0
+end
+
+-- Positions the pooled icons from the schedule. Per frame: arithmetic + SetPoint on a
+-- handful of frames, nothing else.
+function ui.playhead_draw(now)
+    local frame = ui.playhead_frame
+    if not frame or not ui.active or not frame:IsShown() then
+        return
+    end
+    if ui.combat_paused then
+        -- The drill is frozen by real combat: the strip freezes with it.
+        return
+    end
+    now = now or api.get_time()
+    -- The strip MOVES only while a fight runs (Start/Stop Fight owns it). Stopped:
+    -- the frozen clock keeps every cue, the ruler and the emphasis exactly where the
+    -- fight stopped, instead of letting the clock run on.
+    if ui.playhead_running ~= true and type(ui.playhead_frozen_at) == "number" then
+        now = ui.playhead_frozen_at
+    end
+    local width = ui.playhead_track_width or TIMELINE_WIDTH
+    local fraction = st.practice.TL_PLAYHEAD_FRACTION
+    local pps = st.practice.timeline_pps(width, fraction, st.practice.TL_HORIZON_SECONDS)
+    local playhead_x = st.practice.timeline_playhead_x(width, fraction)
+    local from_at, to_at = st.practice.timeline_window(now, width, pps, fraction)
+    local first, last = st.practice.timeline_slice(ui.timeline_sched,
+        ui.timeline_sched_count or 0, from_at, to_at)
+    local pool = ui.playhead_icons
+    local used = 0
+    local half = PLAYHEAD_ICON_SIZE / 2
+    local row_height = ui.playhead_row_height or PLAYHEAD_ROW_HEIGHT
+    local _, lane_index = ui.playhead_rows()
+    if first and pool then
+        for i = first, last do
+            local event = ui.timeline_sched[i]
+            local x = st.practice.timeline_event_x(playhead_x, event.at, now, pps)
+            if x and x >= -half and x <= width + half and used < PLAYHEAD_POOL then
+                used = used + 1
+                local icon = pool[used]
+                if icon then
+                    local row = (lane_index and event.lane and lane_index[event.lane]) or 1
+                    icon:ClearAllPoints()
+                    icon:SetPoint("TOPLEFT", frame.track, "TOPLEFT", x - half,
+                        -((row - 1) * row_height))
+                    ui.playhead_dress(icon, event)
+                    -- The PRESS cue: the action whose second has arrived (or is a
+                    -- breath away) is lit gold; the rest sit back so the eye lands on
+                    -- the one to click.
+                    ui.playhead_emphasis(icon, event.at, now)
+                    icon:Show()
+                end
+            end
+        end
+    end
+    if pool then
+        for i = used + 1, (ui.playhead_icons_used or 0) do
+            if pool[i] then
+                pool[i]:Hide()
+            end
+        end
+    end
+    ui.playhead_icons_used = used
+
+    -- Rotation band: repaint only when the resolved rotation changes.
+    local band_rotation = ui.current_display_rotation
+    if frame.band_rotation ~= band_rotation then
+        frame.band_rotation = band_rotation
+        local na = st.nextaction
+        local band_name = (na and na.display_names and na.display_names[band_rotation])
+            or band_rotation
+        frame.band_label:SetText(band_name and tostring(band_name) or "")
+        local sequence = (na and na.sequences and na.sequences[band_rotation]) or {}
+        local shown = math.min(#sequence, 5)
+        local total = shown * 16 + math.max(shown - 1, 0) * 2
+        for i = 1, 5 do
+            local icon = frame.band_icons[i]
+            local step = sequence[i]
+            if band_rotation and step and i <= 5 then
+                set_step_texture(icon, step)
+                icon.texture:Show()
+                icon:ClearAllPoints()
+                icon:SetPoint("TOP", frame, "TOP",
+                    -total / 2 + (i - 1) * 18 + 8, -14)
+                icon:Show()
+            else
+                icon:Hide()
+            end
+        end
+    end
+
+    -- Ruler: one label per second of the SESSION clock, riding the same event_x
+    -- maths as the cues (the numbers scroll left under the fixed playhead, exactly
+    -- like the reference strip). `origin` is the fight/session start, so 0:00 is the
+    -- first press the drill expects.
+    local origin = ui.playhead_origin
+    if type(origin) ~= "number" then
+        origin = now
+    end
+    local ruler = ui.playhead_ruler_pool
+    local ruler_used = 0
+    if ruler and frame.track then
+        local first_sec = math.floor(from_at - origin)
+        local last_sec = math.ceil(to_at - origin)
+        if last_sec - first_sec > PLAYHEAD_RULER_POOL then
+            first_sec = last_sec - PLAYHEAD_RULER_POOL
+        end
+        for sec = first_sec, last_sec do
+            if sec >= 0 then
+                local x = st.practice.timeline_event_x(playhead_x, origin + sec, now, pps)
+                if x >= -2 and x <= width + 2 and ruler_used < PLAYHEAD_RULER_POOL then
+                    ruler_used = ruler_used + 1
+                    local entry = ruler[ruler_used]
+                    entry.x = x
+                    entry.tick:ClearAllPoints()
+                    entry.tick:SetPoint("TOPLEFT", frame.track, "TOPLEFT", x, 0)
+                    entry.tick:Show()
+                    if entry.sec ~= sec then
+                        entry.sec = sec
+                        entry.label:SetText(string.format("%d:%02d",
+                            math.floor(sec / 60), sec % 60))
+                    end
+                    entry.label:ClearAllPoints()
+                    entry.label:SetPoint("BOTTOM", entry.tick, "TOP", 0, 1)
+                    entry.label:Show()
+                end
+            end
+        end
+    end
+    for i = ruler_used + 1, (ui.playhead_ruler_used or 0) do
+        local entry = ruler and ruler[i]
+        if entry then
+            entry.tick:Hide()
+            entry.label:Hide()
+        end
+    end
+    ui.playhead_ruler_used = ruler_used
+end
+
+-- Lit while the cue's own second is due: from a breath before it until a beat after
+-- (the press window), the icon reads "click THIS one now".
+function ui.playhead_due(at, now)
+    if type(at) ~= "number" or type(now) ~= "number" then
+        return false
+    end
+    return now >= at - 0.15 and now <= at + 0.25
+end
+
+-- Marks one pooled icon as due/queued (latched: the styles are set once per state).
+function ui.playhead_emphasis(icon, at, now)
+    local due = ui.playhead_due(at, now)
+    if icon.due == due then
+        return
+    end
+    icon.due = due
+    if due then
+        icon.border:SetColorTexture(1, 0.85, 0.2, 0.95)
+        icon:SetAlpha(1)
+    else
+        icon.border:SetColorTexture(0.25, 0.25, 0.25, 0.9)
+        icon:SetAlpha(0.7)
+    end
+end
+
+-- Dresses one pooled icon for an event (latching: never re-sets an unchanged icon).
+function ui.playhead_dress(icon, event)
+    local texture = event.texture
+    if (not texture or texture == "") and event.spell_id then
+        texture = spell_texture(event.spell_id)
+    end
+    -- Practice action art: a cue that carries no spell id of its own (the paladin's
+    -- rotation rows carry family id maps, never a single `spell_id`) uses the same art
+    -- the practice panel shows for that action - CS, the twist's split Command/Blood,
+    -- and the seal auto steps. Never a guessed texture: an unmapped key stays blank.
+    local key = event.key
+    if (not texture or texture == "") and key
+        and (key == "twist" or STEP_SPELL_IDS[key]) then
+        if icon.step_key ~= key then
+            icon.step_key = key
+            set_step_texture(icon, key)
+        end
+        icon.texture:Show()
+        local label = event.label or key or ""
+        if icon.label_text ~= label then
+            icon.label_text = label
+            icon.label:SetText(label)
+        end
+        return
+    end
+    if icon.step_key then
+        icon.step_key = nil
+        icon.twist_left:Hide()
+        icon.twist_right:Hide()
+        icon.texture:Show()
+    end
+    -- The SIM's own ability art (the same texture its panel icon wears) for a cue
+    -- whose rotation row carries no single spell id. Only the sim route: a class
+    -- drill's art is its provider's own (never the paladin sim's ability table).
+    -- Unknown keys stay nil (unknown-hides) - this never guesses.
+    if not texture and not ui.practice_class_drill() then
+        texture = ability_texture(key)
+    end
+    local id = event.spell_id or event.key
+    if icon.texture_id ~= id or icon.texture_ref ~= texture then
+        icon.texture_id = id
+        icon.texture_ref = texture
+        if texture then
+            icon.texture:SetTexture(texture)
+            icon.texture:Show()
+        else
+            -- Unknown art hides the icon body; the border + label still make the cue
+            -- readable (unknown-hides, never a guessed texture).
+            icon.texture:Hide()
+        end
+    end
+    local label = event.label or event.key or ""
+    if icon.label_text ~= label then
+        icon.label_text = label
+        icon.label:SetText(label)
+    end
+end
+
+-- Hides every icon and drops the schedule's count (the slots are kept for reuse).
+function ui.playhead_clear()
+    local pool = ui.playhead_icons
+    if pool then
+        for i = 1, #pool do
+            if pool[i] then
+                pool[i]:Hide()
+            end
+        end
+    end
+    ui.playhead_icons_used = 0
+    ui.timeline_sched_count = 0
+    ui.timeline_sched_at = nil
+    ui.timeline_sched_source = nil
+end
+
+-- Shows the strip for a session and primes its first schedule.
+function ui.playhead_show(self, now)
+    local frame = ui.playhead_frame
+    if not frame or not ui.active then
+        return false
+    end
+    if not ui.playhead_available() then
+        frame:Hide()
+        return false
+    end
+    now = now or api.get_time()
+    if type(ui.playhead_origin) ~= "number" then
+        ui.playhead_origin = now
+    end
+    -- The operator's rule: the strip moves ONLY while its own practice clock runs
+    -- (a fight, or the session clock for the fightless routes). A route that opened
+    -- it without stating a run state (a future route, a lost flag) therefore opens
+    -- it STOPPED here, instead of animating on a live clock.
+    if ui.playhead_running ~= true and type(ui.playhead_frozen_at) ~= "number" then
+        ui.playhead_frozen_at = now
+    end
+    -- The Timeline log replaces the strip while it is open (same spot on screen).
+    if not ui.timeline_visible then
+        frame:Show()
+    end
+    ui.playhead_refresh(self, now, true)
+    ui.playhead_draw(now)
+    return true
+end
+
+-- Every session route opens BOTH practice frames: the panel is the controls, the
+-- strip is the practice surface (operator 2026-10-26: the TOP part is where they
+-- practise). `running` is the route's OWN fact: the paladin sim and a class drill
+-- open per their session model, while the rotation scenario and the drill list
+-- have no fight of their own and run on the SESSION clock (anchored at the
+-- session second).
+function ui.playhead_session_open(self, now, running)
+    now = now or api.get_time()
+    ui.playhead_origin = now
+    ui.playhead_running = running == true
+    if ui.playhead_running then
+        ui.playhead_frozen_at = nil
+    else
+        ui.playhead_frozen_at = now
+    end
+    ui.timeline_visible = false
+    ui.playhead_show(self, now)
+    ui.update_timeline_button()
 end
 
 --=========================================================================================
@@ -3817,6 +4832,31 @@ function ui.toggle(self)
         ui.stop(self)
     else
         ui.start(self)
+    end
+end
+
+-- Open (never close) the practice trainer. Every OPTIONS-driven entry point uses
+-- this: closing the options window, or pressing the page's practice button while a
+-- session runs, must leave the session alive. The panel's own X (ui.stop) is the
+-- single exit.
+function ui.open(self)
+    self = self or ST
+    if not ui.active then
+        ui.start(self)
+        return
+    end
+    if ui.panel then
+        ui.panel:Show()
+    end
+    if ui.driver then
+        ui.driver:Show()
+    end
+    -- Re-open through the strip's own gate (availability + the log) so a strip the
+    -- player closed with its X comes back with a live schedule, not a frame whose
+    -- cue table was cleared.
+    ui.playhead_show(self, api.get_time())
+    if ui.rotation_display and not ui.practice_class_drill() then
+        ui.rotation_display:Show()
     end
 end
 
@@ -4648,6 +5688,11 @@ local function scenario_start_session(self, now)
         ui.panel.fight_btn:Hide()
     end
     scenario_open_step(self, now)
+    -- BOTH frames on every route (operator 2026-10-26): the scenario has no swing
+    -- fight, so its strip runs on the SESSION clock anchored at this second (the
+    -- session start is its clock). It stays live for the whole run and stops with
+    -- the session; the top frame is never the one missing frame of the two.
+    ui.playhead_session_open(self, now, true)
     ui.update_result_font(self)
     ui.refresh_icons(self)
     ui.update_info(self)
@@ -4901,6 +5946,10 @@ local function drill_list_start_session(self, now)
         ui.panel.fight_btn:Hide()
     end
     drill_row_sync(self)
+    -- Both frames here too: the drill list grades on the press (no fight clock), so
+    -- its strip runs on the SESSION clock anchored at this second - live for the
+    -- whole session and stops with it, never the one missing frame of the two.
+    ui.playhead_session_open(self, now, true)
     ui.update_result_font(self)
     ui.refresh_icons(self)
     ui.update_info(self)
@@ -4938,6 +5987,14 @@ function ui.start(self)
             note_start_block(self, "Practice mode is not available (panel not built).")
             return
         end
+    end
+
+    -- The rotation scenario and the drill list hide the paladin sim's fight button
+    -- (they have no fight of their own). A later class session must bring it back:
+    -- without this, visiting either mode once removed Start Fight for the rest of
+    -- the login, and the operator's Start/Stop rule could not be used at all.
+    if ui.panel.fight_btn then
+        ui.panel.fight_btn:Show()
     end
 
     -- The practice mode the Practice page selects. "class" (the default) runs the
@@ -5045,12 +6102,8 @@ function ui.start(self)
         queue_window = 0.4
     end
     sim.queue_window = queue_window
-    pr.apply_haste(sim, ui.base_speed, now)
-    local bl_delay = tonumber(db and db.practice_bl_delay) or 0
-    if bl_delay < 0 then
-        bl_delay = 0
-    end
-    pr.begin_fight(sim, now, { bl_delay = bl_delay })
+    -- The session opens STOPPED (archive start(): "wait for Start Fight"). The fight
+    -- itself begins in start_fight(), which is also what starts the timeline clock.
     pr.apply_haste(sim, ui.base_speed, now)
 
     ui.active = true
@@ -5107,11 +6160,11 @@ function ui.start(self)
             ui.proc_icons.dst:Show()
         end
     end
-    if ui.timeline_frame then
-        ui.timeline_frame:Show()
-        ui.timeline_visible = true
-        ui.render_timeline()
-    end
+    -- The moving cue strip is the session's timeline (the operator's ask): the
+    -- upcoming actions approach the fixed playhead, so the press timing is visible
+    -- while the drill runs. The post-fight log stays behind the panel's Timeline
+    -- button (default off). The sim session opens STOPPED (Start Fight starts it).
+    ui.playhead_session_open(self, now, false)
     ui.apply_settings(self)
     ui.panel:Show()
     ui.driver:Show()
@@ -5201,6 +6254,15 @@ function ui.stop(self)
     if ui.timeline_frame then
         ui.timeline_frame:Hide()
     end
+    -- The cue strip dies with the session: hidden, every icon cleared, the schedule
+    -- count zeroed (the slot array is kept for the next session's reuse).
+    if ui.playhead_frame then
+        ui.playhead_frame:Hide()
+    end
+    ui.playhead_clear()
+    ui.playhead_origin = nil
+    ui.playhead_running = nil
+    ui.playhead_frozen_at = nil
     ui.timeline_visible = false
     ui.timeline_needs_render = false
     ui.timeline_events = {}
@@ -5232,18 +6294,16 @@ function ui.toggle_fight(self)
     if ui.scenario_run or ui.drill_list then
         return
     end
-    local fighting = ui.sim and ui.sim.fight_active
-    if ui.hunter_session then
-        fighting = ui.hunter_session.active
-    end
-    if ui.shaman_session then
-        fighting = ui.shaman_session.active
-    end
-    if ui.rogue_session then
-        fighting = ui.rogue_session.active
-    end
-    if ui.druid_session then
-        fighting = ui.druid_session.active
+    -- The ACTIVE class's own run state (the same seam the button label reads), else
+    -- the paladin sim. NEVER a class name here: a provider that publishes `session`
+    -- toggles through its own state, so a new drill class needs no line in this
+    -- module (class isolation).
+    local drill_active = ui.practice_drill_active()
+    local fighting
+    if drill_active ~= nil then
+        fighting = drill_active == true
+    else
+        fighting = ui.sim and ui.sim.fight_active
     end
     if fighting then
         ui.stop_fight(self)
@@ -5263,10 +6323,35 @@ function ui.start_fight(self)
         self:Print("Practice fights cannot be started in combat.")
         return
     end
+    -- Start Fight owns the strip's clock: running before the drill branch so every
+    -- class's fight (sim or its own drill session) moves the timeline.
+    ui.playhead_running = true
+    ui.playhead_frozen_at = nil
     -- The ACTIVE class's drill re-begins through its own provider (same
     -- Start/Stop Fight button); a half-loaded shell refuses loudly.
     if ui.practice_drill_running() then
-        ui.practice_begin_fight(self, api.get_time())
+        local drill_now = api.get_time()
+        ui.practice_begin_fight(self, drill_now)
+        -- A routed begin can silently refuse (a half-loaded shell, a session the
+        -- provider already ended): the strip may only run a fight that EXISTS. The
+        -- provider owns its own seam, so this is a state correction, never a new
+        -- shared notice (the Start Fight label already tells the player).
+        if ui.practice_drill_active() ~= true then
+            ui.playhead_running = false
+            ui.playhead_frozen_at = drill_now
+            ui.update_button(self)
+            ui.update_hint(self)
+            return
+        end
+        -- The fight re-anchors BOTH clocks: the cue cadence and the ruler's 0:00.
+        ui.playhead_origin = drill_now
+        ui.playhead_refresh(self, drill_now, true)
+        ui.playhead_draw(drill_now)
+        -- A strip the player closed with its X returns with the new fight (the
+        -- sim path below does the same); the Timeline log still owns the spot while open.
+        if ui.playhead_frame and not ui.timeline_visible then
+            ui.playhead_frame:Show()
+        end
         ui.update_button(self)
         ui.update_hint(self)
         ui.update_score(self)
@@ -5278,10 +6363,21 @@ function ui.start_fight(self)
     local sim = ui.sim
     local now = api.get_time()
     pr.apply_haste(sim, ui.base_speed, now)
-    pr.begin_fight(sim, now, {})
+    -- The Practice page's Bloodlust delay rides the fight (nil-safe default 0).
+    local bl_delay = 0
+    if type(self.get_class_table) == "function" then
+        local ok_db, db = pcall(self.get_class_table, self)
+        if ok_db and type(db) == "table" then
+            bl_delay = tonumber(db.practice_bl_delay) or 0
+        end
+    end
+    if bl_delay < 0 then
+        bl_delay = 0
+    end
+    pr.begin_fight(sim, now, { bl_delay = bl_delay })
     pr.apply_haste(sim, ui.base_speed, now)
-    -- Fresh timeline data with the opening band; the timeline shows on every fight
-    -- (the archive's "always" default; there is no mode option in this lane).
+    -- Fresh log data with the opening band. The log stays behind the Timeline button;
+    -- the cue strip re-anchors on the new fight and keeps showing the upcoming cues.
     ui.timeline_events = {}
     ui.timeline_event_count = 0
     ui.timeline_bands, ui.timeline_band_count =
@@ -5289,16 +6385,23 @@ function ui.start_fight(self)
     ui.timeline_auto_scroll = true
     ui.timeline_needs_render = true
     ui.last_fight_text = nil
-    if ui.timeline_frame then
-        ui.timeline_frame:Show()
-        ui.timeline_visible = true
-        ui.update_timeline_button()
-        ui.render_timeline()
+    ui.playhead_origin = now
+    ui.playhead_refresh(self, now, true)
+    if ui.playhead_frame and not ui.timeline_visible then
+        ui.playhead_frame:Show()
     end
+    ui.playhead_draw(now)
+    ui.update_timeline_button()
     ui.update_button(self)
     ui.update_hint(self)
     ui.update_haste_buttons(self)
     ui.update_score(self)
+    -- The fight re-derives speed/GCD/rotation and the proc stamps: repaint every
+    -- readout that the session start painted from the stopped state.
+    ui.refresh_icons(self)
+    ui.update_info(self)
+    ui.update_rotation_display(self)
+    ui.update_proc_icons(self)
     ui.sync_to_addon(self)
 end
 
@@ -5323,6 +6426,10 @@ function ui.stop_fight(self)
     if ui.result_frame then
         ui.result_frame:SetAlpha(0)
     end
+    -- The strip freezes at the second the fight stopped; Start Fight re-anchors and
+    -- starts it again (never a clock that keeps running after Stop).
+    ui.playhead_running = false
+    ui.playhead_frozen_at = api.get_time()
     -- Final render for post-fight review; the data and the frame stay up.
     ui.timeline_needs_render = true
     if ui.timeline_visible then
@@ -5426,6 +6533,13 @@ function ui.tick(self, elapsed)
         else
             ui.shift_sim_times(ui.sim, shift)
         end
+        -- The strip's ruler zero is a session clock too: the pause froze it (no
+        -- draw while combat_paused), so it shifts by the same amount as the
+        -- fight/session clocks. Without this the cues stay put but the ruler's
+        -- elapsed time jumps by the pause on resume.
+        if type(ui.playhead_origin) == "number" and type(shift) == "number" then
+            ui.playhead_origin = ui.playhead_origin + shift
+        end
         -- The scenario's decision window freezes over the pause too: the player
         -- cannot cast while the sim is paused (cast_key returns early in combat),
         -- so a pause that outlasts the window must not close the step as a miss.
@@ -5444,6 +6558,10 @@ function ui.tick(self, elapsed)
     if practice_quarantined(self) then
         return
     end
+    -- The cue strip's schedule: rebuilt on the throttled compute tick (never per
+    -- frame, never while no session runs). The strip itself repositions its icons
+    -- from this array on its own OnUpdate.
+    ui.playhead_refresh(self, now)
     local sim = ui.sim
     local out = ui.out
     if ui.scenario_run then

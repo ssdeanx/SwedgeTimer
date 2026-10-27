@@ -2733,6 +2733,11 @@ do
             check(type(w) == "table" and w.type == "execute",
                 "G3: " .. case.label .. " carries " .. case.key)
             if type(w) == "table" then
+                -- The desc carries the operator's guarantee: closing options leaves
+                -- the session running and the panel's X is the only stop.
+                check(type(w.desc) == "string"
+                    and w.desc:find("only the practice panel's X stops it", 1, true) ~= nil,
+                    "G3: " .. case.label .. " desc names the panel X as the only stop")
                 -- Missing module: the name offers Start, the func no-ops.
                 sb.st.practice_ui = nil
                 local ok1, name1 = pcall(w.name)
@@ -2764,8 +2769,18 @@ do
                     toggle = function() end,
                 }
                 local ok4, name4 = pcall(w.name)
-                check(ok4 and name4 == "Stop Practice",
-                    "G3: " .. case.label .. " name offers Stop while active")
+                check(ok4 and name4 == "Open Practice Panel",
+                    "G3: " .. case.label .. " name offers Open while active")
+                local opens, toggles_after, stops = 0, 0, 0
+                sb.st.practice_ui = {
+                    is_active = function() return true end,
+                    open = function() opens = opens + 1 end,
+                    toggle = function() toggles_after = toggles_after + 1 end,
+                    stop = function() stops = stops + 1 end,
+                }
+                local ok5 = pcall(w.func)
+                check(ok5 and opens == 1 and toggles_after == 0 and stops == 0,
+                    "G3: " .. case.label .. " prefers open (never stops from options)")
             end
         end
     end
@@ -4382,6 +4397,141 @@ do
         "SBAR: the texture dropdowns read the statusbar hash table (got " .. tostring(n_statusbar) .. ")")
     check(table_presets_src:find('LSM30_Statusbar') ~= nil,
         "SBAR: the texture dropdowns use the shared-media statusbar widget")
+end
+
+
+--=========================================================================================
+-- 29) Appearance lanes (2026-10-25): the opacity migration call + the ranged bar getter
+--
+-- Two operator orders land on the options side of this file:
+--   (a) the bar BACKDROP ships opaque and a one-time migration raises an untouched old
+--       default. The pure function and its full behaviour live in config.lua / the new
+--       tests/appearance_defaults_state.lua; THIS file runs the real set_opts() over a
+--       stub profile, so it is the only place the CALL SITE can be driven for real.
+--   (b) the ranged distance bar is a standalone horizontal bar, ON by default for
+--       hunters (nil reads ON) and opt-in for every other class (nil reads off).
+--
+-- The widget keeps the key weave_range_enabled: the runtime gate (weave_range.lua) and
+-- every saved profile already use it.
+--=========================================================================================
+do
+    local function appearance_widget(sb)
+        local w = sb.ST.opts_table.args and sb.ST.opts_table.args.weave_range_enabled
+        return type(w) == "table" and w or nil
+    end
+
+    -- (a) The call site: set_opts() runs the migration before building anything.
+    local msb, merr = build("Hunter")
+    check(msb ~= nil, "APPEAR: the hunter options tree builds"
+        .. (msb and "" or (": " .. tostring(merr))))
+    if msb then
+        eq(msb.profile.appearance_defaults_213, true,
+            "APPEAR: set_opts() marks the profile with the migration flag")
+        -- Drive the seam a second time over a seeded profile: the untouched old default
+        -- is raised, a custom colour survives, and the run is idempotent afterwards.
+        msb.profile.DEATHKNIGHT = {
+            mainhand = { background_color = { 0, 0, 0, 0.85 } },
+            offhand = { background_color = { 20, 25, 35, 0.65 } },
+        }
+        msb.profile.appearance_defaults_213 = nil
+        local ok_run, run_err = pcall(msb.ST.set_opts, msb.ST)
+        check(ok_run, "APPEAR: a second set_opts() run does not throw (" .. tostring(run_err) .. ")")
+        local mh = msb.profile.DEATHKNIGHT.mainhand.background_color
+        check(mh[1] == 0 and mh[2] == 0 and mh[3] == 0 and mh[4] == 1.0,
+            "APPEAR: set_opts() raised the untouched old default to opaque black")
+        local oh = msb.profile.DEATHKNIGHT.offhand.background_color
+        check(oh[1] == 20 and oh[2] == 25 and oh[3] == 35 and oh[4] == 0.65,
+            "APPEAR: set_opts() preserved a custom backdrop colour")
+        eq(msb.profile.appearance_defaults_213, true,
+            "APPEAR: the second run re-marks the profile")
+        -- Idempotence at the seam: a third run over a re-seeded old default changes
+        -- nothing because the flag is set.
+        msb.profile.DEATHKNIGHT.mainhand.background_color = { 0, 0, 0, 0.85 }
+        pcall(msb.ST.set_opts, msb.ST)
+        eq(msb.profile.DEATHKNIGHT.mainhand.background_color[4], 0.85,
+            "APPEAR: the flag makes a third run a no-op")
+    end
+
+    -- (b) The widget contract, hunter side.
+    local hsb, herr = build("Hunter")
+    check(hsb ~= nil, "RANGED: the hunter options tree builds"
+        .. (hsb and "" or (": " .. tostring(herr))))
+    if hsb then
+        local w = appearance_widget(hsb)
+        check(w ~= nil and w.type == "toggle",
+            "RANGED: weave_range_enabled has a toggle widget (got "
+            .. tostring(type(w) == "table" and w.type or nil) .. ")")
+        if w then
+            check(type(w.order) == "number", "RANGED: the toggle carries a numeric order")
+            eq(w.name, "Ranged distance bar", "RANGED: the toggle is named for the new bar")
+            check(type(w.desc) == "string" and w.desc ~= "", "RANGED: the toggle carries a description")
+            local lower = type(w.desc) == "string" and w.desc:lower() or ""
+            check(lower:find("horizontal", 1, true) ~= nil,
+                "RANGED: the description says the bar is horizontal")
+            check(lower:find("yards", 1, true) ~= nil,
+                "RANGED: the description says the bar labels yards")
+            check(lower:find("hunter", 1, true) ~= nil,
+                "RANGED: the description states the hunter default")
+            -- The copy must describe the SHIPPED module (HU-23): exact yards only, no
+            -- LibRangeCheck band fallback. The old copy claimed "banded where it only
+            -- has range checks" after that path was removed - pinned out by phrase, not
+            -- by the word "band", because the sanctioned copy uses "35 yd band" as the
+            -- range-window noun (bench/bars_range_hunter_2026-10-25.md §6).
+            check(lower:find("banded", 1, true) == nil,
+                "RANGED: the description carries no stale 'banded' fallback wording")
+            check(lower:find("range check", 1, true) == nil,
+                "RANGED: the description claims no range-check source")
+            check(lower:find("librangecheck", 1, true) == nil,
+                "RANGED: the description names no range library")
+            check(lower:find("exact distance", 1, true) ~= nil,
+                "RANGED: the description says the label is the exact distance")
+            check(w.desc:find("MELEE / IN RANGE / OUT", 1, true) ~= nil,
+                "RANGED: the description names the three state words")
+
+            -- Copy <-> code: the band numbers in the description are the module's own
+            -- constants (5 / 35 / 30), so a module retune or a copy edit reds here.
+            local wrf = assert(io.open(ROOT .. "weave_range.lua", "r"))
+            local wr_src = wrf:read("*a")
+            wrf:close()
+            wr_src = wr_src:gsub("\r\n", "\n")
+            local near = wr_src:match("wr%.NEAR_YARDS%s*=%s*(%d+)")
+            local far = wr_src:match("wr%.FAR_YARDS%s*=%s*(%d+)")
+            local hunter_far = wr_src:match("wr%.HUNTER_FAR_YARDS%s*=%s*(%d+)")
+            eq(near, "5", "RANGED: the module's melee bound is 5 yd")
+            eq(far, "30", "RANGED: the module's shared far bound is 30 yd")
+            eq(hunter_far, "35", "RANGED: the module's hunter far bound is 35 yd")
+            check(lower:find(near .. " yd or closer", 1, true) ~= nil,
+                "RANGED: the description names the module's melee bound (" .. tostring(near) .. " yd or closer)")
+            check(lower:find(hunter_far .. " yd", 1, true) ~= nil,
+                "RANGED: the description names the hunter band (" .. tostring(hunter_far) .. " yd)")
+            check(lower:find(far .. " yd", 1, true) ~= nil,
+                "RANGED: the description names the shared band (" .. tostring(far) .. " yd)")
+
+            -- Nil -> ON for hunters. The sandbox class table starts empty, so this is the
+            -- exact case an older hunter profile presents.
+            hsb.class_db.weave_range_enabled = nil
+            eq(w.get(), true, "RANGED: a nil hunter value reads ON (the documented default)")
+            hsb.class_db.weave_range_enabled = true
+            eq(w.get(), true, "RANGED: an explicit hunter true reads ON")
+            hsb.class_db.weave_range_enabled = false
+            eq(w.get(), false, "RANGED: an explicit hunter false reads OFF")
+            w.set(nil, true)
+            eq(hsb.class_db.weave_range_enabled, true, "RANGED: the toggle writes the class key")
+        end
+    end
+
+    -- (c) The widget contract, every other class: nil stays OFF (opt-in only).
+    for _, pretty in ipairs({ "Rogue", "Warrior", "Paladin", "Shaman", "Druid" }) do
+        local sb = build(pretty)
+        local w = sb and appearance_widget(sb)
+        check(w ~= nil, "RANGED: " .. pretty .. " carries the shared toggle")
+        if w then
+            sb.class_db.weave_range_enabled = nil
+            eq(w.get(), false, "RANGED: a nil " .. pretty .. " value reads OFF (opt-in)")
+            sb.class_db.weave_range_enabled = true
+            eq(w.get(), true, "RANGED: an explicit " .. pretty .. " true reads ON")
+        end
+    end
 end
 
 

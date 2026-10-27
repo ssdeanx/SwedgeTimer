@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-25T23:54:09Z",
+  "agent_name": "spell-resolution",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "One shared rule (compat api.get_spell_query) plus a per-class inline fallback, each gated on its own family; behavioural pins for the hunter helpers, a static pin against the banned `get_spell_query(...) or id` shape, and 10 mutation proofs on /tmp copies (separate WRATH/TBC gates proved independently).",
+    "what_was_hard": "Removing the id re-probe changed the rank walk's verdict: 'absent' is now unreachable on TBC/WRATH, so truly-absent rank sets retry at the callers' throttles instead of latching a negative. Re-cut pins moved that finality contract to Era (where ids are the query) rather than weakening it. Several fixtures were id-only clients; they now model a real client's bidirectional spell data.",
+    "skill_gap": "The existing suites gave no behavioural coverage for the shaman/druid WRATH token helpers, so the new suite carries exact source pins for those class gates in addition to the shared-helper behaviour."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Add tests/spell_query_family_state.lua to tests/run.sh (orchestrator owns it). Operator in-client confirmation on Titanforge 3.80.2 for name-based state reads."
+  }
+}

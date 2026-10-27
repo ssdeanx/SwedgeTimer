@@ -53,6 +53,34 @@ local RAPTOR_RANKS = 11
 -- The Steady Shot ranks in classes/hunter.lua, same purpose.
 local STEADY_RANKS = 4
 
+-- The queue families' localized names: one name per rank family. TBC Anniversary and
+-- Wrath/Titanforge state queries take that name (operator ruling), so the queue blocks
+-- opt in to a client that can answer it - the default sandbox client answers ids only,
+-- which is the shape those families do NOT have.
+local QUEUE_NAMES = {}
+for _, id in ipairs({ 2973, 14260, 14261, 14262, 14263, 14264, 14265, 14266,
+    27014, 48995, 48996 }) do
+    QUEUE_NAMES[id] = "Raptor Strike"
+end
+for _, id in ipairs({ 56641, 34120, 49051, 49052 }) do
+    QUEUE_NAMES[id] = "Steady Shot"
+end
+local QUEUE_ID_BY_NAME = {}
+for id, name in pairs(QUEUE_NAMES) do
+    QUEUE_ID_BY_NAME[name] = id
+end
+local function queue_spell_info(query)
+    local id = query
+    if type(query) == "string" then
+        id = QUEUE_ID_BY_NAME[query]
+    end
+    local name = id and QUEUE_NAMES[id]
+    if name then
+        return name, nil, "icon", 0, 0, 0, id
+    end
+    return nil
+end
+
 -- The Era Aimed Shot ranks in classes/hunter.lua (the six verified vanilla ranks).
 local AIMED_RANKS = 6
 
@@ -142,6 +170,11 @@ local function build(opts)
     -- restricted client answers every read with a secret value (so the resolver
     -- reports "unresolved" - retryable - instead of "absent" - final).
     local name_only_client = opts.name_only_client == true
+    -- The fixture's spell data is remembered in BOTH directions, like a real client:
+    -- a name the id form has answered resolves back to the same spell. The TBC/Wrath
+    -- state paths ask by name (operator ruling), so an id-only fixture would otherwise
+    -- model a client that cannot exist.
+    local id_by_name = {}
     env.GetSpellInfo = function(query)
         sb.get_spell_info_calls = sb.get_spell_info_calls + 1
         sb.spell_queries[#sb.spell_queries + 1] = query
@@ -149,11 +182,26 @@ local function build(opts)
             return sb.secret_marker
         end
         if opts.GetSpellInfo then
-            return opts.GetSpellInfo(query)
+            local name, rank, icon, cast, minr, maxr, answered_id = opts.GetSpellInfo(query)
+            if type(query) == "number" and type(name) == "string"
+                and type(answered_id) == "number" then
+                id_by_name[name] = answered_id
+            elseif type(query) == "string" and name == nil then
+                local back_id = id_by_name[query]
+                if back_id ~= nil then
+                    return opts.GetSpellInfo(back_id)
+                end
+            end
+            return name, rank, icon, cast, minr, maxr, answered_id
         end
         if type(query) == "string" then
-            -- The client's own name for a known spell answers too: a client that named
-            -- a spell answers to that name (the TBC name path).
+            -- The client's own name for a spell answers too: a name it has already
+            -- handed out for an id resolves back to that spell (spell data is
+            -- bidirectional), and a client that named a spell answers to that name.
+            local known_id = id_by_name[query]
+            if known_id ~= nil then
+                return query, nil, "icon", 0, 0, 0, known_id
+            end
             local back = query:match("^Spell (%d+)$")
             local back_id = back and tonumber(back)
             if back_id and sb.known[back_id] then
@@ -166,9 +214,20 @@ local function build(opts)
             return nil
         end
         if sb.known[query] then
-            return "Spell " .. tostring(query), nil, "icon", 0, 0, 0, query
+            local spell_name = "Spell " .. tostring(query)
+            id_by_name[spell_name] = query
+            return spell_name, nil, "icon", 0, 0, 0, query
+        end
+        -- A spell the player KNOWS is a spell the client can also name: spell data is
+        -- independent of the book, but a known id always resolves. The TBC/Wrath state
+        -- paths derive their name token here (operator ruling: names there, never ids).
+        if type(opts.known_spells) == "table" and opts.known_spells[query] then
+            local spell_name = "Spell " .. tostring(query)
+            id_by_name[spell_name] = query
+            return spell_name, nil, "icon", 0, 0, 0, query
         end
         if query == 2643 or query == 27021 then
+            id_by_name["Multi-Shot"] = query
             return "Multi-Shot", nil, "icon", 0, 0, 0, query
         end
         return nil
@@ -206,7 +265,27 @@ local function build(opts)
         if type(known) == "function" then
             return known(id)
         end
-        return known ~= nil and known[id] == true
+        if known == nil then
+            return false
+        end
+        if known[id] == true then
+            return true
+        end
+        -- A name token resolves to the id the client names it by: the TBC/Wrath state
+        -- probes carry the localized name (operator ruling), so the fixture answers the
+        -- same spell under both forms like a real client.
+        if type(id) == "string" then
+            local back = id:match("^Spell (%d+)$")
+            local resolved = back and tonumber(back) or nil
+            if resolved == nil then
+                local _, _, _, _, _, _, answered_id = env.GetSpellInfo(id)
+                resolved = type(answered_id) == "number" and answered_id or nil
+            end
+            if resolved ~= nil then
+                return known[resolved] == true
+            end
+        end
+        return false
     end
     -- UnitChannelInfo returns the spell id as the 8th value and has no castID (unlike
     -- UnitCastingInfo). nil models "not channelling", the classic non-channel payload;
@@ -587,20 +666,23 @@ end
 -- 4) Queue detection and the enable_raptor_strike_color gate
 --=========================================================================================
 do
-    local sb = build()
+    local sb = build({ GetSpellInfo = queue_spell_info })
     local ST = sb.ST
     ST.interfaces_are_initialised = true
     ST.raptor_strike_queued = false
 
     -- Option on, nothing queued: every rank is probed and the flag stays down.
+    -- RE-CUT (2026-10-25, operator ruling): on Wrath/Titanforge the state query takes
+    -- the localized NAME, so the eleven ranks collapse into ONE name probe (the same
+    -- shape the TBC pin below already asserts) - not eleven id probes.
     local ok, err = pcall(ST.HUNTER.on_current_spell_cast_changed, ST, false)
     check(ok, "the queue probe does not error (" .. tostring(err) .. ")")
-    eq(sb.is_current_spell_calls, RAPTOR_RANKS, "an empty cast probes every Raptor Strike rank")
+    eq(sb.is_current_spell_calls, 1, "an empty cast probes the Raptor Strike family by NAME")
     eq(ST.raptor_strike_queued, false, "an empty cast leaves the queue flag down")
     eq(sb.bar_color_calls, 0, "an empty cast does not recolour")
 
     -- Option on, a Raptor Strike rank queued: the flag goes up and the bar is repainted.
-    sb.current_spell = 48996
+    sb.current_spell = "Raptor Strike"
     sb.is_current_spell_calls = 0
     sb.vertex = nil
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
@@ -608,16 +690,17 @@ do
     eq(sb.bar_color_calls, 1, "a queued Raptor Strike recolours once")
     eq(sb.last_hand, "mainhand", "queuing Raptor Strike recolours the mainhand bar")
     colour_eq(sb.vertex, sb.class_db.raptor_strike_color, "a queued Raptor Strike paints the RS colour")
-    check(sb.is_current_spell_calls >= 1, "the probe ran against the rank table")
+    check(sb.is_current_spell_calls >= 1, "the probe ran against the family name")
 
-    -- Any rank of the family is detected, including the vanilla rank.
-    sb.current_spell = 2973
+    -- Any rank of the family is detected, including the vanilla rank (every rank
+    -- shares the family name, which is all the client query carries).
+    sb.current_spell = "Raptor Strike"
     ST.raptor_strike_queued = false
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
     eq(ST.raptor_strike_queued, true, "the vanilla rank 2973 is detected as a queue")
 
     -- Queuing something else clears the flag.
-    sb.current_spell = 12345
+    sb.current_spell = "Bogus Spell"
     ST.raptor_strike_queued = true
     sb.bar_color_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
@@ -626,7 +709,7 @@ do
 
     -- Option off: no probing at all, and the existing flag is left untouched.
     sb.class_db.enable_raptor_strike_color = false
-    sb.current_spell = 48996
+    sb.current_spell = "Raptor Strike"
     ST.raptor_strike_queued = true
     sb.is_current_spell_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
@@ -639,7 +722,7 @@ do
     sb.current_spell = nil
     sb.is_current_spell_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, true)
-    eq(sb.is_current_spell_calls, RAPTOR_RANKS, "a cancelled-cast dispatch still runs the probe")
+    eq(sb.is_current_spell_calls, 1, "a cancelled-cast dispatch still runs the name probe")
     eq(ST.raptor_strike_queued, false, "an empty cast clears a stale queue flag")
 end
 
@@ -875,7 +958,7 @@ end
 -- 8) Steady Shot queue detection and the enable_steady_shot_color gate
 --=========================================================================================
 do
-    local sb = build()
+    local sb = build({ GetSpellInfo = queue_spell_info })
     local ST = sb.ST
     ST.interfaces_are_initialised = true
     ST.steady_shot_queued = false
@@ -884,30 +967,33 @@ do
     -- adds no IsCurrentSpell calls, never reads the channel and leaves the flag down.
     local ok, err = pcall(ST.HUNTER.on_current_spell_cast_changed, ST, false)
     check(ok, "the steady probe does not error with the option off (" .. tostring(err) .. ")")
-    eq(sb.is_current_spell_calls, RAPTOR_RANKS, "the option off adds zero Steady Shot probes")
+    -- RE-CUT (2026-10-25, operator ruling): Wrath/Titanforge state queries take the
+    -- localized NAME, so the raptor family is one name probe - the steady branch still
+    -- adds zero.
+    eq(sb.is_current_spell_calls, 1, "the option off adds zero Steady Shot probes")
     eq(ST.steady_shot_queued, false, "the option off leaves steady_shot_queued down")
     eq(sb.channel_calls, 0, "the option off never reads the player channel")
 
-    -- Option off with a queued Steady Shot id still detects nothing.
-    sb.current_spell = 49052
+    -- Option off with a queued Steady Shot still detects nothing.
+    sb.current_spell = "Steady Shot"
     sb.is_current_spell_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
     eq(ST.steady_shot_queued, false, "a queued Steady Shot is ignored while the option is off")
 
-    -- Option on, raptor off (the two gates are independent), nothing queued: every
-    -- Steady Shot rank is probed and the flag stays down.
+    -- Option on, raptor off (the two gates are independent), nothing queued: the
+    -- Steady Shot family name is probed once and the flag stays down.
     sb.class_db.enable_steady_shot_color = true
     sb.class_db.enable_raptor_strike_color = false
     sb.current_spell = nil
     sb.is_current_spell_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
-    eq(sb.is_current_spell_calls, STEADY_RANKS, "an empty cast probes every Steady Shot rank")
+    eq(sb.is_current_spell_calls, 1, "an empty cast probes the Steady Shot family by NAME")
     eq(ST.steady_shot_queued, false, "an empty cast leaves the steady queue flag down")
     eq(sb.bar_color_calls, 0, "an empty cast does not recolour")
 
-    -- Every rank of the family is detected.
+    -- Every rank of the family is detected (all ranks share the family name).
     for _, spell_id in ipairs({ 56641, 34120, 49051, 49052 }) do
-        sb.current_spell = spell_id
+        sb.current_spell = QUEUE_NAMES[spell_id]
         ST.steady_shot_queued = false
         ST.HUNTER.on_current_spell_cast_changed(ST, false)
         eq(ST.steady_shot_queued, true, "rank " .. spell_id .. " is detected as a steady queue")
@@ -915,7 +1001,7 @@ do
 
     -- The WotLK top rank queued: the flag goes up and the bar is repainted in the
     -- configured Steady Shot colour.
-    sb.current_spell = 49052
+    sb.current_spell = QUEUE_NAMES[49052]
     sb.bar_color_calls = 0
     sb.vertex = nil
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
@@ -925,7 +1011,7 @@ do
     colour_eq(sb.vertex, sb.class_db.steady_shot_color, "a queued Steady Shot paints the SS colour")
 
     -- Queuing something else clears the flag.
-    sb.current_spell = 12345
+    sb.current_spell = "Bogus Spell"
     ST.steady_shot_queued = true
     sb.bar_color_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
@@ -946,6 +1032,7 @@ do
 
     -- A foreign channel id must not match.
     sb.channel_spell = 12345
+    sb.channel_name = "Frostbolt"
     ST.steady_shot_queued = false
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
     eq(ST.steady_shot_queued, false, "an unrelated channel id leaves the flag down")
@@ -979,7 +1066,7 @@ do
     eq(ST.steady_shot_queued, false, "a nil channel payload leaves the flag down")
 
     -- The channel is only consulted when the IsCurrentSpell probe missed.
-    sb.current_spell = 49052
+    sb.current_spell = QUEUE_NAMES[49052]
     sb.channel_spell = 49052
     sb.channel_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
@@ -1134,6 +1221,20 @@ do
         end
         return nil
     end
+    -- The same client asked by NAME: a real classic client answers the localized name
+    -- its own id form hands back (the TBC/Wrath state-query form). The old fixture
+    -- answered ids only, which is why the removed id fallback used to carry the
+    -- name-family walk; a client that cannot answer its own name does not exist.
+    local TBC_BY_NAME = {}
+    for id, entry in pairs(TBC_SPELLS) do
+        TBC_BY_NAME[entry[1]] = id
+    end
+    local function tbc_spell_lookup(query)
+        if type(query) == "string" then
+            query = TBC_BY_NAME[query]
+        end
+        return tbc_spell_info(query)
+    end
     local function token_types(tokens)
         local strings, numbers = 0, 0
         for _, token in ipairs(tokens) do
@@ -1149,7 +1250,7 @@ do
     -- Queue probes: TBC reads one distinct family name (ten Raptor ranks share
     -- one read); Era reads every rank id.
     do
-        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_info,
+        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_lookup,
             current_spell = "Raptor Strike" })
         tbc.ST.interfaces_are_initialised = true
         local ok, err = pcall(tbc.ST.HUNTER.on_current_spell_cast_changed, tbc.ST, false)
@@ -1192,7 +1293,7 @@ do
 
     -- Viper knowledge: TBC asks for the name, Era for the id.
     do
-        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_info,
+        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_lookup,
             known_spells = { ["Aspect of the Viper"] = true } })
         eq(tbc.ST.HUNTER.is_viper_known(), true, "TBC: the Viper name reads known")
         local strings, numbers = token_types(tbc.is_spell_known_tokens)
@@ -1207,7 +1308,7 @@ do
     -- Auto Shot sync + repeat: TBC asks by name, Era by id.
     do
         local cd_tokens, repeat_tokens = {}, {}
-        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_info,
+        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_lookup,
             GetSpellCooldown = function(spell)
                 cd_tokens[#cd_tokens + 1] = spell
                 return 0, 0, 0, 0
@@ -1244,7 +1345,7 @@ do
     -- Gather cooldown + range reads: TBC by name, Era by id.
     do
         local cd_tokens, range_tokens = {}, {}
-        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_info,
+        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_lookup,
             GetSpellCooldown = function(spell)
                 cd_tokens[#cd_tokens + 1] = spell
                 return 0, 0, 0, 0
@@ -1295,7 +1396,7 @@ do
     -- is absent): the landed shot and the quiet failure clear their queue tint
     -- by name. Id-carrying payloads pin the same clears by id above.
     do
-        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_info })
+        local tbc = build({ project = 5, GetSpellInfo = tbc_spell_lookup })
         local sb, T = tbc, tbc.ST
         T.steady_shot_queued = true
         T.raptor_strike_queued = true
@@ -1751,8 +1852,20 @@ do
             env.UnitPowerMax = function() return opts.mana.max end
         end
         if opts.known_spells ~= nil then
-            env.IsSpellKnown = function(id)
-                return opts.known_spells[id] == true
+            -- The fixture answers either form of the same spell (a real client does):
+            -- the TBC/Wrath state token is the localized name, the Era token the id.
+            env.IsSpellKnown = function(token)
+                if opts.known_spells[token] == true then
+                    return true
+                end
+                if type(token) == "string" then
+                    for id, name in pairs(spell_data) do
+                        if name == token then
+                            return opts.known_spells[id] == true
+                        end
+                    end
+                end
+                return false
             end
         end
 
@@ -1833,6 +1946,11 @@ do
         env.LibStub = function(major)
             if major == "AceAddon-3.0" then
                 return { GetAddon = function() return ST end }
+            end
+            -- The swing engine is opt-in: nil = the library is absent (Retail's own
+            -- shape, and every sandbox that does not test the engine seam).
+            if major == "LibClassicSwingTimerAPI" then
+                return opts.swing_lib
             end
             if major == "LibSharedMedia-3.0" then
                 return {
@@ -2024,10 +2142,16 @@ do
         sb.live_cast = nil
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
 
-        near(sb.mh_anchor.center_y, -129,
-            "the mainhand re-anchors directly beneath the ranged bar while the cast bar shows")
-        near(sb.oh_anchor.center_y, -145,
-            "the offhand stacks beneath the mainhand")
+        -- The AUTO SHOT WINDOW FACE (cast bar visible, no live cast) must NOT move a
+        -- melee bar. This is the 2026-10-25 regression pin: the retired reference
+        -- re-anchor fired on exactly this state, once per ranged cycle, so the melee
+        -- bars hopped into the ranged stack at range with no melee activity.
+        near(sb.mh_anchor.center_y, -142,
+            "the Auto Shot window face leaves the mainhand at its stored position")
+        near(sb.oh_anchor.center_y, -158,
+            "the Auto Shot window face leaves the offhand at its stored position")
+        eq(sb.mh_anchor.restored, 0,
+            "the window face issues no LibWindow restore for the mainhand")
         local restored_after_show = sb.mh_anchor.restored
 
         -- A live cast hands the bar over in the very next tick, no event needed.
@@ -2038,16 +2162,19 @@ do
         local tint = ui.cast_frame.tint.color
         check(tint ~= nil and tint[1] == 1 and tint[2] == 0 and tint[3] == 0
             and math.abs(tint[4] - 0.4) < 1e-9, "the tint is the reference red for a clipping cast")
+        near(sb.mh_anchor.center_y, -142,
+            "a live cast also leaves the mainhand at its stored position")
+        near(sb.oh_anchor.center_y, -158,
+            "a live cast also leaves the offhand at its stored position")
 
         sb.live_cast = nil
         sb.class_db.hunter_cast_bar_enabled = false
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
         eq(ui.cast_frame.shown, false, "disabling the option hides the cast bar")
-        eq(ui.melee_anchored, false, "hiding the cast bar restores the normal anchors")
-        check(sb.mh_anchor.restored > restored_after_show,
-            "the mainhand anchor was handed back to LibWindow")
-        check(sb.oh_anchor.restored > restored_after_show,
-            "the offhand anchor was handed back to LibWindow")
+        eq(sb.mh_anchor.restored, restored_after_show,
+            "the melee anchors are never shifted, so nothing is handed back to LibWindow")
+        eq(sb.oh_anchor.restored, restored_after_show,
+            "the offhand anchor is never shifted either")
     end
 
     -- 14d2) a ranged re-anchor drops the previous cycle's cache: the cast bar
@@ -2468,6 +2595,303 @@ do
         tui.ST.HUNTER.on_bar_update(tui.ST, "ranged")
         check(tbadge.shown == false, "trap badge: the toggle off hides the badge")
     end
+
+    -- 14l) Shot cast guard (operator ruling 2026-10-25: NO hunter shot may ever restart
+    -- the melee hands, at any range). The engine resets both melee hands when a tracked
+    -- cast completes (LibClassicSwingTimerAPI.lua:596-604); the vendored lib is
+    -- upstream-clean, so the guard is entirely ours. It arms the engine's own
+    -- `preventSwingReset` for every hunter shot id in the module's own tables, with no
+    -- in-melee exception.
+    do
+        local function stub_engine()
+            local unit = {
+                casting = false, lastCastSpellId = nil, lastCastName = nil,
+                preventSwingReset = false, auraPreventSwingReset = false,
+            }
+            local lib = {
+                getUnit = function(_, id)
+                    if id == "player" then
+                        return unit
+                    end
+                end,
+            }
+            return lib, unit
+        end
+
+        -- No engine (Retail's inert stand-in, Forever's source): never touches anything.
+        do
+            local sb = build_ui({})
+            sb.ST.swing_engine = "inert-standin"
+            local ok, err = pcall(sb.ST.HUNTER.suppress_shot_melee_reset, sb.ST)
+            check(ok, "guard: no engine never throws (" .. tostring(err) .. ")")
+            eq(sb.ST.hunter_shot_guard_count, nil, "guard: no engine arms nothing")
+        end
+
+        -- Classical engine, no cast live: the early exit writes nothing.
+        do
+            local lib, unit = stub_engine()
+            local sb = build_ui({ swing_lib = lib })
+            sb.ST.swing_engine = "vendored-lib"
+            sb.ST.HUNTER.suppress_shot_melee_reset(sb.ST)
+            eq(unit.preventSwingReset, false, "guard: no live cast arms nothing")
+            eq(sb.ST.hunter_shot_guard_count, nil, "guard: no live cast counts nothing")
+        end
+
+        -- Every hunter shot id in the module's own tables arms the flag. These are the
+        -- ids the cast path can report (Auto/Steady/Aimed/Multi/Arcane/Serpent/Kill/
+        -- Chimera/Explosive); a non-shot cast never does.
+        do
+            local shot_ids = { 75, 34120, 19434, 2643, 3044, 1978, 53351, 53209, 53301 }
+            local lib, unit = stub_engine()
+            local sb = build_ui({ swing_lib = lib })
+            sb.ST.swing_engine = "vendored-lib"
+            unit.casting = true
+            for i = 1, #shot_ids do
+                unit.preventSwingReset = false
+                unit.lastCastSpellId = shot_ids[i]
+                unit.lastCastName = nil
+                sb.ST.HUNTER.suppress_shot_melee_reset(sb.ST)
+                eq(unit.preventSwingReset, true,
+                    "guard: shot " .. tostring(shot_ids[i]) .. " arms the flag")
+            end
+            eq(sb.ST.hunter_shot_guard_count, #shot_ids, "guard: every shot arm is counted")
+        end
+
+        -- The ruling removed the in-melee exception: the shot arms at ANY range.
+        do
+            local lib, unit = stub_engine()
+            local sb = build_ui({ swing_lib = lib })
+            sb.ST.swing_engine = "vendored-lib"
+            sb.ST.in_melee_range = true
+            unit.casting = true
+            unit.lastCastSpellId = 75
+            unit.lastCastName = "Auto Shot"
+            sb.ST.HUNTER.suppress_shot_melee_reset(sb.ST)
+            eq(unit.preventSwingReset, true, "guard: an in-melee shot still arms (no exception)")
+            eq(sb.ST.hunter_shot_guard_count, 1, "guard: the in-melee arm is counted")
+        end
+
+        -- A cast that is not a hunter shot is left to the engine.
+        do
+            local lib, unit = stub_engine()
+            local sb = build_ui({ swing_lib = lib })
+            sb.ST.swing_engine = "vendored-lib"
+            unit.casting = true
+            unit.lastCastSpellId = 5384 -- Feign Death, not a shot
+            unit.lastCastName = "Feign Death"
+            sb.ST.HUNTER.suppress_shot_melee_reset(sb.ST)
+            eq(unit.preventSwingReset, false, "guard: a non-shot cast is not touched")
+        end
+
+        -- The event arm: UNIT_SPELLCAST_START for a shot arms before SUCCEEDED, which
+        -- is the only way an instant shot can be covered.
+        do
+            local lib, unit = stub_engine()
+            local sb = build_ui({ swing_lib = lib })
+            sb.ST.swing_engine = "vendored-lib"
+            sb.ST.interfaces_are_initialised = true
+            sb.ST.HUNTER.on_spellcast_event(sb.ST, "UNIT_SPELLCAST_START", "player", "g", 2643)
+            eq(unit.preventSwingReset, true, "guard event: Multi-Shot START arms the flag")
+            unit.preventSwingReset = false
+            sb.ST.HUNTER.on_spellcast_event(sb.ST, "UNIT_SPELLCAST_START", "player", "g", 5384)
+            eq(unit.preventSwingReset, false, "guard event: a non-shot START arms nothing")
+            sb.ST.HUNTER.on_spellcast_event(sb.ST, "UNIT_SPELLCAST_START", "target", "g", 2643)
+            eq(unit.preventSwingReset, false, "guard event: a non-player START arms nothing")
+        end
+
+        -- The localized-name fallback: an id-less lib reading still matches Auto Shot.
+        do
+            local lib, unit = stub_engine()
+            local sb = build_ui({ swing_lib = lib })
+            sb.ST.swing_engine = "vendored-lib"
+            unit.casting = true
+            unit.lastCastSpellId = nil
+            unit.lastCastName = "Auto Shot"
+            sb.ST.HUNTER.suppress_shot_melee_reset(sb.ST)
+            eq(unit.preventSwingReset, true, "guard: the name form matches Auto Shot")
+        end
+
+        -- No library at all: the cached lookup stays nil and the guard is a no-op.
+        do
+            local sb = build_ui({})
+            sb.ST.swing_engine = "vendored-lib"
+            local ok, err = pcall(sb.ST.HUNTER.suppress_shot_melee_reset, sb.ST)
+            check(ok, "guard: a missing library never throws (" .. tostring(err) .. ")")
+            eq(sb.ST.HUNTER.swing_unit_cache, nil, "guard: no unit is cached without a library")
+        end
+    end
+
+    -- 14m) Shot cast guard against the REAL vendored engine (lesson 11: a proof for
+    -- an engine contract runs the SHIPPED library, not a fixture). Three legs:
+    --   (1) the defect is real: START(75)+SUCCEEDED(75) restarts mainhand AND offhand,
+    --   (2) the guard kills exactly that: with the class hook armed, only ranged fires,
+    --   (3) a Steady Shot cast fires nothing (the lib's own BCC exemption), so the guard
+    --       is not papering over a lib that never reset.
+    do
+        local function real_engine()
+            local env = setmetatable({}, { __index = _G })
+            env._G = env
+            env.strmatch = string.match
+            local real_xpcall = xpcall
+            env.xpcall = function(f, errfunc, ...)
+                local a = { n = select("#", ...), ... }
+                return real_xpcall(function() return f(unpack(a, 1, a.n)) end, errfunc)
+            end
+            env.geterrorhandler = function() return function(e) return e end end
+            env.WOW_PROJECT_ID = 5
+            env.WOW_PROJECT_CLASSIC = 2
+            env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5
+            env.WOW_PROJECT_WRATH_CLASSIC = 11
+            env.WOW_PROJECT_CATACLYSM_CLASSIC = 14
+            env.WOW_PROJECT_MISTS_CLASSIC = 19
+            env.WOW_PROJECT_MAINLINE = 1
+            env.LE_EXPANSION_LEVEL_CURRENT = 1
+            env.LE_EXPANSION_BURNING_CRUSADE = 1
+            env.LE_EXPANSION_WRATH_OF_THE_LICH_KING = 2
+            env.LE_EXPANSION_CATACLYSM = 3
+            env.LE_EXPANSION_MISTS_OF_PANDARIA = 4
+            env.GetTimePreciseSec = function() return 100 end
+            env.GetTimeBase = function() return 100 end
+            env.UnitGUID = function(unit)
+                if unit == "player" then return "Player-0001" end
+                if unit == "target" then return "Target-0001" end
+            end
+            env.GetPlayerInfoByGUID = function() return "Hunter", "HUNTER" end
+            env.UnitAttackSpeed = function() return 2.6, 1.7 end
+            env.UnitRangedDamage = function() return 3.0 end
+            env.UnitAura = function() return nil end
+            env.UnitIsPlayer = function() return false end
+            env.GetSpellInfo = function(id)
+                local names = { [75] = "Auto Shot", [34120] = "Steady Shot" }
+                if names[id] then
+                    return names[id], "", "icon_" .. id, 0, 0, 0, id
+                end
+                return nil
+            end
+            env.GetSpellCooldown = function() return 0, 0, 0 end
+            env.GetInventoryItemID = function() return nil end
+            env.INVSLOT_RANGED = 18
+            env.SPEED = "Speed"
+            env.WorldFrame = {}
+            env.CombatLogGetCurrentEventInfo = function() return nil end
+            env.C_Timer = {
+                After = function() return { Cancel = function() end } end,
+                NewTimer = function()
+                    local t = { cancelled = false }
+                    function t:Cancel() self.cancelled = true end
+                    function t:IsCancelled() return self.cancelled end
+                    return t
+                end,
+                NewTicker = function() return { Cancel = function() end } end,
+            }
+            local lib_frame
+            local function frame_stub()
+                local f = { scripts = {} }
+                function f:RegisterEvent() end
+                function f:RegisterUnitEvent() end
+                function f:SetScript(script, fn) self.scripts[script] = fn end
+                function f:GetScript(script) return self.scripts[script] end
+                function f:SetOwner() end
+                function f:ClearLines() end
+                function f:SetItemByID() end
+                function f:NumLines() return 0 end
+                return f
+            end
+            env.CreateFrame = function(kind)
+                if kind == "GameTooltip" then return frame_stub() end
+                lib_frame = lib_frame or frame_stub()
+                return lib_frame
+            end
+
+            local stub = assert(loadfile(ROOT .. "Libs/LibStub/LibStub.lua"))
+            setfenv(stub, env)
+            stub("SwedgeTimer")
+            local ch = assert(loadfile(ROOT .. "Libs/CallbackHandler-1.0/CallbackHandler-1.0.lua"))
+            setfenv(ch, env)
+            ch("SwedgeTimer")
+            local chunk = assert(loadfile(ROOT .. "Libs/LibClassicSwingTimerAPI/LibClassicSwingTimerAPI.lua"))
+            setfenv(chunk, env)
+            chunk("SwedgeTimer")
+
+            local lib = env.LibStub("LibClassicSwingTimerAPI")
+            lib:ADDON_LOADED("ADDON_LOADED", "SwedgeTimer")
+            lib:PLAYER_ENTERING_WORLD("PLAYER_ENTERING_WORLD")
+            local fired = {}
+            -- The lib fires (unitId, speed, expiration, hand) for START/UPDATE and
+            -- (unitId, hand) for STOP; the hand is the LAST argument in both shapes.
+            local function record(event, ...)
+                local args = { ... }
+                local hand = args[#args]
+                fired[#fired + 1] = (event:gsub("^.*SWING_TIMER_", "")) .. ":" .. tostring(hand)
+            end
+            lib.RegisterCallback(lib, "SWING_TIMER_START", record)
+            lib.RegisterCallback(lib, "SWING_TIMER_UPDATE", record)
+            lib.RegisterCallback(lib, "SWING_TIMER_STOP", record)
+            local function reset() fired = {} end
+            local function flat()
+                local out = {}
+                for i = 1, #fired do out[i] = fired[i] end
+                return table.concat(out, ",")
+            end
+            return lib, reset, flat
+        end
+
+        local lib, reset_fired, flat = real_engine()
+        local unit = lib:getUnit("player")
+
+        -- (1) The defect, on the shipped engine.
+        lib:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "g", 75)
+        lib:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "g", 75)
+        local unguarded = flat()
+        check(unguarded:find("START:mainhand", 1, true) ~= nil
+            and unguarded:find("START:offhand", 1, true) ~= nil
+            and unguarded:find("START:ranged", 1, true) ~= nil,
+            "real engine: an unguarded Auto Shot restarts BOTH melee hands and ranged (got "
+            .. unguarded .. ")")
+
+        -- (2) The guard: the class tick hook on the same live cast, then the same
+        -- SUCCEEDED. The operator ruling removed the range exception, so this arms at
+        -- any distance (in_melee_range is irrelevant and deliberately not set).
+        reset_fired()
+        local sb = build_ui({ swing_lib = lib })
+        sb.ST.swing_engine = "vendored-lib"
+        lib:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "g", 75)
+        sb.ST.HUNTER.suppress_shot_melee_reset(sb.ST)
+        eq(unit.preventSwingReset, true, "real engine: the hook arms the engine's own flag")
+        lib:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "g", 75)
+        local guarded = flat()
+        eq(guarded:find("mainhand", 1, true), nil,
+            "real engine: the armed guard leaves the mainhand alone (got " .. guarded .. ")")
+        eq(guarded:find("offhand", 1, true), nil,
+            "real engine: the armed guard leaves the offhand alone (got " .. guarded .. ")")
+        check(guarded:find("START:ranged", 1, true) ~= nil,
+            "real engine: the ranged cycle still starts (got " .. guarded .. ")")
+        eq(unit.preventSwingReset, false, "real engine: the lib clears the flag at SUCCEEDED")
+
+        -- (3) An instant shot (Multi-Shot): the stock lib resets both melee hands, and
+        -- the EVENT arm (UNIT_SPELLCAST_START) is what covers it (no tick between
+        -- START and SUCCEEDED on an instant).
+        reset_fired()
+        lib:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "g", 2643)
+        lib:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "g", 2643)
+        local multi_unguarded = flat()
+        check(multi_unguarded:find("START:mainhand", 1, true) ~= nil,
+            "real engine: an unguarded Multi-Shot restarts the mainhand (got "
+            .. multi_unguarded .. ")")
+        reset_fired()
+        sb.ST.interfaces_are_initialised = true
+        lib:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "g", 2643)
+        sb.ST.HUNTER.on_spellcast_event(sb.ST, "UNIT_SPELLCAST_START", "player", "g", 2643)
+        eq(unit.preventSwingReset, true, "real engine: the event arm arms Multi-Shot")
+        lib:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "g", 2643)
+        eq(flat(), "", "real engine: an armed Multi-Shot fires no swing event")
+
+        -- (4) Steady Shot is exempt in the lib's own BCC table: nothing to guard.
+        reset_fired()
+        lib:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "g", 34120)
+        lib:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "g", 34120)
+        eq(flat(), "", "real engine: an exempt Steady Shot cast fires no swing event")
+    end
 end
 
 --=========================================================================================
@@ -2602,10 +3026,11 @@ do
     eq(aimed_wrath[27065], true, "the Wrath Aimed table keeps the TBC 27065")
 
     local arcane = table_ids("arcane_shot_ids")
-    eq(table_count(arcane), 3, "the Arcane table holds three ranks")
+    eq(table_count(arcane), 4, "the Arcane table holds four ranks")
     eq(arcane[49045], true, "the Arcane table keeps 49045")
     eq(arcane[27019], true, "the Arcane table keeps the TBC 27019")
     eq(arcane[14287], true, "the Arcane table keeps the SoD/Forever 14287 (the APL utility lane)")
+    eq(arcane[3044], true, "the Arcane table keeps rank 1 (the shot guard's low-level coverage)")
 
     local chimera_sod = table_ids("chimera_shot_sod_ids")
     eq(table_count(chimera_sod), 1, "the SoD Chimera table holds the rune id")
@@ -3657,9 +4082,10 @@ do
     eq(H.SERPENT_STING_IDS[13554], true, "serpent: the Era rank 13554 is listed")
     eq(H.SERPENT_STING_IDS[25295], true, "serpent: the later rank 25295 is listed")
     eq(H.SERPENT_STING_IDS[49001], true, "serpent: the Wrath rank 49001 is listed")
+    eq(H.SERPENT_STING_IDS[1978], true, "serpent: rank 1 is listed (the shot guard's coverage)")
     local serpent_count = 0
     for _ in pairs(H.SERPENT_STING_IDS) do serpent_count = serpent_count + 1 end
-    eq(serpent_count, 3, "serpent: only the sourced ranks are listed")
+    eq(serpent_count, 4, "serpent: the sourced ranks plus rank 1 are listed")
 
     -- Improved Steady Shot: the sourced aura id and the sim's duration.
     eq(H.ISS_AURA_ID, 53220, "ISS: the aura id is the sim's 53220")
@@ -4959,7 +5385,9 @@ do
 
     -- (b) ABSENT: the client refutes every Steady rank. The negative is FINAL - the
     --     table is never walked again, not even after the retry window.
-    local ab = build()
+    --     Pinned on Era, where the id form is the query and a refutation is final
+    --     (name families resolve by name first, then fall back to the id).
+    local ab = build({ project = 2 })
     local ABT = ab.ST
     ABT.HUNTER.resolve_guide_icons()
     local after_absent = ab.get_family_spell_id_state_calls

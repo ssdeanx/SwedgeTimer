@@ -1162,6 +1162,92 @@ eq(tev[2].seal_active, "blood", "push: seal_active stored")
 eq(pr.timeline_max_time(tev, tn), 5, "max time across events")
 eq(pr.timeline_max_time({}, 0), 0, "max time with no events is 0")
 
+do -- the moving timeline's pure maths (a block: the suite chunk is at the local ceiling)
+-- The MOVING timeline's pure maths (the cue strip; the frames live in practice_ui.lua)
+-- -------------------------------------------------------------------------------------
+-- Playhead / scale: a fixed fraction of the visible strip, and a scale that makes the
+-- horizon fill the part to its right.
+eq(pr.TL_PLAYHEAD_FRACTION, 0.25, "the playhead fraction is a quarter")
+eq(pr.TL_HORIZON_SECONDS, 10, "the visible horizon is ten seconds (the reference strip)")
+eq(pr.timeline_playhead_x(600, 0.25), 150, "playhead_x: 25% of 600")
+eq(pr.timeline_playhead_x(600), 150, "playhead_x: the shipped fraction by default")
+eq(pr.timeline_playhead_x(0), 0, "playhead_x: no width, no playhead")
+eq(pr.timeline_playhead_x(600, -3), 0, "playhead_x: clamps below 0")
+eq(pr.timeline_playhead_x(600, 3), 600, "playhead_x: clamps above 1")
+eq(pr.timeline_pps(600, 0.25, 6), 75, "pps: six seconds fill the right 450 px")
+eq(pr.timeline_pps(600, 0.25, 0), 0, "pps: no horizon, no scale")
+eq(pr.timeline_pps(0, 0.25, 6), 0, "pps: no width, no scale")
+eq(pr.timeline_pps(600, 1, 6), 0, "pps: a playhead at the right edge leaves no horizon")
+
+-- event_x: now on the playhead, future to its right, past to its left.
+eq(pr.timeline_event_x(150, 10, 10, 75), 150, "event_x: now sits on the playhead")
+eq(pr.timeline_event_x(150, 11.5, 10, 75), 262.5, "event_x: 1.5 s ahead = 112.5 px right")
+eq(pr.timeline_event_x(150, 8.5, 10, 75), 37.5, "event_x: 1.5 s late = 112.5 px left")
+eq(pr.timeline_event_x(150, nil, 10, 75), nil, "event_x: no clock, no position")
+eq(pr.timeline_event_x(150, 10, nil, 75), nil, "event_x: no now, no position")
+
+-- window: the absolute clock range on screen.
+local w_from, w_to = pr.timeline_window(10, 600, 75, 0.25)
+eq(w_from, 8, "window: 2 s of history on the left")
+eq(w_to, 16, "window: 6 s of horizon on the right")
+local d_from, d_to = pr.timeline_window(10, 600, 0, 0.25)
+eq(d_from, 10, "window: a dead scale collapses on now (from)")
+eq(d_to, 10, "window: a dead scale collapses on now (to)")
+
+-- slice: the indices inside a window, both edges inclusive.
+local sev = { { at = 7.9 }, { at = 8 }, { at = 10 }, { at = 13 }, { at = 16 }, { at = 16.1 } }
+local sf, sl = pr.timeline_slice(sev, 6, 8, 16)
+eq(sf, 2, "slice: the first covered index")
+eq(sl, 5, "slice: the last covered index")
+eq(select(1, pr.timeline_slice(sev, 6, 8.5, 12)), 3, "slice: a narrow window starts at its first cover")
+eq(select(2, pr.timeline_slice(sev, 6, 8.5, 12)), 3, "slice: a narrow window ends at its last cover")
+eq(select(1, pr.timeline_slice(sev, 6, 20, 30)), nil, "slice: an empty window has no first")
+eq(select(1, pr.timeline_slice(sev, 0, 8, 16)), nil, "slice: a zero count covers nothing")
+eq(select(1, pr.timeline_slice(nil, 6, 8, 16)), nil, "slice: no array covers nothing")
+eq(select(1, pr.timeline_slice(sev, 6, nil, 16)), nil, "slice: an unreadable bound covers nothing")
+
+-- row filter: a cue is a row the tree can read AND the engine can ask for.
+eq(pr.timeline_row_is_cue({ live = true, engine = true }), true, "row_is_cue: live+engine")
+eq(pr.timeline_row_is_cue({ live = false, engine = true }), false, "row_is_cue: not live")
+eq(pr.timeline_row_is_cue({ live = true, engine = false }), false, "row_is_cue: no engine arm")
+eq(pr.timeline_row_is_cue({ live = true }), false, "row_is_cue: a missing engine flag is no")
+eq(pr.timeline_row_is_cue(nil), false, "row_is_cue: nil row")
+
+-- cadence: the neutral preview, anchored (so it MOVES), one cue per cycle step.
+local cad_rotation = {
+    { action = "a", label = "A", spell_id = 11, live = true, engine = true },
+    { action = "skip", live = false, engine = true },
+    { action = "b", label = "B", spell_id = 22, live = true, engine = true },
+}
+local cad, cad_n = pr.timeline_cadence({}, cad_rotation, 0, 0, 6, 1.5, 3.5)
+eq(cad_n, 4, "cadence: four cues fill a 6 s horizon at 2 per 3.5 s cycle")
+eq(cad[1].at, 0, "cadence: the first cue is at the anchor")
+eq(cad[1].key, "a", "cadence: the first live+engine row")
+eq(cad[1].spell_id, 11, "cadence: the row's spell id rides the cue")
+eq(cad[2].at, 1.75, "cadence: the cycle's two cues sit evenly (3.5 / 2)")
+eq(cad[2].key, "b", "cadence: the dead row is skipped")
+eq(cad[3].at, 3.5, "cadence: the next cycle opens on the cycle length")
+eq(cad[4].at, 5.25, "cadence: and its second cue follows")
+local cad2, cad2_n = pr.timeline_cadence({}, cad_rotation, 0, 5.2, 6, 1.5, 3.5)
+eq(cad2_n, 4, "cadence: a later rebuild still fills the horizon")
+eq(cad2[1].at, 5.25, "cadence: past cues are dropped, the anchor keeps the rest stable")
+eq(select(2, pr.timeline_cadence({}, nil, 0, 0, 6, 1.5, 3.5)), 0,
+    "cadence: no rotation table, no cues")
+eq(select(2, pr.timeline_cadence({}, {}, 0, 0, 6, 1.5, 3.5)), 0,
+    "cadence: an empty rotation table, no cues")
+eq(select(2, pr.timeline_cadence({}, { { action = "x", live = false, engine = false } },
+    0, 0, 6, 1.5, 3.5)), 0, "cadence: no live+engine row, no cues")
+local cad_slots = {}
+pr.timeline_cadence(cad_slots, cad_rotation, 0, 0, 6, 1.5, 3.5)
+local cad_first_slot = cad_slots[1]
+pr.timeline_cadence(cad_slots, cad_rotation, 0, 0, 6, 1.5, 3.5)
+eq(cad_slots[1], cad_first_slot, "cadence: the out table's slots are reused, never re-allocated")
+-- A future anchor leads the strip (the fight has not started yet).
+local cad3, cad3_n = pr.timeline_cadence({}, cad_rotation, 100, 99, 4, 1.5, 3.5)
+eq(cad3_n, 2, "cadence: cues run from the anchor when the anchor is still ahead")
+eq(cad3[1].at, 100, "cadence: the first cue sits on the anchor")
+end
+
 -- bands_for_fight / track_rotation_band (archive start_fight 2866-2876 + 1557-1579)
 local b0, n0 = pr.bands_for_fight(nil)
 eq(n0, 0, "bands_for_fight nil rotation: no bands")

@@ -43,6 +43,11 @@
 --     bands, band_count) at fight end. analyze() consumes events with key `seal_active`;
 --     the on_swing payload carries both `seal` and `seal_active` so it can be passed
 --     through directly once `time` has been added.
+--   * moving cue strip (NEW, not an archive port): timeline_playhead_x / timeline_pps /
+--     timeline_event_x / timeline_window / timeline_slice / timeline_cadence are the
+--     pure geometry + schedule for the practice UI's playhead strip (fixed playhead,
+--     upcoming actions approaching it). They are additive: the LOG path above is
+--     unchanged and still feeds analyze().
 --
 -- Phase-1 sim additions beyond the archive's st.practice.sim fields (needed because the
 -- archive kept this state in st.player / st.practice):
@@ -484,6 +489,215 @@ function st.practice.timeline_max_time(events, count)
         end
     end
     return max_time
+end
+
+--=========================================================================================
+-- Moving practice timeline (pure geometry + schedule; the frames live in practice_ui.lua)
+--=========================================================================================
+-- The cue strip the operator asked for: a FIXED vertical playhead a quarter of the way
+-- into the visible strip, and the upcoming actions scrolling right-to-left toward it.
+-- An action's icon crosses the playhead at its `at` clock, which is the second the
+-- drill wants it pressed. Everything here is arithmetic - no frames, no WoW API - so
+-- the suites pin the maths without a client.
+
+-- Where the playhead sits: a fraction of the strip's VISIBLE width.
+st.practice.TL_PLAYHEAD_FRACTION = 0.25
+-- How far ahead the strip looks, in seconds. Ten, not six: the operator's
+-- reference strip shows ~13 s of clock with the playhead a quarter in (10 s to the
+-- right), and the pixels-per-second follows the strip's screen width, so ten keeps
+-- the cue speed of the reference at any width.
+st.practice.TL_HORIZON_SECONDS = 10
+-- The neutral cadence's fallback spacing: a class that publishes none of its own
+-- PRACTICE_GCD_SECONDS / PRACTICE_CYCLE_SECONDS previews at these.
+st.practice.TL_CADENCE_GCD = 1.5
+st.practice.TL_CADENCE_CYCLE = 3.5
+
+-- A fraction clamped to [0, 1]; a non-number reads the shipped default.
+local function tl_fraction(value)
+    value = tonumber(value) or st.practice.TL_PLAYHEAD_FRACTION
+    if value < 0 then
+        return 0
+    elseif value > 1 then
+        return 1
+    end
+    return value
+end
+
+-- The playhead's x inside the strip: `fraction` of the VISIBLE width. A zero/absent
+-- width answers 0 (nothing to place against), never a guess.
+function st.practice.timeline_playhead_x(width, fraction)
+    width = tonumber(width) or 0
+    if width < 0 then
+        width = 0
+    end
+    return width * tl_fraction(fraction)
+end
+
+-- Pixels per second for a strip that shows `horizon` seconds to the RIGHT of the
+-- playhead: the playhead is fixed, so the right part of the strip IS the horizon.
+function st.practice.timeline_pps(width, fraction, horizon)
+    width = tonumber(width) or 0
+    horizon = tonumber(horizon) or st.practice.TL_HORIZON_SECONDS
+    if width <= 0 or horizon <= 0 then
+        return 0
+    end
+    local span = width * (1 - tl_fraction(fraction))
+    if span <= 0 then
+        return 0
+    end
+    return span / horizon
+end
+
+-- x of an event at the absolute clock `at`, seen at `now`: ahead of now sits to the
+-- RIGHT of the playhead, a past event to the LEFT. Nil when either clock is unknown.
+function st.practice.timeline_event_x(playhead_x, at, now, pps)
+    at = tonumber(at)
+    now = tonumber(now)
+    if not at or not now then
+        return nil
+    end
+    return (tonumber(playhead_x) or 0) + (at - now) * (tonumber(pps) or 0)
+end
+
+-- The absolute-clock window on screen, left edge .. right edge: `fraction` of the
+-- width behind the playhead, the rest of the horizon ahead. A dead clock (pps <= 0)
+-- collapses the window onto `now` (nothing can be placed).
+function st.practice.timeline_window(now, width, pps, fraction)
+    now = tonumber(now) or 0
+    width = tonumber(width) or 0
+    pps = tonumber(pps) or 0
+    if pps <= 0 or width <= 0 then
+        return now, now
+    end
+    fraction = tl_fraction(fraction)
+    return now - (width * fraction) / pps, now + (width * (1 - fraction)) / pps
+end
+
+-- Index range of the ascending `events` that fall inside [from_at, to_at]; nil when
+-- the window is empty. A pure read: no allocation, no re-order.
+function st.practice.timeline_slice(events, count, from_at, to_at)
+    if type(events) ~= "table" or type(from_at) ~= "number" or type(to_at) ~= "number" then
+        return nil
+    end
+    local first, last
+    for i = 1, (count or 0) do
+        local event = events[i]
+        local at = type(event) == "table" and event.at or nil
+        if type(at) == "number" and at == at and at >= from_at and at <= to_at then
+            first = first or i
+            last = i
+        end
+    end
+    return first, last
+end
+
+-- Is this rotation row a cue the preview may show? The class's OWN published fact:
+-- a row the tree cannot read today (`live == false`) or the engine cannot ask for
+-- (`engine == false`) is not a cue.
+function st.practice.timeline_row_is_cue(row)
+    return type(row) == "table" and row.live == true and row.engine == true
+end
+
+-- The neutral "rotation cadence (preview)" schedule: the class's own live+engine
+-- rotation rows, one cue every `gcd`-ish second, walking the published list one
+-- action per cue. `cycle` is the repeat length: a cycle carries round(cycle/gcd)
+-- cues spread EVENLY over it (1.5 s GCD inside a 3.5 s cycle = two cues 1.75 s
+-- apart), so the preview never bursts two cues half a GCD apart at a cycle
+-- boundary and the cycle itself stays exact. Absolute times are anchored to
+-- `anchor` (the fight/session start), so the cues MOVE as the clock advances
+-- instead of being re-based on `now` every rebuild. `out` is reused slot-for-slot
+-- (no per-tick allocation); the returned count is the truth, slots past it are
+-- stale and must be ignored.
+function st.practice.timeline_cadence(out, rotation, anchor, now, horizon, gcd, cycle)
+    out = type(out) == "table" and out or {}
+    local rows = type(rotation) == "table" and #rotation or 0
+    if rows == 0 then
+        return out, 0
+    end
+    now = tonumber(now) or 0
+    horizon = tonumber(horizon) or st.practice.TL_HORIZON_SECONDS
+    if horizon < 0 then
+        horizon = 0
+    end
+    gcd = tonumber(gcd) or st.practice.TL_CADENCE_GCD
+    if gcd <= 0 then
+        gcd = st.practice.TL_CADENCE_GCD
+    end
+    cycle = tonumber(cycle) or st.practice.TL_CADENCE_CYCLE
+    if cycle <= 0 then
+        cycle = st.practice.TL_CADENCE_CYCLE
+    end
+
+    local limit = now + horizon
+    local origin
+    anchor = tonumber(anchor)
+    if anchor and anchor == anchor then
+        if anchor >= now then
+            origin = anchor
+        else
+            -- the cycle containing `now`, so a long fight never walks every cycle
+            origin = anchor + math.floor((now - anchor) / cycle) * cycle
+        end
+    else
+        origin = now
+    end
+
+    local count = 0
+    local index = 0
+    local steps = math.floor(cycle / gcd + 0.5)
+    if steps < 1 then
+        steps = 1
+    elseif steps > 64 then
+        -- A pathological GCD/cycle pair (a class passing 0.01 s) cannot flood the
+        -- schedule: at most 64 cues per cycle, which is already denser than the
+        -- strip can draw.
+        steps = 64
+    end
+    local step_gap = cycle / steps
+    local cycle_start = origin
+    local guard = 0
+    while cycle_start <= limit and guard < 256 do
+        guard = guard + 1
+        for k = 0, steps - 1 do
+            local at = cycle_start + k * step_gap
+            if at > limit then
+                break
+            end
+            -- advance to the next cue row (skipping rows the class does not offer)
+            local row
+            for step = 1, rows do
+                local i = (index + step - 1) % rows + 1
+                local candidate = rotation[i]
+                if st.practice.timeline_row_is_cue(candidate) then
+                    row = candidate
+                    index = i
+                    break
+                end
+            end
+            if not row then
+                break
+            end
+            if at >= now then
+                count = count + 1
+                local slot = out[count]
+                if type(slot) ~= "table" then
+                    slot = {}
+                    out[count] = slot
+                end
+                slot.at = at
+                slot.key = row.action
+                slot.label = row.label or row.action
+                slot.spell_id = row.spell_id
+                -- A row may name its own lane; otherwise the lane is the one the
+                -- sim's own event log uses for that action (cast_timeline_lane),
+                -- so the preview lands on the same rail as the recorded fight.
+                slot.lane = row.lane or st.practice.cast_timeline_lane(row.action)
+                slot.texture = nil
+            end
+        end
+        cycle_start = cycle_start + cycle
+    end
+    return out, count
 end
 
 -- Opening rotation band for a fight (archive start_fight 2866-2876): one band at

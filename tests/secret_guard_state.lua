@@ -168,18 +168,52 @@ local function build(opts)
 
     -- Classic-family stubs (present unless a specific profile omits them).
     if not opts.retail then
-        env.GetSpellInfo = function(id)
+        -- Spell data is bidirectional like a real client: a name the id form answered is
+        -- itself a query form. Wrath/Titanforge state queries take that localized NAME
+        -- (operator ruling 2026-10-25), so the name leg must resolve here.
+        local name_to_id = {}
+        -- A name resolves to the id the client's spell data carries it under (any known
+        -- name, not only one previously queried by id - a real client answers its data).
+        local function id_for_name(spell_name)
+            local back_id = name_to_id[spell_name]
+            if back_id ~= nil then
+                return back_id
+            end
+            for spell_id, info in pairs(sb.spell_info) do
+                if info.name == spell_name then
+                    return spell_id
+                end
+            end
+            return nil
+        end
+        env.GetSpellInfo = function(spell)
             sb.spell_queries = sb.spell_queries or {}
-            sb.spell_queries[#sb.spell_queries + 1] = id
+            sb.spell_queries[#sb.spell_queries + 1] = spell
             if sb.spell_info_throws then error("restricted") end
-            local info = sb.spell_info[id]
+            if type(spell) == "string" then
+                local back_id = id_for_name(spell)
+                local resolved = back_id and sb.spell_info[back_id] or nil
+                if resolved then
+                    return resolved.name, nil, resolved.icon or 1, resolved.cast_ms or 0,
+                        0, 0, back_id
+                end
+                return nil
+            end
+            local info = sb.spell_info[spell]
             if info then
-                return info.name, nil, info.icon or 1, info.cast_ms or 0, 0, 0, id
+                name_to_id[info.name] = spell
+                return info.name, nil, info.icon or 1, info.cast_ms or 0, 0, 0, spell
             end
             return nil
         end
         env.GetSpellCooldown = function(spell)
             local cd = sb.cooldowns and sb.cooldowns[spell]
+            if cd == nil and type(spell) == "string" then
+                local back_id = id_for_name(spell)
+                if back_id ~= nil and sb.cooldowns then
+                    cd = sb.cooldowns[back_id]
+                end
+            end
             if cd then return cd[1], cd[2], cd[3], cd[4] end
             return 0, 0, 0, 0
         end
@@ -194,6 +228,12 @@ local function build(opts)
         env.IsSpellKnown = function(id)
             if opts.known_declines then
                 return nil
+            end
+            if type(id) == "string" then
+                local back_id = id_for_name(id)
+                if back_id ~= nil then
+                    return sb.known[back_id] == true
+                end
             end
             return sb.known[id] == true
         end
@@ -1031,6 +1071,9 @@ do
         spell_info = {
             [403] = { name = "Lightning Bolt", cast_ms = 2500 },
             [331] = { name = "Healing Wave", cast_ms = 3000 },
+            -- The Wrath/Titanforge state token is the NAME, so the client's own data
+            -- must carry Stormstrike for the cooldown read below to resolve.
+            [17364] = { name = "Stormstrike" },
         },
         known = { [403] = true },
     })
@@ -1941,10 +1984,11 @@ do
 end
 
 --=========================================================================================
--- 15. Name-vs-id helper (operator 2026-10-19): TBC by NAME, Era by id
+-- 15. Name-vs-id helper (operator 2026-10-19 for TBC, 2026-10-25 for Titanforge):
+--     TBC and Wrath prefer the NAME, Era by id. The id fallback is operator-approved.
 --=========================================================================================
 do
-    -- TBC Anniversary: the helper returns the NAME (never a bare id).
+    -- TBC Anniversary: the helper returns the NAME first, the id as the fallback.
     local tbc = build({ project = 5, interface = 20506 })
     check(type(tbc.st.api.get_spell_query) == "function",
         "name-vs-id: the shared helper exists")
@@ -1960,15 +2004,18 @@ do
     eq(era.st.api.get_spell_query("Kick", 107), 107,
         "name-vs-id Era: Kick resolves by ID")
 
-    -- Non-TBC families (Wrath) follow the Era shape (id-only, never NAME-only).
+    -- Wrath/Titanforge: the same NAME rule (operator 2026-10-25: "titanforge aka
+    -- wotlk doesnt use spell ids either"). RE-CUT from the old id expectation.
     local wrath = build({ project = 11, interface = 38002 })
-    eq(wrath.st.api.get_spell_query("Kick", 107), 107,
-        "name-vs-id Wrath: non-TBC resolves by ID")
+    eq(wrath.st.api.get_spell_query("Kick", 107), "Kick",
+        "name-vs-id Wrath/Titanforge: resolves by NAME")
+    eq(wrath.st.api.get_spell_query(nil, 107), 107,
+        "name-vs-id Wrath/Titanforge: a missing name falls back to the id")
 
-    -- Nil-safety: a missing name on TBC degrades to nil (unknown-hides);
-    -- a missing id elsewhere degrades the same way.
-    eq(tbc.st.api.get_spell_query(nil, 2825), nil,
-        "name-vs-id TBC: a missing name is unknown (never a bare id)")
+    -- Nil-safety: a missing name on a name family falls back to the id (the
+    -- operator-approved fallback); a missing id on Era stays nil.
+    eq(tbc.st.api.get_spell_query(nil, 2825), 2825,
+        "name-vs-id TBC: a missing name falls back to the id")
     eq(era.st.api.get_spell_query("Kick", nil), nil,
         "name-vs-id Era: a missing id is unknown")
 end

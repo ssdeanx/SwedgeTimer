@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "checkpoint",
+  "timestamp": "2026-10-26T03:17:09Z",
+  "agent_name": "practice-audit",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Follow-up on the fightless routes: the scenario and drill-list strips now run on the SESSION clock (anchored at the session second), both frames are shown, and the pause now shifts the strip anchor so the ruler does not jump. 17/17 mutations killed on a fresh copy.",
+    "what_was_hard": "The `running and nil or now` idiom silently stamped frozen_at=now for running sessions; the new running pin caught it and the helper now sets nil explicitly.",
+    "skill_gap": "None."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

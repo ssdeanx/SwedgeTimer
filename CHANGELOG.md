@@ -1,5 +1,61 @@
 # Changelog
 
+## [2.1.3]
+
+### Added
+- Hunter ranged-distance bar: a standalone horizontal bar in its own frame that reads exact yards from
+  the client (`api.UnitDistance`): full at 5 yd or closer, empty at 35 yd for hunters (30 yd for other
+  classes), with a yards label plus MELEE / IN RANGE / OUT. On by default for hunters, opt-in for every
+  other class; with no target or an unreadable distance it hides instead of painting a false 0.
+- Moving practice timeline: class drills and scenarios now show a cue strip with a fixed playhead at 25%
+  of the strip and a 10 s horizon, so upcoming cues travel to the playhead while the run is live. The
+  strip wears the reference layout at screen scale — the track spans the client and the 600 px track is
+  only the fallback for a client that reports no screen width: a left rail with one icon and name per
+  lane (SoB / Melee / CS / Consec / SoC / Judge for the paladin's twist sim), a ruler with `m:ss` labels
+  and full-height second gridlines that scroll under the fixed playhead, chunky alternating lane rows, a
+  close button, and a default position near the top of the screen, plus the current rotation band (label
+  + sequence icons) above the ruler. Cues use the practice panel's own action art, including the twist's
+  split Command/Blood icon. Practice opens BOTH frames — the moving timeline and the control panel — and
+  the top timeline is the drill's timing surface. The old post-fight log does the same full-width job
+  behind the panel's opt-in **Timeline** button.
+- The practice panel reads like the reference trainer: the bind hint under the icon grid, a **(Reset)**
+  link that restores the session keybinds, a hairline between each block, the Bloodlust / Haste Pot pair
+  as two equal halves, and the reference's order — haste pair, the **Practice Rotation** picker, **Start
+  Fight**, **Timeline**. The port's own readouts (fight timer, score, resource, DST toggle and the live
+  hint) sit below that block; a class drill panel keeps just its own binds, with no Reset link.
+- Practice XP is earned per graded press on that timing surface (the sim's twist window / each class's
+  drill timing), through the existing progression path; opening the trainer or letting it idle earns
+  nothing.
+- Per-client spell querying: state queries use numeric ids on Classic Era (Season of Discovery included)
+  and localized spell names first on TBC Anniversary and WotLK Titanforge, with the id form kept as the
+  fallback.
+
+### Changed
+- Hunter mainhand/offhand no longer restart on ranged shots through the addon's own class guard (the
+  vendored swing library stays stock); Wrath/Titanforge's library-level Auto Shot reset entry is the
+  documented residual. The hunter melee cast-bar re-anchor is retired, so the melee bars no longer hop
+  into the ranged stack during the Auto Shot window.
+- The bar backdrop is opaque by default (alpha 1.0). A one-time migration raises only a profile that
+  still holds the untouched old default; custom colours and theme presets are left as saved.
+- The paladin practice session now opens STOPPED (the reference trainer's behaviour): **Start Fight**
+  begins the fight and the timeline, **Stop Fight** freezes both. Class drills whose session starts its
+  own fight run the timeline from the session start and freeze on Stop.
+- Options → Practice offers **Open Practice Panel** (all six class pages): it opens or raises the
+  trainer and never ends the session. Closing the options window leaves practice running; only the
+  practice panel's X stops it.
+
+### Fixed
+- Restored the HU-23 LibRangeCheck protected-call removal after the 2026-10-25 re-vendor: the library no
+  longer reaches the client's protected `CheckInteractDistance`.
+- WoW Forever swing engine: a weapon swap restarts the cycle at the equipped speed instead of leaving a
+  stale cycle, and world entry STOPs live cycles before clearing them instead of dropping a visible bar.
+- Class practice drills previously had no timeline at all; the moving cue strip now appears in every
+  session.
+
+### Hardening
+- Two code-grounded audits (core performance/reliability; feature/class) filed on the bench; no
+  user-facing claim beyond the fixes above.
+
 ## [2.1.2]
 
 ### Added

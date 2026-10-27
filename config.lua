@@ -77,6 +77,111 @@ ST.defaults = {
 }
 
 --=========================================================================================
+-- One-time appearance migration: opaque bar backdrop
+--=========================================================================================
+-- Operator order 2026-10-25: "make the background alpha high so its not fully see
+-- through" - the BACKDROP only. The coloured progress fill (bar_color_default), the
+-- border (border_color) and the HUD background are not touched by this migration.
+--
+-- ST.bar_defaults.background_color moved from {0,0,0,0.85} to {0,0,0,1.0}
+-- (config_presets.lua). AceDB only fills keys that are ABSENT, so every profile that
+-- logged in before this build keeps its saved 0.85 forever unless it is migrated.
+--
+-- WHAT MAY BE RAISED: only the exact old default {0, 0, 0, 0.85}. Any other value is a
+-- user pick or a theme preset (ST.THEME_PRESETS ships 0.90 / 0.65 / 0.95 / 0.85 alpha
+-- with non-black RGB) and is left exactly as saved. A hand whose ACTIVE theme preset
+-- owns the stored colour is skipped too: "Classic Retro" ships exactly
+-- {0,0,0,0.85} (config_presets.lua), and applying it stores that colour plus
+-- theme_preset = "classic" (option_tables.lua:1326-1329) - that is a preset choice, not
+-- an untouched default.
+--
+-- STORED SHAPE (verified, not assumed): AceDB's copyDefaults
+-- (Libs/AceDB-3.0/AceDB-3.0.lua:88-131) rawsets a NEW table for every default table and
+-- copies the leaves in, so an untouched profile holds a plain 4-element array
+-- {0, 0, 0, 0.85} and the defaults table is never aliased into the profile (:117-124).
+-- Black reads the same in both storage conventions: this key ships 0-1 floats, while the
+-- colour setter stores 0-255 (option_tables.lua:1364-1368), and 0 == 0.0. That is what
+-- makes the exact-match test safe; it also bounds it.
+--
+-- RESIDUAL (accepted, stated on bench/appearance_options_2026-10-25.md): a user who
+-- deliberately picked pure black at 0.85 alpha through the colour picker is
+-- byte-identical to an untouched default, and a "Classic Retro" preset the user then
+-- switched to Custom leaves {0,0,0,0.85} with theme_preset = nil. Both take the opaque
+-- default. There is no saved signal that distinguishes them (no per-key
+-- touched-tracking exists), so the alternative would be to migrate nothing.
+--
+-- WHEN: ST:set_opts() (option_tables.lua) calls this once, before any widget can read a
+-- colour (the getters read lazily at panel render). main.lua creates AceDB and then calls
+-- set_opts() (main.lua:416-424), and the bars are built later in init_libs, so that is the
+-- first settings-aware seam on the init path. Idempotent: the profile flag makes a second
+-- call a no-op.
+ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG = "appearance_defaults_213"
+
+-- The exact old default this migration may raise. A future default move adds its own
+-- step (and its own flag) next to this one rather than editing this value.
+ST.APPEARANCE_OLD_BACKGROUND_COLOR = { 0.0, 0.0, 0.0, 0.85 }
+
+-- The class rows a profile can carry: the same ten tokens ST.defaults.profile lists
+-- above. Literal on purpose - a class row is only descended into when the token is a
+-- class the addon ships.
+local APPEARANCE_CLASS_TOKENS = {
+	"DEATHKNIGHT", "DRUID", "HUNTER", "MAGE", "PALADIN",
+	"PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR",
+}
+
+-- Exact 4-element colour equality. Non-tables never match, so a corrupt saved colour is
+-- skipped instead of indexed.
+local function colors_equal(a, b)
+	if type(a) ~= "table" or type(b) ~= "table" then
+		return false
+	end
+	return a[1] == b[1] and a[2] == b[2] and a[3] == b[3] and a[4] == b[4]
+end
+
+-- Is the stored backdrop owned by the hand's ACTIVE theme preset? Only then is it a
+-- preset choice rather than the old default (the one collision is "Classic Retro").
+local function preset_owns_background_color(hand)
+	local presets = ST.THEME_PRESETS
+	local key = hand.theme_preset
+	if type(presets) ~= "table" or type(key) ~= "string" then
+		return false
+	end
+	local preset = presets[key]
+	return type(preset) == "table"
+		and colors_equal(hand.background_color, preset.background_color)
+end
+
+-- Raises ONLY the untouched old default on every hand of every class row, then marks the
+-- profile. Returns the number of hand colours it changed (0 on a second run). Nil-safe
+-- by construction: a nil profile, a corrupt class row, a non-table hand or a non-table
+-- colour is skipped, never thrown on - this runs on the login path.
+function ST.migrate_appearance_defaults(profile)
+	if type(profile) ~= "table" then
+		return 0
+	end
+	if profile[ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG] then
+		return 0
+	end
+	local old = ST.APPEARANCE_OLD_BACKGROUND_COLOR
+	local raised = 0
+	for _, token in ipairs(APPEARANCE_CLASS_TOKENS) do
+		local class_db = profile[token]
+		if type(class_db) == "table" then
+			for _, hand in pairs(class_db) do
+				if type(hand) == "table"
+					and colors_equal(hand.background_color, old)
+					and not preset_owns_background_color(hand) then
+					hand.background_color = { 0.0, 0.0, 0.0, 1.0 }
+					raised = raised + 1
+				end
+			end
+		end
+	end
+	profile[ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG] = true
+	return raised
+end
+
+--=========================================================================================
 -- End, if debug verify module was read.
 --=========================================================================================
 if st.debug then st.utils.print_msg('-- Parsed config.lua module correctly') end

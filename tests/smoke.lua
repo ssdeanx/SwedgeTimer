@@ -103,8 +103,17 @@ end
 local function spell_table(ids)
     local known = {}
     for i = 1, #ids do known[ids[i]] = true end
-    return function(id)
-        if known[id] then return "Spell " .. tostring(id), nil, 1, 0, 0, 0, id end
+    return function(query)
+        -- A real classic client answers BOTH forms: the id form returns the spell,
+        -- and the localized name it returns is itself a valid query. The name-family
+        -- state paths (TBC Anniversary, Wrath/Titanforge) ask by name, so the fixture
+        -- must answer the name its own id form hands back - otherwise it models a
+        -- client that does not exist.
+        local id = query
+        if type(query) == "string" then
+            id = tonumber(query:match("^Spell (%d+)$"))
+        end
+        if id and known[id] then return "Spell " .. tostring(id), nil, 1, 0, 0, 0, id end
         return nil
     end
 end
@@ -393,6 +402,9 @@ do
     local id, state = st.api.get_family_spell_id_state({47450, 30324, 29707, 25286, 78})
     eq(id, 29707, "tbc-name: the state variant resolves the same rank")
     eq(state, "resolved", "tbc-name: the state variant reports 'resolved'")
+    -- The id fallback is operator-approved ("i never banned fallback to ids"): an id
+    -- the name path cannot name is re-probed by its id form, so a client that refutes
+    -- every candidate still reports "absent" instead of latching "unresolved".
     local absent_id, absent_state = st.api.get_family_spell_id_state({48480, 47450})
     eq(absent_id, nil, "tbc-name: ids absent from this client resolve nil")
     eq(absent_state, "absent", "tbc-name: the state variant reports 'absent'")
@@ -991,7 +1003,10 @@ do
     })
     local self = { hs_queued = true, cleave_queued = false, insufficient_rage = false, set_bar_color = function() end }
     ST.WARRIOR.on_rage_update(self)
-    eq(queried_id, 47450, "warrior(wrath): resolves HS rank 47450 and queries its cost")
+    -- RE-CUT (2026-10-25, operator ruling): Wrath/Titanforge state queries take the
+    -- localized NAME, so the cost read is the client's own name for the resolved
+    -- rank (spell data: ids in, name out) - never the bare id.
+    eq(queried_id, "Spell 47450", "warrior(wrath): resolves HS rank and queries its cost by NAME")
     eq(self.insufficient_rage, true, "warrior(wrath): 5 rage < 15 -> insufficient")
     power.value = 20
     ST.WARRIOR.on_rage_update(self)
@@ -1072,7 +1087,10 @@ do
     })
     local self = { maul_queued = true, insufficient_rage = false, set_bar_color = function() end }
     ST.DRUID.on_rage_update(self)
-    eq(queried_id, 48480, "druid(wrath): resolves Maul rank 48480 and queries its cost")
+    -- RE-CUT (2026-10-25, operator ruling): Wrath/Titanforge state queries take the
+    -- localized NAME, so the cost read is the literal rank-invariant name - never the
+    -- bare id (the same shape TBC already pins).
+    eq(queried_id, "Maul", "druid(wrath): queries its cost by NAME")
     eq(self.insufficient_rage, true, "druid(wrath): 5 rage < 10 -> insufficient")
 end
 
@@ -1339,7 +1357,11 @@ do
         project = 11,
         globals = {
             GetSpellInfo = spell_table({ 48996 }),
-            IsCurrentSpell = function(id) return id == 48996 end,
+            -- RE-CUT (2026-10-25, operator ruling): Wrath/Titanforge state queries
+            -- take the localized NAME, so IsCurrentSpell answers the name the client
+            -- resolves for 48996. A bare id would now be the wrong token and must
+            -- fail this pin.
+            IsCurrentSpell = function(token) return token == "Spell 48996" end,
         },
         ST = ST,
         module = "classes/hunter.lua",

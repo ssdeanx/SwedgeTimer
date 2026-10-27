@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-26T00:18:40Z",
+  "agent_name": "spell-resolution",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Restored the operator-approved name-first/id-fallback on TBC and WRATH only, kept each family gate separate, ported family_spell_exists from HEAD instead of inventing it, and rewrote the false-premise suite around the real rule. The reds closed by making fixtures model name-capable clients (name -> any rank id), not by weakening a pin.",
+    "what_was_hard": "The cancelled desk's no-fallback premise had leaked into fixtures: name->id maps that returned one arbitrary rank, no name leg in IsCurrentSpell/GetSpellCooldown, and static 'no or id' pins. Each needed separating real-contract re-cuts from fixture repairs.",
+    "skill_gap": "warrior_guide_state's arms spec probe surfaced the multi-rank name ambiguity only after the rank walk started resolving again; name probes in fixtures need any-known-rank semantics."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Orchestrator: reconcile; include compat.lua, the six class modules, the seven tests and bench/spell_resolution_2026-10-25.md (CORRECTION section) in the client copy. Operator in-client check on Titanforge 3.80.2 still owed for the name-first branch."
+  }
+}

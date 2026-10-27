@@ -94,9 +94,13 @@ ST.class_defaults = {
     design_snap = true,
     design_snap_threshold = 8,
 
-    -- Melee-weave proximity bar (weave_range.lua): shared default for every class, off
-    -- by default. The top-level options toggle edits it; the module hides its frame
-    -- whenever it is off.
+    -- Ranged distance bar (weave_range.lua): shared default for every class, OFF -
+    -- opt-in. The HUNTER block below overrides it to true (operator order 2026-10-25:
+    -- the ranged distance bar ships default-visible for hunters, who live at range);
+    -- every other class keeps opting in through the top-level options toggle. Nil-safe:
+    -- an explicit false always reads off, and a nil (a profile saved before the key had
+    -- a per-class default) reads as THIS class's default through
+    -- ST.weave_range_default_enabled below, which the options getter shares.
     weave_range_enabled = false,
 
     -- Class activation (main.lua: ST:activate_class). Operator order 2026-10-21: only
@@ -156,7 +160,17 @@ ST.bar_defaults = {
     bar_color_default = {93, 58, 207, 0.85},
 
     -- Background and border appearance
-    background_color = {0.0, 0.0, 0.0, 0.85},
+    -- The BACKDROP fill behind the progress bar (bars.lua:499-526 applies it through
+    -- ApplyBackdrop + SetBackdropColor; the coloured progress fill is bar_color_default,
+    -- a separate key). Opaque by default: operator order 2026-10-25 - "make the
+    -- background alpha high so it's not fully see through". RGB stays black; only the
+    -- alpha moved (0.85 -> 1.0). The border and the HUD background are untouched.
+    -- STORAGE: this key ships as 0-1 floats (unlike border_color's 0-255), while the
+    -- colour setter (option_tables.lua:1364-1368) rewrites ANY touched colour as
+    -- 0-255 RGB + 0-1 alpha. Black is 0 in both conventions, so a saved black carries
+    -- no convention signal - the one-time migration in config.lua
+    -- (ST.migrate_appearance_defaults) is written against that fact.
+    background_color = {0.0, 0.0, 0.0, 1.0},
     background_texture_key = "Solid",
 
     border_color = {40, 40, 40, 0.95},
@@ -507,6 +521,19 @@ ST.HUNTER.defaults = {
     hunter_range_helper_enabled = true,
     hunter_rapid_fire_bar_enabled = true,
     hunter_aspect_icon_enabled = true,
+
+    -- Ranged distance bar (weave_range.lua): ON for hunters - operator order 2026-10-25
+    -- ("the ranged distance bar becomes its own standalone bar ... ON by default for
+    -- HUNTER, opt-in for other classes"). THIS entry is the explicit gate for the
+    -- default-visible change; the shared sibling above
+    -- (ST.class_defaults.weave_range_enabled) stays false, so every other class keeps
+    -- the bar opt-in. Existing hunter profiles with no saved key pick this up through
+    -- AceDB's defaults copy at login (copyDefaults fills absent keys,
+    -- Libs/AceDB-3.0/AceDB-3.0.lua:117-129), and a saved explicit false still reads
+    -- off. A nil read still means ON for hunters: the options getter
+    -- (option_tables.lua) and ST.weave_range_default_enabled below both fall back to
+    -- this default instead of treating nil as off.
+    weave_range_enabled = true,
 
     -- Next Action Guide (the shared nextaction_ui frame driven by ST.HUNTER.guide in
     -- classes/hunter.lua; the decision model is the pure hunter_guide.lua). Default ON
@@ -1558,6 +1585,22 @@ ST.PRACTICE_DEFAULTS = {
         },
     },
 }
+
+--=========================================================================================
+-- Per-class default readers (consumed by the options getters)
+--=========================================================================================
+-- The options getters must answer what a FRESH profile would get from these defaults,
+-- including when the saved key is nil (a profile written before the key had a per-class
+-- default). Deriving the answer from the class's own defaults table keeps one source of
+-- truth: this reader can never drift from the shipped default blocks above.
+--
+-- Takes the class TOKEN ("HUNTER", not "Hunter") - the token main.lua keeps in
+-- ST.player_class (UnitClass's second return, main.lua:392).
+function ST.weave_range_default_enabled(class_token)
+    local class = type(class_token) == "string" and ST[string.upper(class_token)] or nil
+    local defaults = type(class) == "table" and class.defaults or nil
+    return type(defaults) == "table" and defaults.weave_range_enabled == true
+end
 
 --=========================================================================================
 -- End, if debug verify module was read.

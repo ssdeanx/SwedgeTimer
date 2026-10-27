@@ -127,6 +127,9 @@ local SPELL_INFO = {
     -- client's spell data (hunter_ui.lua build), so the fixture must answer for one of
     -- the aspect ids for the icon to have a texture to show.
     [13165] = { name = "Aspect of the Hawk", icon = "icon_hawk", cast_ms = 0 },
+    -- Stormstrike: the shaman weave badge reads the client cooldown by the name token
+    -- on Wrath/Titanforge, so the fixture's spell data must carry the name too.
+    [17364] = { name = "Stormstrike", icon = "icon_ss", cast_ms = 0 },
 }
 
 --=========================================================================================
@@ -563,7 +566,19 @@ local function build(opts)
     end
     env.UnitHealth = function() return 100 end
     env.UnitHealthMax = function() return 100 end
-    env.IsCurrentSpell = function(spell_id) return spell_id == sb.current_spell end
+    env.IsCurrentSpell = function(spell)
+        if spell == sb.current_spell then return true end
+        -- Name families probe the localized name; resolve it against the fixture's
+        -- spell data before comparing with the id the test armed.
+        if type(spell) == "string" then
+            for id, info in pairs(SPELL_INFO) do
+                if info.name == spell and id == sb.current_spell then
+                    return true
+                end
+            end
+        end
+        return false
+    end
     env.IsSpellInRange = function(spell, unit)
         sb.range_reads = sb.range_reads + 1
         if sb.is_spell_in_range ~= nil then
@@ -581,13 +596,34 @@ local function build(opts)
     end
     env.IsAutoRepeatSpell = function() return sb.is_auto_repeat end
     env.IsMounted = function() return sb.mounted end
-    env.GetSpellInfo = function(spell_id)
-        local info = SPELL_INFO[spell_id]
+    env.GetSpellInfo = function(spell)
+        -- A real client answers BOTH forms: the id form returns the spell and the name
+        -- it hands back is itself a query. Wrath/Titanforge state paths ask by name
+        -- (operator ruling), so the fixture answers its own names.
+        local info = SPELL_INFO[spell]
+        if not info and type(spell) == "string" then
+            for id, candidate in pairs(SPELL_INFO) do
+                if candidate.name == spell then
+                    info = candidate
+                    spell = id
+                    break
+                end
+            end
+        end
         if not info then return nil end
-        return info.name, "Rank 1", info.icon, info.cast_ms, 0, 0, spell_id
+        return info.name, "Rank 1", info.icon, info.cast_ms, 0, 0, spell
     end
     env.GetSpellCooldown = function(spell)
         local cd = sb.cooldowns[spell]
+        if not cd and type(spell) == "string" then
+            -- Name families ask by localized name; resolve it to the fixture's id.
+            for id, info in pairs(SPELL_INFO) do
+                if info.name == spell then
+                    cd = sb.cooldowns[id]
+                    if cd then break end
+                end
+            end
+        end
         if not cd then return 0, 0, 0, 0 end
         return cd.start or 0, cd.duration or 0, cd.enabled == false and 0 or 1, 1
     end
@@ -595,7 +631,21 @@ local function build(opts)
     env.GetSpellPowerCost = function()
         return { { cost = sb.rage_cost or 15 } }
     end
-    env.IsSpellKnown = function(spell_id) return sb.known_spells[spell_id] == true end
+    env.IsSpellKnown = function(spell_id)
+        if sb.known_spells[spell_id] == true then
+            return true
+        end
+        -- A name token resolves to the id the fixture's spell data names it by (the
+        -- Wrath/Titanforge state token is the localized name).
+        if type(spell_id) == "string" then
+            for id, info in pairs(SPELL_INFO) do
+                if info.name == spell_id and sb.known_spells[id] == true then
+                    return true
+                end
+            end
+        end
+        return false
+    end
     env.GetActiveTalentGroup = function() return 1 end
     env.GetShapeshiftForm = function() return sb.form_index end
     env.GetTalentInfo = function() return nil, nil, nil, nil, 0 end
@@ -2168,19 +2218,25 @@ do
     tick(b, "ranged")
     eq(ui.cast_frame.shown, false, "hunter window: hidden outside the cast window")
 
-    -- Melee re-anchor while the cast bar is visible (bars locked).
+    -- Melee bars are NOT re-anchored by the ranged UI. The reference re-anchor
+    -- (UpdateHunterMeleeBarAnchor) was retired on 2026-10-25: its trigger is "the cast
+    -- bar is visible", and the cast bar is ALSO visible for the Auto Shot hidden-window
+    -- face, so the melee bars hopped into the ranged stack once per Auto Shot cycle at
+    -- range (the operator's "main hand bar mixed up with the ranged bar" report). The
+    -- pins below are the inverse of the old ones: a visible cast bar must leave the
+    -- melee anchors alone, and hiding it must not restore anything either.
+    local restores_before = #sb.lwin_restores
     sb.cast = { name = "Steady Shot", spell_id = 56641, start_ms = sb.clock * 1000, end_ms = (sb.clock + 1.5) * 1000 }
     tick(b, "ranged")
     eq(ui.cast_frame.shown, true, "hunter anchor: cast bar visible again")
-    eq(ui.melee_anchored, true, "hunter anchor: melee bars re-anchor under the cast bar")
-    local restores_before = #sb.lwin_restores
+    eq(#sb.lwin_restores, restores_before,
+        "hunter anchor: a visible cast bar moves no melee bar")
     sb.cast = nil
     sb.clock = sb.clock + 3.0 -- past the window: the cast face hides
     tick(b, "ranged")
     eq(ui.cast_frame.shown, false, "hunter anchor: cast bar hidden")
-    eq(ui.melee_anchored, false, "hunter anchor: melee bars return to stored positions")
-    check(#sb.lwin_restores > restores_before,
-        "hunter anchor: restoring issued LibWindow.RestorePosition")
+    eq(#sb.lwin_restores, restores_before,
+        "hunter anchor: hiding the cast bar restores nothing (no anchor was shifted)")
 
     -- Range helper: the four states and the all-unknown/absent-target hides.
     ST.has_attackable_target = true

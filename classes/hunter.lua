@@ -9,36 +9,43 @@ st.class_loaders["HUNTER"] = function()
 local api = st.api
 local get_tab = st.utils.convert_lookup_table
 
--- TBC Anniversary spell-state queries take NAMES, not ids (operator client
--- fact; docs/hunter-wa.json converts every tracked id through GetSpellInfo
--- and then compares names, e.g. GetSpellInfo(75/2974/8149-range, 34600,
--- 1499/13795/13813/13809 trap families)). Classic Era takes ids.
+-- TBC Anniversary (classic_anniversary) and Wrath/Titanforge (classic_titan) spell-
+-- state queries take NAMES, not ids (operator client facts - each family gated on
+-- its own; docs/hunter-wa.json converts every tracked id through GetSpellInfo and
+-- then compares names, e.g. GetSpellInfo(75/2974/8149-range, 34600,
+-- 1499/13795/13813/13809 trap families)). Classic Era (SoD included) takes ids;
+-- Forever keeps the id.
 -- spell_token() maps a spell id to the safe token for a per-spell state
 -- query (IsCurrentSpell, IsSpellKnown, GetSpellCooldown, IsSpellInRange,
--- IsAutoRepeatSpell, IsSpellUsable): the localized name on TBC (nil while
--- the client's spell data has not answered - unknown hides, never a bare
--- id), the id unchanged everywhere else. WA id->name mapping, resolved live
--- (never hardcoded, so locales keep working): 75 Auto Shot, 2974 Wing Clip,
--- 2973 Raptor Strike, 2643 Multi-Shot, 19434 Aimed Shot, 34120 Steady Shot,
--- 34026 Kill Command, 19574 Bestial Wrath, 3045 Rapid Fire, 23989 Readiness,
--- 34074 Aspect of the Viper.
+-- IsAutoRepeatSpell, IsSpellUsable): the localized name first on TBC and on
+-- Wrath/Titanforge, with the id as the approved fallback when the name is cold
+-- (a cold name degrades to the id form, never nil); the id unchanged everywhere
+-- else. WA id->name mapping, resolved live (never hardcoded, so locales keep
+-- working): 75 Auto Shot, 2974 Wing Clip, 2973 Raptor Strike, 2643 Multi-Shot,
+-- 19434 Aimed Shot, 34120 Steady Shot, 34026 Kill Command, 19574 Bestial
+-- Wrath, 3045 Rapid Fire, 23989 Readiness, 34074 Aspect of the Viper.
 local function spell_token(spell_id)
-    if st.family ~= "TBC" then
-        return spell_id
-    end
     if spell_id == nil then
         return nil
     end
-    return api.GetSpellInfo(spell_id)
+    if st.family ~= "TBC" and st.family ~= "WRATH" then
+        return spell_id
+    end
+    local name = api.GetSpellInfo(spell_id)
+    if type(api.get_spell_query) == "function" then
+        return api.get_spell_query(name, spell_id) or spell_id
+    end
+    return name or spell_id
 end
 
--- Probe tokens for the on-next-attack queue reads: bare ids everywhere except
--- TBC, where the state APIs take names (see above). On TBC the tokens are the
--- distinct localized family names (every rank shares one name, so one read
--- covers the family); an empty list while the spell data has not answered
--- (unknown hides, no probe at all).
+-- Probe tokens for the on-next-attack queue reads: bare ids everywhere except TBC
+-- Anniversary and Wrath/Titanforge, where the state APIs prefer names (see above). On
+-- those families the tokens are the distinct localized family names (every rank
+-- shares one name, so one read covers the family); an entry whose name the client
+-- cannot resolve is skipped (no mixed id token list - the queue read stays one token
+-- shape per family).
 local function queue_tokens(id_table)
-    if st.family ~= "TBC" then
+    if st.family ~= "TBC" and st.family ~= "WRATH" then
         local tokens = {}
         for spell_id in pairs(id_table) do
             tokens[#tokens + 1] = spell_id
@@ -402,9 +409,11 @@ local hud_aimed_rank_ids = (st.family == "TBC" or st.family == "WRATH")
 -- on SV where Arcane shares its cooldown with Explosive Shot). Same
 -- UNCONFIRMED rule as Kill Command above. 14287 is the rank 8 the SoD and
 -- Forever clients carry (wowsims/sod p7_weave APL i=23 and wowsims/forever
--- APL i=12), so the utility layer's Arcane Shot read resolves a rank there.
+-- APL i=12), so the utility layer's Arcane Shot read resolves a rank there. 3044 is
+-- rank 1: it anchors the shot guard's low-level coverage (the guard's id set is these
+-- same tables); the highest-known-rank walk is unchanged by it.
 local arcane_shot_ids = get_tab({
-    27019, 49045, 14287,
+    27019, 49045, 14287, 3044,
 })
 
 -- Chimera Shot, the SoD rune (wowhead classic spell 409433: gloves rune,
@@ -442,10 +451,10 @@ local sniper_shot_ids = get_tab({
 -- the rollover): Era rank 1 (13554 - the SoD p3 ranged-MM APL's `not dotIsActive
 -- 13554` upkeep), the later rank 25295 (the SoD p7 weave APL's Serpent 25295 r9 and
 -- the Forever APL's Serpent 25295 upkeep) and the Wrath rank 49001 (wowsims/wotlk
--- sim/hunter/serpent_sting.go SIM-CONFIRMED). Only the sourced ranks are listed: an
--- id missing from this table is simply never detected, so the knowledge probe stays
--- quiet on a client whose ranks are not listed here. CLIENT-UNCONFIRMED: every id
--- still needs an in-client GetSpellInfo read.
+-- sim/hunter/serpent_sting.go SIM-CONFIRMED). 1978 is rank 1 and anchors the shot
+-- guard's low-level coverage (the guard reuses these tables); the highest-known-rank
+-- walk is unchanged by it. CLIENT-UNCONFIRMED: every id still needs an in-client
+-- GetSpellInfo read.
 --
 -- The DEBUFF (is the sting up on the target?) is read through compat's
 -- api.scan_unit_aura("target", ...) (the unit-generic player scan, BS-1): the scan
@@ -453,13 +462,13 @@ local sniper_shot_ids = get_tab({
 -- NAME first and the id second: the name is the load-bearing key because a client
 -- that resolves spells by name (the TBC Anniversary client) does not answer with
 -- the ids in this table (it holds the Era / SoD / Wrath ranks only), while the id
--- leg covers the three sourced ranks on the clients that do answer with numeric ids
+-- leg covers every sourced rank on the clients that do answer with numeric ids
 -- (and on a localized client, where the name leg cannot match but the id still
 -- does). A missing row is only "the sting is down" when the read was COMPLETE;
 -- otherwise it stays unknown, which never withholds the naked-Chimera prompt (see
 -- read_serpent_active below).
 local serpent_sting_ids = get_tab({
-    13554, 25295, 49001,
+    13554, 25295, 49001, 1978,
 })
 -- The debuff name every Serpent Sting rank shares (the predicate's primary key).
 local SERPENT_STING_NAME = "Serpent Sting"
@@ -731,6 +740,145 @@ local function world_latency_seconds(self)
     return 0
 end
 
+--=========================================================================================
+-- Shot cast guard: no hunter shot may restart the melee hands (operator ruling 2026-10-25)
+--=========================================================================================
+-- The vendored engine resets BOTH melee hands when a tracked cast completes
+-- (Libs/LibClassicSwingTimerAPI/LibClassicSwingTimerAPI.lua:596-604: the branch is
+-- `unit.casting and not unit.preventSwingReset` -> SwingStart("mainhand") +
+-- SwingStart("offhand")). Any completed cast not exempt inside the lib trips it, and the
+-- lib is UPSTREAM-CLEAN by operator ruling (no local noreset entries), so the exemption
+-- is entirely ours. The operator's 2026-10-25 ruling is absolute: NO hunter shot may
+-- ever restart the melee hands, at any range (the earlier in-melee Auto Shot exception
+-- is rejected).
+--
+-- Two arms, because a shot can complete in two shapes:
+--   1. EVENT arm: UNIT_SPELLCAST_START (main.lua -> class_on_spellcast_event). It runs
+--      after the lib's own START handler (the lib frame registers at file load, the
+--      AceEvent frame in OnInitialize), so `preventSwingReset = true` is set after the
+--      lib computed its own flag and before SUCCEEDED reads it. This is the only arm
+--      that can cover an INSTANT shot (Multi/Arcane/Serpent), whose START+SUCCEEDED
+--      land in one frame with no tick in between.
+--   2. TICK arm: the same arm re-applied on every visible-bar tick while
+--      `unit.casting` is live (belt-and-braces for cast-time shots such as Auto/Steady/
+--      Aimed; it also re-arms if a dispatch order ever reversed).
+-- Idle cost of the tick arm is two table reads (engine string compare + `unit.casting`),
+-- never a client call. Range is not consulted: the ruling removed the range exception,
+-- so `target_in_melee_range` and its probe were deleted rather than left as dead wiring.
+--
+-- Wrath/Titanforge residual: the stock lib ALSO lists Auto Shot 75 in
+-- `reset_swing_spells` (LibClassicSwingTimerAPI.lua:1196), and that OR's first clause
+-- resets the melee hands regardless of `preventSwingReset`. Our-side cannot filter that
+-- START without risking a real melee swing (both carry the same payload while
+-- `casting` is true), so the residual is documented in
+-- bench/cross_client_engine_2026-10-25.md (CORRECTION) and the lib stays untouched.
+-- Forever's swing_source has no cast-reset branch and Retail runs the inert stand-in.
+local function swing_player_unit()
+    -- The engine unit table, cached after the first successful lookup. `getUnit` is the
+    -- library's own accessor (main.lua registers callbacks on the same object); it is
+    -- nil-safe by contract here: a pre-ADDON_LOADED call reads nil and retries next tick.
+    local cached = ST.HUNTER.swing_unit_cache
+    if cached ~= nil then
+        return cached
+    end
+    local lib
+    -- LibStub is a CALLABLE TABLE on the real client (type() == "table", __call);
+    -- a `type(LibStub) == "function"` guard silently skipped this lookup in-game (the
+    -- hunter-state stub is a function, so the suite could not see it). pcall covers
+    -- both shapes.
+    if LibStub ~= nil then
+        local ok_stub, resolved = pcall(LibStub, "LibClassicSwingTimerAPI", true)
+        if ok_stub and type(resolved) == "table" then
+            lib = resolved
+        end
+    end
+    if type(lib) ~= "table" or type(lib.getUnit) ~= "function" then
+        return nil
+    end
+    local ok, unit = pcall(lib.getUnit, lib, "player")
+    if not ok or type(unit) ~= "table" then
+        return nil
+    end
+    ST.HUNTER.swing_unit_cache = unit
+    return unit
+end
+
+-- Hunter ranged-shot matcher: every id in the module's existing shot tables (no second
+-- spell-id source), plus Auto Shot's numeric id and its localized-name fallback (an
+-- older payload can carry no id). The merged lookup is built once on the class table so
+-- the tick path stays a hash read; it is not a file-scope local (Lua 5.1 local ceiling).
+local function is_hunter_ranged_shot(spell_id, cast_name)
+    local ids = ST.HUNTER.ranged_shot_ids
+    if ids == nil then
+        ids = {}
+        local sources = {
+            multi_shot_ids, aimed_shot_ids, aimed_shot_wrath_ids, arcane_shot_ids,
+            serpent_sting_ids, steady_shot_ids, kill_shot_ids, chimera_shot_wrath_ids,
+            chimera_shot_sod_ids, explosive_shot_ids, sniper_shot_ids,
+        }
+        for i = 1, #sources do
+            for id in pairs(sources[i]) do
+                ids[id] = true
+            end
+        end
+        ST.HUNTER.ranged_shot_ids = ids
+    end
+    if spell_id == AUTO_SHOT_ID then
+        return true
+    end
+    if type(spell_id) == "number" and ids[spell_id] then
+        return true
+    end
+    if type(cast_name) ~= "string" then
+        return false
+    end
+    if cast_name == "Auto Shot" then
+        return true
+    end
+    local expected = ST.HUNTER.auto_shot_name_cache
+    if expected == nil then
+        expected = api.GetSpellInfo(AUTO_SHOT_ID)
+        if expected ~= nil then
+            ST.HUNTER.auto_shot_name_cache = expected
+        end
+    end
+    return cast_name == expected
+end
+
+-- Arm the engine's own reset-suppression field for one shot. `preventSwingReset` is
+-- exactly what the lib's SUCCEEDED branch tests, and the lib recomputes it at every
+-- START, so the arm only ever covers the cast it was made on. Shared by the event and
+-- tick arms; the unit is passed in so neither path pays a second lookup.
+function ST.HUNTER.arm_shot_melee_reset_guard(self, unit, spell_id, cast_name)
+    if self.swing_engine ~= "vendored-lib" then
+        return false
+    end
+    if type(unit) ~= "table" then
+        return false
+    end
+    if not is_hunter_ranged_shot(spell_id, cast_name) then
+        return false
+    end
+    unit.preventSwingReset = true
+    self.hunter_shot_guard_count = (self.hunter_shot_guard_count or 0) + 1
+    return true
+end
+
+function ST.HUNTER.suppress_shot_melee_reset(self)
+    -- Tick arm, before the hand gate: this decides what the ENGINE will do at cast
+    -- completion, not what a frame paints. Idle cost is the engine compare plus
+    -- `unit.casting` - no client call, and no range probe (the operator ruling removed
+    -- the in-melee exception, so the shot is suppressed at every range).
+    if self.swing_engine ~= "vendored-lib" then
+        return
+    end
+    local unit = swing_player_unit()
+    if type(unit) ~= "table" or unit.casting ~= true then
+        return
+    end
+    ST.HUNTER.arm_shot_melee_reset_guard(self, unit, unit.lastCastSpellId, unit.lastCastName)
+end
+
 function ST.HUNTER.on_cooldown_update(self)
     -- SPELL_UPDATE_COOLDOWN: keep the ranged cycle length in sync with the live Auto
     -- Shot cooldown (reference SyncRangedTimerSpeed, State.lua:697-710). A valid
@@ -824,6 +972,14 @@ end
 
 function ST.HUNTER.on_spellcast_event(self, event, unit, cast_guid, spell_id)
     if unit ~= "player" or not self.interfaces_are_initialised then
+        return
+    end
+    if event == "UNIT_SPELLCAST_START" then
+        -- Event arm of the shot guard (see the block comment above): arm before the
+        -- engine's SUCCEEDED reset, which is the only way an instant shot can be
+        -- covered. The lib's own START handler has already run (its frame registers at
+        -- file load, the addon's at OnInitialize), so this arm is not overwritten.
+        ST.HUNTER.arm_shot_melee_reset_guard(self, swing_player_unit(), spell_id, nil)
         return
     end
     if event ~= "UNIT_SPELLCAST_INTERRUPTED" and event ~= "UNIT_SPELLCAST_FAILED" then
@@ -1030,6 +1186,11 @@ function ST.HUNTER.on_bar_update(self, hand)
     -- Trap placed-phase expiry (hunter_wa_map §6): player-level state, so it runs
     -- ahead of the hand gate on every tick (nil-safe no-op without a live trap).
     ST.HUNTER.update_trap(self)
+    -- Shot cast guard (2026-10-25 ruling): player-level engine state, so it also runs
+    -- ahead of the hand gate. Re-arms the vendored engine's preventSwingReset while any
+    -- hunter shot cast is live, so the shot cannot restart the melee hands (the EVENT
+    -- arm in on_spellcast_event covers instant shots; this tick arm covers cast time).
+    ST.HUNTER.suppress_shot_melee_reset(self)
     if hand ~= "ranged" and hand ~= "mainhand" then
         return
     end
@@ -2504,8 +2665,8 @@ function ST.HUNTER.resolve_guide_icons()
         if id == nil then
             return nil
         end
-        -- TBC state queries take the name (27019/27065 exist on TBC, so this
-        -- probe does fire there); unknown spell data hides instead of probing.
+        -- Name families prefer the name (27019/27065 exist on TBC, so this
+        -- probe does fire there); a cold name falls back to the id.
         local token = spell_token(id)
         if token ~= nil and api.is_spell_known(token) then
             return id
@@ -3204,8 +3365,8 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     inputs.sniper_range_buff_active = nil
 
     -- The ranged range of the Steady Shot school; nil = unknown (the engine never treats
-    -- nil as out of range). One client probe, no allocation. TBC resolves the name
-    -- (never a bare id); unknown spell data hides instead of probing nil.
+    -- nil as out of range). One client probe, no allocation. Name families resolve
+    -- the name first with the id fallback (operator-approved).
     local range_token = spell_token(steady_current_id or guide_slot_steady.spell_id)
     inputs.target_in_range = nil
     if range_token ~= nil then

@@ -608,7 +608,9 @@ do
 
     sb.power = 5
     ST.WARRIOR.on_rage_update(ST)
-    eq(sb.last_cost_id, 47450, "the queued Heroic Strike rank is the cost that gets queried")
+    -- RE-CUT (2026-10-25, operator ruling): the Wrath/Titanforge cost read carries the
+    -- localized NAME, never the bare id the old fixture expected.
+    eq(sb.last_cost_id, "Spell 47450", "the queued Heroic Strike cost is queried by NAME")
     eq(ST.insufficient_rage, true, "5 rage < 10 cost -> insufficient")
     eq(sb.bar_color_calls, 1, "going insufficient recolours the bar")
     eq(sb.last_hand, "mainhand", "the recolour targets the mainhand bar")
@@ -890,7 +892,11 @@ end
 -- 7) Cleave gating: the option off must stop the probe and the flag
 --=========================================================================================
 do
-    local sb = build({ known = { [25286] = true }, current_spell = 25231 })
+    -- RE-CUT (2026-10-25, operator ruling): on Wrath/Titanforge the queue probe is the
+    -- localized NAME. The fixture's data carries the Cleave rank the queue is set to (its
+    -- `known` set is what makes the synthetic name resolve), and the queued spell is set
+    -- as the NAME token the client answers.
+    local sb = build({ known = { [25286] = true, [25231] = true }, current_spell = "Spell 25231" })
     local ST = sb.ST
     ST.interfaces_are_initialised = true
 
@@ -3241,13 +3247,14 @@ do
 end
 
 --=========================================================================================
--- Name-vs-id rule (operator 2026-10-19; bench/lessons.md): TBC resolves by
--- NAME with the id fallback; Era resolves by id only. Family branching via
--- st.family, never version strings.
+-- Name-vs-id rule (operator 2026-10-19 for TBC, 2026-10-25 for Titanforge; each
+-- family gated on its own): TBC Anniversary and Wrath/Titanforge prefer the NAME
+-- and fall back to the id (operator-approved fallback); Era resolves by id only.
+-- Family branching via st.family, never version strings.
 --=========================================================================================
 do
     -- IsCurrentSpell: the known rank is queried by name on TBC, by id on Era;
-    -- a cold TBC book falls back to ids.
+    -- a cold name-family book falls back to ids.
     local sb = build({ project = 5, known = { [25286] = true }, current_spell = 25286 })
     local ST = sb.ST
     eq(sb.st.family, "TBC", "name-vs-id: the queue sandbox profiles TBC")
@@ -3261,6 +3268,8 @@ do
         end
     end
     check(saw_name, "name-vs-id TBC: the known rank is queried by name")
+    -- The approved fallback (operator: "i never banned fallback to ids"): a name the
+    -- client cannot answer falls back to the id, so the cold queue is still detected.
     local cold = build({ project = 5, known = {}, current_spell = 25286 })
     cold.ST.interfaces_are_initialised = true
     cold.ST.WARRIOR.on_current_spell_cast_changed(cold.ST, false)
@@ -4024,8 +4033,9 @@ end
 do
     -- (a) ABSENT: the client refutes every Heroic Strike rank. The negative is FINAL -
     --     it latches and the table is never walked again, not even after the retry
-    --     window.
-    local ab = build({ known = {} })
+    --     window. Pinned on Era, where the id form is the query and a refutation is
+    --     final (name families resolve by name first, then fall back to the id).
+    local ab = build({ project = 2, known = {} })
     local ABT = ab.ST
     ABT.interfaces_are_initialised = true
     ABT.hs_queued = true
@@ -4040,7 +4050,10 @@ do
     -- (b) UNRESOLVED: the client cannot answer (its GetSpellInfo raises). Nothing is
     --     latched, so the next attempt asks again once the retry backoff has passed -
     --     a cold spell book can no longer poison the rank for the rest of the session.
-    local us = build({ known = {} })
+    --     RE-CUT (2026-10-25, operator ruling): pinned on Era - the "no cost read
+    --     without a resolved rank" shape needs the id query form; a name-family cost
+    --     read is rank-invariant and stays valid while the rank is unresolved.
+    local us = build({ project = 2, known = {} })
     local UST = us.ST
     UST.interfaces_are_initialised = true
     UST.hs_queued = true
@@ -4136,8 +4149,10 @@ do
         "F4 slam: a later cast does not walk the rank table again")
 
     -- (b) ABSENT: the client refutes every Slam rank. The negative is FINAL - the
-    --     table is never walked again, not even after the retry window.
-    local ab = build({ known = {} })
+    --     table is never walked again, not even after the retry window. Pinned on Era,
+    --     where the id form is the query and a refutation is final (name families
+    --     resolve by name first, then fall back to the id).
+    local ab = build({ project = 2, known = {} })
     local ABT = ab.ST
     ABT.interfaces_are_initialised = true
     near(slam_cast(ab, ABT, 1464), 1.5,

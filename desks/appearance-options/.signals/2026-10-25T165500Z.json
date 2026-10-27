@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-25T16:55:00Z",
+  "run_id": "appearance-options-2026-10-25",
+  "agent_name": "appearance-options",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Verified the AceDB storage shape before writing the migration (copyDefaults rawsets a fresh table per defaults table, initSection re-applies defaults to saved profiles but never overwrites present keys). That turned the risky part into an exact-match rule plus a theme_preset owner guard for the one colliding preset (Classic Retro = the old default bytes). The set_opts seam was the first settings-aware point in this lane's write scope; driving it for real in options_load_state (seed a profile, clear the flag, re-run) proved the call site without main.lua.",
+    "what_was_hard": "The new range-bar semantics are split across two lanes: the defaults/options side is here, the module gate is weave_range.lua:210 (== true), so nil==ON for hunter is documented and getter-true but not yet true at the runtime gate. Also the copy now describes a horizontal bar the tree does not have yet - filed as a ship-order dependency rather than silently shipping a description of absent UI.",
+    "skill_gap": "None blocking. Note for future lanes: config.lua loads AFTER option_tables.lua in every TOC, so a function defined there is only safe to call at runtime (set_opts), never at file scope."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Orchestrator adds the tests/appearance_defaults_state.lua line to tests/run.sh (one-writer rule); bars-range-hunter lands the horizontal bar and the nil==ON hunter gate at weave_range.lua:210. Operator runs the bench report's 6 in-client checks."
+  }
+}

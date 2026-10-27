@@ -518,22 +518,45 @@ do
 end
 
 -- 14) B2 WEAPON_SLOT_CHANGED -------------------------------------------------------
+-- Mirror Blizzard's swap arm (forever Blizzard_SwingTimer.lua:151-153, 319-330) and the
+-- classic lib's equipment path (SwingStart(..., true)): a swap RESTARTS every live cycle
+-- at the newly equipped duration (each bar handles the shared event); a hand with no
+-- usable speed is cleared with a STOP.
 do
     local stops_before = count_event("SWING_TIMER_STOP")
     local updates_before = count_event("SWING_TIMER_UPDATE")
     local rejects_before = src.stats.payload_rejects
     fire("PLAYER_SWING", 2.6, 0) -- live mainhand cycle at the current clock
     fire("PLAYER_SWING", 2.0, 1) -- live offhand cycle at the current clock
+    advance(0.5) -- the swap lands mid-cycle: a rescale would differ from a restart
     env.UnitAttackSpeed = function() return 1.3, 2.0, nil end
     fire("WEAPON_SLOT_CHANGED")
-    eq(count_event("SWING_TIMER_UPDATE"), updates_before + 1,
-        "B2: a weapon swap re-times the changed hand only")
-    eq(last_event().event, "SWING_TIMER_UPDATE", "B2: the re-time fires UPDATE")
-    eq(last_event().a[1], 1.3, "B2: the UPDATE carries the new speed")
-    eq(last_event().a[2], clock + 1.3, "B2: the UPDATE rescales the remaining time")
-    eq(last_event().a[3], "mainhand", "B2: the UPDATE names the swapped hand")
+    eq(count_event("SWING_TIMER_UPDATE"), updates_before + 2,
+        "B2: a swap restarts every live hand")
+    local mh_update = fired[#fired - 1]
+    local oh_update = fired[#fired]
+    eq(mh_update.event, "SWING_TIMER_UPDATE", "B2: the mainhand restart fires UPDATE")
+    eq(mh_update.a[1], 1.3, "B2: the mainhand UPDATE carries the equipped speed")
+    eq(mh_update.a[2], clock + 1.3, "B2: the mainhand UPDATE restarts a FULL cycle (not a rescale)")
+    eq(mh_update.a[3], "mainhand", "B2: the UPDATE names the mainhand")
+    eq(oh_update.event, "SWING_TIMER_UPDATE", "B2: the offhand restart fires UPDATE")
+    eq(oh_update.a[2], clock + 2.0, "B2: the offhand UPDATE restarts its own full cycle")
+    eq(oh_update.a[3], "offhand", "B2: the UPDATE names the offhand")
     eq(src:SwingTimerInfo("mainhand"), 1.3, "B2: the swapped hand runs at the new speed")
     eq(src:SwingTimerInfo("offhand"), 2.0, "B2: the unchanged hand keeps its speed")
+    local _, _, mh_start = src:SwingTimerInfo("mainhand")
+    eq(mh_start, clock, "B2: the restart re-anchors the cycle start at the swap")
+    -- A same-speed swap still restarts the cycles (Blizzard always resets on swap).
+    advance(0.5)
+    local same_updates = count_event("SWING_TIMER_UPDATE")
+    env.UnitAttackSpeed = function() return 1.3, 2.0, nil end
+    fire("WEAPON_SLOT_CHANGED")
+    eq(count_event("SWING_TIMER_UPDATE"), same_updates + 2,
+        "B2: a same-speed swap still restarts both hands")
+    eq(fired[#fired - 1].a[2], clock + 1.3,
+        "B2: the same-speed mainhand restart is a full cycle from now")
+    eq(fired[#fired].a[2], clock + 2.0,
+        "B2: the same-speed offhand restart is a full cycle from now")
     env.UnitAttackSpeed = function() return nil, nil, nil end
     fire("WEAPON_SLOT_CHANGED")
     eq(count_event("SWING_TIMER_STOP"), stops_before + 2,
@@ -558,6 +581,19 @@ do
     eq(ke2, ke, "B2: a kept swap read leaves the expiration alone")
     fire("PLAYER_IN_COMBAT_CHANGED", false) -- drain for the next section
     env.UnitAttackSpeed = function() return 2.6, nil, nil end -- restore
+end
+
+-- B2 world-entry clear: a live cycle is STOPped, never silently dropped.
+do
+    fire("PLAYER_SWING", 2.6, 0)
+    local stops_before = count_event("SWING_TIMER_STOP")
+    local info_before = count_event("SWING_TIMER_INFO_INITIALIZED")
+    fire("PLAYER_ENTERING_WORLD")
+    eq(count_event("SWING_TIMER_STOP"), stops_before + 1,
+        "B2: PLAYER_ENTERING_WORLD STOPs a live cycle (never a silent clear)")
+    eq(src:SwingTimerInfo("mainhand"), nil, "B2: the world-entry clear leaves no cycle")
+    eq(count_event("SWING_TIMER_INFO_INITIALIZED"), info_before,
+        "B2: the world-entry clear never re-fires INFO_INITIALIZED")
 end
 
 -- B2 probe-gating: a probe that rejects WEAPON_SLOT_CHANGED never registers it,

@@ -1,0 +1,25 @@
+{
+  "agent_name": "bars-range-hunter",
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-25T17:35:00Z",
+  "run_id": "bars-range-hunter-2026-10-25",
+  "completeness": 5,
+  "self_assessment": {
+    "accuracy": 5,
+    "completeness": 5,
+    "confidence": 4,
+    "intent": 5
+  },
+  "escalation": {
+    "blocked_on": null,
+    "reason": null,
+    "recommendation": null
+  },
+  "patterns": {
+    "what_worked": "Per-hand write audit before any edit cleared the state-ownership hypothesis; a scripted sandbox over the SHIPPED LibClassicSwingTimerAPI proved the real defect (START(75)+SUCCEEDED(75) fires mainhand+offhand+ranged) and then proved the fix (preventSwingReset armed -> ranged only). 7 mutation proofs on /tmp/opencode copies; every focused suite green; luacheck 0/0.",
+    "what_was_hard": "The orchestrator's inherited lead named Steady Shot as a leak; the shipped BCC table already exempts 34120/25258 and the real-lib run proved it fires nothing. The actual leak was Auto Shot 75 (range-dependent, so it cannot live in a static exemption table) and Aimed 19434 (now exempted by the cross-client-engine lane).",
+    "what_is_filed": "tests/run.sh line for the new tests/weave_bar_state.lua; option_tables weave_range_enabled desc replacement (no band fallback any more); main.lua:985-990 stale 'off by default' comment; the 4-state range-helper strip now overlaps the new bar in purpose (operator design call, recommendation in the bench report).",
+    "skill_gap": "No in-client seat: the Auto Shot UNIT_SPELLCAST_START shape on Anniversary is inferred from workshop lesson 17 + the reference addon's cast gate, not observed. The guard keys off the engine's own casting flag, which shares that precondition, so a client that never reports the cast also never fires the reset - but the receipt is /st diag swing_mainhand at range, which only the operator can read."
+  }
+}

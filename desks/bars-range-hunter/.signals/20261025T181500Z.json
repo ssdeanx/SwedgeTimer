@@ -1,0 +1,25 @@
+{
+  "agent_name": "bars-range-hunter",
+  "signal_type": "escalation",
+  "subtype": "hands-up",
+  "timestamp": "2026-10-25T18:15:00Z",
+  "run_id": "bars-range-hunter-2026-10-25",
+  "completeness": 5,
+  "self_assessment": {
+    "accuracy": 5,
+    "completeness": 5,
+    "confidence": 4,
+    "intent": 5
+  },
+  "patterns": {
+    "what_worked": "The lead's mechanism was tested on the SHIPPED library against all three classic branches (Era 2/0, Anniversary 5/1, Titanforge 11/2), reading unit.casting and unit.preventSwingReset at START and every SWING_TIMER_* fired at SUCCEEDED. The branch discriminators behave exactly as the per-version tables predict.",
+    "what_was_hard": "The lead cites ':1030' for '75 is in noreset_swing_spells'; that line is ranged_swing[75] (the table that STARTS the ranged swing on Auto Shot), not an exemption. Static table bands and a real-lib run both say no noreset table contains 75.",
+    "skill_gap": "No in-client seat: whether the client fires UNIT_SPELLCAST_START for Auto Shot is inferred from workshop lesson 17 and the reference addon's cast gate. The guard keys off the engine's own casting flag, which shares that precondition, so the residual is only the /st diag receipt.",
+    "what_is_filed": "Bench report bench/bars_range_hunter_2026-10-25.md Sec.4.4 carries the per-branch truth table and the lib-vs-main.lua fix comparison. No further code change results."
+  },
+  "escalation": {
+    "reason": "VERDICT on the wave's Task A lead: mechanism CONFIRMED, exemption claim REFUTED, fix already shipped. (1) CONFIRMED: LibClassicSwingTimerAPI.lua:596-604 restarts BOTH melee hands on any tracked cast completion, and Auto Shot 75 sets unit.casting=true; on Era, Anniversary and Titanforge the real library fires START:mainhand + START:offhand + START:ranged for START(75)+SUCCEEDED(75). (2) REFUTED: no noreset_swing_spells table contains 75 (bands 996-1044, 1115-1167, 1380-1448, 1525-1560, 1629-1668, 1703-1713); every [75] line is inside a ranged_swing table. Steady 34120 is exempt on Anniversary and Titanforge (so the lead's 'Steady leaks' half is wrong for both), and the lib lane's 2026-10-25 change has since exempted Multi/Aimed/Arcane/Serpent on all three branches. (3) The remaining Auto Shot leak is already fixed in scope: classes/hunter.lua suppress_auto_shot_melee_reset arms the engine's own preventSwingReset during an Auto Shot cast at range, real-lib proven and killed by mutations M2/M3. A lib noreset entry for 75 is REJECTED (it would also kill the in-melee reset the reference deliberately keeps, SuperSwingTimer_State.lua:1516-1536) and a main.lua snapshot/restore is REJECTED (a cast-reset START is payload-identical to a real swing START).",
+    "blocked_on": "One operator design ruling, nothing functional: should a completed Auto Shot cast AT MELEE RANGE delay the melee swing? Shipped answer = YES (the reference rule; the guard only suppresses at range). Alternative = never reset melee on any hunter shot, a one-line change in the guard's melee branch.",
+    "recommendation": "Keep the shipped reference rule unless the operator wants hunter shots never to delay melee; if they do, it is one line (remove the in-melee early return) plus one test flip, and this desk can be re-dispatched for it. No lib edit, no main.lua edit, no hands-up needed on the mechanism itself."
+  }
+}

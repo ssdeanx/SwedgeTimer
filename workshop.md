@@ -200,3 +200,40 @@ hardest, written for a desk that has never seen this tree:
     journals first will rediscover earned lessons as new bugs. Read-only seats
     never do cross-client work (HU-30); the orchestrator never touches bench
     (HU-32) — brief context in the prompt, artifacts filed by the lane.
+
+19. **One decision, one message — never a correction stream to a running lane.**
+    A desk that receives four queued messages (fix ids → don't remove → revert the
+    additions → no revert) cannot tell which is current. The operator cancelled the lane
+    to stop the churn. If a brief is wrong, either cancel and re-scope, or send ONE
+    message that names itself as the final instruction. The last word must be the only
+    word.
+20. **An id absent from the Era export is not a wrong id.** `/home/sam/wow.export` is the
+    1.15.9 client; SoD rune/seasonal ids live on that same client and may not appear in
+    the export. Removing or replacing an id requires a fresh id research AND an explicit
+    operator ruling — never a "the CSV has no row" inference.
+21. **Each client answers state queries in its own form.** Classic Era 1.15.9 (SoD
+    included) takes ids; TBC Anniversary 2.5.6 takes localized names; Wrath/Titanforge
+    3.80.2 takes localized names. Gate each family separately — no combined
+    "classic-line" branch. The id fallback is ALLOWED (operator 2026-10-25: "i never
+    banned fallback to ids"); name first, id when the name cannot resolve.
+22. **A cancelled lane's workspace is frozen, not corrected.** Its bench/journal may
+    describe a fix that was reverted after cancellation. The TREE is the authority;
+    the orchestrator records the discrepancy in the central journal and never edits the
+    cancelled desk's files.
+
+23. **Match the operator's reference layout, don't invent a second visual language.**
+    When the operator supplies a screenshot of the behaviour they want ("Practice should
+    look like this"), the deliverable is that layout adapted to the live data - the lane
+    rail with per-lane icons, the second ruler with m:ss labels, the banded rows, the
+    close X, the top-of-screen default - not a new compact widget that merely implements
+    the same mechanic. The mechanic (fixed playhead, travelling cues) stays; the chrome
+    comes from the reference. Port the archive's constants and frame hierarchy instead of
+    approximating them from memory.
+
+24. **A trainer with two frames has ONE clock.** The practice reference shows a wide timeline
+    and a control panel; the operator expects the timeline to be the timed surface: Start
+    begins it, Stop freezes it, and the X on the panel is the only exit. Opening the options
+    page must never end a session. When porting a trainer, gate the moving surface on the
+    session's own fight state (`playhead_running` / frozen stamp) instead of letting a wall
+    clock run from `start()`, and give every route (class session, scenario, drill list) the
+    same two-frame trailer — a route that shows only the panel is a defect, not a variant.

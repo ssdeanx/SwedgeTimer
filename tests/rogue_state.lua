@@ -354,7 +354,22 @@ local function build(opts)
         env.Enum = { PowerType = {} }
     end
     env.IsSpellKnown = function(spell)
-        return sb.known == nil or sb.known[spell] ~= false
+        if sb.known == nil then
+            return true
+        end
+        if sb.known[spell] == false then
+            return false
+        end
+        -- A NAME token resolves to the id the fixture knows it by: on Wrath/Titanforge
+        -- the state probe carries the localized name (operator ruling), so an id the
+        -- fixture marks unknown must hide the spell under both forms.
+        if type(spell) == "string" then
+            local id = ROGUE_SPELLS_BY_NAME[spell]
+            if id ~= nil and sb.known[id] == false then
+                return false
+            end
+        end
+        return true
     end
     env.IsSpellUsable = function(spell)
         if sb.usable and sb.usable[spell] ~= nil then
@@ -1820,8 +1835,8 @@ do
     eq(builder_id({ ["Saber Slash"] = true, ["Mutilate"] = true }, nil, sod_opts),
         108, "SoD: the gate keeps Hemorrhage off the SoD client (Sinister Strike leads)")
     eq(builder_id({ ["Saber Slash"] = true, ["Mutilate"] = true }, nil,
-        { project = 11 }), 108,
-        "Wrath: the gate keeps Hemorrhage off a family that has none")
+        { project = 11 }), "Sinister Strike",
+        "Wrath: the gate keeps Hemorrhage off a family that has none (name token)")
 
     -- Era-id pinned (the name-vs-id rule): the Era slot stores the numeric id;
     -- the TBC slot above stores the English name. Era-base is the ERA token
@@ -2176,8 +2191,10 @@ do
     eq(era.st.api.get_spell_query("Slice and Dice", 101), 101,
         "Era: slot queries return the id")
     local wrath = build({ project = 11 })
-    eq(wrath.st.api.get_spell_query("Bloodlust", 2825), 2825,
-        "Wrath (non-TBC): the helper returns the id")
+    -- RE-CUT (2026-10-25, operator ruling - "titanforge aka wotlk doesnt use spell ids
+    -- either"): the helper returns the NAME on Wrath/Titanforge too, not the id.
+    eq(wrath.st.api.get_spell_query("Bloodlust", 2825), "Bloodlust",
+        "Wrath/Titanforge: the helper returns the NAME")
 
     -- Slots store the family-correct query.
     tbc.ST.ROGUE.post_init(tbc.ST)
@@ -2611,8 +2628,18 @@ do
             "practice_ui: panel casts grade through the class's own cast seam")
         check(pui:find("if ui.practice_class_drill() then", 1, true) ~= nil,
             "practice_ui: options//st start routes to the active class's drill")
-        check(pui:find("ui.practice_begin_fight(self, api.get_time())", 1, true) ~= nil,
-            "practice_ui: Start Fight re-begins the drill")
+        -- Start Fight's drill branch reads the clock ONCE and hands the same
+        -- `drill_now` to the re-begin and to the cue strip's schedule/draw, so the
+        -- re-begun run and the strip cannot disagree by a frame's worth of clock.
+        -- The pin asserts the source read and every consumer of it.
+        check(pui:find("local drill_now = api.get_time()", 1, true) ~= nil,
+            "practice_ui: Start Fight reads the clock once for the drill re-begin")
+        check(pui:find("ui.practice_begin_fight(self, drill_now)", 1, true) ~= nil,
+            "practice_ui: Start Fight re-begins the drill on that one clock")
+        check(pui:find("ui.playhead_refresh(self, drill_now, true)", 1, true) ~= nil,
+            "practice_ui: the cue strip rebuilds on the SAME clock as the re-begin")
+        check(pui:find("ui.playhead_draw(drill_now)", 1, true) ~= nil,
+            "practice_ui: and draws its cues at that same clock")
         check(pui:find("ui.practice_stop_drill(self)", 1, true) ~= nil,
             "practice_ui: stop ends the drill run")
         check(pui:find("panel.session.pause, self, ui, shift", 1, true) ~= nil,

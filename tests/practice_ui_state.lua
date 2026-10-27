@@ -97,7 +97,9 @@ end
 
 local function make_fontstring()
     local f = { hidden = false }
-    function f:SetPoint() end
+    function f:SetPoint(point, anchor, relative_point, x, y)
+        f.point = { point, anchor, relative_point, x, y }
+    end
     function f:ClearAllPoints() f.point_cleared = true end
     function f:SetFontObject(obj) f.font_object = obj end
     -- SoD-faithful: SetFont with a nil path latches nothing (false, like the
@@ -348,6 +350,15 @@ local function build(opts)
     }
     function ST.PALADIN.practice_sync() sb.practice_sync = sb.practice_sync + 1 end
     function ST.PALADIN.on_aura_change() sb.aura_change = sb.aura_change + 1 end
+    -- The paladin's own published rotation table (classes/paladin.lua's
+    -- build_practice_rotation): the cue strip's neutral cadence preview reads exactly
+    -- this shape - a row is a cue only when the tree can read it (live) and the
+    -- engine can ask for it (engine).
+    ST.PALADIN.practice_rotation = {
+        { action = "cs", label = "Crusader Strike", live = true, engine = true },
+        { action = "judge", label = "Judgement", live = true, engine = true },
+        { action = "consec", label = "Consecration", live = true, engine = true },
+    }
     -- The paladin's sim-path provider seams (class-isolation 2026-10-21): the
     -- shared bridge asks the ACTIVE class's provider for them.
     ST.PALADIN.practice_panel = {
@@ -1283,9 +1294,11 @@ do
     F.timers[1].cb()
     eq(u.init_retry_armed, false, "firing the retry clears the flag")
     eq(u.panel ~= nil, true, "the retry creates the panel")
-    eq(F.created_frames, 70, "init creates exactly the documented 70 frames " ..
-        "(35 panel/result/driver + 10 key buttons + 6 rotation display + " ..
-        "6 timeline shell + 4 proc icons + 8 panel buttons + 1 level badge)")
+    eq(F.created_frames, 99, "init creates exactly the documented 99 frames " ..
+        "(37 panel/result/driver + 10 key buttons + 6 rotation display + 6 timeline shell + " ..
+        "1 cue strip + 1 cue close button + 1 cue lane rail + 5 rotation-band icons + " ..
+        "20 cue icons + 4 proc icons + " ..
+        "9 panel buttons (the reference (Reset) link included) + 1 level badge)")
     eq(u.sim ~= nil, true, "the retry creates the simulation")
     local frames_after = F.created_frames
     u.init(T)
@@ -1358,17 +1371,52 @@ do
     eq(count_keys(u.panel.rot_buttons), 4, "the rotation selector has four buttons")
     eq(u.panel.rot_buttons.auto.label.text, "Raid Pull", "the auto button reads Raid Pull")
     eq(u.panel.rot_buttons["1/2"].label.text, "1/2", "the 1/2 button reads 1/2")
-    eq(u.panel.timeline_btn.label.text, "Timeline", "the timeline button starts idle")
+
+    -- The reference chrome (operator's screenshot 2026-10-26): under the icon grid the
+    -- static bind hint and the (Reset) link, three hairline separators, the haste pair
+    -- as two equal halves, and the reference's row order - haste pair, rotation
+    -- picker, then Start Fight and Timeline.
+    eq(u.panel.hint_bind.text, "Right-click icon to map to action bar",
+        "the reference bind hint ships under the grid")
+    eq(u.panel.reset_btn.label.text, "(Reset)", "the reference (Reset) link ships under it")
+    eq(#u.panel.separators, 3, "three hairline separators divide the reference blocks")
+    eq(u.panel.haste_width, 95, "the haste pair is two equal halves of the panel")
+    eq(u.panel.bl_btn.width, 95, "Bloodlust is one half")
+    eq(u.panel.hp_btn.width, 95, "the haste pot is the other half")
+    eq(u.panel.bl_btn.point[1], "TOPLEFT", "Bloodlust anchors off the panel's left edge")
+    eq(u.panel.hp_btn.point[1], "TOPLEFT", "the haste pot anchors off the left edge too")
+    eq(u.panel.bl_btn.point[5], u.panel.hp_btn.point[5], "the haste pair shares one row")
+    check(u.panel.bl_btn.point[4] < u.panel.hp_btn.point[4],
+        "Bloodlust sits left of the haste pot")
+    check(u.panel.hint_bind.point[5] > u.panel.reset_btn.point[5],
+        "the bind hint sits above (Reset)")
+    check(u.panel.reset_btn.point[5] > u.panel.bl_btn.point[5],
+        "(Reset) sits above the haste pair")
+    check(u.panel.bl_btn.point[5] > u.panel.rot_buttons.auto.point[5],
+        "the haste pair sits above the rotation picker")
+    check(u.panel.rot_buttons["2/4"].point[5] > u.panel.fight_btn.point[5],
+        "the rotation picker sits above Start Fight")
+    check(u.panel.fight_btn.point[5] > u.panel.timeline_btn.point[5],
+        "Start Fight sits above Timeline (the reference's order)")
+    eq(u.panel.timeline_btn.label.text, "Timeline", "the Timeline button starts idle")
     eq(u.panel.ability_icons.cs.keybind_text.text, "", "keybind labels start empty")
+    -- (Reset) restores the session keybinds (ui.reset_keybinds) - after the empty-label
+    -- check above, since a reset repaints the labels.
+    u.keybinds.cs = "F13"
+    u.panel.reset_btn:GetScript("OnClick")()
+    eq(u.keybinds.cs, "3", "the (Reset) link restores the default binds")
+    u.keybinds.cs = nil
     eq(count_keys(u.buttons), 10, "all ten invisible key buttons exist")
     eq(u.buttons.cs.key_name, "SwedgeTimerPracticeKeycs", "the key button name")
     eq(u.dst_enabled, false, "the DST toggle defaults off")
-    eq(u.timeline_visible, false, "the timeline starts hidden")
+    eq(u.timeline_visible, false, "the Timeline log starts hidden")
     eq(u.timeline_event_count, 0, "no timeline events at init")
     eq(u.timeline_band_count, 0, "no rotation bands at init")
     eq(u.rotation_display.shown, false, "the rotation display starts hidden")
     eq(#u.rotation_icons, 5, "the rotation display has five icon slots")
-    eq(u.timeline_frame.shown, false, "the timeline frame starts hidden")
+    eq(u.timeline_frame.shown, false, "the Timeline log frame starts hidden")
+    eq(u.playhead_frame.shown, false, "the cue strip starts hidden")
+    eq(#u.playhead_icons, 20, "the cue strip owns its icon pool (the 10 s horizon)")
     eq(u.timeline_frame.scroll_child ~= nil, true, "the timeline has a scroll child")
     eq(u.timeline_frame.scrollbar ~= nil, true, "the timeline has a scrollbar")
     eq(#u.timeline_frame.lane_bgs, 6, "the timeline has six lane backgrounds")
@@ -1418,20 +1466,27 @@ do
     eq(F.prints[#F.prints], "Practice mode cannot be started in combat.", "the lockdown refusal prints the same reason")
     F.lockdown = false
 
-    -- A real session at t = 0.
+    -- A real session at t = 0 OPENS STOPPED (the archive's "wait for Start Fight").
     u.start(T)
     eq(u.active, true, "start activates the session")
     eq(u.is_active(), true, "is_active reports the session")
-    eq(u.sim.fight_active, true, "start begins the fight")
+    eq(u.sim.fight_active, false, "start opens the session stopped")
+    eq(u.sim.swing_active, false, "no swing runs before Start Fight")
+    eq(u.panel.shown, true, "the panel shows")
+    eq(u.driver.shown, true, "the driver is live")
+    eq(u.panel.fight_btn.label.text, "Start Fight", "the stopped session offers Start Fight")
+    eq(F.prints[#F.prints], "Practice mode started. Type /st practice to stop.", "start prints the session notice")
+
+    -- Start Fight begins the fight, the swing AND the timeline clock.
+    u.start_fight(T)
+    eq(u.sim.fight_active, true, "Start Fight begins the fight")
     eq(u.sim.swing_active, true, "the first swing is in flight")
+    eq(u.playhead_running, true, "Start Fight runs the timeline")
     near(u.sim.swing_ends_at, 2.0, "2.6/1.3 -> the first swing lands 2.0 s in")
     near(u.sim.effective_speed, 2.0, "the immediate Bloodlust rescales the swing speed")
     near(u.sim.effective_gcd, 1.154, "the GCD is hasted to 1.154 s")
     near(u.sim.bl_buff_expires, 40, "the immediate Bloodlust runs its 40 s")
     eq(u.base_speed, 2.6, "the equipped weapon speed is the base speed")
-    eq(u.panel.shown, true, "the panel shows")
-    eq(u.driver.shown, true, "the driver is live")
-    eq(F.prints[#F.prints], "Practice mode started. Type /st practice to stop.", "start prints the session notice")
 
     -- The addon-state mirror (sync_to_addon).
     near(T.mainhand.speed, 2.0, "the mirrored bar speed is the simulated one")
@@ -1443,7 +1498,7 @@ do
     near(T.gcd.spell_length, 1.154, "the spell length mirrors too")
     eq(T.gcd.expires, nil, "the real GCD expiry is cleared while the sim owns it")
     check(F.practice_sync >= 1, "the seal mirror (PALADIN.practice_sync) runs")
-    eq(F.bar_colors, 1, "the seal colour is applied on the session's first mirror")
+    eq(F.bar_colors, 2, "the seal colour is applied at session open and at Start Fight")
     eq(F.last_bar_color_hand, "mainhand", "the colour lands on the mainhand bar")
     check(F.shows >= 1 and F.last_show_hand == "mainhand", "the session shows the bar")
 
@@ -1453,6 +1508,7 @@ do
     eq(u.panel.info_text.text, "Speed: 2.0s  GCD: 1.15s", "the info line reports the simulated speed/GCD")
     local prints_before = #F.prints
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(#F.prints, prints_before, "a second start while active is a silent no-op")
 
     -- toggle -> stop: the session ends and the addon state comes back.
@@ -1481,7 +1537,7 @@ do
     -- toggle -> start again, then the X button stops the session.
     u.toggle(T)
     eq(u.active, true, "toggle starts a new session")
-    eq(u.sim.fight_active, true, "the new session starts a fight")
+    eq(u.sim.fight_active, false, "a new session opens stopped")
     local close
     for i = 1, #F.frames do
         if F.frames[i].template == "UIPanelCloseButton" then
@@ -1492,17 +1548,34 @@ do
     close:GetScript("OnClick")()
     eq(u.active, false, "the X button stops the session")
 
-    -- The Start/Stop Fight button toggles fights inside the session.
+    -- The Start/Stop Fight button starts and stops the fight (and the timeline).
     u.start(T)
     local fight_btn = u.panel.fight_btn
-    eq(fight_btn.label.text, "|cFFFF0000Stop Fight|r", "an active fight labels the button Stop Fight")
+    eq(fight_btn.label.text, "Start Fight", "a stopped session labels the button Start Fight")
+    fight_btn:GetScript("OnClick")()
+    eq(u.sim.fight_active, true, "the fight button starts the fight")
+    eq(fight_btn.label.text, "|cFFFF0000Stop Fight|r", "the running label ships red")
+    eq(u.playhead_running, true, "Start Fight runs the timeline")
     fight_btn:GetScript("OnClick")()
     eq(u.sim.fight_active, false, "the fight button stops the fight")
+    eq(u.playhead_running, false, "Stop Fight stops the timeline")
+    eq(type(u.playhead_frozen_at), "number", "Stop Fight freezes the timeline")
     eq(fight_btn.label.text, "Start Fight", "the idle label comes back")
     eq(u.panel.hint_text.text, "Press Start Fight, or cast seals with the icon grid.", "the stopped hint returns")
     fight_btn:GetScript("OnClick")()
     eq(u.sim.fight_active, true, "the fight button restarts the fight")
     eq(fight_btn.label.text, "|cFFFF0000Stop Fight|r", "the button flips back")
+    u.stop(T)
+
+    -- ui.open (the options entry) raises the trainer and NEVER stops it.
+    u.start(T)
+    u.panel:Hide()
+    u.open(T)
+    eq(u.active, true, "open leaves a running session running")
+    eq(u.panel.shown, true, "open raises the panel")
+    u.stop(T)
+    u.open(T)
+    eq(u.active, true, "open starts a stopped trainer")
     u.stop(T)
 end
 
@@ -1514,7 +1587,9 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)                  -- t = 0; the first swing lands at 2.0
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local sim = u.sim
+    eq(u.playhead_origin, 0, "pause: the strip anchor starts at the fight start")
     u.cast_key(T, "soc")        -- arms a twist for the swing that lands at resume
     eq(sim.n_active_seals, 2, "the seal swap armed a two-seal window")
     eq(sim.twist_attempted, true, "the twist is pending for the next swing")
@@ -1590,6 +1665,20 @@ do
     drive(b)
     eq(u.combat_paused, false, "leaving combat resumes the sim")
     eq(u.panel.hint_text.text, "Click an icon to cast. /st practice or the X button stops.", "the paused hint clears")
+    -- The strip's clock freezes with the practice: the 5 s real-combat pause is not
+    -- practice time, so the anchor shifts with it and the ruler still reads 10 s.
+    eq(u.playhead_origin, 5.0, "pause: the strip anchor shifts by the pause")
+    eq(u.playhead_anchor(F.clock), 5.0, "pause: the cue cadence uses the shifted anchor")
+    u.playhead_draw(F.clock)
+    local px = b.st.practice.timeline_playhead_x(600, b.st.practice.TL_PLAYHEAD_FRACTION)
+    local shown_sec
+    for i = 1, (u.playhead_ruler_used or 0) do
+        local entry = u.playhead_ruler_pool[i]
+        if entry and entry.x and math.abs(entry.x - px) < 0.01 then
+            shown_sec = entry.label.text
+        end
+    end
+    eq(shown_sec, "0:10", "pause: the ruler reads 10 s of practice at resume, not 15")
     -- swing_ends_at passes during the pause (it lands at resume, then restarts) and
     -- fading_seal_expires is consumed by the resumed twist grading; both are pinned by
     -- their own assertions below and in the second cycle. judge_cooldown_expires is the
@@ -1645,6 +1734,7 @@ do
     u.init(T)
     F.clock = 100.0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.result_frame.text.font[1], "Fonts\\LSM.ttf", "start applies the media font")
     eq(u.result_frame.text.font[2], 36, "start applies the configured result font size")
     eq(F.font_requests[#F.font_requests].key, "Expressway", "the hand's text_font key is fetched")
@@ -1699,6 +1789,7 @@ do
     T.gcd.phys_length = true
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(F.gcd_changes, 1, "start's first mirror reports nil -> 1.154 once")
     eq(F.gcd_times, 1, "set_gcd_times_before_swing_seconds runs with phys_length present")
     F.clock = 0.1
@@ -1763,6 +1854,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local sim = u.sim
 
     -- While the real-combat pause is armed the grid is silent.
@@ -1913,6 +2005,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local sim = u.sim
     F.clock = 0.5
     u.cast_key(T, "cs")
@@ -2008,6 +2101,17 @@ do
         { "save_rotation_position", {} },
         { "update_rotation_display", {} },
         { "build_timeline", {} },
+        { "timeline_lanes", {} },
+        { "timeline_lane_index", {} },
+        { "build_playhead", {} },
+        { "playhead_available", {} },
+        { "playhead_rows", {} },
+        { "playhead_anchor", { 0 } },
+        { "playhead_show", { 0 } },
+        { "playhead_refresh", { 0, true } },
+        { "playhead_draw", { 0 } },
+        { "playhead_clear", {} },
+        { "playhead_set_title", { "x" } },
         { "render_timeline", {} },
         { "reset_timeline_pools", {} },
         { "toggle_timeline", {} },
@@ -2244,6 +2348,7 @@ do
     end
     eq(#seen, count_keys(u.panel.ability_icons), "paladin: the panel binds exactly the engine order")
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.base_speed, 2.6, "paladin: the session runs the equipped speed")
     u.stop(T)
 
@@ -2273,6 +2378,12 @@ hT.active_class = "HUNTER"
             "hunter: the panel binds " .. horder[i] .. " in shell order")
     end
     eq(count_keys(hu.panel.ability_icons), #horder, "hunter: the panel binds exactly the shell order")
+    -- The reference chrome is the SIM panel's: a drill panel keeps its own binds, so
+    -- no (Reset) link (the paladin defaults would be wrong) and no separators.
+    eq(hu.panel.reset_btn, nil, "hunter: a drill panel has no (Reset) link")
+    eq(#hu.panel.separators, 0, "hunter: a drill panel has no section separators")
+    eq(hu.panel.hint_bind.text, "Right-click icon to map to action bar",
+        "hunter: the bind hint still explains the drill icons")
     hu.start(hT)
     eq(hu.active, true, "hunter: the drill session starts")
     hu.stop(hT)
@@ -2407,6 +2518,7 @@ do
     F.class_db.practice_weapon_speed = 1.6
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.base_speed, 1.6, "practice_weapon_speed overrides the equipped speed")
     near(u.sim.effective_speed, 1.231, "1.6/1.3 with the immediate Bloodlust")
     near(u.sim.swing_ends_at, 1.231, "the first swing is clamped to the hasted speed")
@@ -2415,6 +2527,7 @@ do
     -- 0 (the shipped default) uses the equipped weapon speed.
     F.class_db.practice_weapon_speed = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.base_speed, 2.6, "weapon speed option 0 reads the equipped weapon")
     near(u.sim.effective_speed, 2.0, "2.6/1.3 -> 2.0")
     u.stop(T)
@@ -2422,6 +2535,7 @@ do
     -- No usable equipment reading falls back to the engine's 3.5 s.
     F.attack_speed = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.base_speed, 3.5, "an unusable weapon speed falls back to 3.5")
     near(u.sim.effective_speed, 2.692, "3.5/1.3 -> 2.692")
     u.stop(T)
@@ -2440,6 +2554,7 @@ do
 
     -- A deferred option apply waits for the driver tick while lockdown is up.
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     F.class_db.practice_panel_x = 5
     F.lockdown = true
     u.apply_settings(T)
@@ -2469,6 +2584,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
 
     -- Session defaults mirror the archived reset defaults, shortened onto labels.
     eq(u.keybinds.cs, "3", "the session keybinds default to the archived set")
@@ -2544,6 +2660,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)                  -- t = 0, fight running, Bloodlust already on
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local sim = u.sim
 
     -- The immediate Bloodlust lights the button with its countdown.
@@ -2612,6 +2729,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)                  -- 2.0/1.154 -> 2/3, fight running, Bloodlust on
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local sim = u.sim
 
     eq(u.panel.rotation_text.text, "Rotation: 2/3", "the rotation line names 2/3")
@@ -2664,6 +2782,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)                  -- 2/3 -> {"cs", "twist", "twist"}
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local na = b.st.nextaction
 
     eq(u.rotation_display.shown, true, "the display shows while the rotation resolves")
@@ -2713,13 +2832,32 @@ end
 
 --=========================================================================================
 -- 16) Timeline: event collection, band tracking, render pools, grading marks
+--
+-- The session's default timeline is the MOVING cue strip (section 31). The archive's
+-- post-fight log is now the opt-in History view: it collects the same events and
+-- renders through the same pools, but the player has to open it (panel History
+-- button). This section pins the LOG behind that toggle.
 --=========================================================================================
 do
     local b = build()
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)                  -- t = 0, fight running, Seal of Blood up
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local sim = u.sim
+
+    -- Default view: the cue strip is up, the log is not.
+    eq(u.timeline_frame.shown, false, "the log does not open with the session")
+    eq(u.timeline_visible, false, "the log's visible flag starts clear")
+    eq(u.playhead_frame.shown, true, "the cue strip opens with the session")
+    eq(u.panel.timeline_btn.label.text, "Timeline", "the log's Timeline button starts idle")
+
+    -- Open the log (the History view): the strip steps aside for it.
+    u.toggle_timeline(T)
+    eq(u.timeline_visible, true, "History opens the log")
+    eq(u.timeline_frame.shown, true, "the log frame shows")
+    eq(u.playhead_frame.shown, false, "the strip steps aside while History is open")
+    eq(u.panel.timeline_btn.label.text, "|cFF00FF00Timeline|r", "the Timeline button highlights")
 
     -- Casts log on their lanes with fight-relative times.
     F.clock = 0.5
@@ -2735,13 +2873,13 @@ do
     eq(u.timeline_events[2].seal_active, "blood", "judge records the judged seal")
     eq(sim.n_active_seals, 0, "judgement consumed the seals")
 
-    -- The landed swing logs a melee event; the timeline renders on the tick.
+    -- The landed swing logs a melee event; the log renders on the tick.
     F.clock = 2.01
     drive(b)
     eq(u.timeline_event_count, 3, "the swing logs the melee event")
     eq(u.timeline_events[3].lane, "melee", "the swing event lane")
     eq(u.timeline_events[3].result, "miss", "the seal-less swing is a miss")
-    eq(u.timeline_needs_render, false, "the visible timeline renders on the tick")
+    eq(u.timeline_needs_render, false, "the visible log renders on the tick")
     eq(u.timeline_icon_pool_used, 3, "one pooled icon per event")
     eq(u.timeline_divider_pool_used, 1, "one divider per melee event")
     eq(u.timeline_ruler_pool_used, 4, "ruler ticks for seconds 0..3")
@@ -2770,22 +2908,24 @@ do
     end
     check(marked >= 1, "at least one swing is marked wrong")
 
-    -- Toggle hides/shows; stop_fight keeps the data; start_fight resets it.
+    -- Toggle closes the log and brings the strip back; stop_fight keeps the data;
+    -- start_fight resets it.
     u.toggle_timeline(T)
-    eq(u.timeline_visible, false, "toggle hides the timeline")
-    eq(u.timeline_frame.shown, false, "the frame hides")
-    eq(u.panel.timeline_btn.label.text, "Timeline", "the toggle button resets")
+    eq(u.timeline_visible, false, "toggle closes the log")
+    eq(u.timeline_frame.shown, false, "the log frame hides")
+    eq(u.playhead_frame.shown, true, "closing History restores the cue strip")
+    eq(u.panel.timeline_btn.label.text, "Timeline", "the Timeline button resets")
     u.toggle_timeline(T)
-    eq(u.timeline_visible, true, "toggle shows the timeline again")
-    eq(u.panel.timeline_btn.label.text, "|cFF00FF00Timeline|r", "the toggle highlights")
+    eq(u.timeline_visible, true, "toggle opens the log again")
+    eq(u.panel.timeline_btn.label.text, "|cFF00FF00Timeline|r", "the Timeline button highlights")
     u.stop_fight(T)
     eq(u.timeline_event_count, 3, "stop_fight keeps the events for review")
-    eq(u.timeline_visible, true, "stop_fight keeps the frame up")
+    eq(u.timeline_visible, true, "stop_fight keeps the log frame up")
     u.start_fight(T)
     eq(u.timeline_event_count, 0, "start_fight clears the events")
     eq(u.timeline_band_count, 1, "start_fight re-opens the band")
     u.stop(T)
-    eq(u.timeline_frame.shown, false, "stop hides the timeline")
+    eq(u.timeline_frame.shown, false, "stop hides the log")
     eq(u.timeline_event_count, 0, "stop clears the events")
     eq(u.timeline_band_count, 0, "stop clears the bands")
 end
@@ -2798,6 +2938,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)                  -- immediate Bloodlust: the BL icon lights up
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local sim = u.sim
     local bl, dst = u.proc_icons.bl, u.proc_icons.dst
 
@@ -2845,6 +2986,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
 
     -- Attaching builds the overlay on the caller-supplied parent frame.
     local parent = F.env.CreateFrame("Frame", nil, F.env.UIParent)
@@ -2909,6 +3051,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
 
     -- The fight clock runs while the fight does and clears when it stops.
     F.clock = 65.0
@@ -2916,10 +3059,14 @@ do
     eq(u.panel.fight_timer_text.text, "Fight: 1:05", "the fight clock formats m:ss")
     u.stop_fight(T)
     eq(u.panel.fight_timer_text.text, "", "stop_fight clears the fight clock")
+    eq(u.playhead_running, false, "stop_fight stops the timeline")
+    eq(u.playhead_frozen_at, 65.0, "stop_fight freezes the timeline at the stop second")
 
     -- Buff and active-seal border highlights ride refresh_icons.
     F.clock = 66.0
     u.start_fight(T)
+    eq(u.playhead_running, true, "start_fight runs the timeline")
+    eq(u.playhead_frozen_at, nil, "start_fight clears the frozen clock")
     u.cast_key(T, "aw")
     F.clock = 66.5
     drive(b)
@@ -2948,8 +3095,9 @@ do
     u.init(T)
     eq(u.panel.score_text ~= nil, true, "the panel owns a score line")
     eq(u.panel.score_text.text, "", "the score line starts empty")
-    eq(F.created_frames, 70, "the score line adds no frames (a FontString, not a frame)")
+    eq(F.created_frames, 99, "the score line adds no frames (a FontString, not a frame)")
     u.start(T)                  -- t = 0, fight running, Seal of Blood up
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
 
     -- No attempts yet, no stored bests: the placeholder line.
     eq(u.score ~= nil, true, "start opens a fresh session score")
@@ -3002,6 +3150,7 @@ do
     -- A new session loads the stored best; empty fights never overwrite it.
     u.stop(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.score.attempts, 0, "a new session restarts the running score")
     eq(u.bests.score, 40, "the new session loads the stored best")
     eq(u.bests.grade, "A", "the new session loads the stored best grade")
@@ -3072,6 +3221,7 @@ do
     eq(by_key.practice_hunter_report.get_frame(), nil, "the shot report builds on toggle")
     eq(by_key.practice_warrior_report.get_frame(), nil, "the Execute report builds on toggle")
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     for _, key in ipairs({ "practice_panel", "practice_rotation", "practice_timeline" }) do
         eq(by_key[key].available(), true, key .. ": available during a session")
     end
@@ -3158,8 +3308,8 @@ do
     eq(u.timeline_frame.point[1], "CENTER", "the timeline save re-anchors")
     tl.reset()
     eq(u.timeline_x, 0, "the timeline reset restores the default x")
-    eq(u.timeline_y, -200, "the timeline reset restores the default y")
-    eq(u.timeline_frame.point[5], -200, "the reset re-anchors at the default y")
+    eq(u.timeline_y, 300, "the timeline reset restores the default y")
+    eq(u.timeline_frame.point[5], 300, "the reset re-anchors at the default y")
 
     u.stop(T)
     eq(by_key.practice_panel.available(), false, "the targets gate on the session again")
@@ -3183,6 +3333,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local tclose = nil
     for i = 1, #F.frames do
         local fr = F.frames[i]
@@ -3192,12 +3343,14 @@ do
     end
     check(tclose ~= nil, "the timeline close button exists")
     eq(tclose.label.text, "X", "the timeline close button reads X")
-    eq(u.timeline_visible, true, "the timeline shows after start")
+    eq(u.timeline_visible, false, "the log starts closed (the cue strip is the default)")
     tclose:GetScript("OnClick")()
-    eq(u.timeline_visible, false, "the timeline close button hides the timeline")
-    eq(u.timeline_frame.shown, false, "the frame hides")
+    eq(u.timeline_visible, true, "the log close button opens the log")
+    eq(u.timeline_frame.shown, true, "the log frame shows")
+    eq(u.playhead_frame.shown, false, "the cue strip steps aside for the log")
     tclose:GetScript("OnClick")()
-    eq(u.timeline_visible, true, "the close button shows the timeline again")
+    eq(u.timeline_visible, false, "the close button closes the log again")
+    eq(u.playhead_frame.shown, true, "closing the log restores the cue strip")
     u.stop(T)
 end
 
@@ -3207,6 +3360,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.timeline_frame.center_x, u.timeline_frame.center_y = 50, -300
     F.env.UIParent.center_x, F.env.UIParent.center_y = 0, 0
     u.save_timeline_position(T)
@@ -3227,6 +3381,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local sim = u.sim
     F.clock = 4.0
     sim.gcd_active = false
@@ -3244,6 +3399,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     F.clock = 0.5
     u.cast_key(T, "cs")
     F.clock = 2.01
@@ -3269,6 +3425,7 @@ do
         attempts = 5, grade = "A" }
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.bests.grade, "A", "the seeded best grade loads")
     pr.record_attempt(u.score, "S", 60)
     for _ = 1, 4 do pr.record_attempt(u.score, "F", nil) end
@@ -3288,6 +3445,7 @@ do
         attempts = 2, grade = "A" }
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     pr.record_attempt(u.score, "A", 50)
     pr.record_attempt(u.score, "F", nil)
     u.stop_fight(T)
@@ -3304,6 +3462,7 @@ do
     F.class_db.practice_bests = "junk"
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.bests, nil, "a non-table best reads as no best")
     eq(u.panel.score_text.text, "Score --", "the line shows no best")
     pr.record_attempt(u.score, "S", 60)
@@ -3320,6 +3479,7 @@ do
     F.class_db.practice_bests = { score = "x", hit_rate = "y", grade = 7, attempts = "z" }
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.bests.score, 0, "a non-number score falls back to 0")
     eq(u.bests.grade, nil, "a non-string grade falls back to nil")
     eq(u.bests.attempts, 0, "a non-number attempt count falls back to 0")
@@ -3334,6 +3494,7 @@ do
     local pr = b.st.practice
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     pr.record_attempt(u.score, "S", 60)
     u.stop_fight(T)
     eq(F.class_db.practice_bests.score, 100, "the session persists its score")
@@ -3404,6 +3565,7 @@ do
     local u, T = b.st.practice_ui, b.ST
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.toggle_hunter_report(T)
     T.HUNTER = { hunter_shot_log = { { clipped = true, latency = 0.1, at = 1 } } }
     u.stop_fight(T)
@@ -3433,6 +3595,7 @@ do
     u.init(T)
     F.clock = 100.0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local pr = b.st.practice
     local real_tick = pr.tick
     pr.tick = function() error("N4 probe throw") end
@@ -3522,6 +3685,10 @@ T.active_class = "ROGUE"
     check(u.panel.ability_icons.evisc ~= nil, "rogue: the pool spend icon exists")
     eq(u.panel.title.text, "|cFFFF8800Pool Practice|r", "rogue: the drill title ships")
     u.start(T)
+    eq(u.playhead_frame.shown, true, "rogue: the drill shows the cue strip")
+    eq(u.playhead_running, true, "rogue: its fight opens running")
+    eq(u.panel.fight_btn.label.text, "|cFFFF0000Stop Fight|r",
+        "rogue: the open drill fight labels the button Stop Fight")
     eq(u.active, true, "rogue: start activates the session")
     eq(u.rogue_session ~= nil, true, "rogue: the drill session exists")
     eq(u.rogue_session.active, true, "rogue: the run begins immediately")
@@ -3551,6 +3718,7 @@ T.active_class = "ROGUE"
     -- first so its first-throw notice is exact; the cast side follows on the
     -- same site (no second chat line).
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local real_tick = T.ROGUE.tick_practice_session
     T.ROGUE.tick_practice_session = function() error("rogue tick probe") end
     local prints_before = #F.prints
@@ -3586,6 +3754,7 @@ T.active_class = "ROGUE"
     T.ROGUE.practice_scenario_key = function() return "renamed_key" end
     local prints_drift = #F.prints
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     check(u.active ~= true, "rogue H4: a drifted key starts no session")
     eq(F.prints[#F.prints], "Practice mode is not available (rogue drill key drifted).", "rogue H4: the drift prints unavailability")
     eq(#F.prints, prints_drift + 1, "rogue H4: the drift prints exactly once")
@@ -3633,6 +3802,7 @@ T.active_class = "HUNTER"
     eq(count_keys(u.panel.ability_icons), 1, "hunter: the panel shows the shot order")
     eq(u.panel.title.text, "|cFFFF8800Forced-Move Practice|r", "hunter: the drill title ships")
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "hunter: start activates the session")
     F.clock = 1.0
     local ok, err = pcall(drive, b, 0.1)
@@ -3656,6 +3826,7 @@ T.active_class = "HUNTER"
     -- H4: drift fails closed.
     T.HUNTER.get_practice_scenario_key = function() return "renamed_key" end
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     check(u.active ~= true, "hunter H4: a drifted key starts no session")
     T.HUNTER.get_practice_scenario_key = function() return "hunter_forced_move" end
 end
@@ -3698,6 +3869,8 @@ T.active_class = "SHAMAN"
     eq(count_keys(u.panel.ability_icons), 2, "shaman: the panel shows the weave casts")
     eq(u.panel.title.text, "|cFFFF8800Weave Practice|r", "shaman: the drill title ships")
     u.start(T)
+    eq(u.playhead_frame.shown, true, "shaman: the drill shows the cue strip")
+    eq(u.playhead_running, true, "shaman: its fight opens running")
     eq(u.active, true, "shaman: start activates the session")
     -- M2/G6: the fight button follows the drill run (not the paladin sim).
     eq(u.panel.fight_btn.label.text, "|cFFFF0000Stop Fight|r", "shaman M2: the live fight labels the button Stop Fight")
@@ -3725,6 +3898,7 @@ T.active_class = "SHAMAN"
     -- H4: drift fails closed.
     T.SHAMAN.practice_scenario_key = function() return "renamed_key" end
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     check(u.active ~= true, "shaman H4: a drifted key starts no session")
     T.SHAMAN.practice_scenario_key = function() return "shaman_weave" end
 end
@@ -3766,6 +3940,8 @@ T.active_class = "DRUID"
     check(u.panel.ability_icons.shift ~= nil, "druid H5: the shift cast exists")
     eq(u.panel.title.text, "|cFFFF8800Powershift Practice|r", "druid: the drill title ships")
     u.start(T)
+    eq(u.playhead_frame.shown, true, "druid: the drill shows the cue strip")
+    eq(u.playhead_running, true, "druid: its fight opens running")
     eq(u.active, true, "druid: start activates the session")
     eq(u.druid_session ~= nil, true, "druid: the drill session exists")
     F.clock = 1.0
@@ -3799,6 +3975,7 @@ T.active_class = "DRUID"
     -- H4: drift fails closed.
     T.DRUID.practice_scenario_key = function() return "renamed_key" end
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     check(u.active ~= true, "druid H4: a drifted key starts no session")
     T.DRUID.practice_scenario_key = function() return "druid_powershift" end
 end
@@ -3811,6 +3988,7 @@ do
     T.PALADIN = nil
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "H3: the sim starts without the class module")
     F.clock = 1.0
     local ok, err = pcall(drive, b, 0.1)
@@ -4133,6 +4311,7 @@ do
     eq(u.panel.resource_text.text, "", "pools: the resource line starts empty")
     eq(u.panel.resource_text.hidden, true, "pools: the resource line starts hidden")
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.panel.resource_text.text, "", "pools: no pool means no resource readout")
     eq(u.panel.resource_text.hidden, true, "pools: no pool keeps the line hidden")
     u.stop(T)
@@ -4187,6 +4366,7 @@ do
     local wu, wT, wF = w.st.practice_ui, w.ST, w.sb
     wu.init(wT)
     wu.start(wT)
+    wu.start_fight(wT)   -- the landed swing needs a running fight
     eq(wu.active, true, "pools: the twist session starts")
     wu.set_session_rage_pool(wT, { white_damage = 1153, level = 60 })
     eq(wu.rage_pool.rage, 0, "pools: no swing yet, no rage")
@@ -4204,6 +4384,7 @@ do
     local wu2, wT2, wF2 = w2.st.practice_ui, w2.ST, w2.sb
     wu2.init(wT2)
     wu2.start(wT2)
+    wu2.start_fight(wT2)
     wu2.set_session_rage_pool(wT2, {})
     wF2.clock = 2.0
     drive(w2)
@@ -4216,6 +4397,7 @@ do
     local wu3, wT3, wF3 = w3.st.practice_ui, w3.ST, w3.sb
     wu3.init(wT3)
     wu3.start(wT3)
+    wu3.start_fight(wT3)
     wu3.set_session_rage_pool(wT3, { white_damage = 4612, level = 60 })
     wF3.clock = 2.0
     drive(w3)
@@ -4228,6 +4410,7 @@ do
     local mu, mT, mF = m.st.practice_ui, m.ST, m.sb
     mu.init(mT)
     mu.start(mT)
+    mu.start_fight(mT)   -- casts grade inside a running drill fight
     mu.set_session_mana_pool(mT, 100, { soc = 40, sob = 40 })
     pr.mana_gain(mu.mana_pool, 90)
     mu.update_resource_display(mT)
@@ -4277,6 +4460,7 @@ do
     local u, T = b.st.practice_ui, b.ST
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.progress_profile, nil, "no profile: the hook keeps no state")
     eq(u.progress_session, nil, "no profile: no pure session is opened")
     local ok = pcall(function() u.stop(T) end)
@@ -4290,6 +4474,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local blob = F.profile_store.practice
     check(type(blob) == "table", "the profile carries a practice blob")
     eq(blob.schema_version, 1, "the migrated blob is at schema version 1")
@@ -4311,6 +4496,7 @@ do
     F.profile_store.other_key = "keep me"
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local blob = F.profile_store.practice
     check(type(blob) == "table", "a corrupt blob is repaired into a table")
     check(type(blob.progress) == "table", "the corrupt progress half is repaired")
@@ -4326,6 +4512,7 @@ do
     local u, T, F = b.st.practice_ui, b.ST, b.sb
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(F.profile_store.practice, future, "a newer blob is left exactly as it was")
     eq(F.practice_writes, 0, "a newer blob is never written over")
     u.stop(T)
@@ -4340,6 +4527,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local writes_after_start = F.practice_writes
     check(writes_after_start >= 1, "the load-time migration replaces the profile key")
 
@@ -4396,6 +4584,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "A")
     F.clock = 5
     u.stop(T)
@@ -4404,6 +4593,7 @@ do
     -- The panel idles for an hour; a second session counts only its own window.
     F.clock = 3600
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "A")
     F.clock = 3610
     u.stop(T)
@@ -4420,6 +4610,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "S")
     F.clock = 1
     u.stop(T)
@@ -4429,6 +4620,7 @@ do
     F.day = "2026-10-21"
     F.clock = 10
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "S")
     F.clock = 11
     u.stop(T)
@@ -4439,6 +4631,7 @@ do
     F.day = "2026-10-22"
     F.clock = 20
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "S")
     F.clock = 21
     u.stop(T)
@@ -4454,6 +4647,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "S")
     F.clock = 1
     u.stop(T)
@@ -4472,6 +4666,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     for _ = 1, 6 do
         u.record_graded_attempt(T, "A")
     end
@@ -4492,6 +4687,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local writes = F.practice_writes
     -- Below the interval: no write.
     F.clock = 299
@@ -4517,9 +4713,10 @@ do
     check(u.badge_frame ~= nil, "the badge frame is built with the panel")
     eq(u.badge_frame.parent, u.panel, "the badge is a child of the panel")
     eq(u.badge_frame.shown, false, "the badge is hidden by default")
-    eq(u.panel.height, 370, "the badge adds no height to the panel (it is an overlay)")
+    eq(u.panel.height, 428, "the badge adds no height to the panel (it is an overlay)")
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.badge_frame.shown, false, "the badge stays hidden with the toggle off")
     eq(u.badge_enabled, false, "the toggle reads off with no db key")
     -- With the toggle off the progression runs SILENTLY: the data is still
@@ -4539,6 +4736,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.badge_enabled, true, "the toggle reads on with the db key")
     eq(u.badge_frame.shown, true, "the badge shows when the toggle is on")
     eq(u.badge_frame.level.text, "Lv 1", "the badge starts at level 1")
@@ -4592,6 +4790,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "the default mode starts the shipped class session")
     eq(u.sim.fight_active, true, "the default mode still runs the paladin sim")
     eq(u.scenario_run, nil, "the default mode starts no scenario")
@@ -4618,6 +4817,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "the scenario session starts")
     check(u.scenario_run ~= nil, "the scenario run exists")
     eq(u.scenario_step.expected, "cs", "the class's answer is the open step's expectation")
@@ -4671,6 +4871,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     check(u.scenario_step ~= nil, "the first step is open")
     eq(u.scenario_step.deadline, 3.0, "the window is the design 3 s")
     -- Into combat with 1 s left on the window; the pause outlasts it.
@@ -4710,6 +4911,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.progress_drill_key, "custom_rotation_key", "the class's own scenario id is the scope")
     u.stop(T)
 end
@@ -4735,6 +4937,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(asked[1].class_field, "from the class", "the class's own context reaches the step")
     eq(asked[1].resources.mana, 42, "the class's resource view rides along")
     eq(asked[1].cooldowns.cs, 3, "the class's cooldown view rides along")
@@ -4756,6 +4959,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.progress_drill_key, "paladin_rotation",
         "the engine's fallback id stands when the class names none")
     u.stop(T)
@@ -4769,6 +4973,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.scenario_step.expected, nil, "the unknown step has no expectation")
     u.cast_key(T, "cs")
     eq(u.score.attempts, 0, "the unknown decision records no attempt")
@@ -4788,6 +4993,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     for i = 1, 10 do
         u.cast_key(T, "cs")
         F.clock = F.clock + 1
@@ -4811,6 +5017,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, nil, "the session does not start")
     eq(u.sim.fight_active, false, "the refusal never falls back to the paladin sim")
     eq(u.scenario_run, nil, "no scenario run exists")
@@ -4819,12 +5026,14 @@ do
     -- The same class with the drill mode selected and no drills: also loud.
     b.sb.class_db.practice_mode = "drills"
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, nil, "the drill-list session does not start either")
     eq(F.prints[#F.prints], "Practice drills are not available for this class.",
         "the drill refusal prints the reason")
     -- The shipped class mode still works for the very same class.
     b.sb.class_db.practice_mode = nil
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "the shipped class session still starts")
     u.stop(T)
 end
@@ -4844,6 +5053,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "the drill-list session starts")
     eq(#u.drill_list, 2, "both drills are listed")
     eq(u.practice_row.shown, true, "the practice row shows")
@@ -4876,6 +5086,11 @@ do
     T.player_class = "WARRIOR"
 T.active_class = "WARRIOR"
     T.WARRIOR = {
+        -- The class's published rotation table: the drill-list strip's cue source
+        -- (the real warrior module publishes one too).
+        practice_rotation = {
+            { action = "bt", label = "Bloodthirst", live = true, engine = true },
+        },
         practice_drills = {
             { key = "warrior_core_order", label = "Core order", grade = function() return "A" end },
             { key = "warrior_ww_delay", label = "WW delay", grade = function() return "B" end },
@@ -4885,6 +5100,8 @@ T.active_class = "WARRIOR"
     F.clock = 0
     u.start(T)
     eq(u.active, true, "the warrior's own drill session starts")
+    eq(u.playhead_frame.shown, true, "warrior: the drill list shows the cue strip")
+    eq(u.playhead_running, true, "warrior: the drill-list strip runs on the session clock")
     check(u.drill_list ~= nil, "the warrior runs its own drill list")
     eq(#u.drill_list, 2, "both of the warrior's drills are listed")
     eq(u.sim.fight_active, false, "the warrior never runs the twist sim")
@@ -4926,6 +5143,7 @@ T.active_class = "DRUID"
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "the druid's own drill session starts")
     check(u.druid_session ~= nil, "the druid keeps its own session (not the drill list)")
     eq(u.drill_list, nil, "the class session is the drill list's job, not its own")
@@ -4934,6 +5152,7 @@ T.active_class = "DRUID"
     b.sb.class_db.practice_mode = "drills"
     u.stop(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     check(u.drill_list ~= nil, "the druid trains its own drill list on demand")
     eq(u.drill_list[1].key, "druid_powershift_rework", "the class list owns the shift rule")
     eq(u.progress_drill_key, "druid_powershift_rework",
@@ -5011,12 +5230,14 @@ do
         "C7: the ACTIVATED class's panel ships, not the playing class's")
     check(u.panel.ability_icons.evisc ~= nil, "C7: the ACTIVATED class's icons build")
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "C7: the ACTIVATED class's drill session starts")
     check(u.rogue_session ~= nil, "C7: the rogue session owns the run")
     u.stop(T)
     -- The reverse: the same sandbox with the warrior ACTIVE has no rogue drill.
     T.active_class = "WARRIOR"
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     check(u.active ~= true, "C7: with WARRIOR active the rogue drill does not run")
     check(u.rogue_session == nil, "C7: no rogue session leaks across the switch")
 end
@@ -5045,6 +5266,7 @@ T.active_class = "DRUID"
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "the druid's own drill session starts")
     eq(u.progress_drill_key, "druid_powershift_rework",
         "the mastery row is the drill the class's session runs")
@@ -5065,6 +5287,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.scenario_step.hold, true, "the open step is a hold")
     eq(u.scenario_step.expected, nil, "a hold step expects no action")
     eq(u.practice_row_prompt.text, "next: HOLD - pool the resource first",
@@ -5113,6 +5336,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.scenario_step.expected, "cs", "the open step wants the rotation action")
     eq(type(u.scenario_neutral) == "table" and u.scenario_neutral.heal, true,
         "the session carries the class's neutral set")
@@ -5155,6 +5379,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.scenario_neutral, nil, "a class with no published set has no neutral set")
     -- One step only: the run ends on the mis-pick, so the summary is written.
     u.scenario_run.max_steps = 1
@@ -5190,6 +5415,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     -- The rotation action itself still grades normally.
     u.cast_key(T, "cs")
     eq(u.result_frame.text.text, "CORRECT", "the rotation action still reads CORRECT")
@@ -5233,6 +5459,7 @@ do
     u.init(T)
     F.clock = 10
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(asked[1].pull_at, 30, "the context carries the pull timestamp")
     eq(asked[1].pull_in_seconds, 20, "the context carries the countdown")
     u.stop(T)
@@ -5397,6 +5624,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "the drill-list session starts")
     local buttons = u.practice_row_buttons.buttons
     check(buttons["paladin_fcfs_priority"] ~= nil, "the drill has a button")
@@ -5438,6 +5666,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local buttons = u.practice_row_buttons.buttons
     buttons["paladin_fcfs_priority"]:GetScript("OnClick")()
     eq(seen[1].session ~= nil, true, "the drill press carries a session identity")
@@ -5449,6 +5678,7 @@ do
     -- A new session gets a new identity: the mis-pick window starts over.
     u.stop(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local buttons2 = u.practice_row_buttons.buttons
     buttons2["paladin_fcfs_priority"]:GetScript("OnClick")()
     check(seen[2].session ~= first_session, "a new session gets a new drill-counter identity")
@@ -5468,6 +5698,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local frames_after_start = F.created_frames
     -- Twenty steps open and close: the row is rebuilt every time.
     for _ = 1, 20 do
@@ -5509,6 +5740,7 @@ T.active_class = "SHAMAN"
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, true, "the shaman's own session starts")
     check(u.shaman_session ~= nil, "the shaman keeps its own session (not the drill list)")
     eq(u.drill_list, nil, "the class session is the drill list's job, not its own")
@@ -5540,6 +5772,7 @@ T.active_class = "SHAMAN"
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     -- The session is gone (it ended, or it never existed): the cast must say so.
     u.shaman_session = nil
     u.shaman_swing = nil
@@ -5567,6 +5800,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(u.active, nil, "the scenario does not start on a client with no live swing engine")
     eq(u.scenario_run, nil, "no scenario run exists")
     local last = F.prints[#F.prints]
@@ -5599,6 +5833,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local buttons = u.practice_row_buttons.buttons
     check(buttons["paladin_twist"] ~= nil, "the paladin's drill list leads with the twist drill")
     check(buttons["paladin_fcfs_priority"] ~= nil, "the paladin's own drills are listed too")
@@ -5650,6 +5885,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local buttons = u.practice_row_buttons.buttons
     local missing = 0
     for i = 1, 13 do
@@ -5695,6 +5931,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     -- Ten attempts: the completion bonus needs ten (SESSION_BONUS_MIN_ATTEMPTS).
     for _ = 1, 10 do
         u.record_graded_attempt(T, "A")
@@ -5735,6 +5972,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "A")
     F.clock = 5
     local on_hide = u.panel:GetScript("OnHide")
@@ -5789,6 +6027,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "A")
     eq(F.profile_store.practice.progress.classes.PALADIN.xp, 80, "M1: the first attempt earns its XP")
 
@@ -5824,6 +6063,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "A")
     eq(u.badge_frame.session.text, "+80 XP", "M1: the badge shows the session's XP")
     eq(pui.perform_reset(T), true, "M1: the shipped reset runs against the live profile")
@@ -5847,6 +6087,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     for _ = 1, 6 do
         u.record_graded_attempt(T, "A")
     end
@@ -5868,6 +6109,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local prints_before = #F.prints
     for _ = 1, 8 do
         u.record_graded_attempt(T, "A")
@@ -5891,6 +6133,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     for _ = 1, 6 do
         u.record_graded_attempt(T, "A")
     end
@@ -5914,6 +6157,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     for _ = 1, 8 do
         u.record_graded_attempt(T, "A")
     end
@@ -5943,6 +6187,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     for _ = 1, 10 do
         u.record_graded_attempt(T, "F")
     end
@@ -5981,6 +6226,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     eq(cap_notices(F.prints), 0, "H2: nothing is printed before the cap bites")
     -- Three A grades fill the drill's daily cap (3 x its median attempt XP = 240);
     -- the fourth award is swallowed whole.
@@ -6019,6 +6265,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     check(#F.prints > 0, "M1: the newer blob prints a refusal notice")
     local refused = false
     for _, line in ipairs(F.prints) do
@@ -6046,6 +6293,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     -- An attempt with no usable drill id lands in the reserved bucket.
     u.progress_drill_key = nil
     u.record_graded_attempt(T, "A")
@@ -6292,6 +6540,7 @@ T.active_class = cls
             u.init(T)
             F.clock = 0
             u.start(T)
+            u.start_fight(T)   -- the session opens stopped; the fight is explicit
             check(u.drill_list ~= nil, cls .. ": the drill-list session is the live one")
             local buttons = u.practice_row_buttons and u.practice_row_buttons.buttons or {}
             check(buttons[spec.action] ~= nil,
@@ -6453,6 +6702,7 @@ T.active_class = cls
             u.init(T)
             F.clock = 0
             u.start(T)
+            u.start_fight(T)   -- the session opens stopped; the fight is explicit
             local buttons = u.practice_row_buttons and u.practice_row_buttons.buttons or {}
             return {
                 b = b, u = u, module = module, own = own, seam = seam,
@@ -6544,6 +6794,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "S")
     F.clock = 1
     u.stop(T)
@@ -6574,6 +6825,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     local attempts = u.score.attempts
     local hits = u.score.hits
     local last_grade = u.score.last_grade
@@ -6600,6 +6852,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     u.record_graded_attempt(T, "A")
     local blob = F.profile_store.practice
     local drill = blob.progress.classes.PALADIN.drills[u.progress_drill_key]
@@ -6627,6 +6880,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     for _ = 1, 6 do
         u.record_graded_attempt(T, "A")
     end
@@ -6648,6 +6902,7 @@ do
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     for _ = 1, 8 do
         u.record_graded_attempt(T, "A")
     end
@@ -6712,6 +6967,7 @@ T.active_class = "HUNTER"
         u.init(T)
         F.clock = 0
         u.start(T)
+        u.start_fight(T)   -- the session opens stopped; the fight is explicit
         return {
             ui = u,
             ST = T,
@@ -6875,6 +7131,7 @@ T.active_class = cls
         u.init(T)
         F.clock = 0
         u.start(T)
+        u.start_fight(T)   -- the session opens stopped; the fight is explicit
         local buttons = u.practice_row_buttons and u.practice_row_buttons.buttons or {}
 
         -- (a) ONE button per spell: the panel never offers two spellings of one
@@ -6947,6 +7204,7 @@ T.active_class = cls
             want = expected
             F.clock = F.clock + 1
             u.start(T)
+            u.start_fight(T)   -- the session opens stopped; the fight is explicit
             local step = u.scenario_step
             check(step ~= nil and step.expected == expected,
                 label .. ": the prompt names " .. tostring(expected))
@@ -7046,6 +7304,7 @@ T.active_class = "PALADIN"
     u.init(T)
     F.clock = 0
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     check(u.drill_list ~= nil, "29e: the drill-list session is the live one")
     -- The press carries its own spelling (the guide slot's "consecration"), and
     -- the pick must reach the class's grader in the canonical key space.
@@ -7389,6 +7648,7 @@ do
     local u, T = b.st.practice_ui, b.ST
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     T.get_class_table = function() return nil end
     local ok, err = pcall(u.cast_key, T, "aw")
     check(ok, "NILSWEEP P1 cast_key AW tolerates a missing class row (error: " .. tostring(err) .. ")")
@@ -7401,12 +7661,439 @@ do
     local u, T = b.st.practice_ui, b.ST
     u.init(T)
     u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
     -- The panel must have on-screen geometry or save_position returns before the db
     -- read; the bar frame already carries right/top (the builder sets them).
     u.panel.left, u.panel.top = 10, 20
     T.get_class_table = function() return nil end
     local ok, err = pcall(u.save_position, T)
     check(ok, "NILSWEEP P2 save_position tolerates a missing class row (error: " .. tostring(err) .. ")")
+end
+
+--=========================================================================================
+-- 31) The MOVING cue strip: the session's default timeline (operator request)
+--
+-- The archive's post-fight log is now the opt-in History view (section 16). The
+-- default is a fixed playhead a quarter of the way in, with the upcoming actions
+-- travelling right-to-left toward it. These pins run the REAL init and session
+-- flow, so they cover the wiring (start/stop/History/tick) rather than a fixture's
+-- own plumbing.
+--=========================================================================================
+do
+    -- The shipped paladin sim: no `upcoming` provider -> the neutral preview.
+    local b = build()
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    u.init(T)
+    u.start(T)
+    local strip = u.playhead_frame
+    check(strip ~= nil, "the strip is built at init")
+    eq(strip.shown, true, "the strip shows with the session")
+    eq(u.timeline_sched_source, "cadence", "no provider: the neutral preview drives it")
+    eq(strip.title.text, "Rotation cadence (preview)", "the preview is labelled as such")
+    check((u.timeline_sched_count or 0) > 0, "the preview schedules cues")
+    eq(u.playhead_icons_used > 0, true, "the moving icons are drawn")
+
+    -- The strip is STOPPED when the trainer opens: nothing travels until Start.
+    local icon = u.playhead_icons[1]
+    local x0 = icon.point[4]
+    u.playhead_draw(1)
+    near(icon.point[4], x0, "a stopped timeline keeps its cues still")
+
+    -- The cues TRAVEL while the fight runs: the same schedule, one second later,
+    -- sits one PPS further left (75 px on a 600 px strip with a six-second horizon).
+    u.start_fight(T)
+    eq(u.playhead_running, true, "the paladin fight starts the timeline")
+    local x_start = icon.point[4]
+    u.playhead_draw(1.0)
+    near(x_start - icon.point[4], 45, "the cue travels left at the strip's own scale")
+
+    -- A tick rebuilds the schedule (the compute tick, not the frame).
+    F.clock = 1.0
+    drive(b)
+    check(u.timeline_sched_at ~= nil, "the tick refreshes the schedule")
+
+    -- History replaces the strip; closing it restores the strip.
+    u.toggle_timeline(T)
+    eq(strip.shown, false, "History takes the strip's place")
+    u.toggle_timeline(T)
+    eq(strip.shown, true, "closing History restores the strip")
+
+    -- Stop hides and clears it; a restart shows a fresh one.
+    u.stop(T)
+    eq(strip.shown, false, "stop hides the strip")
+    eq(u.timeline_sched_count, 0, "stop clears the schedule")
+    eq(u.playhead_icons_used, 0, "stop clears the icons")
+    u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
+    eq(strip.shown, true, "a new session shows the strip again")
+    check((u.timeline_sched_count or 0) > 0, "and rebuilds its cues")
+    u.stop(T)
+end
+
+do
+    -- The operator's class: the HUNTER drill session gets a strip too (before this
+    -- the class drills had no timeline at all). A class that publishes `upcoming`
+    -- drives it; one that does not falls back to its OWN rotation table.
+    -- The client knows the hunter's Steady Shot rank (49001), so the cue art
+    -- resolves through the same spell_texture path the real client uses.
+    local b = build({ client_spells = { 49001 } })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "HUNTER"
+    T.active_class = "HUNTER"
+    local reads = 0
+    T.HUNTER = {
+        get_practice_scenario_key = function() return "hunter_forced_move" end,
+        PRACTICE_SHOT_ORDER = { "steady" },
+        practice_shot_label = function(key)
+            if key == "steady" then return "Steady Shot" end
+            return nil
+        end,
+        practice_shot_spell_id = function(key)
+            if key == "steady" then return 49001 end
+            return nil
+        end,
+        practice_new_session = function(now) return { active = false, started_at = now } end,
+        practice_begin_session = function(session, now)
+            session.active = true
+            session.started_at = now
+            return true
+        end,
+        practice_tick = function(session, now, elapsed, out) return out or {} end,
+        practice_cast = function() return "A" end,
+        practice_status = function() return "Windows clear - cast freely" end,
+        practice_fight_elapsed = function(session, now)
+            if type(session) ~= "table" or not session.active then return nil end
+            return now - (session.started_at or now)
+        end,
+        practice_shift_pause = function() end,
+        practice_end_session = function(session) session.active = false end,
+        -- The class's own rotation table: the cadence fallback reads it.
+        practice_rotation = {
+            { action = "steady", label = "Steady Shot", spell_id = 49001, live = true, engine = true },
+            { action = "multi", label = "Multi-Shot", spell_id = 2643, live = true, engine = true },
+        },
+        PRACTICE_GCD_SECONDS = 1.5,
+        PRACTICE_CYCLE_SECONDS = 3.5,
+        -- The optional timeline contract members: no `upcoming` yet (the class lane
+        -- owes it), so the preview carries the strip.
+        timeline_lanes = { { key = "cast", name = "Cast" } },
+    }
+    T.HUNTER.practice_panel = fixture_panel(b, T, "HUNTER")
+    u.init(T)
+    u.start(T)
+    eq(u.active, true, "hunter: the drill session starts")
+    eq(u.playhead_running, true, "hunter: the drill opens with its own fight running")
+    eq(u.playhead_frame.shown, true, "hunter: the drill gets a cue strip")
+    eq(u.playhead_frame.title.text, "Rotation cadence (preview)",
+        "hunter: no `upcoming` -> the class's own cadence preview")
+    check((u.timeline_sched_count or 0) > 0, "hunter: the preview schedules the class's rows")
+    eq(u.playhead_frame.height, 56 + 30 + 14, "hunter: one published lane = one 30 px row")
+    eq(u.timeline_frame, nil, "hunter: no log frame is built for a class with no log lanes")
+
+    -- The class publishes `upcoming`: its cues take over the strip.
+    T.HUNTER.practice_panel.upcoming = function(_ui, now)
+        reads = reads + 1
+        return {
+            { at = now + 1, key = "steady", label = "Steady Shot", spell_id = 49001, lane = "cast" },
+        }
+    end
+    T.HUNTER.practice_panel.timeline_title = "Forced-move cues"
+    -- The provider drives the strip while the drill fight runs (Start Fight).
+    u.start_fight(T)
+    F.clock = F.clock + 1
+    drive(b)
+    eq(u.playhead_frame.title.text, "Forced-move cues", "hunter: the class's title is used")
+    eq(u.timeline_sched_source, "upcoming", "hunter: the provider drives the strip")
+    check(reads >= 1, "hunter: the provider was read")
+    eq(u.playhead_icons[1].texture.texture, "icon_spell_49001",
+        "hunter: the cue art resolves from the provider's spell id")
+    eq(u.playhead_icons[1].label.text, "Steady Shot", "hunter: the cue label rides the icon")
+
+    -- The schedule rebuild is throttled: a second compute tick 50 ms later must not
+    -- ask the class again (0.1 s rebuild interval).
+    local reads_before_second_tick = reads
+    F.clock = F.clock + 0.05
+    drive(b)
+    eq(reads, reads_before_second_tick, "hunter: the schedule rebuild is throttled")
+
+    -- Off: a stopped session never reads the provider.
+    u.stop(T)
+    local reads_after_stop = reads
+    F.clock = F.clock + 1
+    u.playhead_refresh(T, F.clock, true)
+    eq(reads, reads_after_stop, "off: a stopped session never reads the provider")
+end
+
+do
+    -- A class with no practice module at all: the session is refused and no strip is
+    -- ever shown (never a blank timeline over another class's rotation).
+    local b = build()
+    local u, T = b.st.practice_ui, b.ST
+    T.player_class = "MAGE"
+    T.active_class = "MAGE"
+    u.init(T)
+    eq(u.playhead_available(), false, "no class table: the strip is unavailable")
+    u.start(T)
+    u.start_fight(T)   -- the session opens stopped; the fight is explicit
+    eq(u.active, nil, "no class table: no session starts")
+    eq(u.playhead_frame.shown, false, "no class table: the strip stays hidden")
+end
+
+--=========================================================================================
+-- 32) BOTH practice frames on every route (audit 2026-10-26)
+--
+-- The operator's rule: the TOP strip is where they practise and the panel is the
+-- controls, so no route may open one without the other. The strip moves ONLY while
+-- a practice clock runs: the paladin sim opens stopped (Start Fight), a class drill
+-- opens with its own fight running, and the two fightless routes (rotation scenario
+-- / drill list) run it on the SESSION clock, anchored at the session second.
+--=========================================================================================
+do
+    -- 32a) The rotation scenario: panel + strip, strip on the SESSION clock (no
+    -- fight of its own), no fight button; and the class session AFTER it must bring
+    -- Start Fight back (it hides the button while it runs, and nothing used to
+    -- un-hide it).
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "scenario"
+    T.PALADIN.practice_scenario_step = function()
+        return { action = "cs", reason = "scenario" }
+    end
+    T.PALADIN.practice_scenario_key = "paladin_rotation"
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    check(u.scenario_run ~= nil, "32a: the scenario session started")
+    eq(u.panel.shown, true, "32a: the scenario shows the panel")
+    eq(u.playhead_frame.shown, true, "32a: the scenario shows the cue strip")
+    eq(u.playhead_running, true,
+        "32a: no swing fight -> the strip runs on the session clock")
+    eq(u.playhead_origin, 0, "32a: the session clock is anchored at the session second")
+    eq(u.playhead_frozen_at, nil, "32a: a running session clock is not frozen")
+    eq(u.timeline_sched[1].key, "cs",
+        "32a: the sim strip still previews the class's APL rotation")
+    check((u.timeline_sched_count or 0) > 0, "32a: the scenario strip schedules cues")
+    local icon = u.playhead_icons[1]
+    local x0 = icon.point[4]
+    F.clock = 1
+    u.playhead_draw(F.clock)
+    near(x0 - icon.point[4], 45, "32a: the session clock moves the cues")
+    F.clock = 0
+    u.playhead_draw(0)
+    -- A cue whose rotation row carries no single spell id still wears the sim's own
+    -- ability art (the same texture its panel icon shows), never a blank box.
+    local judge_art
+    for i = 1, (u.playhead_icons_used or 0) do
+        if u.playhead_icons[i].label_text == "Judgement" then
+            judge_art = u.playhead_icons[i]
+        end
+    end
+    check(judge_art ~= nil, "32a: the strip draws the Judgement cue")
+    if judge_art then
+        eq(judge_art.texture.texture, "icon_judge",
+            "32a: a cue with no spell id wears the sim's own ability art")
+    end
+    -- The options entry opens (never stops) and brings the strip back with a live
+    -- schedule (a bare Show would leave a cleared cue table blank).
+    u.playhead_clear()
+    u.playhead_frame:Hide()
+    u.open(T)
+    eq(u.active, true, "32a: options open never stops the session")
+    eq(u.playhead_frame.shown, true, "32a: options open re-shows the strip")
+    check((u.timeline_sched_count or 0) > 0,
+        "32a: options open rebuilds the cue schedule")
+    eq(u.panel.fight_btn.shown, false,
+        "32a: the scenario hides the sim fight button (it has no fight)")
+    u.stop(T)
+    eq(u.playhead_frame.shown, false, "32a: stop hides the strip")
+    eq(u.panel.shown, false, "32a: stop hides the panel")
+    b.sb.class_db.practice_mode = nil
+    u.start(T)
+    eq(u.panel.fight_btn.shown, true,
+        "32a: a later class session restores the Start Fight button")
+    eq(u.playhead_frame.shown, true, "32a: and shows the strip again")
+    u.stop(T)
+end
+
+do
+    -- 32b) The drill list: panel + strip on the SESSION clock (no fight clock of
+    -- its own), no fight button - and a drill press is still a graded attempt.
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    b.sb.class_db.practice_mode = "drills"
+    T.PALADIN.practice_drills = {
+        { key = "audit_timing", label = "Audit timing", grade = function() return "A" end },
+    }
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    check(u.drill_list ~= nil, "32b: the drill-list session started")
+    eq(u.panel.shown, true, "32b: the drill list shows the panel")
+    eq(u.playhead_frame.shown, true, "32b: the drill list shows the cue strip")
+    eq(u.playhead_running, true, "32b: the drill list strip runs on the session clock")
+    eq(u.playhead_origin, 0, "32b: the session clock is anchored at the session second")
+    eq(u.panel.fight_btn.shown, false, "32b: the drill list hides the sim fight button")
+    local icon = u.playhead_icons[1]
+    local x0 = icon.point[4]
+    F.clock = 1
+    u.playhead_draw(F.clock)
+    near(x0 - icon.point[4], 45, "32b: the session clock moves the drill-list cues")
+    F.clock = 0
+    u.playhead_draw(0)
+    local buttons = u.practice_row_buttons.buttons
+    local before = u.score.attempts
+    buttons["audit_timing"]:GetScript("OnClick")()
+    eq(u.score.attempts, before + 1, "32b: the drill press is the graded attempt")
+    u.stop(T)
+    eq(u.playhead_frame.shown, false, "32b: stop hides the strip")
+    eq(u.panel.shown, false, "32b: stop hides the panel")
+end
+
+do
+    -- 32c/32d/32e) A class drill with its own fight clock: it opens RUNNING, Stop
+    -- freezes in place, Start re-anchors both clocks, a refused re-begin never runs
+    -- the strip, and its cues are exactly the actions its panel can press.
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    T.player_class = "SHAMAN"
+    T.active_class = "SHAMAN"
+    T.SHAMAN = {
+        PRACTICE_CAST_ORDER = { "lb" },
+        practice_cast_label = function(key)
+            return key == "lb" and "Lightning Bolt" or nil
+        end,
+        practice_cast_spell_id = function() return nil end,
+        practice_scenario_key = function() return "shaman_weave" end,
+        practice_rotation = {
+            { action = "lb", label = "Lightning Bolt", live = true, engine = true },
+            -- A rotation row the drill panel does not offer: never a cue.
+            { action = "cl", label = "Chain Lightning", live = true, engine = true },
+        },
+    }
+    T.SHAMAN.practice_panel = {
+        drill_key = "shaman_weave",
+        scenario_key = function() return "shaman_weave" end,
+        order = function() return T.SHAMAN.PRACTICE_CAST_ORDER end,
+        label = function(key) return T.SHAMAN.practice_cast_label(key) end,
+        spell_id = function() return nil end,
+        progress = {
+            mode = "shaman_mw_weave",
+            scenario = "shaman_rotation",
+            drills = { "shaman_weave" },
+        },
+        session = {
+            running = function(ui) return ui.audit_session ~= nil end,
+            active = function(ui) return ui.audit_session and ui.audit_session.active end,
+            start = function(self, now, ui)
+                ui.audit_session = { active = true, started_at = now }
+                return true
+            end,
+            tick = function() end,
+            cast = function() return "A" end,
+            stop = function(self, ui) ui.audit_session = nil end,
+            begin = function(self, now, ui)
+                if ui.audit_session then
+                    ui.audit_session.active = true
+                    ui.audit_session.started_at = now
+                end
+            end,
+            end_session = function(self, ui)
+                if ui.audit_session then ui.audit_session.active = false end
+            end,
+        },
+    }
+    u.init(T)
+    F.clock = 10
+    u.start(T)
+    check(u.audit_session ~= nil, "32c: the class drill session started")
+    eq(u.panel.shown, true, "32c: the drill shows the panel")
+    eq(u.playhead_frame.shown, true, "32c: the drill shows the cue strip")
+    eq(u.playhead_running, true, "32c: the drill opens with its own fight already running")
+    eq(u.playhead_origin, 10, "32c: the strip is anchored at the drill fight start")
+    eq(u.panel.fight_btn.label.text, "|cFFFF0000Stop Fight|r",
+        "32c: the open drill fight labels the button Stop Fight")
+    local icon = u.playhead_icons[1]
+    local x0 = icon.point[4]
+    F.clock = 11
+    u.playhead_draw(F.clock)
+    near(x0 - icon.point[4], 45, "32c: the open drill's cues travel with its fight")
+    -- Stop freezes in place: no clock runaway while the fight is stopped. The
+    -- panel's own button walks the generic provider seam (no class name in the
+    -- shared module).
+    local fight_btn = u.panel.fight_btn
+    fight_btn:GetScript("OnClick")()
+    eq(u.playhead_running, false, "32c: Stop Fight stops the strip")
+    eq(u.playhead_frozen_at, 11, "32c: Stop Fight freezes it at the stop second")
+    eq(u.audit_session.active, false, "32c: Stop Fight ends the drill run")
+    local x_stop = icon.point[4]
+    u.playhead_draw(50)
+    near(icon.point[4], x_stop, "32c: the frozen strip does not drift with the clock")
+    -- A strip the player closed with its X comes back with the next fight.
+    u.playhead_frame:Hide()
+    -- Start re-anchors the ruler on the new fight.
+    F.clock = 20
+    fight_btn:GetScript("OnClick")()
+    eq(u.playhead_frame.shown, true, "32c: Start Fight brings a closed strip back")
+    eq(u.playhead_running, true, "32c: Start Fight runs the strip again")
+    eq(u.playhead_origin, 20, "32c: Start Fight re-anchors the ruler at 0:00")
+    eq(u.playhead_frozen_at, nil, "32c: and clears the frozen clock")
+    eq(u.audit_session.active, true, "32c: Start Fight re-begins the drill run")
+    -- Every cue is an action the drill's own panel can press (never the APL rows
+    -- the drill cannot cast).
+    local unpressed
+    for i = 1, (u.timeline_sched_count or 0) do
+        local key = u.timeline_sched[i].key
+        if key ~= "lb" then unpressed = key end
+    end
+    eq(unpressed, nil, "32e: every drill cue is a pressable panel action")
+    -- A provider whose re-begin silently refuses must not run the strip: the state
+    -- is corrected (the button label stays Start Fight), no phantom fight.
+    u.stop_fight(T)
+    T.SHAMAN.practice_panel.session.begin = function() end
+    F.clock = F.clock + 1
+    u.start_fight(T)
+    eq(u.playhead_running, false, "32d: a refused re-begin leaves the strip stopped")
+    eq(u.audit_session.active, false, "32d: and no fight is claimed")
+    u.stop(T)
+    eq(u.playhead_frame.shown, false, "32c: stop hides the strip")
+    eq(u.panel.shown, false, "32c: stop hides the panel")
+end
+
+do
+    -- 32f) XP comes from TIMED graded presses: opening/closing a session earns
+    -- nothing, an idle fight earns nothing, and a timed twist press does earn.
+    local b = build({ with_db = true })
+    local u, T, F = b.st.practice_ui, b.ST, b.sb
+    local P = b.st.practice_progress
+    u.init(T)
+    F.clock = 0
+    u.start(T)
+    check(u.progress_session ~= nil, "32f: opening practice opens a progression session")
+    u.stop(T)
+    eq(P.scope_xp(u.progress_profile.progress, "PALADIN"), 0,
+        "32f: opening and closing practice earns no XP")
+    eq(u.badge_frame.session.text, "", "32f: the badge shows no session XP")
+    -- A running fight with no timed press: swings land, none is an attempt.
+    F.clock = 0
+    u.start(T)
+    u.start_fight(T)
+    for _ = 1, 12 do
+        F.clock = F.clock + 0.25
+        drive(b, 0.05)
+    end
+    eq(u.score.attempts, 0, "32f: idling a running fight records no graded attempt")
+    u.stop(T)
+    eq(P.scope_xp(u.progress_profile.progress, "PALADIN"), 0,
+        "32f: idling a running fight earns no XP")
+    -- The timed twist press is the graded attempt, and it earns.
+    F.clock = 0
+    u.start(T)
+    u.start_fight(T)
+    twist_attempt(b)
+    eq(u.score.attempts, 1, "32f: one timed twist press is one graded attempt")
+    u.stop(T)
+    check(P.scope_xp(u.progress_profile.progress, "PALADIN") > 0,
+        "32f: the timed press earns XP")
 end
 
 if failures == 0 then

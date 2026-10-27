@@ -895,3 +895,413 @@ No git. No lint-config changes. Warning wiring per wire-not-strip (trace → WIR
   bars.lua +17, bars_lazy +75 (§6), main_init +13 (§4b-iii). F1 retracted
   with byte evidence (no phantom fix). Mutations M1-M4 kill.
 - Still running: rwd only. Commit waits for all five.
+
+## Dispatch (2026-10-25, operator wave: deep audit + hunter bars/range + practice timeline + clients + version)
+- Operator scope (verbatim intent): deep audit of the actual code + improve/optimize/enhance ideas;
+  background alpha not see-through (ANSWERED: backdrop only); fix hunter mainhand vs ranged bar;
+  ranged distance as its own bar that fills toward melee range (melee weaving);
+  practice mode should be a MOVING timeline showing when to click each ability;
+  works on classic_era / classic_anniversary ("classic") / classic_titan (Titanforge) / Forever / Retail;
+  native wow-ui-source API instead of our Lib where the client actually has it.
+- Operator rulings taken this session (question tool, verbatim answers):
+  1. Version: treat "0.0.1" as the INCREMENT -> 2.1.2 becomes **2.1.3** (all 7 TOCs + main.lua + CHANGELOG).
+  2. Swing engine: **native API on Forever/Retail, keep the vendored lib on the classic line**.
+     Verified today: PLAYER_SWING exists ONLY on origin/forever; classic_era / classic_anniversary /
+     classic_titan / live have no swing event and no Blizzard_SwingTimer. No native swing API to copy on classic.
+  3. Background alpha: **backdrop only** (not the colored fill).
+  4. Practice timeline: **fixed moving playhead with upcoming abilities** (not the old auto-scroll log).
+  5. Ranged distance: **standalone fill bar, ON by default for hunters, opt-in elsewhere**.
+- No read-only agent seats this wave (operator order): all six lanes are shell-capable `general` desks;
+  cross-client claims must cite branch+path+line via `git -C /home/sam/wow-ui-source`.
+- Baseline BEFORE the wave: `bash tests/run.sh` = 48 steps, **3 failed** (lrc_guard_state 83/141,
+  range_source_state 12/148 twice) — the vendored LibRangeCheck re-acquired `CheckInteractDistance`
+  (lib :413/:463) after the HU-23 removal; a later vendored update regressed it. Assigned to
+  cross-client-engine (Task A). Everything else green; luacheck 2/0 in 90 files.
+
+| Lane | Scope | State | Session |
+|---|---|---|---|
+| bars-range-hunter | bars.lua, weave_range.lua, classes/hunter.lua, hunter_ui.lua + hunter/weave suites; hunter mh-vs-ranged truth table + standalone melee-weave distance bar | running | ses_e8c1621f9ffe2EsMz0luIPLGi1 |
+| practice-timeline | practice_ui.lua, practice.lua + practice suites; diagnose practice start path + moving-playhead timeline with class-provider seam | running | ses_e8c1621f8ffed6PG4TtSX6z4KQ |
+| appearance-options | config_presets.lua, option_tables.lua, config.lua + options suite; opaque backdrop default + one-time migration, weave bar default/option copy | running | ses_e8c1621e7ffeyBJR3xQ7rn9evk |
+| cross-client-engine | swing_source.lua, compat.lua, main.lua (named regions), vendored LibRangeCheck protected-call removal + engine/range suites; Forever native events, Retail inert, classic lib path | running | ses_e8c1621e7ffdcFA2q0LElF5CJ0 |
+| audit-core | READ-ONLY scope: main/bars/compat/swing_source/guard/utils/diag/ldb/enemy_swing/hud/config — per-frame cost, event paths, growth, reliability, idle cost + ranked fixes/ideas | running | ses_e8c1621e6ffeR60CNSDru9YA6z |
+| audit-features | READ-ONLY scope: classes/*, practice*, guides, UI, options — behavior vs documented intent, class isolation, practice integrity, per-client drift, perf/reliability + ranked fixes/ideas | running | ses_e8c1621e6ffdZv0hT90HVWbeAZ |
+| version-docs | 2.1.3 bump (7 TOCs + main.lua + CHANGELOG) + README/TESTING truth pass | queued (after builders; owns main.lua/CHANGELOG) | — |
+
+## Orchestrator findings filed into the wave (2026-10-25, pre-reconcile, verified in-tree)
+- **Baseline is not green**: the vendored `LibRangeCheck-2.0` re-acquired the HU-23 protected call
+  (`Libs/LibRangeCheck-2.0/LibRangeCheck-2.0/LibRangeCheck-2.0.lua:413` declares `CheckInteractDistance`,
+  `:463` calls it) after a later vendored update. `tests/lrc_guard_state.lua` (83/141) and
+  `tests/range_source_state.lua` (12/148) catch it. This is a shipping defect: on TBC Anniversary the
+  client blocks the protected call (`ADDON_ACTION_BLOCKED`), so range display dies. Cross-client lane owns it.
+- **Hunter mh-vs-ranged lead (verified in the lib, fix not yet ruled)**: the lib's
+  `UNIT_SPELLCAST_SUCCEEDED` blanket cast-reset (`LibClassicSwingTimerAPI.lua:596-605`) restarts
+  mainhand AND offhand on every non-Retail cast when `unit.casting` is set. Auto Shot 75 is exempt via
+  `noreset_swing_spells` (:1030/:1143/etc), but hunter shot casts (Steady 34120 / Multi 2643 / Aimed 19434)
+  are not — so each shot can re-anchor the melee bars and the mh bar looks welded to the ranged cycle.
+  Routed to both the bars and cross-client lanes with an instruction to confirm against the real version
+  branch and choose an our-side suppression vs a per-version lib `noreset` entry (HU-29 fork-patch rule).
+- **Practice timeline is a post-fight event log, not a moving trainer**: `practice_ui.lua:3198-3300`
+  places icons at `event.time * TIMELINE_PPS` and jumps the scrollbar to max on each render; the archived
+  TBC build does the same (`docs/swedge/SwedgeTimer_TBC/practice.lua:2246-2370`). Lanes are paladin-hardcoded
+  in shared `practice.lua:128-142` (SoB/CS/Consec/SoC/Judge), so non-paladin drills have no meaningful
+  timeline. The moving-playhead rebuild is new work, not a port.
+- **Weave-range bar exists but is off and vertical**: `weave_range.lua` (269 lines) fills bottom-up beside
+  PlayerFrame, default `weave_range_enabled = false` (`config_presets.lua:100`), and it already uses exact
+  yards via `st.api.UnitDistance`. The operator's requested bar is a default-ON hunter bar, so the lane is
+  re-shaping it rather than inventing a second distance widget. The old 4-state `hunter_ui` strip stays
+  unless a lane proves it duplicates the new bar.
+- **Version surface** (for the 2.1.3 lane): 7 TOC `## Version` lines + `main.lua:5 local version` +
+  `CHANGELOG.md` top section. `README.md` carries no version. `ST.addon_version` is derived, no other
+  file hardcodes it.
+
+## Reconcile (2026-10-25): appearance-options DONE
+- Verified, not trusted: `tests/appearance_defaults_state.lua` 145/0 in-tree; `tests/options_load_state.lua`
+  3596/0; migration shape checked against `Libs/AceDB-3.0/AceDB-3.0.lua:88-131` (copyDefaults rawsets a new
+  table) and the Classic-Retro collision (`config_presets.lua:255+` ships {0,0,0,0.85}) is guarded by
+  `theme_preset`. I re-ran two mutations independently on a /tmp copy: hunter default -> false kills 4 pins;
+  backdrop alpha -> 0.85 kills 8 pins. Kill confirmed.
+- Scope held: config_presets.lua, config.lua, option_tables.lua, tests/appearance_defaults_state.lua (new),
+  tests/options_load_state.lua. Fill alpha/border/HUD untouched.
+- Accepted residual (lane-owned, documented): a deliberately picked pure black 0.85 is byte-identical to the
+  old default and migrates opaque; no touched-tracking exists to distinguish it.
+- Owed by orchestrator: `tests/run.sh` registration for `appearance_defaults_state.lua` (+ the other two new
+  suites when their lanes land). `tests/toc_check.lua` currently fails exactly those registration pins —
+  expected mid-wave, not a defect.
+- Owed by bars-range-hunter: runtime gate in weave_range.lua must use `ST.weave_range_default_enabled`
+  (nil == ON for HUNTER); steered.
+
+## Reconcile (2026-10-25): audit-core DONE (read-only, no product edits)
+- Trail verified: `bench/audit_core_perf_2026-10-25.md` (839 lines, new file), desk journal current,
+  done signal `desks/audit-core/.signals/20261025T165010Z.json`. No product file touched (git diff confirms).
+- Independently re-checked the two HIGHs against the tree: (R1) `main.lua:2501-2532` — `rf_update` returns
+  before `set_bar_visibilities()` on `rf_disabled`, and the visibility pass sits OUTSIDE the pcall while the
+  re-arm is the last line, so a throw kills show/hide for the session. (R2) `main.lua:1400-1415/1467-1480`
+  suppression state has no combat-exit reset; `classes/paladin.lua:2214-2218` resets its own analogue,
+  proving the omission. Both CONFIRMED; both pre-existing in HEAD.
+- Other accepted findings for the next wave: HUD always-on layout poll + live trinket cooldown reads
+  (`hud.lua:697-715,324-330`), TBC paladin 20 Hz × 40-row aura walk (`main.lua:1028-1051` →
+  `classes/paladin.lua:590-600`), enemy_swing CLEU + LibStub per event while off (`enemy_swing.lua:586-592`),
+  O1-O10 optimizations, 10 enhancements (5 confusion-reducers). Report also flags R3 class-picker
+  `active_class` vs `player_class` mismatch, R4 init latch ordering, R5 bar-full timer handle hygiene.
+- Not dispatched as fixes in this wave: main.lua is owned by cross-client-engine until it lands; the next
+  wave owns R1/R2/O5/O6 (+O7/O8) as a core-engine lane and O1-O4/O9/O10 as a display lane. Pins to re-cut
+  are filed in the report, not edited.
+
+## Reconcile (2026-10-25): audit-features DONE (read-only, no product edits)
+- Trail verified: `bench/audit_features_2026-10-25.md` (454 lines, new), desk journal current,
+  done signal `desks/audit-features/.signals/2026-10-25T17-05-00Z.json`. No product file touched.
+- Independently spot-checked the HIGHs:
+  * `class_activation` half-wired CONFIRMED by inspection: `main.lua:791` activates the selected module,
+    but `post_init`/event hooks still key `self[self.player_class]` (e.g. :970, :1098) and
+    `hud.lua:524`/`nextaction_ui.lua:135` also use the playing class. Auto default masks it; an explicit
+    pick loads a dead module. Next wave: one key for dispatch/settings (or label the picker dev-only).
+  * Era/SoD range probe dead CONFIRMED: `classes/hunter.lua:180 steady_id_by_family.ERA = 56641` and
+    `/home/sam/wow.export/Spell.csv` (1.15.9 client, 2.0 MB) has ZERO rows for 56641; the guide's
+    `range_token` falls back to that id (:3331-3334), so `target_in_range` is always nil on Era/SoD and the
+    out-of-range HOLD can never fire. Next wave: family-correct range token (Auto Shot 75 on Era).
+- Other accepted for next wave: practice prompt/button re-grade without a timing gate (stats/mastery/
+  perfect_ten farmable; XP capped), hunter gather 3-6 aura walks per 50 ms tick, practice pcalls hiding a
+  broken class grader. All pre-existing; all cited in the report.
+- Note recorded from the lane: `practice_ui_state` was transiently red mid-wave and passes 2608/0 at its
+  final snapshot — orchestrator's full run is the authority, not the lane's window.
+
+## Reconcile (2026-10-25): practice-timeline DONE
+- Verified, not trusted: `practice_timeline_state.lua` 102/0, `practice_state.lua` 1582/0,
+  `practice_ui_state.lua` 2608/0, in-tree. Independent mutation on a full /tmp copy (event_x sign
+  flipped) kills 5 pins — kill confirmed. Scope held: practice_ui.lua, practice.lua + the three suites.
+  LF preserved (practice_ui/practice have 0 CR lines; the CRLF files were untouched).
+- Accepted: class drills had NO timeline at all (`begin_drill_session` never touched the frame; the toggle
+  was inside the sim-only block at practice_ui.lua:2115) — REAL and fixed by showing the strip in every
+  session. The old view was a past-only auto-scrolled log; the archive has the same log, not a playhead.
+  Paladin-hardcoded lanes in shared practice.lua are now resolved from the ACTIVE class
+  (`ui.timeline_lanes`/`ui.timeline_lane_index`, cached per class).
+- Shipped contract: fixed 25% playhead, 6 s horizon, 75 px/s, 12-icon reused pool, one OnUpdate on the
+  strip frame (hidden => no tick), schedule rebuilt at PLAYHEAD_SCHEDULE_INTERVAL, provider seam
+  `practice_panel.timeline_lanes` + `upcoming(ui, now, horizon)`, neutral fallback from the active class's
+  own live+engine rotation rows labelled "Rotation cadence (preview)". History is now the opt-in button.
+- Owed by orchestrator: run.sh line `tests/practice_timeline_state.lua`.
+- Owed by a follow-up lane (classes/hunter.lua is owned by bars-range-hunter until it lands): hunter
+  `practice_panel.upcoming` so the strip shows the real shot schedule instead of the neutral preview.
+  Other filed items (bench §A5): drill sessions ship with no keybinds (click-only until right-click assign),
+  reset_keybinds wording, swallowed start error, toggle_fight per-class block, fixed row layout.
+
+## Reconcile (2026-10-25): cross-client-engine DONE (pending one operator ruling)
+- Baseline RED closed: `lrc_guard_state` 141/0 and `range_source_state` 148/0 in-tree; the 2026-10-25
+  re-vendor (commit `6e2bc2d`) had replaced the HU-23 LRC file with pre-patch upstream. The lane ported the
+  guard package 1:1 onto the new upstream base (API probes, item/spell absence+secret guards, empty-list
+  getRange guard, conditional event registration) and dropped the interact ladder entirely.
+- Engine matrix independently re-verified today: `PLAYER_SWING` exists only on `origin/forever`
+  (`SwingTimerDocumentation.lua:43-52`, enum :71-82); `classic_era`/`classic_anniversary`/`classic_titan`/
+  `live` have no swing event and no Blizzard_SwingTimer. The lane's choices match: lib on classic,
+  swing_source on Forever, inert on Retail, no classic-lib fallback (HU-31).
+- swing_source changes accepted: weapon swap now RESTARTS at the equipped duration (mirrors Blizzard :319-330),
+  world entry STOPs live cycles before clearing (no silent drop), event omissions re-justified with lines
+  (PLAYER_TARGET_CHANGED / PLAYER_SWING_RANGE_UPDATE are display-only and the latter needs
+  C_SwingTimer.EnableRangeCheck). main.lua diff is the diag `swing_engine=` line only.
+- Hunter cast-reset addendum: the lane CONFIRMED the lead with corrections — Auto Shot 75 was not in
+  `noreset_swing_spells`; Steady is already exempt on BCC/Wrath; the unexempt damage shots were
+  Multi/Aimed/Arcane/Serpent. It patched the VENDORED SWING LIB's per-version `noreset_swing_spells`
+  (+47 lines, Era/BCC/Wrath) and added a real-lib hunter leg (978/0, 2 expected-fail HU-29; 9/9 muts).
+  This is HU-29 option (b) exercised without an explicit operator ruling → raised to the operator.
+- Filed, not fixed: Wrath/Titanforge `reset_swing_spells[75]` still restarts mainhand+offhand on Auto Shot
+  (`LibClassicSwingTimerAPI.lua:1196`), defeating the class guard there; one-line removal recommended.
+- Suites: `swing_source_state` 159/0, `engine_matrix_state` 101/0, `real_wire_state` 978/0 (2 xfail).
+  run.sh line owed for `engine_matrix_state.lua`.
+
+## Reconcile (2026-10-25): bars-range-hunter DONE + two operator rulings
+- Verified in-tree: `weave_range_state` 90/0, `weave_bar_state` 105/0 (new), `hunter_state` 1824/0,
+  `bars_state` 956/0. Desk journal carries three passes + 3 signals (done + hands-up + checkpoint).
+- Task A root causes (both fixed, both real):
+  1. ENGINE: the vendored lib restarts BOTH melee hands on every completed tracked cast
+     (`LibClassicSwingTimerAPI.lua:596-605`); Auto Shot is a cast on the classic line. The lane proved it on
+     the SHIPPED library (Era/Anniversary/Titanforge profiles), and corrected the inherited lead: no
+     `noreset_swing_spells` table contains 75; every `[75]` is in `ranged_swing` (starts the ranged cycle).
+     Fix as shipped: class guard `ST.HUNTER.suppress_auto_shot_melee_reset` arms the engine's own
+     `preventSwingReset` during an Auto Shot cast (range-dependent).
+  2. LAYOUT: `hunter_ui.sync_melee_anchor` moved mainhand/offhand under the ranged bar whenever the hunter
+     cast bar was visible — and the cast bar is visible for the Auto Shot hidden-window face for 0.5 s of
+     EVERY ranged cycle. The re-anchor is retired; the bars no longer hop into the ranged stack with no
+     melee activity.
+- Task B: standalone horizontal distance bar, own top-level frame, exact yards only (`api.UnitDistance`),
+  fill 1.0 at ≤5 yd / 0 at ≥35 hunter (30 others), label + MELEE/IN RANGE/OUT, unknown hides (never paints 0),
+  no unit reads on the disabled path, anchored above the ranged bar with a height-based cast/RF reserve and
+  screen clamp. Nil gate delegates to `ST.weave_range_default_enabled` (appearance lane's helper), no class
+  token hardcoded. Driver pcall-isolated + quarantine, 0.05 s enabled / 0.5 s disabled.
+- OPERATOR RULINGS TAKEN THIS SESSION:
+  * Vendored swing-lib patch: **REVERT — our-side only.** Cross-client lane re-dispatched to restore the lib
+    byte-exactly and move the hunter-shot exemption into `classes/hunter.lua` (+ main.lua only if provable).
+  * Auto Shot at melee: **NEVER RESET MELEE** (reference in-melee exception rejected). The class guard must
+    arm all hunter shots, in melee included. Wrath/Titanforge `reset_swing_spells[75]` is the residual: if it
+    cannot be suppressed deterministically our-side, it is documented, not heuristically swallowed.
+- Resolved the lane's hands-up by the second ruling above (no in-melee exception).
+- Owed: run.sh lines for `weave_bar_state.lua`, `appearance_defaults_state.lua`, `practice_timeline_state.lua`,
+  `engine_matrix_state.lua`; option desc fix (dispatched to appearance-options); `main.lua:985-990` stale
+  comment (cross-client lane); in-client checks in bench §11.
+
+## Follow-up reconcile (2026-10-25): appearance-options desc correction
+- `option_tables.lua:195-224` now describes the landed standalone bar accurately (exact yards, no band
+  fallback, MELEE/IN RANGE/OUT, unknown hides, 35 yd hunter / 30 yd others, hunter-ON). Getter/setter/
+  disabled unchanged. `options_load_state.lua` 3606/0 (+10 pins), appearance 145/0, luacheck 0/0.
+  Pins read 5/30/35 from the module so copy and code cannot drift; two mutations kill. run.sh registration
+  already added by orchestrator (toc_check 1082/0).
+
+## OPERATOR CORRECTION (2026-10-25): spell-id vs spell-name per client
+- Verbatim: "titanforge aka wotlk doesnt use spell ids either. stop guessing. each has their own client."
+  Combined with the earlier line ("tbc is classic_anniversary and doesnt take spell ids it needs spell
+  names"):
+  * **ERA (classic_era 1.15.9, including SoD runes)** — state queries take IDS. SoD is the SAME client as
+    Era; SoD runes are extra ids on Era, NOT a separate family. Never substitute a TBC/Wrath id for an Era
+    one.
+  * **TBC (classic_anniversary 2.5.6)** — state queries take localized NAMES, never bare ids.
+  * **WRATH / Titanforge (classic_titan 3.80.2)** — state queries take localized NAMES, never bare ids
+    (operator in-client fact; API docs say number, so the operator's client behaviour is the authority).
+  * Each family is gated separately — no combined "classic-line" name/id branch.
+- Consequences to fix, in order:
+  1. `compat.api.get_spell_query` (compat.lua:1661) returns a name only on TBC. It must return a name on
+     TBC **and** WRATH, with explicit per-family branches (ERA ids; TBC names; WRATH names; FOREVER/Cata/
+     Mists untouched until proven).
+  2. Every class's token helper that hardcodes TBC must use the compat helper (or add WRATH): hunter
+     `spell_token` (classes/hunter.lua:25), shaman inline branches, druid inline branches, plus the
+     paladin/warrior/rogue helpers that already call `get_spell_query` (they inherit the fix).
+  3. The new hunter shot guard must not rely on our id tables alone for Titanforge: add a canonical-NAME
+     fallback (class `spell_name` fields), because Titanforge's ids may not match our tables.
+  4. `classes/hunter.lua:180 steady_id_by_family.ERA = 56641` is a WRATH id with zero rows in the 1.15.9
+     `Spell.csv`; the Era range token must be a real Era ability (Auto Shot 75 / Multi 2643), never an
+     invented Era Steady Shot.
+- Evidence limit: only the 1.15.9 Era export exists locally (`/home/sam/wow.export`); no Titanforge client
+  data offline. Titanforge claims are the operator's in-client fact + name-based queries, and must be marked
+  as such in tests/reports.
+- Queued lane after cross-client-engine lands (it owns compat.lua now): `spell-resolution-matrix` —
+  compat helper + all six class token helpers + per-family truth pins (Era ids incl. SoD ids; TBC names;
+  Wrath names) + mutations for a wrong-family substitution.
+
+| Lane | Scope | State | Session |
+|---|---|---|---|
+| spell-resolution-map | READ-ONLY scope: compat + all six class token helpers + every state-query call site; per-family id/name truth map (Era ids incl. SoD, TBC names, Wrath/Titanforge names), change plan, Titanforge risk list | running | ses_e8aa9d64bffeGUinJ165TqYVw0 |
+
+## CORRECTION (2026-10-25, operator): do not remove or replace spell ids
+- Verbatim: "if u remove shit u will have to research the spell ids again." My earlier instruction to
+  replace `steady_id_by_family.ERA = 56641` (and any id flagged absent from `/home/sam/wow.export`) is
+  WITHDRAWN. The 1.15.9 export does NOT prove an id invalid: SoD rune/seasonal ids may be absent from it,
+  and SoD shares the Era client. **No id is removed, replaced, or "corrected" without a fresh id research
+  and an explicit operator ruling.** Steered both running lanes (cross-client-engine, spell-resolution-map)
+  accordingly; the map lane now lists unverified ids under "do not touch without re-research", not as fixes.
+- Additive work only: keep every existing id table; add the family-correct NAME query for state calls
+  (TBC + Titanforge) and a name fallback for the hunter guard that deletes nothing.
+
+## Full suite GREEN (2026-10-25, after all cancellations + stale-pin re-cut)
+- `bash tests/run.sh`: **52 steps, 0 failed**; luacheck **2 warnings / 0 errors in 94 files** (floor).
+- Stale pin fixed by the practice desk: `tests/rogue_state.lua` now asserts the shared `drill_now` clock
+  (`practice_begin_fight` + `playhead_refresh` + `playhead_draw` from one `api.get_time()`); rogue_state
+  1137/0; 3 mutations kill. No production code changed for it.
+- Vendored swing lib confirmed byte-identical to HEAD (revert held). No existing spell id removed.
+- Honest residual: the cancelled cross-client desk's journal/bench still describe the withdrawn lib patch
+  as the chosen fix (its workspace is frozen; NOT edited by the orchestrator per HU-32). The tree is the
+  authority: lib clean, our-side guard `ST.HUNTER.suppress_shot_melee_reset` shipped, real_wire 1005/0 with
+  3 expected-fails (2 HU-29 + the Wrath Auto Shot residual).
+
+| Lane | Scope | State | Session |
+|---|---|---|---|
+| spell-resolution | compat.get_spell_query + six class token helpers; NAMES on TBC **and** WRATH, ids on ERA (SoD same client), explicit per-family gates, additive only — NO id table edits/removals; new per-family suite | running | ses_e8aa2db20ffeFhCha64diU8p0y |
+| version-docs | 2.1.3 bump (7 TOCs + main.lua:5 + CHANGELOG) + README/TESTING/AGENTS per-client spell-query truth pass | queued (after spell-resolution; owns main.lua/CHANGELOG) | — |
+
+## Final wave state before operator in-game test (2026-10-26)
+- Full suite: **53 steps, 0 failed**; luacheck **2 warnings / 0 errors in 95 files** (floor). `toc_check`
+  1082/0 after registering the three new suites (`weave_bar_state`, `practice_timeline_state`,
+  `appearance_defaults_state`, `engine_matrix_state`, `spell_query_family_state`).
+- Landed + verified in-tree:
+  * Hunter mainhand/ranged: lib cast-reset proven on the shipped lib, fixed OUR-SIDE
+    (`ST.HUNTER.suppress_shot_melee_reset` arms the engine's own `preventSwingReset` for every hunter
+    ranged shot, melee included); the hunter cast-bar melee re-anchor is retired. **Vendored
+    LibClassicSwingTimerAPI is byte-identical to HEAD** (operator ruling: our-side only).
+  * Standalone ranged-distance bar: own horizontal frame, exact yards only (`api.UnitDistance`), fills to
+    5 yd / empty at 35 hunter (30 others), MELEE/IN RANGE/OUT label, unknown hides, hunter default ON,
+    other classes opt-in via `ST.weave_range_default_enabled`.
+  * Practice: moving 25% playhead strip, 6 s horizon, cues right-to-left, 12-icon reused pool, one OnUpdate
+    on a hidden-when-idle frame; class drills previously had NO timeline. Provider seam
+    `practice_panel.upcoming` + `timeline_lanes`; neutral cadence fallback from the active class's own
+    rotation rows. History is the opt-in log.
+  * Appearance: backdrop alpha 1.0 default + one-time migration (only the exact untouched old default),
+    Classic-Retro/custom colors preserved. Fill/border/HUD untouched.
+  * Cross-client engine: HU-23 LRC protected-call removal restored after the 2026-10-25 re-vendor (0
+    `CheckInteractDistance(` sites; lrc_guard 141/0, range_source 148/0); Forever weapon-swap restarts and
+    world-entry STOPs (mirrors origin/forever `Blizzard_SwingTimer`); Retail inert. `swing_engine=` diag.
+  * Spell queries: **Era ids (SoD same client); TBC + Titanforge localized names first, ID FALLBACK
+    preserved** (operator: "i never banned fallback to ids"). No id table entry removed; the two additive
+    rank-1 entries (3044/1978) stay.
+  * Version: 2.1.3 across 7 TOCs + `main.lua:5` (docs desk finalizing; verify after).
+- DEFERRED on operator order ("dont do it if its a big thing just get current codebase in sync"): the
+  leveling guard (known-spell-aware HUD + next-action filtering). HUD already has the `spell_known` hide
+  gate; a full rotation filter is a separate wave.
+- Residuals to disclose, not fix now:
+  1. Titanforge: the shot guard matches our id tables for Multi/Aimed/Arcane/Serpent; if Titanforge's
+     client ids differ, the guard can miss even though state queries now try names. Name fallback for the
+     guard is a follow-up.
+  2. Titanforge: stock lib `reset_swing_spells[75]` still restarts melee on Auto Shot; no deterministic
+     our-side filter (operator forbade lib edits). Documented as xfail in real_wire.
+  3. No in-client proof for any of this wave. The bench reports say so; in-client checks are in
+     bench/*_2026-10-25 §in-client and TESTING.md.
+  4. The cancelled cross-client desk's bench/journal still describe the withdrawn lib patch as chosen
+     (frozen workspace; HU-32). The tree is the authority.
+  5. Leveling guard deferred.
+- Docs sync: CHANGELOG/README/TESTING/version by `version-docs` desk; AGENTS.md deliberately untouched
+  (operator: no bloat; the cross-client principle already lives there). workshop.md lessons 19-22 added
+  (no correction streams; id absence is not proof; per-client name/id + fallback; cancelled lanes frozen).
+
+## Version + docs finalized (2026-10-26)
+- **2.1.3** in all 7 TOCs + `main.lua:5`; `ST.addon_version` derives. CHANGELOG `## [2.1.3]`
+  (Added/Changed/Fixed/Hardening, no leveling claim, no in-client claim). README: hunter range bar,
+  practice cue strip, opaque backdrop — three surgical lines. TESTING: five in-client bullets.
+  AGENTS.md deliberately UNTOUCHED (operator: no bloat; the cross-client principle already lives there).
+- Orchestrator corrected the docs desk's one wrong TESTING claim: `/st diag` DOES print
+  `swing_<hand>=<start>/<update>/<stop>` + `swing_last` (main.lua:2757-2780); the bullet now tells the
+  operator to read those, not to dump the addon table.
+- Final `bash tests/run.sh`: **53 steps, 0 failed**; luacheck **2 warnings / 0 errors in 95 files**.
+  `luac.out` restored to HEAD after the run (build artifact, not part of the wave).
+- Line endings verified: CHANGELOG 1136/1136 CRLF; README/TESTING/TOCs/main.lua LF as before; no mixed
+  endings in any modified file.
+- Honest residuals for the test session: (1) no in-client proof for anything in the wave; (2) Titanforge
+  shot-guard name matching is id-table based (state queries are name-first with id fallback); (3) stock
+  lib `reset_swing_spells[75]` still restarts melee on Auto Shot on Wrath/Titanforge (xfail, operator
+  forbade lib edits); (4) `steady_id_by_family.ERA = 56641` left untouched — id changes need fresh
+  research + operator approval; (5) leveling guard deferred by operator order.
+
+## README credit added (2026-10-26, operator order)
+- `README.md` Links section now credits **forktale** for the paladin seal-twist work, with the
+  operator-provided CurseForge link: https://www.curseforge.com/wow/addons/swedgetimer-tbc-anniversary-update
+- Docs-only change; no code/tests/version impact. README LF preserved.
+
+## Practice timeline restyled to the operator's reference (2026-10-26)
+- Operator supplied the forktale/TBC timeline screenshot: "Practice should look like this."
+  The cue strip now wears that layout (practice_ui.lua `build_playhead`):
+  * left lane rail, 64 px: one 16 px icon + name per lane (the paladin's sim lanes
+    SoB / Melee / CS / Consec / SoC / Judge, resolved through `ui.timeline_lanes()` so the
+    strip and the History log never disagree);
+  * 34 px ruler band: title on the right, one tick + `m:ss` label per second, the labels
+    riding the SAME `timeline_event_x` maths as the cues (clock scrolls, playhead fixed);
+  * banded 24 px lane rows (alternating shade), the 22 px cue icons in their own lanes;
+  * fixed playhead line at 25%, full lane height + 6 px into the ruler; close X hides the
+    strip for the rest of the session (a later `playhead_show` restores it);
+  * default position moved to the top of the screen (`TIMELINE_DEFAULT_Y` -200 -> 260,
+    shared with the History log, matching the screenshot).
+- Cue lanes: `st.practice.timeline_cadence` now derives a cue's lane from the sim's own
+  `cast_timeline_lane` when the rotation row does not name one, so preview cues land on
+  the same rails as recorded events. No ids touched.
+- Tests re-cut: `tests/practice_timeline_state.lua` lane geometry (34 + 24n + 14), plus a
+  new layout block (rail names/icons, 24 px rows, ruler 0:00 -> 0:01 under the playhead,
+  CS cue on row 3, close X hides/restores). `tests/practice_ui_state.lua`: frame count
+  83 -> 85 (close button + lane rail), default y -200 -> 260, one-lane strip height.
+  Four mutations on /tmp/opencode copies kill the new pins (lane height, ruler loop,
+  derived lane, close no-op).
+- `bash tests/run.sh`: **53 steps, 0 failed**; luacheck 2 warnings / 0 errors in 95 files.
+- Docs: CHANGELOG [2.1.3] timeline bullet, README Practice paragraph, TESTING practice
+  timeline bullet. Version unchanged (2.1.3, not yet tested in client).
+- Cue art follow-up (same restyle): the cue icon pool gained the practice display's split
+  halves, and `playhead_dress` falls back to `set_step_texture(event.key)` when a cue has no
+  `spell_id` of its own (the paladin rotation rows carry per-family id MAPS, not a single id).
+  That gives the strip the panel's CS art and the twist's split Command/Blood icon; an
+  unmapped key still hides (unknown-hides). Pins: step art for a no-id CS cue + all four
+  twist-half assertions; a /tmp mutation that disables the fallback turns 6 checks red.
+
+## Practice trainer: reference layout, start/stop clock, both frames (2026-10-26)
+- Operator reference: https://media.forgecdn.net/attachments/1587/946/twist-practice-ui-png.png
+  (local copy bench/assets/twist_practice_ui.png). Requirement: BOTH frames in practice; the top
+  timeline is the timed surface; Start Fight starts it, Stop freezes it; XP from timed graded presses;
+  options must offer "Open Practice Panel"; only the panel's X stops practice; Era + TBC; every class.
+- Landed:
+  * `build_playhead` now wears the reference chrome: lane rail, 46 px ruler, 24 px banded rows, m:ss
+    labels riding the same event_x maths, rotation band (label + up to 5 sequence icons) top-centre,
+    close X, default y 260. Cue art falls back to `set_step_texture(event.key)` (CS + twist split).
+  * Movement clock: `ui.playhead_running` / `ui.playhead_frozen_at`. `ui.start` opens the PALLY SIM
+    session stopped (archive "wait for Start Fight"); `start_fight` runs it (before the drill branch,
+    so every class's fight sets it); `stop_fight` freezes at the stop second; `begin_drill_session`
+    runs only if the class's own session already started its fight; `ui.stop` clears both.
+  * Both frames for every class: `playhead_available` also accepts the class's own panel `order`;
+    `playhead_cadence_rotation` builds rows from `practice_class_def` (label + spell_id) when the
+    class publishes no `practice_rotation` - never the paladin sim's order for another class.
+  * Options: all 7 practice entries now label "Open Practice Panel" and prefer `ui.open` (open-only,
+    never stops), with a `toggle` fallback for a half-loaded shell. Closing AceConfig never stops.
+  * XP: verified the existing per-attempt path (`record_graded_attempt` -> `record_progress_attempt`)
+    awards per graded press and repaints the badge; opening/idling earns nothing. No new XP formula.
+- Tests: practice_ui_state re-cut for the stopped session (start/stop lifecycle, fight button, pools
+  start their own fight, 90 frames incl. 5 band icons), practice_timeline_state 128 checks
+  (reference layout, ruler 0:00->0:01, band, class-order fallback). Full `bash tests/run.sh`: 53/0.
+- Independent audit desk dispatched with the image link: ses_e89faba11ffe2wefox8rtCnG7G (report will
+  land in bench/practice_audit_2026-10-26.md; reconcile before finalizing docs).
+
+## Practice UI check vs the reference: full-width timeline + panel chrome (2026-10-26)
+- Operator (this session): "check the practice ui ... it should of been remade so its similar to image
+  i posted. focus on the top part and the menu on right side." Reference: the same CurseForge
+  screenshot (bench/assets/twist_practice_ui.png). Read the audit first
+  (bench/practice_audit_2026-10-26.md): the two-frame wiring, Start/Stop ownership and timed XP were
+  already sound; the operator-visible gaps were all CHROME/SCALE (audit D2/D3/D4/D5/D6/D7).
+- Verified as-built (code + sandbox dump of the built frames): panel 210x428 with the grid, the port's
+  readouts and a 90 px button pair; strip 722x250 at the 600 px fallback track (24 px rows, 46 px ruler,
+  22 px cues, 6 s horizon, 6 px ruler ticks); log 676x220. Both frames share `ui.timeline_x/y`.
+- Landed (top part):
+  * Screen-scaled track: `ui.timeline_track_width(rail, minimum, width)` - screen minus 2x10 px margins,
+    the frame's rail and 12 px chrome, clamped to the 600 px fallback and 2000 px. Both frames use it
+    (strip rail 110, log rail 60); `ui.playhead_track_width` / `ui.timeline_width` store the built
+    geometry so `playhead_draw` never re-derives it. A sandbox/client with no UIParent width keeps 600.
+  * Reference scale: ruler 46 -> 56, lane rows 24 -> 30, cue icons 22 -> 24, rail 64 -> 110, horizon
+    6 -> 10 s (`TL_HORIZON_SECONDS`), pools 12/16 -> 20/26, default y 260 -> 300.
+  * Ruler ticks are now FULL-HEIGHT second gridlines down the lanes (were 6 px marks above the track).
+- Landed (right panel, reference order): bind hint "Right-click icon to map to action bar" under the
+  grid, a clickable **(Reset)** link (sim panels only - `ui.reset_keybinds`; a drill panel's binds are
+  its own module's) and 3 hairline separators; Bloodlust / Haste Pot are two equal 95 px halves; the
+  reference order is haste pair -> Practice Rotation -> **Start Fight** -> **Timeline**; the port's
+  readouts (fight timer, score, resource, DST, live hint) moved BELOW that block. "History" renamed to
+  **Timeline** (the log the button opens), comments/docs updated.
+- Tests: practice_ui_state 2697 -> 2716 checks (reference chrome, equal haste halves, y-order,
+  (Reset) restores binds, drill panel has no reset/separators); practice_timeline_state 143 -> 157
+  (track-width maths incl. clamps, full-width strip + log builds at 1920, gridline height/anchor).
+  Stub additions: FontString/texture `SetPoint` recording. Six mutations (reset wiring, haste widths,
+  hint text, track width, tick height, panel order) all killed on in-place backups, file restored.
+  `bash tests/run.sh`: 53 steps, 0 failed; luacheck 0 errors.
+- Left as documented limits (unchanged from the audit): the strip is a cadence PREVIEW, not the graded
+  press schedule (D1); 8 paladin APL rows still have no art (D2); no scrollbar on the strip (D4 - the
+  strip is a fixed window, the log has one); drill panels have no Timeline button (D6).
+- Next: in-client pass on a 1920 client (TESTING "Practice timeline" + "Practice panel chrome"), then
+  decide whether the strip should be flush at the top (DEFAULT_Y is the one-line dial) and whether the
+  blank APL cues need the family-id art resolver.

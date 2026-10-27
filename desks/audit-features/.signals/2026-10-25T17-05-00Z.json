@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-25T17:05:00Z",
+  "agent_name": "audit-features",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Read the journal/bench trail first, then swept the dispatch graph and the provider contracts instead of trusting docs; the hook/route split (active_class vs player_class) fell out of wiring_check §10 plus a literal scan the guard cannot see. Client-data check (/home/sam/wow.export) settled the Era spell-id doubt.",
+    "what_was_hard": "The tree was edited by another lane during the audit (practice/hunter/main), so citations moved twice and practice_ui_state flipped red->green mid-run; every practice line number had to be re-verified at the end.",
+    "skill_gap": "No in-client observation, so all behaviour verdicts are static; could not measure the aura-scan CPU cost, only call counts."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Operator ruling needed on class_activation (F1): narrow the option to practice/preview or route every live class hook through active_class; do not ship the current half-wired state as 'working'."
+  }
+}

@@ -1,0 +1,15 @@
+# version-docs — Journal
+
+## 2026-10-25 — Desk opened
+- **Purpose:** tight docs/version desk for the 2.1.2 → 2.1.3 release: version fields, CHANGELOG, README, TESTING.
+- **Scope:** the 7 `*.toc` `## Version` lines, `main.lua:5` only, `CHANGELOG.md`, `README.md`, `TESTING.md`. No code, tests, Libs, bench, desks (other than this one), AGENTS.md, workshop.md, hands-up.md.
+- **Priors read:** `AGENTS.md` (release rules), `bench/lessons.md`, `desks/journal.md` (2026-10-25 wave: bars-range-hunter, practice-timeline, cross-client-engine, spell-resolution), plus tree evidence for every CHANGELOG claim.
+- **Next step:** bump the 8 version fields, add `## [2.1.3]`, minimal README/TESTING truth pass, run the three prescribed checks.
+
+## 2026-10-25 — [signal:done] 2.1.3 version + docs pass complete
+- **Worked on:** operator order 2.1.2 → 2.1.3. Bumped `## Version` in all 7 TOCs (`SwedgeTimer`, `_Vanilla`, `_TBC`, `_Wrath`, `_Cata`, `_Mists`, `_Mainline`) and `main.lua:5`; `ST.addon_version` derives, no other product file hardcoded the version. Added `## [2.1.3]` above `## [2.1.2]` with Added / Changed / Fixed / Hardening, written from tree evidence (`weave_range.lua`, `practice.lua` `TL_PLAYHEAD_FRACTION=0.25` / `TL_HORIZON_SECONDS=6`, `compat.api.get_spell_query`, `classes/hunter.lua` shot guard, `config.lua` + `config_presets.lua` backdrop migration, LRC vendored header, `swing_source.lua` swap/world-entry paths). CHANGELOG CRLF preserved (0 lines without CR). README: hunter row now names the standalone ranged-distance bar; one Practice sentence on the moving cue strip + opt-in History; one Visuals bullet on the opaque backdrop default. TESTING: five in-client bullets in the existing Era/TBC and Titanforge sections.
+- **Current state:** `grep -h '## Version' *.toc | sort -u` → only `"2.1.3"`; `main.lua:5` → 2.1.3; `lua5.1 tests/toc_check.lua` → 1082 checks, 0 failures; `lua5.1 tests/smoke.lua` → 232 checks, 0 failures; `grep -n '2.1.2' CHANGELOG.md` → only the `[2.1.2]` history header (line 37). TOCs/main stayed ASCII/LF; README/TESTING stayed LF. No in-client run claimed.
+- **Two truths recorded instead of copied verbatim from the dispatch:**
+  1. `diag.lua` does NOT print the swing-wire START/UPDATE/STOP counters today (only `swing_engine=`); `main.lua:1311`'s comment claiming it does is stale. The TESTING bullet therefore dumps `LibStub("AceAddon-3.0"):GetAddon("SwedgeTimer").swing_wire_counts.mainhand.start` instead of pointing at a nonexistent `/st diag swing_mainhand` line. Code/diag scope is NOT mine — flagged for the orchestrator.
+  2. The Wrath/Titanforge library-level `reset_swing_spells[75]` Auto Shot residual (`LibClassicSwingTimerAPI.lua:1163` vs the OR at `:596`) still restarts melee hands there regardless of `preventSwingReset`; the CHANGELOG Changed bullet names it as the documented residual rather than claiming the guard covers every client.
+- **Next step:** orchestrator reconcile; optional follow-up lane to print the wire counters in `/st diag` (or fix main.lua:1311's comment) — not done here by scope.

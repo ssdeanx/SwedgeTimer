@@ -1713,6 +1713,7 @@ do
     eq(inputs.strict_sequence, false, "strict: TBC never runs strictSequence")
     eq(inputs.time_to_pull_seconds, nil, "filed: no pull timer reads nil")
     eq(inputs.seal_remaining_seconds, nil, "filed: no seal source reads nil")
+    b.spell_infos[20375] = { name = "Seal of Command", icon = "icon_20375" }
     b.known_spells[20375] = true
     inputs = S.PALADIN.gather_guide_inputs(S)
     eq(inputs.soc_rank1_known, true, "rank-1: a known book rank 1 reads true")
@@ -2470,7 +2471,7 @@ do
                     if type(toggle.name) == "function" then
                         eq(toggle.name(), "Start Practice", "page: idle label")
                         nst.practice_ui.is_active = function() return true end
-                        eq(toggle.name(), "Stop Practice", "page: active label")
+                        eq(toggle.name(), "Open Practice Panel", "page: active label never offers Stop")
                     end
                 end
                 -- Drill rows: nil-safe off defaults, live round-trip on the class table.
@@ -3443,6 +3444,11 @@ do
         "utility gather: an unknown Hand of Reckoning reads nil (unknown-hides)")
     eq(inputs.how_wrath_remaining, nil,
         "utility gather: an unknown WotLK Hammer of Wrath reads nil (unknown-hides)")
+    -- The client's spell DATA for both (a spell in the book always has data). On
+    -- Wrath/Titanforge the state token is the NAME, so the id -> name leg must answer
+    -- before the read can run; an id-only fixture would model a client that cannot exist.
+    w.spell_infos[67485] = { name = "Hand of Reckoning", icon = "icon_67485" }
+    w.spell_infos[48806] = { name = "Hammer of Wrath", icon = "icon_48806" }
     w.known_spells[67485] = true
     w.known_spells[48806] = true
     inputs = W.PALADIN.gather_guide_inputs(W)

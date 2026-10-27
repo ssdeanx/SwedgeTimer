@@ -143,14 +143,19 @@ local WEAVE_COE_SPELL_ID = 66842
 local WEAVE_WRATH_LB_SPELL_ID = 49238
 local WEAVE_LB_NAME = "Lightning Bolt"
 
--- Name-vs-id rule (bench/lessons.md): TBC Anniversary resolves by NAME never
--- bare id; Classic Era by id. spell_query branches every direct spell read
--- (GetSpellInfo / GetSpellCooldown / is_spell_known / IsSpellUsable /
--- IsSpellInRange / IsCurrentSpell / GetSpellPowerCost) via st.family.
--- Nil-safe: a nil id/name stays nil so unknown-hides is preserved.
+-- Name-vs-id rule (bench/lessons.md; operator 2026-10-19 for TBC, 2026-10-25 for
+-- Titanforge; each family gated on its own): TBC Anniversary and Wrath/Titanforge
+-- prefer the NAME for state queries, with the id as the approved fallback (name
+-- first, then the id); Classic Era resolves by id. spell_query branches every direct
+-- spell read (GetSpellInfo / GetSpellCooldown / is_spell_known / IsSpellUsable /
+-- IsSpellInRange / IsCurrentSpell / GetSpellPowerCost) via st.family. Nil-safe: a
+-- nil name falls back to the id on a name family (operator-approved), so unknown
+-- only when both are nil.
 local function spell_query(id, name)
 	if st.family == "TBC" then
-		return name
+		return name or id
+	elseif st.family == "WRATH" then
+		return name or id
 	end
 	return id
 end
@@ -518,10 +523,11 @@ end
 -- positive cast time. Returns {spell_id, name, icon, cast_seconds} or nil. compat's
 -- GetSpellInfo normalizes castTime to milliseconds on every family (classic global and
 -- C_Spell.SpellInfo.castTime agree), so the 4th return is used directly.
--- Name-vs-id: TBC resolves by NAME (group.label) never bare id; every other
--- family resolves by id. Nil-safe: an unanswered name/id returns nil.
+-- Name-vs-id: TBC Anniversary and Wrath/Titanforge resolve by NAME (group.label)
+-- never bare id; every other family resolves by id. Nil-safe: an unanswered
+-- name/id returns nil.
 local function resolve_family_spell(group)
-	if st.family == "TBC" then
+	if st.family == "TBC" or st.family == "WRATH" then
 		local label = group.label
 		if label and api.is_spell_known(label) then
 			local name, _, icon, cast_ms, _, _, answered_id = api.GetSpellInfo(label)

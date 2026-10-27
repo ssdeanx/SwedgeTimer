@@ -8,7 +8,6 @@
 --   hidden cast window         SuperSwingTimer_UI.lua:418-428
 --   no-clip tint               SuperSwingTimer_UI.lua:858-886
 --   latency end-slice          SuperSwingTimer_UI.lua:890-941
---   melee re-anchor            SuperSwingTimer_UI.lua:26-39, 1140-1146
 --   cast-bar visibility        SuperSwingTimer_UI.lua:459-491
 --   movement-safe cast zone    SuperSwingTimer_UI.lua:204-225 (IsRangedCastWindowSafe),
 --                              805-850 (the overlay + threshold marker)
@@ -24,15 +23,18 @@
 -- time_until_next_shot); every timestamp here is in the api.get_time() domain. The
 -- frames are created from the hunter class module's post_init (out of combat; a
 -- creation that lands under combat lockdown is deferred to the next per-frame tick) and
--- driven by the class module's on_bar_update hook from the ranged bar (the mainhand
--- tick keeps the melee re-anchor in sync). The cast bar anchors above the ranged bar
--- (UIParent centre when no ranged bar frame exists at all), and the whole set is a
--- silent no-op while the ranged hand is disabled, so it never shows on clients without
--- a ranged swing (Retail).
+-- driven by the class module's on_bar_update hook from the ranged bar. The cast bar
+-- anchors above the ranged bar (UIParent centre when no ranged bar frame exists at all),
+-- and the whole set is a silent no-op while the ranged hand is disabled, so it never
+-- shows on clients without a ranged swing (Retail).
+--
+-- This module never moves a melee bar: the reference's UpdateHunterMeleeBarAnchor
+-- re-anchor was retired on 2026-10-25 (operator report: it made the mainhand bar look
+-- mixed up with the ranged bar, because the cast bar is visible for the Auto Shot
+-- hidden-window face every cycle). See the retired-anchor note above the cast bar.
 --=========================================================================================
 local addon_name, st = ...
 local LSM = LibStub("LibSharedMedia-3.0")
-local LWIN = LibStub("LibWindow-1.1")
 local api = st.api
 
 st.hunter_ui = st.hunter_ui or {}
@@ -45,7 +47,6 @@ st.guard.label("hunter_ui", "Hunter UI")
 -- Constants (reference values in the comments)
 --=========================================================================================
 local CAST_BAR_GAP = 2                     -- HUNTER_CAST_BAR_GAP, Constants:162
-local MELEE_ANCHOR_GAP = 2                 -- reference melee/OH stack gap, UI.lua:36-37
 local RANGE_HELPER_GAP = 3                 -- HUNTER_RANGE_HELPER_GAP, ClassMods.lua:5533
 local RANGE_HELPER_WIDTH = 7               -- HUNTER_RANGE_HELPER_WIDTH, Constants:163
 -- Sweet-spot band, expressed in exact yards (R3, 2026-10-21). The reference's index-3
@@ -151,15 +152,6 @@ local function frame_visible(frame)
         return frame:IsVisible() == true
     end
     return frame:IsShown() == true
-end
-
--- The hand's anchor frame, or nil before bars.lua builds it.
-local function get_anchor(self, hand)
-    local state = self[hand]
-    if not state or not state.anchor_frame then
-        return nil
-    end
-    return state.anchor_frame
 end
 
 -- Whether the hunter's ranged bar is usable right now: the ranged hand state exists and
@@ -392,8 +384,8 @@ function ui.build(self, ranged_frame)
     -- H1 target warning (option-gated nil = off; text set once, visibility per frame).
     ui.target_warning = create_target_warning(ui.cast_frame, font_path)
 
-    -- Transition state: nil/false means "normal anchors".
-    ui.melee_anchored = false
+    -- Transition state: nil/false means "normal anchors". (No melee-anchor state: the
+    -- melee bars are never re-anchored by this module - see the retired-anchor note.)
     ui.helper_top = nil
     ui.rf_anchor = nil
     ui.rf_width = nil
@@ -477,73 +469,27 @@ function ui.init(self)
 end
 
 --=========================================================================================
--- Melee re-anchor (reference UpdateHunterMeleeBarAnchor, UI.lua:26-39, 1140-1146)
+-- Melee bar anchoring: RETIRED (2026-10-25, operator report)
 --=========================================================================================
--- While the hunter cast bar is visible, the mainhand and offhand bars re-anchor into
--- the reference's stack on the side of the ranged bar away from the cast bar: the
--- mainhand directly beneath the ranged bar, the offhand directly beneath the mainhand,
--- 2 px gaps. When the cast bar hides, both return to their LibWindow positions. The
--- reference pins the bars with two-point anchors, which also couples their widths to
--- the anchor bar; SwedgeTimer's bars are independently sized, so the stacking is
--- applied as a vertical re-anchor of the stored position that keeps each bar's own
--- width and horizontal placement.
-local function anchor_hand_top_below(frame, target_bottom)
-    -- LWIN keeps the frame's own position in the hand's storage: restore it (scale and
-    -- legacy points included), then shift the vertical component so the frame's top edge
-    -- sits at `target_bottom` (a UIParent-domain y, LibWindow's own unit).
-    LWIN.RestorePosition(frame)
-    local point, _, _, x, y = frame:GetPoint(1)
-    if not point then
-        return
-    end
-    local scale = frame:GetScale() or 1
-    local height = (frame:GetHeight() or 0) * scale
-    local target_center = target_bottom - height / 2
-    local _, center_y = frame:GetCenter()
-    local shift = (center_y or target_center) * scale - target_center
-    frame:ClearAllPoints()
-    frame:SetPoint(point, UIParent, point, x, y - shift / scale)
-end
-
-function ui.sync_melee_anchor(self)
-    -- The re-anchor is skipped while the bars are unlocked for positioning, so a drag can
-    -- never save a shifted position as the new normal.
-    local class_db = self:get_class_table()
-    -- No class row reads as the shipped default (timers locked): the re-anchor is
-    -- skipped, which is exactly the unlocked=false behaviour.
-    local anchored = frame_visible(ui.cast_frame)
-        and (type(class_db) ~= "table" or class_db.timers_locked ~= false)
-    if ui.melee_anchored == anchored then
-        return
-    end
-    local mh = get_anchor(self, "mainhand")
-    local oh = get_anchor(self, "offhand")
-    if not anchored then
-        -- Restore the normal (LibWindow) anchors. Also the path taken when the melee
-        -- bars themselves are missing.
-        if mh then
-            LWIN.RestorePosition(mh)
-        end
-        if oh then
-            LWIN.RestorePosition(oh)
-        end
-        ui.melee_anchored = false
-        return
-    end
-    local ranged_frame = ui.ranged_frame
-    if not (mh and ranged_frame) then
-        return
-    end
-    ui.melee_anchored = true
-    local ranged_scale = ranged_frame:GetScale() or 1
-    local ranged_bottom = ranged_frame:GetBottom() * ranged_scale
-    anchor_hand_top_below(mh, ranged_bottom - MELEE_ANCHOR_GAP)
-    if oh then
-        local mh_scale = mh:GetScale() or 1
-        local stack_bottom = ranged_bottom - MELEE_ANCHOR_GAP - (mh:GetHeight() or 0) * mh_scale
-        anchor_hand_top_below(oh, stack_bottom - MELEE_ANCHOR_GAP)
-    end
-end
+-- This module used to port the reference's UpdateHunterMeleeBarAnchor
+-- (SuperSwingTimer_UI.lua:31-44): while the hunter cast bar was visible it re-anchored the
+-- mainhand and offhand bars into a stack under the ranged bar and handed them back to
+-- LibWindow when the cast bar hid. The trigger is wrong for this layout. The cast bar is
+-- visible for the Auto Shot hidden-window face too - `cast_bar_display` returns "window"
+-- for the last 0.5 s of EVERY ranged cycle - so at range, with no melee swing at all, the
+-- melee bars hopped into the ranged stack once per Auto Shot and back. That is the
+-- operator's 2026-10-25 report ("main hand bar ... looks like it is mixed up with the
+-- ranged bar").
+--
+-- The reference can stack those bars because its MH bar is HIDDEN whenever the ranged
+-- cycle or the cast bar is up (SuperSwingTimer_UI.lua:2650-2670: showMH requires
+-- hunterMeleeVisible and NOT (effectiveRangedActive or hunterCastVisible)). This addon
+-- deliberately does not hide the melee cycle at range - the melee-weave workflow is
+-- exactly about watching it - so the stack has no place to live. Operator order: every
+-- bar keeps its own LibWindow position, and the ranged UI never moves a melee bar.
+--
+-- The mechanism (and its helpers) is deleted rather than left as a no-op: a tombstone
+-- function would still be called from the per-frame path for no result.
 
 --=========================================================================================
 -- Cast bar
@@ -1567,7 +1513,6 @@ function ui.hide_all(self)
     ui.oom_scan_at = nil
     ui.lnl_scan_at = nil
     ui.trap_scan_at = nil
-    ui.sync_melee_anchor(self)
 end
 
 function ui.update(self)
@@ -1593,7 +1538,6 @@ function ui.update(self)
     -- announces the first throw per site, counts it and quarantines after
     -- st.guard.QUARANTINE_THROWS (25).
     st.guard.run(self, "hunter_ui:cast_bar", ui.update_cast_bar, self, db, now)
-    ui.sync_melee_anchor(self)
     st.guard.run(self, "hunter_ui:cast_zone", ui.update_cast_zone, self, db, now)
     st.guard.run(self, "hunter_ui:target_warning", ui.update_target_warning, self, db)
     st.guard.run(self, "hunter_ui:range_helper", ui.update_range_helper, self, db)
@@ -1615,9 +1559,11 @@ function ui.force_rapid_fire_refresh(self)
 end
 
 function ui.on_bar_update(self, hand)
-    -- Dispatched from ST.HUNTER.on_bar_update for the mainhand and ranged bars. Retries
-    -- the deferred frame creation; while the ranged bar is not ticking (it is hidden),
-    -- the mainhand tick keeps the melee re-anchor in sync.
+    -- Dispatched from ST.HUNTER.on_bar_update for the mainhand and ranged bars. The
+    -- mainhand tick is here only to retry the deferred frame creation (a lockdown build
+    -- is retried from whichever bar ticks first); the visual set itself is driven by the
+    -- ranged tick, and no hand tick moves another hand's frame (2026-10-25: the melee
+    -- re-anchor is retired).
     if not ui.ready then
         ui.init(self)
         if not ui.ready then
@@ -1626,8 +1572,6 @@ function ui.on_bar_update(self, hand)
     end
     if hand == "ranged" then
         ui.update(self)
-    else
-        ui.sync_melee_anchor(self)
     end
 end
 
