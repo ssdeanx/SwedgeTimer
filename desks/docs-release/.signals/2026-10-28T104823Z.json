@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T10:48:23Z",
+  "agent_name": "docs-release",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the superseding audit's §P5-3 before the lane reports gave an exact claim contract; every bullet was then traced to a named report plus a code identity (constants, field names, widget bounds) rather than to the report's prose. The one test that reads a doc (toc_check's per-class-sets passage) matches by content and normalises CRLF, so the prose edit provably cannot move the gate.",
+    "what_was_hard": "Two of the audit's MUST-NOT items (HU-37 hunter visual set, E1 offhand Width) were fixed by lanes that landed after the audit was written, so the contract and the tree conflict. Resolved by describing only what the later report proves, and flagging the judgment in report §6 so it can be reversed with one bullet.",
+    "skill_gap": "No reproducible way to diff prose against the pre-edit file without git; the trail relies on recorded sha256 before/after plus the audit manifest matching the baseline."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

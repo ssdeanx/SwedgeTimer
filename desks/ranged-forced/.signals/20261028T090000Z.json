@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T09:00:00Z",
+  "run_id": "ranged-forced-2026-10-28",
+  "agent_name": "ranged-forced",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Implementation and pins already encoded the forced ruling; verification pass confirmed 54/0 green and luacheck 2/0. No source edits needed.",
+    "what_was_hard": "Desk was freshly opened with no journal entry; reconciled against the existing bars.lua v2 code and section-12 pins.",
+    "skill_gap": "Live-client round-trip of the operator's dragged-then-login profile with a stale first-pass latch remains unverified."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  },
+  "journal_marker": "desks/ranged-forced/journal.md § 2026-10-28 Verified and closed"
+}

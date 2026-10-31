@@ -3268,8 +3268,8 @@ do
         nextaction_locked = "true",
         nextaction_visibility_key = "\"in_combat\"",
         nextaction_icon_size = "45",
-        nextaction_x = "0",
-        nextaction_y = "-180",
+        nextaction_x = "127",
+        nextaction_y = "-65",
     }
     for key, value in pairs(expected_defaults) do
         check(hunter_defaults:find("%f[%a_]" .. key .. "%s*=%s*" .. value, 1) ~= nil,

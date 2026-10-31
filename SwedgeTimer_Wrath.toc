@@ -57,6 +57,7 @@ practice_progress.lua
 practice_progress_ui.lua
 main.lua
 bars.lua
+power_bar.lua
 ldb.lua
 nextaction_ui.lua
 practice_ui.lua

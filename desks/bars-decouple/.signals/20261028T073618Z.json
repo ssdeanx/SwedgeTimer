@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T07:36:18Z",
+  "agent_name": "bars-decouple",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 3
+  },
+  "patterns": {
+    "what_worked": "Reproducing the operator's two mechanisms separately offline (visibility coupling vs the library's cast-completion melee reset) turned a vague complaint into two named bugs with separate fixes; the prior hunter lane's real-library proof gave the guard mechanism without re-deriving it.",
+    "what_was_hard": "Every engine START is ambiguous (combat-enter/equipment/cast resets), so the activity gate needed genuine receipts: CLEU isOffHand slots for the offhand, the shot id set for ranged, the Forever source's PLAYER_SWING for that family. A parallel lane editing classes/hunter.lua broke one bars_state pin mid-run; re-cut and flagged.",
+    "skill_gap": "No in-client access: the guard's client-side precondition (UNIT_SPELLCAST_START for Auto Shot on Era/TBC) and the hunter widget coupling remain UNVERIFIED in client."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

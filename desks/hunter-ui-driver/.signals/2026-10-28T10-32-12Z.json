@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T10:32:12Z",
+  "run_id": "hu37-hunter-ui-driver-2026-10-28",
+  "agent_name": "hunter-ui-driver",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Decoupled the tick from the ranged bar without a new frame: the hunter hook rides bars.lua's never-hidden per-hand anchor frame, the widgets parent to it with every anchor/width still keyed to the bar, and a visibility+script dedupe keeps exactly one tick source per frame. Red-first M1 (revert to ranged-tick-only) killed the hidden-bar cast/helper/badge pins; M2 (both sources) killed the no-double-tick pin.",
+    "what_was_hard": "The obvious clean fix - a dedicated hunter-owned driver frame - adds a 7th build-time hunter frame and fails the frame census pinned in tests/bars_state.lua:1059, a file outside this lane's write scope (reproduced: got 21, want 20). The anchor-frame host is the scope-compliant equivalent; the report files the census hoist as an owner follow-up. A show-rule gate keyed on hand_show_condition_met hid the whole set in the bars_state fixture (which does not model in-combat/target state), so the gate evaluates the show rule only while the bar frame is not visible.",
+    "skill_gap": "None blocking. Hidden-frame rendering/OnUpdate semantics remain client-only (UNVERIFIED offline, as the audit noted)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

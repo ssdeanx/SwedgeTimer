@@ -1379,6 +1379,43 @@ do
     eq(self.raptor_strike_queued, false, "hunter(wrath): cast clears the raptor strike queued flag")
 end
 
+-- ---------------------------------------------------------------------------
+-- Clock domain (2026-10-28). The precise clock drives the tick, GetTime() owns the
+-- domain everything is compared in. GetTime() does not advance while a loading screen
+-- is up and the precise clock does, so a frozen offset goes stale by the loading time;
+-- the wrapper must re-anchor instead of drifting out of the domain.
+-- ---------------------------------------------------------------------------
+do
+    local precise_now, reference = 500.0, 500.0
+    local _, cst = build_profile({
+        project = 2,
+        globals = {
+            GetTime = function() return reference end,
+            GetTimePreciseSec = function() return precise_now end,
+        },
+    })
+    local clock = cst.api.get_time
+    check(math.abs(clock() - 500.0) < 1e-6, "clock: first read is on the GetTime domain")
+
+    precise_now, reference = 501.0, 501.0
+    check(math.abs(clock() - 501.0) < 1e-6, "clock: tracks the domain while both clocks advance")
+
+    -- Loading screen: GetTime() pauses at 512 for eight seconds while the precise
+    -- clock runs on to 520. A frozen offset would answer 520 - 8 s outside the domain.
+    precise_now, reference = 520.0, 512.0
+    check(math.abs(clock() - 512.0) < 1e-6,
+        "clock: re-anchors after a loading screen (the domain wins over the raw precise read)")
+
+    precise_now, reference = 521.0, 513.0
+    check(math.abs(clock() - 513.0) < 1e-6, "clock: keeps tracking after the re-anchor")
+
+    -- Within the renew window the precise reading is kept (sub-frame resolution).
+    precise_now, reference = 521.01, 513.0
+    local fine = clock()
+    check(fine >= 513.0 and fine <= 513.06,
+        "clock: a sub-frame precise reading is kept inside the renew window")
+end
+
 print("")
 print(string.format("%d checks, %d failures", checks, failures))
 if failures > 0 then

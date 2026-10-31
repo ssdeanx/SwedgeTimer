@@ -2329,6 +2329,24 @@ do
 end
 
 do
+    -- LATENT L2: a '**'-shaped profile (AceDB defaults metatable) must not make
+    -- get_class_table return a junk defaults table for a missing class token.
+    local b = boot()
+    local T, F = b.ST, b.sb
+    F.profile["PALADIN"] = nil
+    local defaults = { enabled = true, sound_channel = "Master" }
+    local mt = { __index = function(t, k) return rawget(t, "**") end }
+    F.profile["**"] = defaults
+    setmetatable(F.profile, mt)
+    local got = T.get_class_table(T)
+    check(got == nil, "LATENT L2 get_class_table rawgets past a '**' defaults row (got " .. tostring(got) .. ")")
+    -- cleanup
+    setmetatable(F.profile, nil)
+    F.profile["**"] = nil
+    F.profile["PALADIN"] = b.sb.class_db
+end
+
+do
     -- N2: the 0.05 s visibility pass hides every hand with no class row (the
     -- disabled-bar state), instead of indexing db_class.class_enabled.
     local b = boot({ class = "HUNTER" })
@@ -2471,6 +2489,17 @@ do
     eq(F.hooks.post_init or 0, hooks_before, "NILSWEEP N12 no class hook runs without a class token")
     eq(T.should_show_bar_this_form, false,
         "NILSWEEP N12 the shared widget pass still ran (the form flag was reset)")
+end
+
+do
+    -- LATENT L2/L3: get_class_table and bar_full_delay reads use rawget.
+    local src = read("main.lua")
+    check(src:find('return rawget(profile, self.player_class)', 1, true) ~= nil,
+        "LATENT L2 get_class_table uses rawget")
+    check(src:find('bar_full_delay = rawget(db_shared, "bar_full_delay")', 1, true) ~= nil,
+        "LATENT L3 bar_full_delay uses rawget")
+    check(src:find('local bar_full_delay = db_shared and db_shared.bar_full_delay', 1, true) == nil,
+        "LATENT L3 no plain metatable-triggering bar_full_delay read remains")
 end
 
 if failures == 0 then

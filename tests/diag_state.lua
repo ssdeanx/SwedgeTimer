@@ -14,6 +14,11 @@
 --   * the ticks line: "?" sites in a default OFF session, the per-site counts and the
 --     seconds attribution after wrap_onupdate ran with the profile gate on, the on=yes/no
 --     marker, and a junk tick_sites never throwing;
+--   * the per-hand BAR STATE section (2026-10-28): one line per hand the class owns (the
+--     addon's class_hands read, with the three-hand fallback when it is unreadable), every
+--     field of a fully populated hand exactly, the offhand/ranged lines, the hunter queue
+--     flags on the mainhand line only, a hidden/dimmed/unticked/stalled hand, a hostile or
+--     partial frame degrading to "?", and the section's cap behaviour;
 --   * wrap_onupdate: the disabled gate returns the original function object untouched
 --     (flat-zero overhead), the enabled gate counts per hand, passes elapsed through,
 --     sums st.api.get_time attribution, and degrades when the clock is absent;
@@ -439,7 +444,12 @@ do
     eq(#captured, 1, "non-verbose: exactly one line")
 
     check(run_report(st, self, true), "verbose: no throw")
-    eq(#captured, 73, "verbose: exactly 73 lines (5 base + 67 ids + 1 errors-none)")
+    -- 5 base lines + 3 BAR STATE lines (the three-hand fallback: this fixture has no
+    -- class_hands) + 1 power line + 1 quarantine line + 67 ids + 1 errors-none. The
+    -- per-hand section was added 2026-10-28; the power and quarantine lines were added by
+    -- the publish-audit P4 pass on the same date (worst case 5+3+1+1+67+8 = 85 <= 88).
+    eq(#captured, 78,
+        "verbose: exactly 78 lines (5 base + 3 bars + 1 power + 1 quarantine + 67 ids + 1 errors-none)")
     eq(captured[1], login_line, "verbose: line 1 is the same login line")
     eq(captured[2],
         "SwedgeTimer diag: flags stl_ready=true llm_ready=false lrc_ready=true "
@@ -454,10 +464,15 @@ do
     eq(captured[5],
         "SwedgeTimer diag: secrets api=no",
         "verbose line 5 is the exact secrets line (no C_Secrets in this sandbox)")
-    contains(captured[6], "SwedgeTimer diag: ids ", "verbose line 6 opens the ids section")
-    contains(captured[72], "SwedgeTimer diag: ids 60052", "verbose: last wanted id (60052) renders")
-    eq(captured[73], "SwedgeTimer diag: errors not observed (no error handler installed)",
-        "verbose line 73 reports that no error handler was installed (F1)")
+    contains(captured[6], "SwedgeTimer diag: bar mainhand", "verbose line 6 opens the bar section")
+    contains(captured[8], "SwedgeTimer diag: bar ranged", "the bar section covers the three hands")
+    contains(captured[9], "SwedgeTimer diag: power ", "the power line follows the bar section")
+    contains(captured[10], "SwedgeTimer diag: quarantine ",
+        "the quarantine line follows the power line")
+    contains(captured[11], "SwedgeTimer diag: ids ", "verbose line 11 opens the ids section")
+    contains(captured[77], "SwedgeTimer diag: ids 60052", "verbose: last wanted id (60052) renders")
+    eq(captured[78], "SwedgeTimer diag: errors not observed (no error handler installed)",
+        "verbose line 78 reports that no error handler was installed (F1)")
 
     self = healthy_self()
     self.init_deadline_fired = true
@@ -465,7 +480,7 @@ do
     contains(captured[2], "deadline=fired", "the fired init deadline is reported")
 
     check(run_report(st, {}, true), "verbose over an empty state: no throw")
-    eq(#captured, 73, "verbose over an empty state still prints 73 lines")
+    eq(#captured, 78, "verbose over an empty state still prints 78 lines")
     contains(captured[2], "stl_ready=? llm_ready=? lrc_ready=? lrc_unavailable=?",
         "unset readiness flags render ?")
     contains(captured[2], "deadline=no init=no", "empty state: deadline/init render no")
@@ -486,12 +501,14 @@ do
     eq(#captured, 2, "MAX_LINES = 2 caps the verbose report at two lines")
     st.diag.MAX_LINES = 6
     run_report(st, healthy_self(), true)
-    eq(#captured, 6, "MAX_LINES = 6 truncates ids with an explicit +N count line")
-    contains(captured[6], "+67 more (cap 6)", "ids truncation carries the remaining count")
+    eq(#captured, 6, "MAX_LINES = 6 truncates the first section with an explicit +N count line")
+    -- At cap 6 the five base lines leave one line, which the bar section owns: it prints
+    -- its +N count line instead of a silent cut ("never a silent cut", diag.lua's rule).
+    contains(captured[6], "+3 more (cap 6)", "the bar section carries the remaining count")
     st.diag.MAX_LINES = "junk"
     run_report(st, healthy_self(), true)
-    eq(#captured, 73, "a non-numeric MAX_LINES falls back to the default cap")
-    st.diag.MAX_LINES = 85
+    eq(#captured, 78, "a non-numeric MAX_LINES falls back to the default cap")
+    st.diag.MAX_LINES = 88
 end
 
 --=========================================================================================
@@ -501,7 +518,7 @@ do
     -- Absent (every classic client, and the offline harness): api=no, no probes touched.
     local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
     check(run_report(st, healthy_self(), true), "no C_Secrets: verbose does not throw")
-    eq(#captured, 73, "no C_Secrets: verbose still prints 73 lines")
+    eq(#captured, 78, "no C_Secrets: verbose still prints 78 lines")
     eq(captured[5], "SwedgeTimer diag: secrets api=no",
         "no C_Secrets: the secrets line reports api=no")
 
@@ -630,6 +647,428 @@ do
 end
 
 --=========================================================================================
+-- 11b. Per-hand BAR STATE lines (2026-10-28): the silent-fault surface
+--=========================================================================================
+-- "/st diag works better, because it said there was no errors, meaning something was
+-- missed/silent". A clean error ring proves nothing about the bars, so each owned hand gets
+-- one line with the state the tick actually renders from. These pins are exact for a fully
+-- populated hand and "?"-degrading for every unreadable one.
+local function bar_state_fixture()
+    local fill = {
+        width = 135.5,
+        GetWidth = function(self) return self.width end,
+    }
+    local visuals = { bar = fill }
+    local bar_frame = {
+        visible = true,
+        alpha = 1.0,
+        script = function() end,
+        IsVisible = function(self) return self.visible end,
+        IsShown = function(self) return self.visible end,
+        GetAlpha = function(self) return self.alpha end,
+        GetScript = function(self, kind) return kind == "OnUpdate" and self.script or nil end,
+        visuals_frame = visuals,
+    }
+    local anchor = { bar_frame = bar_frame }
+    local state = {
+        anchor_frame = anchor,
+        start = 100,
+        speed = 2.6,
+        ends_at = 102.6,
+        current_progress = 0.5,
+        is_full = false,
+        is_paused = false,
+        engine_dead = false,
+        vf_width = 271,
+    }
+    return state, bar_frame
+end
+
+local function hand_self(className, hands)
+    local self = healthy_self()
+    self.player_class = className
+    self.class_hands = { [className] = hands }
+    self.db.profile[className] = {
+        mainhand = { x = 0, y = -120 },
+        offhand = { x = 0, y = -142 },
+        ranged = { x = 0, y = -98 },
+    }
+    return self
+end
+
+do
+    -- A fully populated three-hand class: every field, exact.
+    local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    st.api = { get_time = function() return 101.3 end }
+    local self = hand_self("HUNTER", { "mainhand", "offhand", "ranged" })
+    local mainhand, mainhand_frame = bar_state_fixture()
+    -- Only the mainhand frame is mutated below; the other two hands just need a state table
+    -- (the fixture returns the frame as its second value, which those two do not read).
+    local offhand = bar_state_fixture()
+    local ranged = bar_state_fixture()
+    self.mainhand = mainhand
+    self.offhand = offhand
+    self.ranged = ranged
+    self.HUNTER.raptor_strike_queued = false
+    self.HUNTER.steady_shot_queued = true
+    check(run_report(st, self, true), "populated hands: verbose does not throw")
+    eq(captured[6],
+        "SwedgeTimer diag: bar mainhand built=yes shown=yes why=- gate=n/a active=? win=? "
+        .. "left=none src=none alpha=1.00 tick=yes start=100.00 "
+        .. "speed=2.60 ends_at=102.60 now=101.30 progress=0.500 full=no paused=no dead=no "
+        .. "vf_width=271.00 fill=135.50 pos=0,-120 queue=raptor:no,steady:yes",
+        "the mainhand BAR STATE line carries every field, in order, with the queue flags")
+    eq(captured[7],
+        "SwedgeTimer diag: bar offhand built=yes shown=yes why=- gate=n/a active=? win=? "
+        .. "left=none src=none alpha=1.00 tick=yes start=100.00 "
+        .. "speed=2.60 ends_at=102.60 now=101.30 progress=0.500 full=no paused=no dead=no "
+        .. "vf_width=271.00 fill=135.50 pos=0,-142",
+        "the offhand line is the same fields with its own saved row and no queue flags")
+    contains(captured[8], "bar ranged built=yes", "the ranged hand gets its own line")
+    contains(captured[8], "pos=0,-98", "the ranged line reports its saved row")
+
+    -- Hidden, dimmed, unticked, stalled: the four silent faults the operator cannot see.
+    mainhand_frame.visible = false
+    mainhand_frame.alpha = 0.6
+    mainhand_frame.script = nil
+    mainhand.current_progress = 0
+    mainhand.is_full = true
+    mainhand.is_paused = true
+    mainhand.engine_dead = true
+    self.HUNTER.raptor_strike_queued = true
+    self.HUNTER.steady_shot_queued = nil
+    check(run_report(st, self, true), "hidden hand: verbose does not throw")
+    contains(captured[6], "shown=no", "a hidden bar reports shown=no")
+    contains(captured[6], "why=?", "an unrecorded hide reason is unknown, never a guess")
+    -- main.lua records the reason at the point it hides (this fixture stamps the field the
+    -- same way): the line then names it instead of leaving shown=no unexplained.
+    mainhand.hide_reason = "idle"
+    check(run_report(st, self, true), "recorded hide reason: verbose does not throw")
+    contains(captured[6], "shown=no why=idle gate=n/a",
+        "a recorded hide reason renders as a token (P4-1: shown=no must say WHY)")
+    contains(captured[6], "alpha=0.60", "the out-of-range dim is visible on the line")
+    contains(captured[6], "tick=no", "a bar with no OnUpdate script reports tick=no")
+    contains(captured[6], "progress=0.000", "a stalled bar reports progress=0.000")
+    contains(captured[6], "full=yes paused=yes dead=yes", "the state flags render together")
+    contains(captured[6], "queue=raptor:yes,steady:?", "an unset queue flag is unknown, not no")
+
+    -- The hand list comes from the addon: a single-melee-hand class gets one line, not three.
+    local st2 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    local paladin = hand_self("PALADIN", { "mainhand" })
+    paladin.mainhand = bar_state_fixture()
+    check(run_report(st2, paladin, true), "single-hand class: verbose does not throw")
+    eq(captured[6], "SwedgeTimer diag: bar mainhand built=yes shown=yes why=- gate=n/a "
+        .. "active=? win=? left=none src=none alpha=1.00 tick=yes "
+        .. "start=100.00 speed=2.60 ends_at=102.60 now=? progress=0.500 full=no paused=no "
+        .. "dead=no vf_width=271.00 fill=135.50 pos=0,-120",
+        "a one-hand class prints exactly one BAR STATE line")
+    contains(captured[9], "ids ", "the ids section follows the single hand line")
+    eq(#captured, 76, "5 base + 1 bar + power + quarantine + 67 ids + 1 errors-none")
+
+    -- A frame that throws from every read must degrade to "?" per field, never throw.
+    local st3 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    local hostile = hand_self("ROGUE", { "mainhand", "offhand", "ranged" })
+    local state = {
+        start = 1, speed = 2, ends_at = 3,
+        anchor_frame = { bar_frame = setmetatable({}, {
+            __index = function() error("hostile frame") end,
+        }) },
+    }
+    hostile.mainhand = state
+    hostile.ROGUE.raptor_strike_queued = "junk"
+    check(run_report(st3, hostile, true), "hostile frame: verbose does not throw")
+    contains(captured[6], "bar mainhand built=no", "a frame whose reads throw renders unbuilt")
+    contains(captured[6], "queue=raptor:?,steady:?", "a non-boolean queue flag renders ?")
+
+    -- A hand with no frames at all (HU-22 lazy build) is "no" / "?", never an error.
+    local st4 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    local lazy = hand_self("WARRIOR", { "mainhand", "offhand", "ranged" })
+    lazy.mainhand = { speed = 2.6, start = 100, ends_at = 102.6 }
+    check(run_report(st4, lazy, true), "unbuilt hand: verbose does not throw")
+    contains(captured[6], "bar mainhand built=no", "an unbuilt hand reports built=no")
+    contains(captured[6], "shown=? why=unbuilt",
+        "an unbuilt hand answers shown=? and why=unbuilt (no visibility decision ran)")
+    contains(captured[6], "speed=2.60", "the seeded cycle still renders for an unbuilt hand")
+
+    -- The section is capped like every other section: an explicit count, never a silent cut.
+    local st5 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    st5.diag.MAX_LINES = 6
+    check(run_report(st5, healthy_self(), true), "capped bar section: verbose does not throw")
+    contains(captured[6], "+3 more (cap 6)", "the capped bar section closes with its count")
+
+    -- The saved row is read with rawget: AceDB's profile root and class rows carry a '**'
+    -- metatable whose __index CREATES a defaults-filled sub-table for any missing key
+    -- (Libs/AceDB-3.0/AceDB-3.0.lua:88-107). A /st diag must never write through a read -
+    -- with a plain `profile[class]` this fixture would persist a phantom class row.
+    local st6 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    local created = 0
+    local phantom_db = setmetatable({}, {
+        __index = function(t, key)
+            created = created + 1
+            local row = setmetatable({}, {
+                __index = function(row_table, hand_key)
+                    created = created + 1
+                    local tbl = { phantom = true }
+                    rawset(row_table, hand_key, tbl)
+                    return tbl
+                end,
+            })
+            rawset(t, key, row)
+            return row
+        end,
+    })
+    -- DEMONHUNTER: a class token the guide summary does NOT iterate (only the six shipped
+    -- provider classes are), so the ONLY reader of that profile key is the hand-row path
+    -- under test. With rawget the key stays absent; a plain read would persist it.
+    local phantom = hand_self("DEMONHUNTER", { "mainhand" })
+    phantom.db.profile = phantom_db
+    -- Seed the six guide rows the summary legitimately reads (the guide path is not the
+    -- subject here; an absent row there is a separate, pre-existing read).
+    for _, token in ipairs({ "PALADIN", "WARRIOR", "DRUID", "SHAMAN", "HUNTER", "ROGUE" }) do
+        rawset(phantom_db, token, { nextaction_enabled = true })
+    end
+    phantom.mainhand = bar_state_fixture()
+    check(run_report(st6, phantom, true), "AceDB-shaped profile: verbose does not throw")
+    eq(created, 0, "the report indexes no missing profile key (rawget only, no phantom row)")
+    eq(rawget(phantom_db, "DEMONHUNTER"), nil, "no class row was persisted by the report")
+    contains(captured[6], "pos=?,?", "an unreadable saved row renders pos=?,?")
+
+
+    -- Static wiring: the report is the ONLY caller and the section is pcall-guarded.
+    local diag_src = read("diag.lua")
+    check(diag_src:find("local function bar_lines(self)", 1, true) ~= nil,
+        "diag.lua owns the bar-section builder")
+    check(diag_src:find('append_section, out, bars, cap_inner, "bars"', 1, true) ~= nil,
+        "the bar section goes through the capped append_section path")
+    check(diag_src:find("class_hands", 1, true) ~= nil,
+        "the hand list is read from the addon's class_hands table")
+    check(diag_src:find("class_hands", 1, true) ~= nil and diag_src:find("BAR_HANDS", 1, true) ~= nil,
+        "the three-hand fallback exists for an unreadable class_hands")
+end
+
+--=========================================================================================
+-- 11c. The P4 additions (2026-10-28): power line, gate/receipt fields, quarantine sites
+--=========================================================================================
+-- The publish audit named four blind spots: no power-bar line at all, no activity-gate /
+-- receipt fields (a gated hand looked switched off), no reason for shown=no, and
+-- quarantine site names absent (only the total). Each is pinned here against the real
+-- module in the same sandbox (print-only: no frame is created and no profile key written).
+local function power_fixture()
+    local frame = {
+        visible = true,
+        width = 275,
+        height = 14,
+        IsVisible = function(self) return self.visible end,
+        IsShown = function(self) return self.visible end,
+        GetWidth = function(self) return self.width end,
+        GetHeight = function(self) return self.height end,
+    }
+    local anchor_frame = {
+        visible = true,
+        IsVisible = function(self) return self.visible end,
+        IsShown = function(self) return self.visible end,
+    }
+    return {
+        ready = true,
+        frame = frame,
+        -- The bar's own pure fill maths (power_bar.fraction shape): the report calls it so
+        -- its fraction matches the painted fraction instead of re-implementing the clamp.
+        fraction = function(value, max_value)
+            if type(value) ~= "number" or type(max_value) ~= "number" or max_value <= 0 then
+                return nil
+            end
+            if value >= max_value then
+                return 1
+            end
+            return value / max_value
+        end,
+        last_state = {
+            why = nil,
+            anchor = anchor_frame,
+            anchor_hand = "offhand",
+            power_type = 0,
+            value = 3000,
+            max_value = 3000,
+            fraction = 1,
+        },
+    }, frame, anchor_frame
+end
+
+do
+    -- --- The power line: a painted bar, exact -----------------------------------------
+    local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    local pb = power_fixture()
+    st.power_bar = pb
+    st.api = {
+        UnitPowerType = function(unit) return 0, "MANA" end,
+        UnitPower = function(unit, power_type) return 3000 end,
+        UnitPowerMax = function(unit, power_type) return 3000 end,
+    }
+    check(run_report(st, healthy_self(), true), "power painted: verbose does not throw")
+    eq(captured[9],
+        "SwedgeTimer diag: power ready=yes anchor=offhand anchor_shown=yes shown=yes "
+        .. "width=275.00 height=14.00 type=0 token=MANA value=3000/3000 fraction=1.000 why=-",
+        "the power line names the anchor hand, the geometry, the live reading and why=-")
+
+    -- --- The power line: every hide reason is named -----------------------------------
+    local frame
+    pb, frame = power_fixture()
+    frame.visible = false
+    pb.last_state = { why = "no-anchor", anchor = nil, anchor_hand = nil }
+    st.power_bar = pb
+    check(run_report(st, healthy_self(), true), "power no-anchor: verbose does not throw")
+    contains(captured[9], "anchor=none anchor_shown=no shown=no",
+        "an unanchored power bar reports anchor=none and anchor_shown=no")
+    contains(captured[9], "why=no-anchor",
+        "the power line names the hide reason instead of only shown=no")
+
+    local reasons = { "no-frame", "no-addon", "off", "no-api", "no-type", "no-value",
+        "no-fraction" }
+    for _, reason in ipairs(reasons) do
+        pb.last_state = { why = reason }
+        check(run_report(st, healthy_self(), true), "power reason " .. reason .. ": no throw")
+        contains(captured[9], "why=" .. reason,
+            "every pb.resolve hide token is named (" .. reason .. ")")
+    end
+    pb.last_state = { why = "unexpected-token" }
+    check(run_report(st, healthy_self(), true), "power unknown reason: no throw")
+    contains(captured[9], "why=?",
+        "an unknown resolve token renders ? instead of leaking an unexpected field")
+
+    -- --- The power line: module absent, never initialised, unreadable ---------------------------------
+    local st2 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    check(run_report(st2, healthy_self(), true), "no power module: verbose does not throw")
+    eq(captured[9], "SwedgeTimer diag: power module=no",
+        "an absent power_bar module is named (never silently skipped)")
+
+    local pb2 = power_fixture()
+    pb2.ready = false
+    st2.power_bar = pb2
+    check(run_report(st2, healthy_self(), true), "power not ready: verbose does not throw")
+    contains(captured[9], "power ready=no", "a bar that never initialised reports ready=no")
+    contains(captured[9], "type=unknown token=unknown value=unknown fraction=?",
+        "without st.api the power reading degrades to unknown (never a fake zero)")
+
+    local pb3 = { ready = true, frame = {}, last_state = { why = "no-frame" } }
+    st2.power_bar = pb3
+    check(run_report(st2, healthy_self(), true), "power frame without reads: no throw")
+    contains(captured[9], "shown=? width=? height=?",
+        "a frame that cannot answer renders ? per field, never throws")
+
+    -- --- The quarantine line: explicit empty state --------------------------------------
+    local st3 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    local self3 = healthy_self()
+    self3.bar_hook_errors = { count = 0, by_site = {}, quarantined = {} }
+    check(run_report(st3, self3, true), "quarantine empty: verbose does not throw")
+    eq(captured[10], "SwedgeTimer diag: quarantine total=0 sites=none",
+        "a clean session says sites=none instead of printing a bare zero")
+
+    -- --- The quarantine line: named sites, quarantined first, counts, [q] ---------------
+    local self4 = healthy_self()
+    self4.bar_hook_errors = {
+        count = 31,
+        by_site = { ["practice:tick"] = 4, ["hud:cs"] = 25, ["bars:mainhand:2"] = 2 },
+        quarantined = { ["hud:cs"] = true },
+    }
+    check(run_report(st3, self4, true), "quarantine sites: verbose does not throw")
+    eq(captured[10],
+        "SwedgeTimer diag: quarantine total=31 sites=hud:cs=25[q],practice:tick=4,"
+        .. "bars:mainhand:2=2",
+        "every counted site is named with its count; quarantined first, then by volume")
+
+    -- --- The quarantine line: a bounded tail, never a silent cut ------------------------
+    local self5 = healthy_self()
+    local by_site = { count = 0, by_site = {}, quarantined = {} }
+    for i = 1, 10 do
+        by_site.by_site["site:" .. tostring(i)] = i
+        by_site.count = by_site.count + i
+    end
+    self5.bar_hook_errors = by_site
+    check(run_report(st3, self5, true), "quarantine capped: verbose does not throw")
+    contains(captured[10], "sites=site:10=10,site:9=9", "sites sort by volume, highest first")
+    contains(captured[10], ",+2 more sites",
+        "more than eight counted sites close with an explicit +N count, not a silent cut")
+
+    -- --- The quarantine line: an unreadable counter is unknown, not zero ---------------
+    local self6 = healthy_self()
+    self6.bar_hook_errors = "junk"
+    check(run_report(st3, self6, true), "quarantine unreadable: verbose does not throw")
+    eq(captured[10], "SwedgeTimer diag: quarantine total=? sites=?",
+        "an unreadable counter renders ? (never a misleading clean total)")
+
+    local self6b = healthy_self()
+    self6b.bar_hook_errors = { count = "junk", by_site = { ["hud:cs"] = 2 }, quarantined = {} }
+    check(run_report(st3, self6b, true), "quarantine broken count: verbose does not throw")
+    eq(captured[10], "SwedgeTimer diag: quarantine total=? sites=hud:cs=2",
+        "an unreadable total stays unknown while the named sites still print")
+
+    local self6c = healthy_self()
+    self6c.bar_hook_errors = { count = 5 }
+    check(run_report(st3, self6c, true), "quarantine no site map: verbose does not throw")
+    eq(captured[10], "SwedgeTimer diag: quarantine total=5 sites=?",
+        "a counter without its per-site map says sites=? instead of claiming none")
+
+    -- --- Gate / receipt fields per hand -------------------------------------------------
+    local st4 = load_diag({ st = healthy_st(), libstub = function() return nil end })
+    st4.api = { get_time = function() return 101.3 end }
+    local self7 = hand_self("HUNTER", { "mainhand", "offhand", "ranged" })
+    local in_use = { offhand = true, ranged = false }
+    self7.hand_visibility_needs_activity = function(_, hand)
+        return hand == "offhand" or hand == "ranged"
+    end
+    self7.hand_is_in_use = function(_, hand) return in_use[hand] == true end
+    self7.hand_activity_window = function(_, hand)
+        if hand == "mainhand" then
+            return nil
+        end
+        return 2.6
+    end
+    self7.mainhand = bar_state_fixture()
+    self7.offhand = bar_state_fixture()
+    self7.ranged = bar_state_fixture()
+    self7.offhand.has_activity = true
+    self7.offhand.last_activity_at = 100
+    self7.offhand.activity_source = "cleu"
+    self7.ranged.has_activity = false
+    self7.ranged.auto_repeat_active = true
+    check(run_report(st4, self7, true), "gate/receipt: verbose does not throw")
+    contains(captured[6], "why=- gate=n/a active=? win=? left=none src=none",
+        "the mainhand has no activity gate (gate=n/a) and no receipt")
+    contains(captured[7], "gate=open active=yes win=2.60 left=1.30 src=cleu",
+        "an offhand receipt opens the gate, names its source and shows the window left")
+    contains(captured[8], "gate=closed active=no win=2.60 left=none src=auto-repeat",
+        "an idle ranged hand closes the gate; Auto Shot armed is named as the in-use reason")
+
+    -- A receipt older than the window floors at 0.00; a receipt with no named source is ?.
+    self7.offhand.last_activity_at = 90
+    self7.offhand.activity_source = nil
+    check(run_report(st4, self7, true), "expired receipt: verbose does not throw")
+    contains(captured[7], "left=0.00", "an expired receipt floors the remaining window at 0.00")
+    contains(captured[7], "src=?", "a receipt with no recorded source renders ?, never none")
+
+    -- No clock: left is ? (unknown is never a fake zero) while the receipt still renders.
+    st4.api = {}
+    check(run_report(st4, self7, true), "clockless receipt: verbose does not throw")
+    contains(captured[7], "active=yes win=2.60 left=? src=?",
+        "without a clock the window-left field is ?, never 0")
+
+    -- Static wiring of the new readers (each builder is called under its own pcall).
+    local diag_src = read("diag.lua")
+    check(diag_src:find("local function power_line(self)", 1, true) ~= nil,
+        "diag.lua owns the power-line builder")
+    check(diag_src:find("local function quarantine_line(self)", 1, true) ~= nil,
+        "diag.lua owns the quarantine-line builder")
+    check(diag_src:find("pcall(power_line, self)", 1, true) ~= nil,
+        "the power line is wired into the report under a pcall")
+    check(diag_src:find("pcall(quarantine_line, self)", 1, true) ~= nil,
+        "the quarantine line is wired into the report under a pcall")
+    check(diag_src:find("hide_reason_text", 1, true) ~= nil,
+        "the bar line reads the recorded hide reason")
+    check(diag_src:find("activity_source", 1, true) ~= nil,
+        "the bar line reads the receipt source token")
+end
+
+--=========================================================================================
 -- 12. Static wiring: main.lua hooks, purity, TOC placement
 --=========================================================================================
 do
@@ -663,6 +1102,49 @@ do
         "main.lua removes the chained error handler again")
     check(main:find('self:RegisterEvent("PLAYER_LOGOUT")', 1, true) ~= nil,
         "main.lua registers PLAYER_LOGOUT for the uninstall")
+    -- P4-1 wiring: the hide reason is recorded where the decision hides the bar, and the
+    -- receipt writer names its source. Both are read by the bar lines above.
+    check(main:find("function ST:note_hand_hide_reason", 1, true) ~= nil,
+        "main.lua records the hide reason at the visibility decision")
+    for _, token in ipairs({ '"class-off"', '"off"', '"no-weapon"', '"spec"', '"form"',
+            '"show-rule"', '"idle"' }) do
+        check(main:find(token, 1, true) ~= nil,
+            "the hide-reason token " .. token .. " is written in main.lua")
+    end
+    check(main:find("state.hide_reason = reason", 1, true) ~= nil,
+        "note_hand_hide_reason stores the token on the hand state (the diag reads it)")
+    -- Every branch that hides must record its reason right before the hide: a token that
+    -- exists but is not wired to a hide would make the diag's why= field a lie.
+    for _, token in ipairs({ "class-off", "off", "form", "spec", "show-rule", "idle" }) do
+        local callsite = 'note_hand_hide_reason(hand, "' .. token .. '")'
+        local start = main:find(callsite, 1, true)
+        check(start ~= nil, "the hide-reason token " .. token .. " is wired at a decision point")
+        if start then
+            local window = main:sub(start, start + 160)
+            check(window:find("hide_bar(hand)", 1, true) ~= nil,
+                "the " .. token .. " reason is recorded immediately before the hide it explains")
+        end
+    end
+    -- The disabled branch routes the reason through hand_disabled_reason (off / no-weapon).
+    check(main:find('return "no-weapon"', 1, true) ~= nil,
+        "the disabled branch distinguishes a missing weapon from a switched-off hand")
+    local disabled_call = main:find("note_hand_hide_reason(hand, self:hand_disabled_reason(hand))", 1, true)
+    check(disabled_call ~= nil, "the disabled branch records the routed reason")
+    if disabled_call then
+        check(main:sub(disabled_call, disabled_call + 160):find("hide_bar(hand)", 1, true) ~= nil,
+            "the disabled branch records its reason immediately before the hide")
+    end
+    check(main:find("state.activity_source = source", 1, true) ~= nil,
+        "note_hand_activity records the receipt source")
+    for _, token in ipairs({ '"cleu"', '"forever"', '"shot"' }) do
+        check(main:find(token, 1, true) ~= nil,
+            "the receipt source token " .. token .. " is passed by its writer")
+    end
+    local power_bar_src = read("power_bar.lua")
+    check(power_bar_src:find("function pb.resolve(ST)", 1, true) ~= nil,
+        "power_bar.lua exposes the read-only state resolver the diag reads")
+    check(power_bar_src:find("pb.last_state = state", 1, true) ~= nil,
+        "pb.update stores the resolved state (the only writer of pb.last_state)")
 
     local diag_src = read("diag.lua")
     check(diag_src:find("function diag.wrap_onupdate", 1, true) ~= nil,
@@ -711,11 +1193,12 @@ end
 do
     local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
     check(run_report(st, healthy_self(), true), "ids no-api: verbose does not throw")
-    eq(#captured, 73, "ids no-api: 5 base + 67 UNRESOLVED + 1 errors-none")
-    contains(captured[6], "ids 1310785=UNRESOLVED", "ids no-api: first wanted id UNRESOLVED")
-    contains(captured[72], "ids 60052=UNRESOLVED", "ids no-api: last wanted id UNRESOLVED")
+    eq(#captured, 78,
+        "ids no-api: 5 base + 3 bars + 1 power + 1 quarantine + 67 UNRESOLVED + 1 errors-none")
+    contains(captured[11], "ids 1310785=UNRESOLVED", "ids no-api: first wanted id UNRESOLVED")
+    contains(captured[77], "ids 60052=UNRESOLVED", "ids no-api: last wanted id UNRESOLVED")
     check(run_report(st, nil, true), "ids nil-self: verbose does not throw")
-    contains(captured[6], "UNRESOLVED", "ids nil-self still degrades to UNRESOLVED")
+    contains(captured[11], "UNRESOLVED", "ids nil-self still degrades to UNRESOLVED")
 
     local st2 = load_diag({ st = healthy_st(), libstub = function() return nil end })
     st2.api = {
@@ -742,25 +1225,34 @@ do
         end,
     }
     check(run_report(st2, healthy_self(), true), "ids stub-api: verbose does not throw")
-    contains(captured[6], "ids 1310785 name=Sniper Shot", "resolved id renders the name")
-    contains(captured[6], "icon=999", "resolved id renders the icon")
-    contains(captured[6], "cast=1500", "resolved id renders the cast time")
-    contains(captured[6], "known=true", "resolved id renders known=true")
-    contains(captured[13], "ids 34428=UNRESOLVED", "a throwing GetSpellInfo degrades to UNRESOLVED")
-    contains(captured[14], "ids 32216 name=Victorious", "partial probe still renders the name")
-    contains(captured[14], "known=?", "a throwing is_spell_known renders ?")
+    contains(captured[11], "ids 1310785 name=Sniper Shot", "resolved id renders the name")
+    contains(captured[11], "icon=999", "resolved id renders the icon")
+    contains(captured[11], "cast=1500", "resolved id renders the cast time")
+    contains(captured[11], "known=true", "resolved id renders known=true")
+    contains(captured[18], "ids 34428=UNRESOLVED", "a throwing GetSpellInfo degrades to UNRESOLVED")
+    contains(captured[19], "ids 32216 name=Victorious", "partial probe still renders the name")
+    contains(captured[19], "known=?", "a throwing is_spell_known renders ?")
 
     local st3 = load_diag({ st = healthy_st(), libstub = function() return nil end })
     st3.api = { GetSpellInfo = "junk", is_spell_known = "junk" }
     check(run_report(st3, healthy_self(), true), "ids junk-api: verbose does not throw")
-    contains(captured[6], "UNRESOLVED", "a non-function GetSpellInfo degrades to UNRESOLVED")
+    contains(captured[11], "UNRESOLVED", "a non-function GetSpellInfo degrades to UNRESOLVED")
 
+    -- The ids tail is what the cap truncates once the fixed block is 10 lines (5 base +
+    -- 3 bars + power + quarantine): at cap 13 two ids fit and the count line closes it.
     local st4 = load_diag({ st = healthy_st(), libstub = function() return nil end })
-    st4.diag.MAX_LINES = 10
+    st4.diag.MAX_LINES = 13
     check(run_report(st4, healthy_self(), true), "ids capped: verbose does not throw")
-    eq(#captured, 10, "MAX_LINES = 10 caps at ten lines")
-    contains(captured[10], "+63 more (cap 10)", "ids truncation carries the remaining count")
-    st4.diag.MAX_LINES = 85
+    eq(#captured, 13, "MAX_LINES = 13 caps at thirteen lines")
+    contains(captured[11], "ids 1310785", "the first wanted id fits at cap 13")
+    contains(captured[13], "+65 more (cap 13)", "ids truncation carries the remaining count")
+    -- Below the fixed block a cap cannot reach the ids at all: the bar section closes with
+    -- its own explicit count line instead (pinned at MAX_LINES = 6 in section 9).
+    st4.diag.MAX_LINES = 10
+    run_report(st4, healthy_self(), true)
+    eq(#captured, 10, "MAX_LINES = 10 stops at the fixed lines (no ids room)")
+    contains(captured[10], "quarantine ", "the last fixed line printed under a small cap")
+    st4.diag.MAX_LINES = 88
 
     local diag_src = read("diag.lua")
     check(diag_src:find("WANTED_IDS", 1, true) ~= nil, "diag.lua keeps the DATA-only wanted-id list")
@@ -828,11 +1320,14 @@ do
     for i = 1, 8 do
         st4.diag.record_error("e" .. tostring(i))
     end
-    st4.diag.MAX_LINES = 75
+    -- The errors tail is what the cap truncates here: 5 base + 3 bars + power + quarantine
+    -- + 67 ids = 77 lines, so at MAX_LINES = 80 the eight-entry ring keeps two lines plus
+    -- an explicit count (the arithmetic has moved twice with the added sections).
+    st4.diag.MAX_LINES = 80
     check(run_report(st4, healthy_self(), true), "errors capped: verbose does not throw")
-    eq(#captured, 75, "errors truncation respects MAX_LINES")
-    contains(captured[75], "+6 more (cap 75)", "errors truncation carries the remaining count")
-    st4.diag.MAX_LINES = 85
+    eq(#captured, 80, "errors truncation respects MAX_LINES")
+    contains(captured[80], "errors +6 more (cap 80)", "errors truncation carries the remaining count")
+    st4.diag.MAX_LINES = 88
 end
 
 --=========================================================================================

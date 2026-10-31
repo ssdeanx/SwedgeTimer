@@ -20,6 +20,32 @@ local CreateFrame = CreateFrame
 local C_Timer = C_Timer
 local GetCombatRating = api.GetCombatRating
 local GetCombatRatingBonus = api.GetCombatRatingBonus
+-- 20 is CR_HASTE_SPELL, spelled as the bare index on purpose: the global constant is
+-- NOT portable. Classic Era defines it only in the TBC/Cata PaperDollFrame variants, so
+-- the vanilla client reads nil and GetCombatRating(nil) raises
+-- "Usage: GetCombatRating(ratingIndex)" on every COMBAT_RATING_UPDATE (2026-10-28
+-- in-client report, ERA). calculate_expected_spell_gcd has always used the bare 20 for
+-- the same read, which is why that path never raised.
+local HASTE_SPELL_RATING = 20
+
+-- Rating reads are advisory: a client that cannot answer (a nil/out-of-range index on a
+-- vanilla client, a restricted secret value, an absent API) keeps the previous estimate
+-- instead of throwing out of an event handler. nil = "unknown", never zero.
+local function read_combat_rating(index)
+    local ok, value = pcall(GetCombatRating, index)
+    if not ok or type(value) ~= "number" or is_secret(value) then
+        return nil
+    end
+    return value
+end
+
+local function read_combat_rating_bonus(index)
+    local ok, value = pcall(GetCombatRatingBonus, index)
+    if not ok or type(value) ~= "number" or is_secret(value) then
+        return nil
+    end
+    return value
+end
 -- Secret-safe for the reads below: compat's GetSpellCooldown reports a restricted
 -- (secret) reading as 0/0/0/0, the same shape as a cleared cooldown, which the == 0
 -- early-outs in poll_gcd / UNIT_SPELLCAST_INTERRUPTED already handle. No arithmetic
@@ -73,10 +99,10 @@ end
 -----------------------------------------------------------
 function lib:calculate_expected_spell_gcd()
     -- First try to calc the expected GCD from first principles
-    local rating_percent_reduction = GetCombatRatingBonus(20)
-    if is_secret(rating_percent_reduction) then
-        -- Restricted stat read: keep the previous estimate instead of folding in a
-        -- value we cannot see (the wrapper would otherwise raise on the arithmetic).
+    -- 20 = CR_HASTE_SPELL (HASTE_SPELL_RATING). An unknown/restricted read keeps the
+    -- previous estimate instead of folding in a value we cannot see.
+    local rating_percent_reduction = read_combat_rating_bonus(HASTE_SPELL_RATING)
+    if rating_percent_reduction == nil then
         return
     end
     local spell_gcd = self.base_spell_gcd
@@ -148,10 +174,12 @@ end
 -- Event handlers
 -----------------------------------------------------------
 function lib:COMBAT_RATING_UPDATE()
-    local new_spell_haste = GetCombatRating(CR_HASTE_SPELL)
-    if is_secret(new_spell_haste) then
-        -- Restricted stat read: keep the previous estimate, never compare or store an
-        -- opaque value.
+    -- 20 = CR_HASTE_SPELL (HASTE_SPELL_RATING), never the global constant: Classic Era
+    -- leaves CR_HASTE_SPELL nil on the vanilla client, so GetCombatRating(nil) raises
+    -- "Usage: GetCombatRating(ratingIndex)" for every fired event.
+    -- An unknown/restricted read keeps the previous estimate, never compares or stores it.
+    local new_spell_haste = read_combat_rating(HASTE_SPELL_RATING)
+    if new_spell_haste == nil then
         return
     end
     -- print(new_spell_haste)

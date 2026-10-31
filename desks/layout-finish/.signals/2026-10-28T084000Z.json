@@ -1,0 +1,41 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T08:40:00Z",
+  "agent_name": "layout-finish",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the operator's five sentences as four separate mechanisms (row placement, class-agnostic gate, one shared pair height, silent-state visibility) kept the diff small and each change independently pinned. The mutation run found two of this lane's own shortcuts before the operator could: 21/21 mutations killed on a throwaway tree copy, including a latch read and a key read that AceDB's '**' metatable would have turned into SavedVariables writes.",
+    "what_was_hard": "AceDB's copyDefaults '**' metatable CREATES a defaults-filled sub-table on any missing-key READ (Libs/AceDB-3.0/AceDB-3.0.lua:88-107). Both new keys (the placement latch and melee_bar_height) therefore had to be rawget-based, and the same hazard turned out to disable the shipped appearance migration (config.lua, out of this lane's scope - filed as F2). The placement rule also had to stay honest about what it cannot read: a dragged or scaled hand row has no derivable vertical offset, so the rule leaves that profile alone rather than guess.",
+    "skill_gap": "No in-client access. The rule's behaviour on the operator's own profile, the pair-height feel, the options rendering and the new diag lines are UNVERIFIED (bench report section 8). The two diag-suite cap pins are now expressed as cap arithmetic, which will need the same re-cut if the report grows again."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "F2 (appearance migration dead on live profiles) is the one real defect outside this lane's scope: a one-line rawget in config.lua plus a '**'-shaped fixture in tests/appearance_defaults_state.lua. Dispatch it before the docs lane publishes the 2026-10-25 opaque-backdrop change as working."
+  },
+  "artifacts": [
+    "bench/layout_finish_2026-10-28.md",
+    "desks/layout-finish/journal.md",
+    "main.lua",
+    "bars.lua",
+    "config_presets.lua",
+    "option_tables.lua",
+    "option_table_presets.lua",
+    "diag.lua",
+    "tests/bars_state.lua",
+    "tests/diag_state.lua",
+    "tests/options_load_state.lua"
+  ],
+  "gate": {
+    "command": "bash tests/run.sh",
+    "steps": 54,
+    "failed": 0,
+    "luacheck": "2 warnings / 0 errors in 97 files"
+  }
+}

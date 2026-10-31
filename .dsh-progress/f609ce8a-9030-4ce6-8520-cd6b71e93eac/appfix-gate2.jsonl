@@ -1,0 +1,16 @@
+{"v":1,"task":"appfix-gate2","state":"running","msg":"started: bash tests/run.sh","at":1793177894181}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/warrior_state.lua","at":1793177895187}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/hunter_state.lua","at":1793177896191}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/druid_energy_state.lua","at":1793177897196}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/warrior_guide_state.lua","at":1793177898201}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/practice_progress_ui_state.lua","at":1793177899206}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/practice_timeline_state.lua","at":1793177901216}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/neutral_actions_state.lua","at":1793177902221}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/prepull_contract_state.lua","at":1793177904231}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/diag_state.lua","at":1793177906241}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/engine_matrix_state.lua","at":1793177907246}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/power_bar_state.lua","at":1793177908251}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/toc_check.lua","at":1793177909256}
+{"v":1,"task":"appfix-gate2","msg":"PASS  lua5.1 tests/wiring_check.lua","at":1793177951453}
+{"v":1,"task":"appfix-gate2","msg":"54 steps, 1 failed","at":1793177960028}
+{"v":1,"task":"appfix-gate2","state":"failed","msg":"exit code 1","at":1793177960028}

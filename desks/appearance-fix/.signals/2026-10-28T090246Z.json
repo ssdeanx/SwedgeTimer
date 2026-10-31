@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T09:02:46Z",
+  "run_id": "appearance-fix-2026-10-28",
+  "agent_name": "appearance-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reproduced the '**' trap against the shipped AceDB library before touching code (plain read created + rawset a defaults table), then proved the fix over a real AceDB:New profile with reloads, key counts and mutation proofs. The == true marker decision came from a verified fact (the defective code never reached its write), not from taste.",
+    "what_was_hard": "A concurrent lane (ranged-forced) was editing bars.lua and tests/bars_state.lua during this session, so two gate runs straddled its writes and the tree was transiently red; had to bracket the final gate with sha256 pre/post to get a trustworthy 54/0. Also had to correct an interim orchestrator reconcile that claimed a theme_preset rawget change the code does not have.",
+    "skill_gap": "Sweep of the same trap was static + targeted dynamic; the options tree cannot be dynamically instrumented in this suite (options_load_state uses a plain stub profile), so render-time reads are classified by reading code, not execution."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Release-blocking follow-up: widgets.lua:44-46 latent sound_channel metatable read (needs a rawget/type guard). Operator still owes the four in-client checks in bench/appearance_fix_2026-10-28.md section 9."
+  }
+}

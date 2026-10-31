@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T07:29:53Z",
+  "run_id": "hunter-tint-2026-10-28",
+  "agent_name": "hunter-tint",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Traced the only MH fill writer end to end, then ported the reference's own three-part lifecycle (IsHunterMeleeActive gate, OnMeleeSwing restore, ClearHunterQueueTint) into this tree's event-driven shape. The new section 10c pins each requirement (B1-B4) with both runtime and structural checks, and seven mutations of the class module were each killed. The cross-file pin collision with tests/bars_state.lua was filed with a proven minimal re-cut instead of editing another lane's file; the owning lane landed an equivalent re-cut.",
+    "what_was_hard": "The target-change clear has no class hook: main.lua owns events and has no class dispatch for target changes, and main.lua is out of scope, so the clear had to ride a per-frame maintenance tick that runs ahead of the hand gate (the reference polls for the same reason). The first mutation run also exposed that the sandbox had no ST.mainhand table, which let the live-cycle gate removal crash before the B1 pins ran; the fixture now mirrors main.lua's post-init hand shape so the pin can actually fail.",
+    "skill_gap": "The exact in-client trigger (why IsCurrentSpell answered true for a Raptor probe during the operator's ranged play) remains unobserved; the fix makes the tint impossible at range regardless, but the trigger cause is UNVERIFIED. A live /st diag + queue-flag print during ranged play is the closing evidence."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

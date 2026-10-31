@@ -48,16 +48,46 @@
 --                                    main.lua installs it in init_libs and removes it
 --                                    again on PLAYER_LOGOUT, so the report can tell
 --                                    "nothing threw" from "nothing was watched"
+--   self[hand].anchor_frame.bar_frame / visuals_frame / visuals_frame.bar
+--                                    the per-hand BAR STATE lines (frames are READ:
+--                                    IsVisible/IsShown/GetAlpha/GetScript/GetWidth and
+--                                    the hand's own state table - nothing is created,
+--                                    shown, hidden or written)
+--   self.class_hands / self.player_class  which hands exist for the class (one line each)
+--   db.profile[<CLASS>][<hand>].x/.y  the saved LibWindow row (pos= in the hand line)
+--   self.<CLASS>.raptor_strike_queued / .steady_shot_queued
+--                                    the hunter queue-tint flags (mainhand line only)
+--   self[hand].has_activity / .last_activity_at / .activity_source / .auto_repeat_active
+--   self[hand].hide_reason           the activity receipt and the recorded hide reason
+--                                    (written ONLY by main.lua's gate/visibility paths;
+--                                    the report reads them - same writer/reader split as
+--                                    diag.tick_sites)
+--   self.hand_visibility_needs_activity / hand_is_in_use / hand_activity_window
+--                                    main.lua's own read-only gate rule functions (called,
+--                                    never class logic; they read state and the clock)
+--   st.power_bar.frame / .ready / .last_state / .fraction
+--                                    the power-bar line: the last resolved state the
+--                                    driver stored (pb.last_state, written ONLY by
+--                                    pb.update; .fraction is its pure fill maths) plus
+--                                    the live st.api UnitPowerType/UnitPower/UnitPowerMax
+--                                    readings (API reads, like GetSpellInfo)
+--   self.bar_hook_errors.by_site / .quarantined
+--                                    the guard quarantine line (written ONLY by
+--                                    st.guard; the report names every site it counted)
 --=========================================================================================
 local _, st = ...
 
 st.diag = st.diag or {}
 local diag = st.diag
 
--- Hard output cap. The verbose report is the 5 base lines plus the ids section (one
--- line per wanted id, truncated with a +N count line when the cap binds) plus the
--- error ring (newest last, same cap rule), so this stays headroom, never a silent cut.
-diag.MAX_LINES = 85
+-- Hard output cap. The verbose report is the 5 base lines plus the power-bar line (added
+-- 2026-10-28, publish-audit P4) plus the per-hand BAR STATE lines (one per hand the class
+-- owns) plus the guard-quarantine line (P4) plus the ids section (one line per wanted id,
+-- truncated with a +N count line when the cap binds) plus the error ring (newest last,
+-- same cap rule). Worst case is 5 + 1 + 3 + 1 + 67 + 8 = 85 lines, so the cap stays 88
+-- and the cap-binding tails keep their headroom. This stays headroom, never a silent cut.
+local DEFAULT_MAX_LINES = 88
+diag.MAX_LINES = DEFAULT_MAX_LINES
 -- Bounded in-memory error ring (no SavedVariables writes; the report reads, the
 -- chained handler writes - same split as diag.tick_sites).
 diag.ERROR_MAX = 8
@@ -418,6 +448,308 @@ local function ticks_line()
         ticks_cpu_value())
 end
 
+--=========================================================================================
+-- Per-hand bar state (verbose only; reads frames, never creates or mutates one)
+--=========================================================================================
+-- Operator order 2026-10-28: "/st diag works better, because it said there was no errors,
+-- meaning something was missed/silent". A clean error ring is not proof the bars work: a
+-- bar can be unbuilt, hidden, unticked, alpha-dimmed, stalled at zero progress or painting
+-- a stale fill with nothing thrown anywhere. One line per hand the class actually owns
+-- (main.lua's class_hands, read only), fields in a fixed order so the output is greppable
+-- session over session:
+--   built    - the frames exist (HU-22 lazy build; "no" is also the not-configured state)
+--   shown    - the bar frame is on screen right now
+--   why      - a short reason when the hand is NOT on screen (publish-audit P4-1):
+--              unbuilt | class-off | off | no-weapon | spec | form | show-rule | idle;
+--              "-" while shown, "?" when that cannot be read (main.lua records the token
+--              where the visibility decision hides the bar)
+--   gate     - the activity gate: open | closed | n/a (the mainhand has no gate) | ?
+--   active   - the has_activity receipt flag (yes/no/?)
+--   win      - this hand's activity window in seconds
+--   left     - seconds left in that window; none with no receipt, ? when unknown
+--   src      - what proved the activity: cleu | forever | shot | auto-repeat | none | ?
+--   alpha    - the bar frame's alpha (the out-of-range dim writes this)
+--   tick     - an OnUpdate script is installed on the bar frame
+--   start / speed / ends_at / now / progress - the swing cycle the tick renders from
+--   full / paused / dead - the state flags the tick branches on
+--   vf_width - the visuals width the fill maths uses
+--   fill     - the fill texture's actual width in px (1 = the neutral sliver)
+--   pos      - the saved LibWindow row (x,y) the bar is placed at
+--   queue    - the hunter Raptor/Steady queue-tint flags, on the MAINHAND line only (they
+--              are class-level flags and they recolour the mainhand fill)
+-- Every value runs through the same pcall/type guards as the rest of the module: an
+-- unreadable field renders "?" and never throws. The hand list is read from the addon, so
+-- a single-melee-hand class (paladin/druid) gets one line, not three.
+local BAR_HANDS = { "mainhand", "offhand", "ranged" }
+
+-- The hand tokens this class owns. Falls back to the three generic hands when the addon's
+-- table is unreadable (a sandbox, a pre-init self): a hand the class does not own then
+-- renders as unbuilt, which is the informative answer, never an error.
+local function class_hand_tokens(self)
+    local class = read(self, "player_class")
+    local hands = read(read(self, "class_hands"), class)
+    if type(hands) == "table" and #hands > 0 then
+        return hands
+    end
+    return BAR_HANDS
+end
+
+-- Seconds / pixel widths / alpha: two decimals, or "?" (unknown is never rendered as 0).
+local function number_text(value)
+    if type(value) ~= "number" then
+        return "?"
+    end
+    return string.format("%.2f", value)
+end
+
+-- Bar progress fraction: three decimals so a near-stalled tick is visible.
+local function progress_text(value)
+    if type(value) ~= "number" then
+        return "?"
+    end
+    return string.format("%.3f", value)
+end
+
+-- State flag: only real booleans answer yes/no; unset is "?".
+local function yes_no(value)
+    if value == true then
+        return "yes"
+    end
+    if value == false then
+        return "no"
+    end
+    return "?"
+end
+
+-- One frame method call under pcall; nil when the method is absent or throws. Extra
+-- arguments are forwarded (GetScript needs the event name).
+local function frame_read(frame, name, ...)
+    local method = read(frame, name)
+    if type(method) ~= "function" then
+        return nil
+    end
+    local ok, value = pcall(method, frame, ...)
+    if ok then
+        return value
+    end
+    return nil
+end
+
+-- The saved LibWindow row for one hand (profile[<class>][<hand>]), read-only. rawget is
+-- deliberate: AceDB gives the profile root and every class row a '**' metatable whose
+-- __index CREATES a defaults-filled sub-table for a missing key
+-- (Libs/AceDB-3.0/AceDB-3.0.lua:88-107) - a diagnostic must never write through a read.
+local function profile_hand(self, hand)
+    local profile = read(read(self, "db"), "profile")
+    if type(profile) ~= "table" then
+        return nil
+    end
+    local class = read(self, "player_class")
+    if class == nil then
+        return nil
+    end
+    local class_row = rawget(profile, class)
+    if type(class_row) ~= "table" then
+        return nil
+    end
+    return rawget(class_row, hand)
+end
+
+-- The hunter Raptor/Steady queue-tint flags: class-level state that recolours the mainhand
+-- fill, so it renders on the mainhand line only, and only when the class exposes it.
+local function queue_text(self, hand)
+    if hand ~= "mainhand" then
+        return ""
+    end
+    local class_module = read(self, read(self, "player_class"))
+    local raptor = read(class_module, "raptor_strike_queued")
+    local steady = read(class_module, "steady_shot_queued")
+    if raptor == nil and steady == nil then
+        return ""
+    end
+    return " queue=raptor:" .. yes_no(raptor) .. ",steady:" .. yes_no(steady)
+end
+
+-- Call one of the addon's own read-only rule functions (main.lua's gate helpers). nil when
+-- the function is absent, a sandbox stubbed it out or it throws - the same "unknown"
+-- contract as every other field. This is not class logic: the three helpers read state
+-- and the aligned clock only.
+local function call_self(self, name, ...)
+    local fn = read(self, name)
+    if type(fn) ~= "function" then
+        return nil
+    end
+    local ok, value = pcall(fn, self, ...)
+    if ok then
+        return value
+    end
+    return nil
+end
+
+-- The activity gate for one hand, as the report renders it (2026-10-28, publish-audit
+-- P4-1: a bar hidden by the gate looked exactly like a bar switched off):
+--   gate   - "n/a" when the hand has no activity gate (the mainhand), else open/closed/?
+--   active - the has_activity receipt flag (yes/no/?)
+--   win    - the hand's own activity window in seconds ("?" when unreadable)
+--   left   - seconds left in the window ("none" with no receipt, "?" when the clock or
+--            the window is unknown - a receipt with no clock is never rendered as 0)
+--   src    - the receipt source token ("cleu" | "forever" | "shot"), "auto-repeat" when
+--            only the Auto Shot armed reading keeps the hand in use, "none", or "?"
+local function gate_text(self, hand)
+    if call_self(self, "hand_visibility_needs_activity", hand) ~= true then
+        return "n/a"
+    end
+    local in_use = call_self(self, "hand_is_in_use", hand)
+    if in_use == true then
+        return "open"
+    end
+    if in_use == false then
+        return "closed"
+    end
+    return "?"
+end
+
+local function window_text(self, hand)
+    local window = call_self(self, "hand_activity_window", hand)
+    if type(window) ~= "number" then
+        return "?"
+    end
+    return string.format("%.2f", window)
+end
+
+local function window_left_text(state, window, now)
+    if read(state, "has_activity") ~= true then
+        return "none"
+    end
+    local last = read(state, "last_activity_at")
+    if type(window) ~= "number" or type(last) ~= "number" or type(now) ~= "number" then
+        return "?"
+    end
+    local left = window - (now - last)
+    if left < 0 then
+        left = 0
+    end
+    return string.format("%.2f", left)
+end
+
+local function receipt_source_text(state, hand)
+    if read(state, "has_activity") == true then
+        local source = read(state, "activity_source")
+        if type(source) == "string" and source ~= "" then
+            return source
+        end
+        -- A receipt recorded by a writer this build no longer names: unknown, not "none".
+        return "?"
+    end
+    if hand == "ranged" and read(state, "auto_repeat_active") == true then
+        return "auto-repeat"
+    end
+    return "none"
+end
+
+-- A short reason for shown=no ("-" when the bar is on screen, "?" when the state is
+-- unreadable). The tokens are main.lua's own hide reasons, recorded where the visibility
+-- decision hides the bar (see main.lua: note_hand_hide_reason); an unbuilt hand is
+-- answered here because it never reaches that decision.
+local function hide_reason_text(state, built, shown)
+    if not built then
+        return "unbuilt"
+    end
+    if shown == true then
+        return "-"
+    end
+    if shown == false then
+        local reason = read(state, "hide_reason")
+        if type(reason) == "string" and reason ~= "" then
+            return reason
+        end
+    end
+    return "?"
+end
+
+-- One hand's BAR STATE line. The caller pcall's this too, so an unreadable field can only
+-- cost its own line.
+local function bar_line(self, hand)
+    local state = read(self, hand)
+    local anchor = read(state, "anchor_frame")
+    local bar_frame = read(anchor, "bar_frame")
+    local visuals = read(bar_frame, "visuals_frame")
+    local fill = read(visuals, "bar")
+    local built = bar_frame ~= nil and visuals ~= nil
+    local shown, tick, alpha = nil, nil, nil
+    if built then
+        shown = frame_read(bar_frame, "IsVisible")
+        if type(shown) ~= "boolean" then
+            shown = frame_read(bar_frame, "IsShown")
+        end
+        if type(shown) ~= "boolean" then
+            shown = nil
+        end
+        if type(read(bar_frame, "GetScript")) == "function" then
+            -- The event name matters: GetScript() without it answers nil on a real frame.
+            tick = frame_read(bar_frame, "GetScript", "OnUpdate") ~= nil
+        end
+        alpha = frame_read(bar_frame, "GetAlpha")
+    end
+    -- The aligned clock compat reports (nothing here reads the raw clock or the profile).
+    local now = nil
+    local api_table = read(st, "api")
+    local clock = read(api_table, "get_time")
+    if type(clock) == "function" then
+        local ok_clock, value = pcall(clock)
+        if ok_clock and type(value) == "number" then
+            now = value
+        end
+    end
+    local row = profile_hand(self, hand)
+    local window = call_self(self, "hand_activity_window", hand)
+    return string.format(
+        "%s bar %s built=%s shown=%s why=%s gate=%s active=%s win=%s left=%s src=%s"
+            .. " alpha=%s tick=%s start=%s speed=%s ends_at=%s now=%s progress=%s"
+            .. " full=%s paused=%s dead=%s vf_width=%s fill=%s pos=%s,%s%s",
+        PREFIX,
+        tostring(hand),
+        built and "yes" or "no",
+        yes_no(shown),
+        hide_reason_text(state, built, shown),
+        gate_text(self, hand),
+        yes_no(read(state, "has_activity")),
+        window_text(self, hand),
+        window_left_text(state, window, now),
+        receipt_source_text(state, hand),
+        number_text(alpha),
+        yes_no(tick),
+        number_text(read(state, "start")),
+        number_text(read(state, "speed")),
+        number_text(read(state, "ends_at")),
+        number_text(now),
+        progress_text(read(state, "current_progress")),
+        yes_no(read(state, "is_full")),
+        yes_no(read(state, "is_paused")),
+        yes_no(read(state, "engine_dead")),
+        number_text(read(state, "vf_width")),
+        number_text(frame_read(fill, "GetWidth")),
+        show(read(row, "x")),
+        show(read(row, "y")),
+        queue_text(self, hand))
+end
+
+-- The BAR STATE section: one line per owned hand, in the class's own hand order.
+local function bar_lines(self)
+    local hands = class_hand_tokens(self)
+    local out = {}
+    for i = 1, #hands do
+        local hand = hands[i]
+        local ok, line = pcall(bar_line, self, hand)
+        if ok and type(line) == "string" then
+            out[#out + 1] = line
+        else
+            out[#out + 1] = PREFIX .. " bar " .. tostring(hand) .. " unavailable"
+        end
+    end
+    return out
+end
+
 -- Secret-value restriction predicates (Mainline clients) - the switches that decide
 -- whether restricted reads come back as opaque secrets. C_Secrets is absent on classic
 -- clients, where the line is just "secrets api=no". Every probe is pcall'd; a missing,
@@ -455,6 +787,214 @@ local function secrets_line()
             .. secret_probe_flag(c_secrets, probe[2], probe[3])
     end
     return PREFIX .. " " .. table.concat(parts, " ")
+end
+
+--=========================================================================================
+-- Power bar (verbose only; 2026-10-28 publish-audit P4-1)
+--=========================================================================================
+-- The audit's "Power bar orphaned: NO line at all" gap. The bar hides for five different
+-- reasons (off / no melee row / no power API / no power type / no usable reading) and an
+-- anchored-but-empty bar looks exactly like one that was never built. One line, always in
+-- the verbose report, so an orphaned bar is attributable:
+--   ready        - pb.init created the frames (no = the module never initialised)
+--   anchor       - the owning melee hand named by the last refresh (offhand | mainhand |
+--                  none), from pb.last_state (written only by pb.update)
+--   anchor_shown - whether that owning row is on screen right now
+--   shown / width / height - the bar frame itself
+--   type / token / value / fraction - the LIVE primary-power reading (st.api, the same
+--                  calls the bar paints from; unknown when the client restricts it)
+--   why          - the last refresh's hide token (pb.resolve), "-" while painted
+local POWER_WHY = {
+    ["no-frame"] = true,
+    ["no-addon"] = true,
+    ["off"] = true,
+    ["no-anchor"] = true,
+    ["no-api"] = true,
+    ["no-type"] = true,
+    ["no-value"] = true,
+    ["no-fraction"] = true,
+}
+
+local function power_live_text(pb)
+    local api_table = read(st, "api")
+    if type(api_table) ~= "table" then
+        return "unknown", "unknown", "unknown", "?"
+    end
+    local type_fn = read(api_table, "UnitPowerType")
+    local value_fn = read(api_table, "UnitPower")
+    local max_fn = read(api_table, "UnitPowerMax")
+    local power_type, token = nil, nil
+    if type(type_fn) == "function" then
+        local ok, kind, kind_token = pcall(type_fn, "player")
+        if ok then
+            if type(kind) == "number" then
+                power_type = kind
+            end
+            if type(kind_token) == "string" and kind_token ~= "" then
+                token = kind_token
+            end
+        end
+    end
+    if power_type == nil then
+        return "unknown", "unknown", "unknown", "?"
+    end
+    local value, max_value = nil, nil
+    if type(value_fn) == "function" then
+        local ok, reading = pcall(value_fn, "player", power_type)
+        if ok and type(reading) == "number" then
+            value = reading
+        end
+    end
+    if type(max_fn) == "function" then
+        local ok, reading = pcall(max_fn, "player", power_type)
+        if ok and type(reading) == "number" then
+            max_value = reading
+        end
+    end
+    local type_text = tostring(power_type)
+    local token_text = token or "?"
+    if value == nil or max_value == nil then
+        return type_text, token_text, "unknown", "?"
+    end
+    local fraction = nil
+    local fraction_fn = read(pb, "fraction")
+    if type(fraction_fn) == "function" then
+        local ok, reading = pcall(fraction_fn, value, max_value)
+        if ok and type(reading) == "number" then
+            fraction = reading
+        end
+    elseif max_value > 0 then
+        fraction = value / max_value
+    end
+    local fraction_text = type(fraction) == "number" and progress_text(fraction) or "?"
+    return type_text, token_text, tostring(value) .. "/" .. tostring(max_value), fraction_text
+end
+
+local function power_line(self)
+    local pb = read(st, "power_bar")
+    if type(pb) ~= "table" then
+        return PREFIX .. " power module=no"
+    end
+    local frame = read(pb, "frame")
+    local state = read(pb, "last_state")
+    local anchor = read(state, "anchor_hand")
+    if type(anchor) ~= "string" or anchor == "" then
+        anchor = "none"
+    end
+    local anchor_shown = "?"
+    local anchor_frame = read(state, "anchor")
+    if anchor_frame ~= nil then
+        local visible = frame_read(anchor_frame, "IsVisible")
+        if type(visible) ~= "boolean" then
+            visible = frame_read(anchor_frame, "IsShown")
+        end
+        if type(visible) == "boolean" then
+            anchor_shown = visible and "yes" or "no"
+        end
+    elseif anchor == "none" then
+        anchor_shown = "no"
+    end
+    local shown = nil
+    if frame ~= nil then
+        shown = frame_read(frame, "IsVisible")
+        if type(shown) ~= "boolean" then
+            shown = frame_read(frame, "IsShown")
+        end
+        if type(shown) ~= "boolean" then
+            shown = nil
+        end
+    end
+    local why = "-"
+    if shown ~= true then
+        local reason = read(state, "why")
+        if type(reason) == "string" and POWER_WHY[reason] == true then
+            why = reason
+        else
+            why = "?"
+        end
+    end
+    local type_text, token_text, value_text, fraction_text = power_live_text(pb)
+    return string.format(
+        "%s power ready=%s anchor=%s anchor_shown=%s shown=%s width=%s height=%s"
+            .. " type=%s token=%s value=%s fraction=%s why=%s",
+        PREFIX,
+        read(pb, "ready") == true and "yes" or "no",
+        anchor,
+        anchor_shown,
+        yes_no(shown),
+        number_text(frame_read(frame, "GetWidth")),
+        number_text(frame_read(frame, "GetHeight")),
+        type_text,
+        token_text,
+        value_text,
+        fraction_text,
+        why)
+end
+
+--=========================================================================================
+-- Guard quarantine (verbose only; 2026-10-28 publish-audit P4-2 / C2a)
+--=========================================================================================
+-- st.guard quarantines a throwing site after 25 failures, announces it once, then never
+-- calls it again - so a per-tick subsystem can be dead for the session. /st diag used to
+-- print only the total (main.lua's bar_hook_errors=<n>), which named nothing. This line
+-- names every site the guard counted with its count, sorted quarantined-first then by
+-- volume (deterministic across sessions), capped with an explicit "+N more sites" tail.
+local QUARANTINE_SITES_MAX = 8
+
+local function quarantine_line(self)
+    local errors = read(self, "bar_hook_errors")
+    if type(errors) ~= "table" then
+        return PREFIX .. " quarantine total=? sites=?"
+    end
+    local total = read(errors, "count")
+    -- An unreadable count is unknown, never a fake clean zero.
+    local total_text = type(total) == "number" and tostring(total) or "?"
+    local by_site = read(errors, "by_site")
+    if type(by_site) ~= "table" then
+        -- A guard table without its per-site map cannot name anything: say so.
+        return PREFIX .. " quarantine total=" .. total_text .. " sites=?"
+    end
+    local quarantined = read(errors, "quarantined")
+    local sites = {}
+    for site, count in pairs(by_site) do
+        if type(count) == "number" then
+            local is_quarantined = type(quarantined) == "table"
+                and read(quarantined, site) == true
+            sites[#sites + 1] = {
+                site = tostring(site),
+                count = count,
+                quarantined = is_quarantined,
+            }
+        end
+    end
+    if #sites == 0 then
+        return PREFIX .. " quarantine total=" .. total_text .. " sites=none"
+    end
+    table.sort(sites, function(a, b)
+        if a.quarantined ~= b.quarantined then
+            return a.quarantined
+        end
+        if a.count ~= b.count then
+            return a.count > b.count
+        end
+        return a.site < b.site
+    end)
+    local parts = {}
+    local shown_count = #sites
+    if shown_count > QUARANTINE_SITES_MAX then
+        shown_count = QUARANTINE_SITES_MAX
+    end
+    for i = 1, shown_count do
+        local entry = sites[i]
+        parts[#parts + 1] = entry.site .. "=" .. tostring(entry.count)
+            .. (entry.quarantined and "[q]" or "")
+    end
+    local tail = ""
+    if #sites > shown_count then
+        tail = ",+" .. tostring(#sites - shown_count) .. " more sites"
+    end
+    return PREFIX .. " quarantine total=" .. total_text
+        .. " sites=" .. table.concat(parts, ",") .. tail
 end
 
 --=========================================================================================
@@ -677,9 +1217,10 @@ end
 --=========================================================================================
 -- st.diag.report(self, verbose): print the report. Never throws, never writes. Each line
 -- is built under its own pcall, so one unreadable field can only cost its own line.
--- Verbose adds flags/modules/ticks/secrets plus the ids section (wanted-id resolution)
--- plus the error ring (newest last); both sections respect MAX_LINES with an explicit
--- +N count line when the cap binds. Login (non-verbose) stays one line.
+-- Verbose adds flags/modules/ticks/secrets plus the power-bar line, the per-hand BAR STATE
+-- section, the guard-quarantine line, the ids section (wanted-id resolution) and the error
+-- ring (newest last); every section respects MAX_LINES with an explicit +N count line when
+-- the cap binds. Login (non-verbose) stays one line.
 function diag.report(self, verbose)
     local ok, lines = pcall(function()
         local out = {}
@@ -694,7 +1235,30 @@ function diag.report(self, verbose)
             out[#out + 1] = ticks_ok and ticks or (PREFIX .. " ticks unavailable")
             local secrets_ok, secrets = pcall(secrets_line)
             out[#out + 1] = secrets_ok and secrets or (PREFIX .. " secrets unavailable")
-            local cap_inner = tonumber(diag.MAX_LINES) or 85
+            local cap_inner = tonumber(diag.MAX_LINES) or DEFAULT_MAX_LINES
+            -- Per-hand bar state: the lines that make a SILENT bar fault visible (a bar
+            -- that is unbuilt/hidden/unticked/dimmed/stalled with nothing thrown). Capped
+            -- through the same append_section as the ids/errors tails, with an explicit +N
+            -- count line when the cap binds - never a silent cut.
+            local bars_ok, bars = pcall(bar_lines, self)
+            if bars_ok and type(bars) == "table" then
+                local ok_app = pcall(append_section, out, bars, cap_inner, "bars")
+                if not ok_app then
+                    out[#out + 1] = PREFIX .. " bars unavailable"
+                end
+            else
+                out[#out + 1] = PREFIX .. " bars unavailable"
+            end
+            -- The power bar: one fixed line right after the bar block, so an
+            -- orphaned/disabled/mis-anchored power bar can never be confused with one
+            -- that is simply not there (P4-1).
+            local power_ok, power = pcall(power_line, self)
+            out[#out + 1] = power_ok and power or (PREFIX .. " power unavailable")
+            -- The guard quarantine: one line naming every throwing/quarantined site, so a
+            -- dead per-tick subsystem is attributable instead of a bare total (P4-2).
+            local quarantine_ok, quarantine = pcall(quarantine_line, self)
+            out[#out + 1] = quarantine_ok and quarantine
+                or (PREFIX .. " quarantine unavailable")
             local ids_ok, ids = pcall(ids_lines)
             if ids_ok and type(ids) == "table" then
                 local ok_app = pcall(append_section, out, ids, cap_inner, "ids")
@@ -715,7 +1279,7 @@ function diag.report(self, verbose)
         print_line(PREFIX .. " report failed (see the Lua error log)")
         return
     end
-    local cap = tonumber(diag.MAX_LINES) or 85
+    local cap = tonumber(diag.MAX_LINES) or DEFAULT_MAX_LINES
     for i = 1, #lines do
         if i > cap then
             break

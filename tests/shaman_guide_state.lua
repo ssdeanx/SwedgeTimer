@@ -3235,8 +3235,8 @@ do
         nextaction_locked = "true",
         nextaction_visibility_key = "\"in_combat\"",
         nextaction_icon_size = "45",
-        nextaction_x = "0",
-        nextaction_y = "-180",
+        nextaction_x = "127",
+        nextaction_y = "-65",
         guide_flameshock_refresh = "0",
     }
     for key, value in pairs(expected_defaults) do

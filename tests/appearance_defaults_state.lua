@@ -3,11 +3,12 @@
 -- migration raises only an untouched old default, (2) the ranged distance bar defaults ON
 -- for hunters and stays opt-in for every other class.
 --
--- Loads the REAL config_presets.lua and config.lua in a sandbox (LibStub/AceAddon and the
--- st.debug trailer are the only things they touch at load) and drives
--- ST.migrate_appearance_defaults over profile fixtures shaped the way AceDB leaves them
--- (Libs/AceDB-3.0/AceDB-3.0.lua:88-131: one fresh table per defaults table, leaves
--- copied in - never an alias of the defaults table).
+-- Loads the REAL config_presets.lua and config.lua in a sandbox, and (section 8) the
+-- SHIPPED Libs/AceDB-3.0/AceDB-3.0.lua, so the migration is driven both over plain shaped
+-- fixtures and over a real AceDB profile object - the root carries the '**' defaults
+-- metatable that CREATES a defaults table on a missing-key read (:88-107), which is the
+-- F2 defect this suite now pins against. AceDB's copy defaults one fresh table per defaults
+-- table with the leaves copied in, never aliasing the defaults table (:88-131).
 --
 -- What is pinned here:
 --   1. shipped defaults: opaque black backdrop; the coloured fill, the border, the GCD
@@ -23,7 +24,11 @@
 --   6. hunter default semantics: the shared default stays false for other classes, the
 --      hunter default is true, and ST.weave_range_default_enabled (the options getter's
 --      single source of truth) answers ON for a nil hunter value and OFF for nil on every
---      other class.
+--      other class;
+--   7. the real AceDB profile: the flag is read with rawget (a plain read creates and
+--      persists a table), the marker is the plain boolean this migration writes - a table
+--      left by the pre-fix read is NOT accepted as done - the raise applies across a
+--      reload, and the run leaves no other key behind.
 --
 -- The option WIDGET's runtime behaviour (nil -> ON for HUNTER, explicit false -> off, and
 -- the set_opts migration call) is pinned against the real generated options tree in
@@ -68,12 +73,52 @@ local NEW_DEFAULT = { 0.0, 0.0, 0.0, 1.0 }
 local ST = {}
 for _, token in ipairs(CLASS_TOKENS) do ST[token] = {} end
 local st = { debug = false, utils = { print_msg = function() end } }
-local env = setmetatable({}, { __index = _G })
-env.LibStub = function(major)
-    if major == "AceAddon-3.0" then return { GetAddon = function() return ST end } end
-    return {}
+
+-- A LibStub that answers BOTH shapes the real tree uses: `LibStub("AceAddon-3.0")` (the
+-- config modules' GetAddon) and `LibStub:NewLibrary/GetLibrary` (the vendored AceDB-3.0
+-- loaded below, so the '**'-shaped fixture is the SHIPPED database, not a hand-built
+-- lookalike). Section 8 needs the real AceDB; every other section only uses the config
+-- modules and is unaffected by it.
+local libs = {}
+local LibStub = {}
+function LibStub:NewLibrary(major, minor)
+    if libs[major] then return nil end -- the real LibStub refuses a duplicate major
+    libs[major] = { major = major, minor = minor }
+    return libs[major]
 end
-for _, path in ipairs({ "config_presets.lua", "config.lua" }) do
+function LibStub:GetLibrary(major)
+    return libs[major]
+end
+setmetatable(LibStub, { __call = function(_, major)
+    if major == "AceAddon-3.0" then return { GetAddon = function() return ST end } end
+    return libs[major]
+end })
+
+-- The four client globals AceDB-3.0 touches at load (it builds its character/realm keys at
+-- file scope) plus the frame it registers PLAYER_LOGOUT on. Only the library's own needs.
+local function CreateFrame()
+    local frame = { events = {}, scripts = {} }
+    function frame:RegisterEvent(event) self.events[#self.events + 1] = event end
+    function frame:SetScript(name, fn) self.scripts[name] = fn end
+    return frame
+end
+
+local env = setmetatable({}, { __index = _G })
+env._G = env -- the sandbox owns its globals (the tests/bars_state.lua convention)
+env.LibStub = LibStub
+env.CreateFrame = CreateFrame
+env.GetRealmName = function() return "TestRealm" end
+env.UnitName = function() return "Tester" end
+env.UnitClass = function() return "Warrior", "WARRIOR" end
+env.UnitRace = function() return "Human", "Human" end
+env.UnitFactionGroup = function() return "Alliance" end
+env.GetLocale = function() return "enUS" end
+env.GetCurrentRegion = function() return 1 end
+env.GetCurrentRegionName = function() return "US" end
+
+-- Load order: the vendored database first (config.lua's defaults feed it in section 8),
+-- then the two real config modules exactly as the TOC loads them.
+for _, path in ipairs({ "Libs/AceDB-3.0/AceDB-3.0.lua", "config_presets.lua", "config.lua" }) do
     local chunk = assert(loadfile(ROOT .. path))
     setfenv(chunk, env)
     local ok, err = pcall(chunk, "SwedgeTimer", st)
@@ -110,8 +155,11 @@ do
 
     -- The BACKDROP only: the coloured fill, its sibling textures and the border keep the
     -- values they shipped with. A change here means the wrong surface was made opaque.
-    check(colors_equal(ST.bar_defaults.bar_color_default, { 93, 58, 207, 0.85 }),
-        "the coloured progress FILL keeps its colour and alpha (not the operator's target)")
+    -- 2026-10-28: one opacity for every bar. The shared fill moved 0.85 -> 0.9 so it
+    -- equals every per-hand fill (the hunter's three hands and the class rows all ship
+    -- 0.9); the backdrop order above is still the thing this test guards.
+    check(colors_equal(ST.bar_defaults.bar_color_default, { 93, 58, 207, 0.9 }),
+        "the coloured progress FILL keeps colour and the harmonised 0.9 alpha")
     check(colors_equal(ST.bar_defaults.bar_color_gcd, { 140, 140, 140, 0.85 }),
         "the GCD underlay colour is untouched")
     check(colors_equal(ST.bar_defaults.border_color, { 40, 40, 40, 0.95 }),
@@ -450,6 +498,169 @@ do
     check(class_block:find("%f[%a_]weave_range_enabled%s*=%s*false") ~= nil,
         "the shared class_defaults block ships weave_range_enabled = false (source pin)")
 end
+
+--=========================================================================================
+-- 8) The REAL AceDB profile: the '**' metatable, the flag read, and the reload path
+--=========================================================================================
+-- Sections 2-5 build plain profile tables. That is exactly why the shipped defect (F2)
+-- survived them: on a live profile the root is an AceDB table carrying the '**' defaults
+-- metatable (ST.defaults.profile['**'] = ST.class_defaults; Libs/AceDB-3.0/AceDB-3.0.lua:
+-- 88-107), whose __index CREATES a defaults-filled table, rawsets it on the profile and
+-- returns it. `if profile[FLAG] then` was therefore truthy on the FIRST login, the
+-- migration returned 0 forever, and the 2026-10-25 order (backdrop 0.85 -> 1.0) never
+-- reached a saved profile. This section drives the real vendored AceDB object, so the
+-- fixture cannot drift from the client's own database behaviour.
+local AceDB = assert(libs["AceDB-3.0"], "the vendored AceDB-3.0 is loaded into the sandbox")
+local FLAG = ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG
+
+-- One boot/reload of the real database. `sv` is the SavedVariables table: passing the SAME
+-- table back to AceDB:New is a reload (the defaults changed but AceDB only fills keys that
+-- are ABSENT - which is precisely why a saved 0.85 leaf needed a migration at all).
+local function ace_boot(sv)
+    local db = AceDB:New(sv, ST.defaults, true)
+    return db, db.profile, sv
+end
+
+local function raw_key_count(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n
+end
+
+do
+    -- (a) The fixture is genuinely '**'-shaped, or nothing below would prove anything.
+    local _, profile = ace_boot({})
+    local root_mt = getmetatable(profile)
+    check(type(root_mt) == "table" and type(root_mt.__index) == "function",
+        "ACEDB: the profile root carries AceDB's '**' __index metatable")
+    check(getmetatable(rawget(profile, "WARRIOR")) ~= nil,
+        "ACEDB: a class row carries its own '**' metatable")
+    eq(getmetatable(rawget(rawget(profile, "WARRIOR"), "mainhand")), nil,
+        "ACEDB: a hand table has NO metatable (the migration's leaf reads cannot create)")
+    -- The trap, on the real object: a plain read of an absent key CREATES a defaults
+    -- table and rawsets it. This is the shape that killed the migration.
+    eq(rawget(profile, "appearance_probe_absent"), nil, "ACEDB: the probe key starts absent")
+    local created = profile.appearance_probe_absent
+    check(type(created) == "table", "ACEDB: a plain read of an absent key answers a TABLE")
+    check(rawget(profile, "appearance_probe_absent") == created,
+        "ACEDB: that plain read PERSISTED the table on the profile (rawget sees it)")
+    rawset(profile, "appearance_probe_absent", nil)
+
+    -- (b) F2.1: the migration's flag read does not trigger the metatable, the flag write
+    -- stores the plain boolean, and the migration therefore RUNS on a live profile.
+    eq(rawget(profile, FLAG), nil, "ACEDB: a fresh real profile carries no migration flag")
+    profile.WARRIOR.mainhand.background_color = { 0.0, 0.0, 0.0, 0.85 }
+    profile.WARRIOR.offhand.background_color = { 0.0, 0.0, 0.0, 0.85 }
+    profile.WARRIOR.ranged.background_color = { 0.0, 0.0, 0.0, 0.85 }
+    local root_keys_before = raw_key_count(profile)
+    local warrior_keys_before = raw_key_count(rawget(profile, "WARRIOR"))
+    eq(ST.migrate_appearance_defaults(profile), 3,
+        "ACEDB: the migration raises the saved old defaults (F2: it returned 0 forever)")
+    check(colors_equal(profile.WARRIOR.mainhand.background_color, NEW_DEFAULT)
+        and colors_equal(profile.WARRIOR.offhand.background_color, NEW_DEFAULT)
+        and colors_equal(profile.WARRIOR.ranged.background_color, NEW_DEFAULT),
+        "ACEDB: every saved 0.85 hand became opaque")
+
+    -- F2.1: the stored marker is a plain value. A boolean is the only shape this
+    -- migration writes; a table here is what the defective read created instead.
+    eq(rawget(profile, FLAG), true, "ACEDB: the flag is the plain boolean true")
+    eq(type(rawget(profile, FLAG)), "boolean",
+        "ACEDB: the flag value is a boolean, NOT a created defaults table")
+    -- No silent junk: the run adds the flag and touches nothing else at the root, and a
+    -- class row never gains a hand/section the migration did not find.
+    eq(raw_key_count(profile), root_keys_before + 1,
+        "ACEDB: the migration adds exactly one profile-root key (the flag)")
+    eq(raw_key_count(rawget(profile, "WARRIOR")), warrior_keys_before,
+        "ACEDB: the migration adds no class-row key")
+    eq(rawget(rawget(profile, "PALADIN"), "offhand"), nil,
+        "ACEDB: a hand the class row does not carry stays ABSENT (no read created it)")
+    check(getmetatable(rawget(profile, "WARRIOR")) ~= nil,
+        "ACEDB: the class row still carries its metatable after the run")
+
+    -- (c) F2.2 on the real object: only the exact untouched old default moves. A custom
+    -- colour, a preset-owned old default and a near-miss alpha are all preserved.
+    local _, profile_c = ace_boot({})
+    profile_c.ROGUE.mainhand.background_color = { 15, 18, 25, 0.90 }
+    profile_c.ROGUE.offhand.background_color = { 0.0, 0.0, 0.0, 0.85 }
+    profile_c.ROGUE.offhand.theme_preset = "classic" -- ships exactly {0,0,0,0.85}
+    profile_c.ROGUE.ranged.background_color = { 0.0, 0.0, 0.0, 0.86 }
+    eq(ST.migrate_appearance_defaults(profile_c), 0,
+        "ACEDB: a custom colour, a preset-owned old default and a near-miss are untouched")
+    check(colors_equal(profile_c.ROGUE.mainhand.background_color, { 15, 18, 25, 0.90 }),
+        "ACEDB: the custom colour is preserved")
+    check(colors_equal(profile_c.ROGUE.offhand.background_color, OLD_DEFAULT),
+        "ACEDB: the active 'Classic Retro' preset keeps its 0.85 backdrop")
+    check(colors_equal(profile_c.ROGUE.ranged.background_color, { 0.0, 0.0, 0.0, 0.86 }),
+        "ACEDB: a near-miss alpha is not touched")
+    -- The same stored colour with NO preset owner: the old default is raised (a separate
+    -- profile - the first one is already marked done, which is the next check).
+    local _, profile_c2 = ace_boot({})
+    profile_c2.ROGUE.offhand.background_color = { 0.0, 0.0, 0.0, 0.85 }
+    eq(ST.migrate_appearance_defaults(profile_c2), 1,
+        "ACEDB: an un-owned old default on the same row migrates")
+    check(colors_equal(profile_c2.ROGUE.offhand.background_color, NEW_DEFAULT),
+        "ACEDB: the un-owned old default became opaque")
+
+    -- (d) F2.3 + the reason the migration exists: AceDB keeps a saved 0.85 across a
+    -- reload onto the new defaults, and the flag makes the raise once-per-profile.
+    local _, profile_old, sv_old = ace_boot({})
+    profile_old.HUNTER.mainhand.background_color = { 0.0, 0.0, 0.0, 0.85 }
+    local _, profile_reload = ace_boot(sv_old)
+    eq(profile_reload.HUNTER.mainhand.background_color[4], 0.85,
+        "ACEDB: a reload onto the new defaults KEEPS the saved 0.85 (why F2 mattered)")
+    eq(rawget(profile_reload, FLAG), nil, "ACEDB: the reloaded profile starts unmarked")
+    eq(ST.migrate_appearance_defaults(profile_reload), 1,
+        "ACEDB: the fixed build raises the saved old default after the reload")
+    eq(profile_reload.HUNTER.mainhand.background_color[4], 1.0,
+        "ACEDB: the reloaded hand is opaque")
+    -- A second login over the same SavedVariables: the flag is a real saved boolean and
+    -- the migration is a no-op.
+    local _, profile_second = ace_boot(sv_old)
+    eq(rawget(profile_second, FLAG), true,
+        "ACEDB: the flag survives the reload as the plain boolean true")
+    eq(profile_second.HUNTER.mainhand.background_color[4], 1.0,
+        "ACEDB: the raised value survives the reload")
+    eq(ST.migrate_appearance_defaults(profile_second), 0,
+        "ACEDB: a second login returns 0 (once per profile)")
+    -- Re-seeding an old default behind the flag is not raised again.
+    profile_second.HUNTER.mainhand.background_color = { 0.0, 0.0, 0.0, 0.85 }
+    eq(ST.migrate_appearance_defaults(profile_second), 0,
+        "ACEDB: the saved flag blocks a later re-run")
+
+    -- (e) THE POLLUTED FLAG. The defective build's read left a created defaults table at
+    -- the flag key in every session it ran (AceDB strips it on the logout that follows,
+    -- but a profile tool / hand-copied SavedVariables / a client that skips the handler
+    -- can hand one back). A table is not a run marker: the defective code returned 0
+    -- BEFORE its own write, so it never marked anything. A truthy test would leave those
+    -- profiles at 0.85 forever - the same silent failure in a new shape.
+    local _, profile_p = ace_boot({})
+    profile_p.WARRIOR.mainhand.background_color = { 0.0, 0.0, 0.0, 0.85 }
+    local junk = profile_p[FLAG] -- exactly what config.lua:162 did before the fix
+    eq(type(junk), "table", "ACEDB: the pre-fix read creates a table at the flag key")
+    eq(type(rawget(profile_p, FLAG)), "table", "ACEDB: and persists it on the profile")
+    eq(ST.migrate_appearance_defaults(profile_p), 1,
+        "ACEDB: a created table is NOT a run marker - the migration still raises the default")
+    eq(rawget(profile_p, FLAG), true,
+        "ACEDB: the run REPLACES the junk table with the plain true")
+    eq(profile_p.WARRIOR.mainhand.background_color[4], 1.0,
+        "ACEDB: the polluted profile finally gets the 2026-10-25 order")
+
+    -- (f) ONE LEVEL DOWN: the class-row read has the same trap shape (the class row carries
+    -- its own '**' = ST.bar_defaults metatable). A row a profile does not carry must stay
+    -- ABSENT - a plain profile[token] read would create a defaults-filled row through
+    -- '__index' and persist it.
+    local _, profile_r = ace_boot({})
+    rawset(profile_r, "MAGE", nil) -- e.g. a profile restored without that class row
+    eq(rawget(profile_r, "MAGE"), nil, "ACEDB: the removed class row starts absent")
+    local r_keys_before = raw_key_count(profile_r)
+    eq(ST.migrate_appearance_defaults(profile_r), 0,
+        "ACEDB: a profile without a class row still migrates (nothing to raise)")
+    eq(rawget(profile_r, "MAGE"), nil,
+        "ACEDB: the migration did NOT recreate the absent class row")
+    eq(raw_key_count(profile_r), r_keys_before + 1,
+        "ACEDB: it added the flag key and nothing else")
+end
+
 
 print(string.format("%d checks, %d failed", checks, failures))
 if failures > 0 then os.exit(1) end

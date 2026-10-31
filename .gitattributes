@@ -1,59 +1,58 @@
+# SwedgeTimer packaging attributes.
+# The addon ships as ONE universal build: the seven TOCs are the only per-flavor
+# artifacts, and every Lua module is shared. This file controls what a git-archive
+# release contains; it must never remove payload the TOCs reference.
+
 * text=auto eol=lf
-desks/ export-ignore
-bench/ export-ignore
-Media/ export-ignore
-tests/ export-ignore
 
-# The attributes file itself.
-/.gitattributes export-ignore
+# Workshop / audit / development trees (not addon payload).
+/bench/** export-ignore
+/desks/** export-ignore
+/docs/** export-ignore
+/tests/** export-ignore
+/OLD/** export-ignore
+/Tests/** export-ignore
+/Tools/** export-ignore
 
-# Workshop, journals, notes, audit output.
+# Role documents and tooling state.
 /AGENTS.md export-ignore
 /CAIRN.md export-ignore
 /hands-up.md export-ignore
 /MEMORY.md export-ignore
 /workshop.md export-ignore
-/bench/** export-ignore
-/desks/** export-ignore
-/docs/** export-ignore
-
-# A stale full copy of the add-on with its own TacoTip.toc, kept in-repo but
-# never packaged.
-/OLD/** export-ignore
-
-# In-game WoWUnit suite and the release verifier itself.
-/Tests/** export-ignore
-/Tools/** export-ignore
-
-# The Extras companion is its own CurseForge project, shipped as its own
-# package; a TacoTip archive must not contain a second .toc. The Extras
-# package's own rules live in `TacoTip_Extras/.gitattributes`; the two are
-# read in different scopes (a TacoTip archive is built from the repository
-# root, an Extras archive from the subtree), so they do not fight.
-/TacoTip_Extras/** export-ignore
-
-# Library `.toc` metadata. TacoTip.toc loads every library by explicit path,
-# so these would be extra .toc files with nothing to load.
-/Libs/LibDetours-1.0/LibDetours-1.0.toc export-ignore
-/Libs/LibStub/LibStub.toc export-ignore
-
-* text=auto eol=lf
-
-# Screenshots and marketing images. `tt.tga` is referenced by `## IconTexture`
-# in TacoTip.toc and stays.
-/*.png export-ignore
-
-# Dot files: editor, agent and tooling state.
-/.agents/** export-ignore
-/.codegraph export-ignore
-/.cortexkit/** export-ignore
-/.directory export-ignore
-/.github/** export-ignore
+/.gitattributes export-ignore
 /.gitignore export-ignore
 /.luacheckrc export-ignore
 /.luarc.json export-ignore
-/.omg/** export-ignore
-/.omo/** export-ignore
-/.opencode/** export-ignore
+/.wowluarc.json export-ignore
 /.vscode/** export-ignore
-/docs/swedge/** export-ignore
+/.omg/** export-ignore
+/.serena/** export-ignore
+/.ruff_cache/** export-ignore
+/.dsh-progress/** export-ignore
+/README.md export-ignore
+/CHANGELOG.md export-ignore
+/TESTING.md export-ignore
+/LICENSE export-ignore
+
+# Build / scratch artifacts (luac writes luac.out without -o).
+/luac.out export-ignore
+
+# Project-page art, not addon payload. The ## IconTexture file is the transparent
+# TGA at the repo root and stays.
+/*.png export-ignore
+/Logo.tga export-ignore
+/Logo.png export-ignore
+
+# Unreferenced media. The shipped payload keeps:
+#   Media/Fonts/**            (Expressway.ttf)
+#   Media/Textures/**         (Minimalist.tga, circle_smooth.tga)
+#   Media/StatusBar/Wglass.tga
+#   Media/Sounds/**           (the paladin twist sounds)
+# Class_icons, blizz_textures, Background, Details and Platynator are referenced by
+# no Lua or TOC in the shipped tree (see bench/release_readiness_2026-10-20.md §3.3).
+/Media/Class_icons/** export-ignore
+/Media/blizz_textures/** export-ignore
+/Media/Background/** export-ignore
+/Media/Details/** export-ignore
+/Media/Platynator/** export-ignore

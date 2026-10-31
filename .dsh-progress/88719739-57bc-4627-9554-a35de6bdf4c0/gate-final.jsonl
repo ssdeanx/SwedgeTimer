@@ -1,0 +1,13 @@
+{"v":1,"task":"gate-final","state":"running","msg":"started: bash tests/run.sh","at":1793178414723}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/warrior_state.lua","at":1793178415729}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/hunter_state.lua","at":1793178416734}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/druid_energy_state.lua","at":1793178417739}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/shaman_guide_state.lua","at":1793178418744}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/practice_progress_ui_state.lua","at":1793178419749}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/neutral_actions_state.lua","at":1793178421759}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/prepull_contract_state.lua","at":1793178424770}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/engine_matrix_state.lua","at":1793178426780}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/toc_check.lua","at":1793178428789}
+{"v":1,"task":"gate-final","msg":"PASS  lua5.1 tests/wiring_check.lua","at":1793178469973}
+{"v":1,"task":"gate-final","msg":"54 steps, 0 failed","at":1793178478822}
+{"v":1,"task":"gate-final","state":"done","pct":100,"msg":"finished","at":1793178478822}

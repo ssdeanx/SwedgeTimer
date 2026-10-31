@@ -40,13 +40,13 @@ bar on Cata/Mists — record it and move on.
 2. The addon prints a **login one-liner by itself at login** (`main.lua:673-677`) — record it
    verbatim:
    ```
-   SwedgeTimer diag: family=WRATH iface=38002 version=2.1.1 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:on DRUID:on SHAMAN:on HUNTER:on ROGUE:on
+   SwedgeTimer diag: family=WRATH iface=38002 version=2.1.3 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:on DRUID:on SHAMAN:on HUNTER:on ROGUE:on
    ```
    Then run **`/st diag`**. There is **no `verbose` sub-command**: the slash handler matches only
    `` / `practice` / `design` / `diag` (`main.lua:2013-2046`), so `/st diag` **is** the verbose
    report. Expected shape (values change per client):
    ```
-   SwedgeTimer diag: family=WRATH iface=38002 version=2.1.1 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:on DRUID:on SHAMAN:on HUNTER:on ROGUE:on
+   SwedgeTimer diag: family=WRATH iface=38002 version=2.1.3 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:on DRUID:on SHAMAN:on HUNTER:on ROGUE:on
    SwedgeTimer diag: flags stl_ready=true llm_ready=false lrc_ready=true lrc_unavailable=false deadline=no init=yes
    SwedgeTimer diag: modules practice=yes hud=yes rotation=yes design=yes providers=6/6
    SwedgeTimer diag: ticks on=yes mainhand=<count> offhand=<count> ranged=<count or ?> cpu=<n.nn>s
@@ -364,6 +364,19 @@ Everything above (including the R1 `/dump` and the P3/H2 lust checks), plus:
 - [ ] Range: may work through the interact-distance checkers or fall back with a one-time notice —
       either is fine; record `lrc=` and whether range text ever fills.
 - [ ] Shaman weave, hunter cast bar, druid trackers and the guides all behave as on WotLK.
+
+### Power bar and hunter melee stack (2.1.3)
+- [ ] Hunter: the ranged bar is on top, the thin mainhand sits directly under it at the same width,
+      and the offhand (when used) sits under the mainhand. The power bar (mana) is under the melee
+      stack, 14 px tall, with the current value text.
+- [ ] Power types: warrior shows rage, rogue shows energy, cat druid energy, bear druid rage,
+      paladin/shaman mana. Shapeshifting swaps the bar type and colour without a reload.
+- [ ] Drag the ranged bar: the melee stack and power bar follow. Drag the mainhand while the stack
+      is on: it snaps back (intended). Options -> Hunter -> Melee Bars off restores each hand's own
+      saved width/position.
+- [ ] Options -> Power bar: off hides it, height 10-30 applies immediately, the value toggle hides
+      the number. With every swing bar hidden the power bar hides too.
+- [ ] Combat: no Lua error and no ADDON_ACTION_BLOCKED; the bars keep their strata/level.
 
 ### Retail / Live (12.1.x — 120100, 120105)
 - [ ] Load on each live patch (12.1.0 and 12.1.5) — **no out-of-date flag**, no Lua errors.

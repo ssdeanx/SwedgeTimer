@@ -12,7 +12,10 @@
 --   * the paladin provider's live + practice-aware source selection,
 --   * the creation gates (pre-init and combat-lockdown deferral, provider-less inert),
 --   * config defaults, the PALADIN options widgets, the two Dropdown-SoundPreview
---     selects, the widgets.lua registrations, and the TOC load orders.
+--     selects, the widgets.lua registrations, and the TOC load orders,
+--   * the sound preview's channel guard, driven end to end over the REAL vendored
+--     AceDB: a '**'-metatable profile must hand PlaySoundFile a string, never the
+--     defaults table a plain read creates (widgets.lua F2.5, section 7b).
 -- Run from the repo root: lua5.1 tests/rotationtext_state.lua  (any cwd works).
 
 local script_dir = (arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
@@ -417,6 +420,275 @@ do
         "the sound preview plays through PlaySoundFile")
     check(widgets_src:find("recover_class_sound_map", 1, true) ~= nil,
         "the sound map resolver documents its class-map recovery")
+end
+
+--=========================================================================================
+-- 7b) widgets.lua sound preview: the AceDB '**' trap (F2.5), end to end
+--=========================================================================================
+-- widgets.lua:44-46 (pre-fix) read `class_db.sound_channel` and
+-- `ST.db.profile.sound_channel` as plain table reads. Both the profile root and every
+-- class row are AceDB tables carrying the '**' defaults metatable
+-- (ST.defaults.profile['**'] = ST.class_defaults, each ST.<CLASS>.defaults['**'] =
+-- ST.bar_defaults; Libs/AceDB-3.0/AceDB-3.0.lua:88-107): a plain read of an ABSENT key
+-- runs __index, which CREATES a defaults-filled table, rawsets it into the saved profile
+-- and returns it. The old code therefore handed a truthy TABLE to PlaySoundFile, and the
+-- call was unpcall'd. The defect was unreachable only because both preview dropdowns are
+-- paladin-only and PALADIN ships a string - the same silent class as the appearance
+-- migration (config.lua:158-179).
+--
+-- The fixture is the SHIPPED database and the SHIPPED defaults (the real vendored
+-- AceDB + config_presets.lua + config.lua + widgets.lua), not a hand-built lookalike, so
+-- the '**' shape below is the one a live profile has. The widget's public entry
+-- (st.widgets.preview_sound) and the widget's own OnEnter hook are both driven.
+do
+    local CLASS_TOKENS = {
+        "DEATHKNIGHT", "DRUID", "HUNTER", "MAGE", "PALADIN",
+        "PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR",
+    }
+    local wST = {}
+    for _, token in ipairs(CLASS_TOKENS) do wST[token] = {} end
+    local wst = { debug = false, utils = { print_msg = function() end } }
+
+    -- LibStub answers both shapes the real tree uses: the call (`AceAddon-3.0` for the
+    -- modules' GetAddon, `AceGUI-3.0` for the widget module) and the embed protocol
+    -- (`NewLibrary`/`GetLibrary`) the vendored AceDB-3.0 registers through.
+    local wlibs = {}
+    local wLibStub = {}
+    function wLibStub:NewLibrary(major, minor)
+        if wlibs[major] then return nil end
+        wlibs[major] = { major = major, minor = minor }
+        return wlibs[major]
+    end
+    function wLibStub:GetLibrary(major) return wlibs[major] end
+
+    local registered = {}
+    local acegui = {}
+    function acegui:RegisterWidgetType(name, ctor, version)
+        registered[#registered + 1] = { name = name, ctor = ctor, version = version }
+    end
+    function acegui:Create(kind)
+        -- The base Dropdown surface the SoundPreview constructor wraps.
+        return {
+            kind = kind,
+            text = { SetJustifyH = function() end },
+            pullout = { items = {} },
+            SetList = function() end,
+        }
+    end
+    wlibs["AceGUI-3.0"] = acegui
+    setmetatable(wLibStub, { __call = function(_, major)
+        if major == "AceAddon-3.0" then return { GetAddon = function() return wST end } end
+        return wlibs[major]
+    end })
+
+    -- The client calls the preview makes. widgets.lua captures PlaySoundFile/StopSound
+    -- with rawget(_G, ...) at load, so the recorders must exist before the module loads.
+    local sound_calls, stop_calls = {}, {}
+    local play_throws, stop_throws = false, false
+    local function PlaySoundFile(path, channel)
+        sound_calls[#sound_calls + 1] = { path = path, channel = channel }
+        if play_throws then error("PlaySoundFile: bad argument #2", 0) end
+        return true, "HANDLE_" .. tostring(#sound_calls)
+    end
+    local function StopSound(handle)
+        stop_calls[#stop_calls + 1] = handle
+        if stop_throws then error("StopSound: invalid handle", 0) end
+    end
+
+    -- AceDB builds its character/realm keys at file scope and registers PLAYER_LOGOUT.
+    local function wCreateFrame()
+        local frame = { events = {}, scripts = {} }
+        function frame:RegisterEvent(event) self.events[#self.events + 1] = event end
+        function frame:SetScript(name, fn) self.scripts[name] = fn end
+        return frame
+    end
+
+    local wenv = setmetatable({}, { __index = _G })
+    wenv._G = wenv
+    wenv.LibStub = wLibStub
+    wenv.CreateFrame = wCreateFrame
+    wenv.GetRealmName = function() return "TestRealm" end
+    wenv.UnitName = function() return "Tester" end
+    wenv.UnitClass = function() return "Warrior", "WARRIOR" end
+    wenv.UnitRace = function() return "Human", "Human" end
+    wenv.UnitFactionGroup = function() return "Alliance" end
+    wenv.GetLocale = function() return "enUS" end
+    wenv.GetCurrentRegion = function() return 1 end
+    wenv.GetCurrentRegionName = function() return "US" end
+    wenv.PlaySoundFile = PlaySoundFile
+    wenv.StopSound = StopSound
+
+    -- Real load order for the pieces this path touches (AceDB first: config.lua's
+    -- defaults feed AceDB:New below; widgets.lua last, as in every TOC).
+    local widget_paths = {
+        "Libs/AceDB-3.0/AceDB-3.0.lua", "config_presets.lua", "config.lua", "widgets.lua",
+    }
+    local load_ok = true
+    for _, path in ipairs(widget_paths) do
+        local wchunk = assert(loadfile(ROOT .. path))
+        setfenv(wchunk, wenv)
+        local piece_ok, piece_err = pcall(wchunk, "SwedgeTimer", wst)
+        if not piece_ok then
+            load_ok = false
+            check(false, path .. " does not load under the widgets sandbox: " .. tostring(piece_err))
+        end
+    end
+    check(load_ok, "W-SANDBOX: AceDB + the shipped defaults + widgets.lua all load")
+    if load_ok then
+        local AceDB = assert(wlibs["AceDB-3.0"], "W-SANDBOX: the vendored AceDB-3.0 registered")
+        check(type(wST.defaults) == "table", "W-SANDBOX: config.lua declares ST.defaults")
+        check(type(wst.widgets) == "table" and type(wst.widgets.preview_sound) == "function",
+            "W-SANDBOX: widgets.lua publishes st.widgets.preview_sound")
+
+        local db = AceDB:New({}, wST.defaults, true)
+        wST.db = db
+        local profile = db.profile
+        wST.player_class = "WARRIOR"        -- a class whose row ships NO sound_channel
+        local class_row = rawget(profile, "WARRIOR")
+
+        -- (a) The fixture IS the trap. Without this, the fix below would prove nothing:
+        -- on the real shipped object a plain read of the absent key answers a TABLE and
+        -- rawsets it (that is exactly the value the old widget code played).
+        local root_mt = getmetatable(profile)
+        check(type(root_mt) == "table" and type(root_mt.__index) == "function",
+            "FIXTURE: the profile root carries AceDB's '**' __index metatable")
+        check(type(class_row) == "table" and type(getmetatable(class_row)) == "table",
+            "FIXTURE: the WARRIOR class row carries its own '**' metatable")
+        eq(rawget(profile, "sound_channel"), nil, "FIXTURE: the profile root ships no sound_channel")
+        eq(rawget(class_row, "sound_channel"), nil, "FIXTURE: the WARRIOR row ships no sound_channel")
+        local plain_root = profile.sound_channel
+        check(type(plain_root) == "table",
+            "FIXTURE: the DEFECTIVE plain profile read answers a TABLE (got "
+            .. type(plain_root) .. ")")
+        check(rawget(profile, "sound_channel") == plain_root,
+            "FIXTURE: that plain read rawsets the table into the saved profile")
+        rawset(profile, "sound_channel", nil)
+        local plain_class = class_row.sound_channel
+        check(type(plain_class) == "table",
+            "FIXTURE: the DEFECTIVE plain class-row read answers a TABLE (got "
+            .. type(plain_class) .. ")")
+        check(rawget(class_row, "sound_channel") == plain_class,
+            "FIXTURE: that plain read rawsets the table into the class row")
+        rawset(class_row, "sound_channel", nil)
+
+        -- The option list keys name entries of the class sound map; inject it through the
+        -- widget's documented seam so this test does not need the paladin module loaded.
+        local sound_path = "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\Tada.wav"
+        wst.widgets.twist_sounds = { TadaFanfare = sound_path }
+
+        -- (b) W1: an absent channel yields the shipped default STRING, and neither read
+        -- creates anything on the saved profile.
+        wst.widgets.preview_sound("TadaFanfare")
+        eq(#sound_calls, 1, "W1: a known key reaches PlaySoundFile")
+        eq(sound_calls[1].path, sound_path, "W1: the preview plays the mapped file path")
+        check(type(sound_calls[1].channel) == "string",
+            "W1: the channel handed to PlaySoundFile is a STRING, never the metatable's "
+            .. "table (got " .. type(sound_calls[1].channel) .. ")")
+        eq(sound_calls[1].channel, "Master", "W1: an absent channel falls back to the shipped default")
+        eq(rawget(profile, "sound_channel"), nil, "W1: the profile-root read created no key")
+        eq(rawget(class_row, "sound_channel"), nil, "W1: the class-row read created no key")
+
+        -- (b2) The real trigger: the widget's own OnEnter hook on a list entry.
+        local sound_ctor
+        for i = 1, #registered do
+            if registered[i].name == "Dropdown-SoundPreview" then sound_ctor = registered[i].ctor end
+        end
+        eq(type(sound_ctor), "function", "W-SANDBOX: the Dropdown-SoundPreview constructor is registered")
+        if type(sound_ctor) == "function" then
+            local widget = sound_ctor()
+            local item = {}
+            function item:SetCallback(event, fn) self.events = self.events or {}; self.events[event] = fn end
+            widget.pullout.items = { item }
+            widget:SetList({ TadaFanfare = "TadaFanfare" })
+            local on_enter = item.events and item.events.OnEnter
+            eq(type(on_enter), "function", "W1: the widget attaches an OnEnter preview to every entry")
+            item.userdata = { value = "TadaFanfare" }
+            local before = #sound_calls
+            on_enter(item)
+            eq(#sound_calls, before + 1, "W1: hovering a list entry reaches PlaySoundFile")
+            check(type(sound_calls[#sound_calls].channel) == "string"
+                and sound_calls[#sound_calls].channel == "Master",
+                "W1: the hover path also passes the default string channel")
+        end
+
+        -- (c) A saved value is honoured, and the class row keeps the old precedence.
+        rawset(profile, "sound_channel", "SFX")
+        wst.widgets.preview_sound("TadaFanfare")
+        eq(sound_calls[#sound_calls].channel, "SFX", "W1: a saved profile channel is used")
+        rawset(class_row, "sound_channel", "Music")
+        wst.widgets.preview_sound("TadaFanfare")
+        eq(sound_calls[#sound_calls].channel, "Music", "W1: the class row still wins over the profile root")
+
+        -- (d) A corrupt saved value never reaches the client: a table is truthy, which is
+        -- what the old read returned, so "non-nil" is not the contract - STRING is.
+        rawset(class_row, "sound_channel", { corrupt = true })
+        rawset(profile, "sound_channel", 123)
+        wst.widgets.preview_sound("TadaFanfare")
+        check(type(sound_calls[#sound_calls].channel) == "string",
+            "W1: a corrupted saved channel still yields a string (got "
+            .. type(sound_calls[#sound_calls].channel) .. ")")
+        eq(sound_calls[#sound_calls].channel, "Master", "W1: a saved table/number falls back to the default")
+        rawset(class_row, "sound_channel", nil)
+        rawset(profile, "sound_channel", nil)
+
+        -- (e) PALADIN, the only class that ships the key, keeps its string path: the
+        -- class-row default, then a value picked in the options.
+        wST.player_class = "PALADIN"
+        local paladin_row = rawget(profile, "PALADIN")
+        eq(rawget(paladin_row, "sound_channel"), "Master", "the PALADIN row ships the string default")
+        wst.widgets.preview_sound("TadaFanfare")
+        eq(sound_calls[#sound_calls].channel, "Master", "PALADIN previews on its shipped channel")
+        rawset(paladin_row, "sound_channel", "SFX")
+        wst.widgets.preview_sound("TadaFanfare")
+        eq(sound_calls[#sound_calls].channel, "SFX", "a PALADIN channel picked in the options is used")
+        rawset(paladin_row, "sound_channel", "Master")
+        wST.player_class = "WARRIOR"
+
+        -- (f) The preview handle (archive 34-53): a second preview stops the first.
+        wst.widgets.preview_sound("TadaFanfare")
+        local latched = "HANDLE_" .. tostring(#sound_calls)
+        local stops_before = #stop_calls
+        wst.widgets.preview_sound("TadaFanfare")
+        eq(#stop_calls, stops_before + 1, "a second preview stops the previous handle")
+        eq(stop_calls[#stop_calls], latched, "the stopped handle is the one it latched")
+
+        -- (g) W2: both client calls are pcall-guarded, so no client throw escapes a hover.
+        play_throws = true
+        local sounds_before = #sound_calls
+        local ok_play = pcall(wst.widgets.preview_sound, "TadaFanfare")
+        check(ok_play, "W2: a throwing PlaySoundFile cannot error out of a preview")
+        eq(#sound_calls, sounds_before + 1, "W2: the failing call was attempted exactly once")
+        play_throws = false
+
+        wst.widgets.preview_sound("TadaFanfare")   -- latches a fresh handle
+        local handle_pending = "HANDLE_" .. tostring(#sound_calls)
+        stop_throws = true
+        local ok_stop = pcall(wst.widgets.preview_sound, "TadaFanfare")
+        check(ok_stop, "W2: a throwing StopSound cannot error out of a preview")
+        eq(stop_calls[#stop_calls], handle_pending, "W2: the throwing stop targeted the latched handle")
+        eq(sound_calls[#sound_calls].channel, "Master", "W2: a failed stop still lets the next preview play")
+        stop_throws = false
+
+        -- (h) W4 sweep: an unknown key and a corrupt map entry are silent no-ops, and the
+        -- source keeps no plain metatable read on the channel path.
+        local n_before = #sound_calls
+        wst.widgets.preview_sound("NoSuchSound")
+        eq(#sound_calls, n_before, "W4: an unknown key never reaches PlaySoundFile")
+        wst.widgets.twist_sounds.Broken = { not_a_path = true }
+        wst.widgets.preview_sound("Broken")
+        eq(#sound_calls, n_before, "W4: a non-string map entry never reaches PlaySoundFile")
+
+        local widgets_src = read("widgets.lua")
+        check(widgets_src:find("class_db%.sound_channel", 1) == nil
+            and widgets_src:find("ST%.db%.profile%.sound_channel", 1) == nil,
+            "W4: no plain metatable-triggering sound_channel read remains in widgets.lua")
+        local n_rawget = select(2, widgets_src:gsub("rawget%(", ""))
+        check(n_rawget >= 5,
+            "W4: the channel path reads both sources with rawget (" .. tostring(n_rawget) .. " rawgets)")
+        check(widgets_src:find("pcall(play_sound_file", 1, true) ~= nil
+            and widgets_src:find("pcall(stop_sound", 1, true) ~= nil,
+            "W2: PlaySoundFile and StopSound both stay pcall-guarded")
+    end
 end
 
 do

@@ -42,23 +42,40 @@ end
 -- Anniversary and Wrath/Titanforge, where the state APIs prefer names (see above). On
 -- those families the tokens are the distinct localized family names (every rank
 -- shares one name, so one read covers the family); an entry whose name the client
--- cannot resolve is skipped (no mixed id token list - the queue read stays one token
--- shape per family).
+-- cannot resolve yet contributes its numeric id instead (HU-34 fallback - a cold
+-- cache still probes, never a silently empty list).
 local function queue_tokens(id_table)
+    local tokens, seen = {}, {}
     if st.family ~= "TBC" and st.family ~= "WRATH" then
-        local tokens = {}
         for spell_id in pairs(id_table) do
             tokens[#tokens + 1] = spell_id
         end
+        table.sort(tokens)
         return tokens
     end
-    local tokens, seen = {}, {}
+    -- Name-family order is deterministic: every distinct localized family name
+    -- first (sorted), then the ids of entries whose name is cold (sorted). A warm
+    -- queued spell therefore matches on the first probe, and a cold entry still
+    -- gets its approved id fallback instead of being skipped.
+    local names, ids = {}, {}
     for spell_id in pairs(id_table) do
         local name = api.GetSpellInfo(spell_id)
-        if name and not seen[name] then
-            seen[name] = true
-            tokens[#tokens + 1] = name
+        if type(name) == "string" then
+            if not seen[name] then
+                seen[name] = true
+                names[#names + 1] = name
+            end
+        else
+            ids[#ids + 1] = spell_id
         end
+    end
+    table.sort(names)
+    table.sort(ids)
+    for i = 1, #names do
+        tokens[#tokens + 1] = names[i]
+    end
+    for i = 1, #ids do
+        tokens[#tokens + 1] = ids[i]
     end
     return tokens
 end
@@ -132,6 +149,31 @@ local function is_hunter_queued_melee_token(token, id_table)
         end
     end
     return false
+end
+
+-- hunter-tint (2026-10-28): the queue tint is a MELEE-cycle read. A hunter at range has
+-- no main-hand cycle, and a ranged shot must never recolour that fill (operator report:
+-- "why is mh changing colors for hunter when using ranged"). This is the reference's own
+-- gate - IsHunterMeleeActive (SuperSwingTimer_State.lua:455-464): hunter + in combat +
+-- the mh timer state "swinging" - expressed on this tree's swing fields, the same
+-- live-swing shape nextaction_ui.lua:446-449 uses. Every read is nil-safe (the Retail
+-- stand-in / a pre-init sandbox answers nothing), and `now` is the api.get_time()
+-- domain the engine's expiration stamps live in, so an expired cycle is not live even
+-- while the bar's 0.5 s full-delay has not flipped is_full yet.
+local function hunter_mainhand_cycle_live(self)
+    if self.in_combat ~= true then
+        return false
+    end
+    local mh = self.mainhand
+    if type(mh) ~= "table" or mh.is_full == true or mh.engine_dead == true then
+        return false
+    end
+    if type(mh.speed) ~= "number" or mh.speed <= 0
+        or type(mh.start) ~= "number" or type(mh.ends_at) ~= "number" then
+        return false
+    end
+    local now = api.get_time()
+    return type(now) == "number" and now < mh.ends_at
 end
 
 --=========================================================================================
@@ -1091,7 +1133,14 @@ function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
                 return
             end
         end
-        self.raptor_strike_queued = false
+        if self.raptor_strike_queued == true then
+            -- B2: the clear repaints in the same path - this is the branch a ranged
+            -- stretch used to leak a stale tint through (flag dropped, fill kept).
+            self.raptor_strike_queued = false
+            self:set_bar_color("mainhand")
+        else
+            self.raptor_strike_queued = false
+        end
     end
     -- Steady Shot has its own option gate (the two queue colours are independent).
     -- On classic clients a queued Steady Shot is queued into the swing and
@@ -1118,7 +1167,13 @@ function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
             self:set_bar_color("mainhand")
             return
         end
-        self.steady_shot_queued = false
+        if self.steady_shot_queued == true then
+            -- B2: same immediate repaint as the raptor clear above.
+            self.steady_shot_queued = false
+            self:set_bar_color("mainhand")
+        else
+            self.steady_shot_queued = false
+        end
     end
 end
 
@@ -1127,6 +1182,12 @@ function ST.HUNTER.post_init(self)
     -- module, otherwise a stale nil would decide the bar colour.
     self.raptor_strike_queued = false
     self.steady_shot_queued = false
+    -- hunter-tint (2026-10-28) lifecycle state: the main-hand cycle `start` the tint was
+    -- last evaluated against (the swing-consumed clear) and the target GUID it was
+    -- painted against (the target-change clear). Session state, reset on every init so a
+    -- reload can never inherit a half-written tint.
+    self.hunter_tint_swing_start = nil
+    self.hunter_tint_target = nil
     -- The H2 shot log starts empty (one sample per completed shot cast; the
     -- post-fight report in practice_ui reads it). Reset here so a reload never
     -- inherits a half-written track.
@@ -1176,6 +1237,36 @@ function ST.HUNTER.post_init(self)
     end
 end
 
+-- hunter-tint (2026-10-28) B1/B2: the queue tint's per-frame safety net. It runs from
+-- on_bar_update AHEAD of the hand gate (the update_trap / shot-guard pattern), so
+-- whichever bar ticks can clear a stale tint - the main-hand bar's OnUpdate stops while
+-- that bar is hidden. It reads only the queue flags, the main-hand cycle, the target's
+-- GUID and the clock; NEVER self.ranged (B4: no cross-hand coupling). Idle cost is two
+-- boolean reads; the target read and the repaint happen only while a tint is queued.
+function ST.HUNTER.maintain_queue_tint(self)
+    if self.raptor_strike_queued ~= true and self.steady_shot_queued ~= true then
+        return
+    end
+    -- B1: the moment the melee cycle is gone (swing consumed with no next start,
+    -- combat exit, engine death) the queue no longer has a next attack to ride.
+    local clear = not hunter_mainhand_cycle_live(self)
+    if not clear and type(UnitGUID) == "function" then
+        -- B2 (target change): a queue armed against the old target must not survive the
+        -- swap. UnitGUID is nil-safe on every supported family; a client that cannot
+        -- answer leaves both sides nil, which is not a change.
+        clear = UnitGUID("target") ~= self.hunter_tint_target
+    end
+    if not clear then
+        return
+    end
+    self.raptor_strike_queued = false
+    self.steady_shot_queued = false
+    self.hunter_tint_target = nil
+    -- Repaint in the same path: the class override now declines the tint (the cycle is
+    -- gone), so bars.lua hands the fill its default colour.
+    self:set_bar_color("mainhand")
+end
+
 function ST.HUNTER.on_bar_update(self, hand)
     -- Per-frame hunter visual driver, called from ST:onupdate_common via the generic
     -- class hook for every visible bar. The ranged tick drives the full visual set; the
@@ -1191,6 +1282,11 @@ function ST.HUNTER.on_bar_update(self, hand)
     -- hunter shot cast is live, so the shot cannot restart the melee hands (the EVENT
     -- arm in on_spellcast_event covers instant shots; this tick arm covers cast time).
     ST.HUNTER.suppress_shot_melee_reset(self)
+    -- hunter-tint (2026-10-28): the queue-tint safety net (B1/B2). Player-level state
+    -- like the two calls above, so it also runs ahead of the hand gate - whichever bar
+    -- ticks (the main-hand bar may be hidden at range) clears a tint whose melee cycle
+    -- is gone. Idle cost is two boolean reads.
+    ST.HUNTER.maintain_queue_tint(self)
     if hand ~= "ranged" and hand ~= "mainhand" then
         return
     end
@@ -1286,9 +1382,17 @@ function ST.HUNTER.get_cast_grace(self, spell_id, cast_name)
 end
 
 function ST.HUNTER.on_combat_exit(self)
-    -- A queued Raptor Strike or Steady Shot dies with the fight.
+    -- A queued Raptor Strike or Steady Shot dies with the fight. B2: the fill is
+    -- repainted in this same path (the reference's ClearHunterQueueTint restores
+    -- unconditionally), so the last tint cannot outlive its combat.
     self.raptor_strike_queued = false
     self.steady_shot_queued = false
+    self.hunter_tint_target = nil
+    -- The repaint touches bar visuals, so it carries the init guard (wiring_check
+    -- check 3; the paladin's combat-exit glow stop is guarded the same way).
+    if self.interfaces_are_initialised then
+        self:set_bar_color("mainhand")
+    end
     -- A live cast dies with the fight too; its untracked sample must not leak into the
     -- next fight's log. The log itself persists for the post-fight report.
     self.hunter_live_cast = nil
@@ -1324,14 +1428,38 @@ function ST.HUNTER.set_bar_color(self, hand)
         return false
     end
 
+    -- hunter-tint (2026-10-28) B1: the tint rides a LIVE main-hand swing only. A hunter
+    -- at range has no main-hand cycle, so a queue flag (however it got set) can never
+    -- recolour this fill; false hands the default colour back to bars.lua.
+    if not hunter_mainhand_cycle_live(self) then
+        return false
+    end
+
+    -- B2 (the swing that consumes the queued ability): main.lua calls this hook at every
+    -- SWING_TIMER_START (main.lua:1454), and a cycle whose `start` moved is a NEW swing -
+    -- the queued next-attack has been consumed, so the base fill is restored. This is the
+    -- reference's OnMeleeSwing rule (SuperSwingTimer_ClassMods.lua:5857-5863). The first
+    -- observed cycle (nil -> a start) is not a consumption.
+    local swing_start = self.mainhand.start
+    local previous_swing_start = self.hunter_tint_swing_start
+    if previous_swing_start ~= nil and swing_start ~= previous_swing_start then
+        self.raptor_strike_queued = false
+        self.steady_shot_queued = false
+        self.hunter_tint_target = nil
+    end
+    self.hunter_tint_swing_start = swing_start
+
     -- On-next-attack behaviours
     if db_class.enable_raptor_strike_color and self.raptor_strike_queued then
+        -- The target the queue was painted against: a later target change clears it.
+        self.hunter_tint_target = (type(UnitGUID) == "function") and UnitGUID("target") or nil
         frame.bar:SetVertexColor(
             self:convert_color(db_class.raptor_strike_color)
         )
         return true
     end
     if db_class.enable_steady_shot_color and self.steady_shot_queued then
+        self.hunter_tint_target = (type(UnitGUID) == "function") and UnitGUID("target") or nil
         frame.bar:SetVertexColor(
             self:convert_color(db_class.steady_shot_color)
         )

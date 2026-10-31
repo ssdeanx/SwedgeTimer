@@ -1,0 +1,25 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T09:52:00Z",
+  "run_id": "publish-audit-2026-10-28-superseding",
+  "agent_name": "publish-audit",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-audited the settled 05:21:08 tree with a recorded baseline/final manifest (no drift): gate 54/0 twice, luacheck 2/0 in 97 files, focused suites green; verified every lane closure hash, both login-rule idempotence pin sets, the voided false-trail row, and the A-G/P1-P5 surface from source.",
+    "what_was_hard": "The tree had moved under the earlier 05:09 report (get_class_table/bar_full_delay/option_table_presets at 05:16, paladin sound at 05:21), so every claim needed re-derivation; hidden-frame OnUpdate semantics and all in-client behaviour remain UNVERIFIED offline.",
+    "skill_gap": "None; in-client confirmation is the operator's half."
+  },
+  "escalation": {
+    "reason": "Release gate is NOT READY: no code BLOCKER in the six supported classes, but five blockers remain.",
+    "blocked_on": "E1 offhand Width slider inert (option_tables.lua:7203-7239 vs bars.lua:309-310); P5-3 CHANGELOG/README unwritten and the power-bar row sentence is now wrong; HU-37/HU-38 operator rulings open; no in-client pass on TBC or Era; the stale 05:09 report + desks/journal.md publish-audit DONE block must be voided (B2/B3).",
+    "recommendation": "Void the stale report/ledger block; lock the offhand Width widget (or route it to the mainhand key); write the release notes per the P5-3 must/must-not lists; guard the options surface for Retail class tokens outside the defaults before advertising Retail; then run the section-G in-client pass on both clients."
+  },
+  "journal_marker": "desks/publish-audit/journal.md § 2026-10-28 05:52 EDT",
+  "supersedes": "desks/publish-audit/.signals/2026-10-28T093000Z.json (from the 05:09 pre-latent-tree pass; its 'docs already updated' claim is false)"
+}

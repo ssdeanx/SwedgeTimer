@@ -488,6 +488,11 @@ local function create_icon(parent, slot, index, db)
     if f.cooldown.SetHideCountdownNumbers then
         f.cooldown:SetHideCountdownNumbers(true)
     end
+    -- External countdown addons (OmniCC and everything that follows its contract) draw
+    -- their own number on every cooldown frame unless this flag is set. The HUD draws its
+    -- own text, so without it the icon shows two numbers stacked on top of each other
+    -- (operator report 2026-10-28: "double cooldown text in hud icons").
+    f.cooldown.noCooldownCount = true
     f.cooldown:SetDrawEdge(false)
     f.cooldown:Hide()
 
@@ -1138,6 +1143,11 @@ function HUD.paint(self, icon, s, now)
             icon.cd_start, icon.cd_duration, icon.cd_reverse = start, s.duration, reverse
             icon.cooldown:SetReverse(reverse)
             icon.cooldown:SetCooldown(start, s.duration)
+            -- Re-asserted with every new swipe: the client's own countdown number is
+            -- hidden for this frame, so the HUD's text is the only number drawn.
+            if icon.cooldown.SetHideCountdownNumbers then
+                icon.cooldown:SetHideCountdownNumbers(true)
+            end
             icon.cooldown:Show()
         end
     elseif icon.cd_key then

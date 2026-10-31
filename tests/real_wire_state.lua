@@ -2448,6 +2448,39 @@ do
 end
 
 print("")
+do
+    -- Engine clock alignment (2026-10-28). The library keeps its own precise-clock
+    -- offset; a loading screen leaves it a known distance from ours (the operator's
+    -- diag: speed=3.50 but ends_at-start=3.10). A START always spans exactly one speed,
+    -- so the handler converts the stamp onto OUR axis instead of storing the engine's -
+    -- the fill, the countdown and the tint then read the same cycle.
+    local b = build({ profile = "era" })
+    assert(b ~= nil, "engine-clock: the sandbox builds")
+    local T, F = b.ST, b.sb
+    T:OnInitialize()
+    report_login(b)
+    addon_loaded(b)
+    pew(b)
+    fire_lrc(b)
+    local skew = 0.4
+    local speed = 3.5
+    local ours = F.clock
+    local engine_now = ours - skew
+    T.callback_event_handler("SWING_TIMER_START", "player", speed, engine_now + speed, "mainhand")
+    near(T.engine_clock_bias, skew, "engine-clock: a START measures the engine's bias")
+    near(T.mainhand.start, ours, "engine-clock: the bar anchors on our clock")
+    near(T.mainhand.ends_at - T.mainhand.start, speed,
+        "engine-clock: the cycle spans exactly one weapon speed (no 0.4 s short bar)")
+    -- Our own fallback START declares our axis: the bias is not applied twice.
+    T.callback_event_handler("SWING_TIMER_START", speed, F.clock + speed, "ranged", true)
+    near(T.ranged.ends_at - T.ranged.start, speed,
+        "engine-clock: our own fallback START is not re-biased")
+    -- An engine UPDATE carries the same axis and is converted too.
+    T.callback_event_handler("SWING_TIMER_UPDATE", "player", speed, (F.clock - skew) + 1.0, "mainhand")
+    near(T.mainhand.ends_at, F.clock + 1.0, "engine-clock: an engine UPDATE is converted")
+    eq(#F.cb_errors, 0, "engine-clock: no callback-bus error was swallowed")
+end
+
 print(string.format("%d checks, %d failures (%d expected-fail: 2 HU-29, 1 Wrath Auto Shot residual)",
     checks, failures, expected_failures))
 if failures > 0 then

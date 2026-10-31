@@ -330,7 +330,7 @@ function ui.init(self)
     local frame = CreateFrame("Frame", addon_name .. "NextActionFrame", UIParent)
     ui.frame = frame
     frame:SetSize(BASE_ICON_SIZE, BASE_ICON_SIZE)
-    frame:SetPoint("CENTER", UIParent, "CENTER", db.nextaction_x or 0, db.nextaction_y or -180)
+    frame:SetPoint("CENTER", UIParent, "CENTER", db.nextaction_x or 127, db.nextaction_y or -65)
     frame:SetFrameStrata("MEDIUM")
     frame:SetClampedToScreen(true)
     frame:RegisterForDrag("LeftButton")
@@ -878,7 +878,7 @@ function ui.apply_settings(self)
     frame:SetScale(scale)
     frame:ClearAllPoints()
     frame:SetPoint("CENTER", UIParent, "CENTER",
-        (db.nextaction_x or 0) / scale, (db.nextaction_y or -180) / scale)
+        (db.nextaction_x or 127) / scale, (db.nextaction_y or -65) / scale)
     frame:SetMovable(not locked and enabled)
     frame:EnableMouse(not locked and enabled)
 

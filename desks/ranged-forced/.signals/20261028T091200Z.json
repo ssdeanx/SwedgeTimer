@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T09:12:00Z",
+  "run_id": "ranged-forced-2026-10-28",
+  "agent_name": "ranged-forced",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Forced ranged placement landed in bars.lua (drag/scale skip removed, version latch upgrades the first pass once, extent reader now handles TOP/BOTTOM/CENTER anchors at height*scale so a dragged melee row no longer disables the band). Fresh profiles proven 0-field-write; 15/15 mutations killed; gate 54/0, bars_state 1249 checks.",
+    "what_was_hard": "A duplicate ranged-forced instance wrote this desk's report/journal/signal at 05:01:58Z from a mid-flight snapshot and claimed 'no source edits were required' while the owning instance's edits were landing. The bench report is appended (never overwritten) with a superseding section and this signal supersedes the earlier done signal.",
+    "skill_gap": "Live-client round-trip of the operator's dragged-then-login profile with a stale first-pass latch remains unverified (report section S10)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Orchestrator: treat bench/ranged_forced_2026-10-28.md 'SUPERSEDING REPORT' as authoritative and correct the central lane row; dispatch the stale-comment fix at main.lua:418-433 and config_presets.lua:1125-1133/:1514-1522."
+  },
+  "journal_marker": "desks/ranged-forced/journal.md § 2026-10-28 05:12Z — OWING INSTANCE: edits landed, proofs done"
+}

@@ -1,0 +1,15 @@
+{"v":1,"task":"gate-definitive","state":"running","msg":"started: bash tests/run.sh","at":1793178647135}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/warrior_state.lua","at":1793178648141}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/hunter_state.lua","at":1793178649145}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/druid_energy_state.lua","at":1793178650150}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/shaman_guide_state.lua","at":1793178651155}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/practice_progress_ui_state.lua","at":1793178652160}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/neutral_actions_state.lua","at":1793178654166}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/prepull_contract_state.lua","at":1793178656175}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/weave_bar_state.lua","at":1793178658185}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/engine_matrix_state.lua","at":1793178659190}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/secret_guard_state.lua","at":1793178660195}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/toc_check.lua","at":1793178661200}
+{"v":1,"task":"gate-definitive","msg":"PASS  lua5.1 tests/wiring_check.lua","at":1793178697375}
+{"v":1,"task":"gate-definitive","msg":"54 steps, 0 failed","at":1793178705480}
+{"v":1,"task":"gate-definitive","state":"done","pct":100,"msg":"finished","at":1793178705480}

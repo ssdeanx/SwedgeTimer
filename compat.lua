@@ -1469,17 +1469,30 @@ do
 	local precise = GetTimePreciseSec
 	if type(precise) == "function" then
 		local offset
+		-- The precise clock DRIVES the tick (sub-frame resolution); GetTime() owns the
+		-- DOMAIN every caller compares in (bars.lua and the swing engine both stamp on
+		-- it). The gap between the two is NOT constant: GetTime() does not advance while
+		-- a loading screen is up and the precise clock does, so an offset learned once
+		-- goes stale by the loading time (the operator's 2026-10-28 readout showed a
+		-- 0.40 s gap between the engine's expirations and this clock: speed=3.50 but
+		-- ends_at-start=3.10). Re-anchor whenever the two have drifted by more than
+		-- CLOCK_RENEW, so a read never leaves the GetTime() domain by more than that.
+		local CLOCK_RENEW = 0.05
 		api.get_time = function()
 			local precise_now = precise()
 			if type(precise_now) ~= "number" then
 				return GetTime()
 			end
-			if offset == nil then
-				-- The offset between the two clocks is constant: learn it once on
-				-- first use, with GetTime() as the reference domain.
-				offset = GetTime() - precise_now
+			local reference = GetTime()
+			if type(reference) ~= "number" then
+				return precise_now + (offset or 0)
 			end
-			return precise_now + offset
+			local now = precise_now + (offset or 0)
+			if offset == nil or now < reference - CLOCK_RENEW or now > reference + CLOCK_RENEW then
+				offset = reference - precise_now
+				now = reference
+			end
+			return now
 		end
 	elseif type(GetTime) == "function" then
 		api.get_time = GetTime

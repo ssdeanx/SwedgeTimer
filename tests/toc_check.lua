@@ -322,24 +322,23 @@ for _, toc in ipairs(FLAVOR_TOCS) do
         or ": does not ship LibClassicSwingTimerAPI (Mainline stand-in / Cata-Mists nil tables)"))
 end
 
--- ## Interface matrix: each flavour advertises exactly its client, Mainline and the base
--- toc must cover every supported Interface number, and WotLK Classic (30401) is not a
--- supported target.
+-- ## Interface matrix: each flavour advertises EXACTLY its client (the base toc is the
+-- classic-line fallback only, Mainline owns Retail/Forever), and WotLK Classic (30401) is
+-- not a supported target.
 local INTERFACE_EXACT = {
     { toc = "SwedgeTimer_Vanilla.toc", values = { "11509" } },
     { toc = "SwedgeTimer_TBC.toc", values = { "20506" } },
     { toc = "SwedgeTimer_Wrath.toc", values = { "38002" } },
-}
-local INTERFACE_CONTAINS = {
     { toc = "SwedgeTimer_Mainline.toc", values = { "120100", "120105", "16001" } },
     -- The base toc is the classic-line FALLBACK only: it ships
     -- LibClassicSwingTimerAPI, whose file-scope RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
     -- throws on mainline-code clients (no classic combat log there) and would abort the
-    -- whole addon load. Advertising a mainline interface from a toc that ships that lib
-    -- is therefore a load-failure hazard, so the base toc stays classic-line and the
-    -- Mainline flavour toc owns Retail/Forever.
+    -- whole addon load. It therefore advertises NO mainline interface. This is an EXACT
+    -- check, not a contains check: the F6 regression (2026-10-25) re-added 120105/120107/
+    -- 16001 and passed a contains-only loop, which is the hole this table closes.
     { toc = "SwedgeTimer.toc", values = { "11509", "20506", "38002" } },
 }
+local INTERFACE_CONTAINS = {}
 local function interface_list(toc)
     local values = {}
     for value in pairs(toc_values[toc] or {}) do values[#values + 1] = value end
@@ -376,7 +375,7 @@ end
 -- runtime, and removing module and line together would slip past the disk-completeness
 -- check above, so the names are pinned explicitly on every toc.
 local REQUIRED_MODULES = {
-    "diag.lua", "hunter_window.lua", "rogue_guide.lua", "classes\\rogue.lua",
+    "diag.lua", "hunter_window.lua", "power_bar.lua", "rogue_guide.lua", "classes\\rogue.lua",
 }
 for _, toc in ipairs(tocs) do
     for _, module_path in ipairs(REQUIRED_MODULES) do
@@ -995,9 +994,18 @@ local LOCAL_BASELINE = {
 -- closure, so returning the first match would measure the wrapper (3 locals)
 -- instead of the body. nil when luac cannot read it - never a guess: a file
 -- whose count cannot be read FAILS the check below.
+local function luac_list_lines(path)
+    -- -o: luac writes its bytecode stream to this file. Without -o it defaults to
+    -- luac.out in the cwd, which used to dirty the tracked repo-root artifact on
+    -- every harness run. The temp file is removed immediately.
+    local tmp = os.tmpname()
+    local lines = shell_lines('luac5.1 -l -l -o "' .. tmp .. '" "' .. path .. '" 2>/dev/null')
+    os.remove(tmp)
+    return lines
+end
 local function compiler_local_count(path)
     local max_n = nil
-    for _, line in ipairs(shell_lines('luac5.1 -l -l "' .. path .. '" 2>/dev/null')) do
+    for _, line in ipairs(luac_list_lines(path)) do
         local n = line:match("upvalues, (%d+) locals")
         if n then
             n = tonumber(n)
@@ -1044,7 +1052,7 @@ end
 -- real count, so this proves the guard reads the MAX across prototypes and not
 -- the wrapper's first match.
 local rogue_main_count, rogue_body_count = nil, nil
-for _, line in ipairs(shell_lines('luac5.1 -l -l "' .. ROOT .. 'classes/rogue.lua" 2>/dev/null')) do
+for _, line in ipairs(luac_list_lines(ROOT .. "classes/rogue.lua")) do
     local n = line:match("upvalues, (%d+) locals")
     if n then
         n = tonumber(n)

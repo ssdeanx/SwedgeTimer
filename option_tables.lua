@@ -224,6 +224,66 @@ function ST:generate_top_level_options_table()
             return not ST:get_class_table().class_enabled
         end,
     }
+    self.opts_table.args.power_bar_enabled = {
+        type = "toggle",
+        order = 1.14,
+        name = "Power bar",
+        desc = "Show your primary resource under the bottom-most melee bar (offhand when "..
+            "used, else mainhand): mana, rage, energy or focus as the client reports it. "..
+            "The bar is the owning swing bar's width and 14 px tall by default. It hides "..
+            "when no melee bar is visible or the client cannot answer the power read.",
+        get = function()
+            return ST:get_class_table().power_bar_enabled ~= false
+        end,
+        set = function(_, value)
+            ST:get_class_table().power_bar_enabled = value and true or false
+            if st.power_bar and type(st.power_bar.refresh) == "function" then
+                st.power_bar.refresh(ST)
+            end
+        end,
+        disabled = function()
+            return not ST:get_class_table().class_enabled
+        end,
+    }
+    self.opts_table.args.power_bar_height = {
+        type = "range",
+        order = 1.15,
+        name = "Power bar height",
+        desc = "Height of the power bar in pixels (default 14).",
+        min = 10, max = 30, step = 1,
+        get = function()
+            return ST:get_class_table().power_bar_height or 14
+        end,
+        set = function(_, value)
+            ST:get_class_table().power_bar_height = value
+            if st.power_bar and type(st.power_bar.refresh) == "function" then
+                st.power_bar.refresh(ST)
+            end
+        end,
+        disabled = function()
+            local db = ST:get_class_table()
+            return not db.class_enabled or db.power_bar_enabled == false
+        end,
+    }
+    self.opts_table.args.power_bar_text_enabled = {
+        type = "toggle",
+        order = 1.16,
+        name = "Power bar value",
+        desc = "Show the current power value in the bar.",
+        get = function()
+            return ST:get_class_table().power_bar_text_enabled ~= false
+        end,
+        set = function(_, value)
+            ST:get_class_table().power_bar_text_enabled = value and true or false
+            if st.power_bar and type(st.power_bar.refresh) == "function" then
+                st.power_bar.refresh(ST)
+            end
+        end,
+        disabled = function()
+            local db = ST:get_class_table()
+            return not db.class_enabled or db.power_bar_enabled == false
+        end,
+    }
     -- Class activation (main.lua: ST:activate_class). Operator order 2026-10-21:
     -- only the selected class's module executes. "Auto" (default) is the class being
     -- played; an explicit pick activates that class's module instead. The value is read
@@ -231,7 +291,7 @@ function ST:generate_top_level_options_table()
     -- hides the widget, and nil reads as "Auto".
     self.opts_table.args.class_activation = {
         type = "select",
-        order = 1.14,
+        order = 1.17,
         name = "Class module",
         desc = "Which class module SwedgeTimer activates. Auto (the default) activates the "..
             "class you are playing; picking a class activates that class's module instead. "..
@@ -1266,20 +1326,96 @@ end
 -- to ensure the appropriate config functions in the addon are run when the user
 -- changes the settings.
 function ST:set_opts_funcs()
+    -- Melee pair height routing (operator order 2026-10-28; brief L3). While the class-level
+    -- pair height (bars.lua: ST:melee_pair_height) is set, the mainhand and the offhand
+    -- RENDER at it, so their per-hand Height widget must show and edit THAT value: the
+    -- hand's own saved bar_height is kept untouched (it applies again once the pair clears)
+    -- and a widget that still showed or wrote it would be lying. With NO pair height the
+    -- OFFHAND still renders at the mainhand's height (the size invariant in bars.lua), so
+    -- its widget shows and edits the MAINHAND key - the offhand's own height key never
+    -- sizes the bar. The ranged hand is never part of either rule. Nil-safe: no bars.lua
+    -- (a sandbox) means no routing, as shipped.
+    local function pair_height()
+        if type(ST.melee_pair_height) ~= "function" then
+            return nil
+        end
+        return ST:melee_pair_height()
+    end
+
+    -- The effective height of one melee hand: the pair when set, else the mainhand's key for
+    -- the offhand, else the hand's own key.
+    local function effective_height(hand_token, hands)
+        if hand_token == "mainhand" or hand_token == "offhand" then
+            local pair = pair_height()
+            if pair ~= nil then
+                return pair
+            end
+        end
+        if hand_token == nil then
+            -- The multi-hand groups: follow their first melee hand, if any.
+            for i = 1, #(hands or {}) do
+                local h = hands[i]
+                if h == "mainhand" or h == "offhand" then
+                    hand_token = h
+                    break
+                end
+            end
+        end
+        if hand_token == "offhand" then
+            local mainhand = ST:get_hand_table("mainhand")
+            if type(mainhand) == "table" and type(mainhand.bar_height) == "number" then
+                return mainhand.bar_height
+            end
+            return nil
+        end
+        if hand_token == "mainhand" then
+            local mainhand = ST:get_hand_table("mainhand")
+            return type(mainhand) == "table" and mainhand.bar_height or nil
+        end
+        return nil
+    end
+
+    local function hands_include_melee(hands)
+        if type(hands) ~= "table" then
+            return false
+        end
+        for i = 1, #hands do
+            if hands[i] == "mainhand" or hands[i] == "offhand" then
+                return true
+            end
+        end
+        return false
+    end
+
     for hand, settings in pairs(ST.opts_case_dict) do
         ST.opts_funcs[hand] = {}
+        local melee_group = hands_include_melee(settings.hands)
 
         -- A generic getter func for each hand
         if hand == "mainhand" or hand == "offhand" or hand == "ranged" then
             ST.opts_funcs[hand].getter = function(_, info)
+                local key = info[#info]
+                if key == "bar_height" and melee_group then
+                    local effective = effective_height(hand, settings.hands)
+                    if effective ~= nil then
+                        return effective
+                    end
+                end
                 local db = ST:get_hand_table(hand)
-                return db[info[#info]]
+                return db[key]
             end
         else
             -- Just default to the mainhand for the all_bars func.
             ST.opts_funcs[hand].getter = function(_, info)
+                local key = info[#info]
+                if key == "bar_height" and melee_group then
+                    local effective = effective_height(nil, settings.hands)
+                    if effective ~= nil then
+                        return effective
+                    end
+                end
                 local db = ST:get_hand_table("mainhand")
-                return db[info[#info]]
+                return db[key]
             end
         end
 
@@ -1317,9 +1453,34 @@ function ST:set_opts_funcs()
 
         -- A setter for bar appearances
         ST.opts_funcs[hand].bar_setter = function(_, info, value)
+            local key = info[#info]
+            local pair = melee_group and pair_height() or nil
             for h in ST:generic_iter(settings.hands) do
-                local db = ST:get_hand_table(h)
-                db[info[#info]] = value
+                -- A bar_height write is routed to whatever actually sizes that bar:
+                --   * a set pair height owns BOTH melee hands (write the pair key);
+                --   * with no pair, the offhand renders at the mainhand's height, so a
+                --     write aimed at the offhand lands on the mainhand key (the offhand's
+                --     own key never sizes it);
+                --   * everything else - the ranged hand included - writes its own key.
+                local to_pair = key == "bar_height" and pair ~= nil
+                    and (h == "mainhand" or h == "offhand")
+                local to_mainhand = key == "bar_height" and pair == nil
+                    and (h == "offhand" or (hand == "offhand" and h == "mainhand"))
+                if to_pair then
+                    ST:get_class_table().melee_bar_height = value
+                elseif to_mainhand then
+                    local mainhand = ST:get_hand_table("mainhand")
+                    if type(mainhand) == "table" then
+                        mainhand.bar_height = value
+                    end
+                else
+                    local db = ST:get_hand_table(h)
+                    db[key] = value
+                end
+            end
+            -- A routed write can land on another hand than the panel's, so re-apply the whole
+            -- class hand set (the mainhand pass also cascades to the built offhand).
+            for h in ST:generic_iter(ST:get_class_hands()) do
                 ST:configure_bar_size_and_positions(h)
                 ST:configure_bar_appearances(h)
                 ST:configure_bar_outline(h)
@@ -2827,7 +2988,7 @@ function ST.class_opts_funcs.PALADIN(self)
             name = "X position",
             desc = "Horizontal screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_x or 0)
+                return tostring(ST:get_class_table().nextaction_x or 127)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -2842,7 +3003,7 @@ function ST.class_opts_funcs.PALADIN(self)
             name = "Y position",
             desc = "Vertical screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_y or -180)
+                return tostring(ST:get_class_table().nextaction_y or -65)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -4150,7 +4311,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             name = "X position",
             desc = "Horizontal screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_x or 0)
+                return tostring(ST:get_class_table().nextaction_x or 127)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -4165,7 +4326,7 @@ function ST.class_opts_funcs.WARRIOR(self)
             name = "Y position",
             desc = "Vertical screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_y or -180)
+                return tostring(ST:get_class_table().nextaction_y or -65)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -4542,6 +4703,36 @@ function ST.class_opts_funcs.HUNTER(self)
             get = "color_getter",
             set = "color_setter",
         },
+        hunter_melee_header = {
+            type = "header",
+            order = 2.5,
+            name = "Melee Bars",
+        },
+        hunter_melee_desc = {
+            order = 2.501,
+            type = "description",
+            name = "The thin mainhand/offhand bars are pinned under the ranged bar and follow "..
+                "its width (ranged, then mainhand, then offhand). Turning this off restores "..
+                "each hand's own saved width and position.",
+        },
+        hunter_melee_stack = {
+            type = "toggle",
+            order = 2.51,
+            name = "Stack melee bars under the ranged bar",
+            desc = "Mainhand and offhand become thin bars under the ranged bar at its width. "..
+                "Off: each hand keeps its own width and LibWindow position.",
+            get = function()
+                return ST:get_class_table().hunter_melee_stack ~= false
+            end,
+            set = function(_, value)
+                local db = ST:get_class_table()
+                db.hunter_melee_stack = value and true or false
+                if value == false and st.hunter_ui
+                    and type(st.hunter_ui.restore_melee_layout) == "function" then
+                    st.hunter_ui.restore_melee_layout(ST)
+                end
+            end,
+        },
         hunter_cast_bar_header = {
             type = "header",
             order = 3.0,
@@ -4775,7 +4966,7 @@ function ST.class_opts_funcs.HUNTER(self)
             name = "X position",
             desc = "Horizontal screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_x or 0)
+                return tostring(ST:get_class_table().nextaction_x or 127)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -4790,7 +4981,7 @@ function ST.class_opts_funcs.HUNTER(self)
             name = "Y position",
             desc = "Vertical screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_y or -180)
+                return tostring(ST:get_class_table().nextaction_y or -65)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -5651,7 +5842,7 @@ function ST.class_opts_funcs.DRUID(self)
             name = "X position",
             desc = "Horizontal screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_x or 0)
+                return tostring(ST:get_class_table().nextaction_x or 127)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -5666,7 +5857,7 @@ function ST.class_opts_funcs.DRUID(self)
             name = "Y position",
             desc = "Vertical screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_y or -180)
+                return tostring(ST:get_class_table().nextaction_y or -65)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -6244,7 +6435,7 @@ function ST.class_opts_funcs.SHAMAN(self)
             name = "X position",
             desc = "Horizontal screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_x or 0)
+                return tostring(ST:get_class_table().nextaction_x or 127)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -6259,7 +6450,7 @@ function ST.class_opts_funcs.SHAMAN(self)
             name = "Y position",
             desc = "Vertical screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_y or -180)
+                return tostring(ST:get_class_table().nextaction_y or -65)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -6725,7 +6916,7 @@ function ST.class_opts_funcs.ROGUE(self)
             name = "X position",
             desc = "Horizontal screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_x or 0)
+                return tostring(ST:get_class_table().nextaction_x or 127)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -6740,7 +6931,7 @@ function ST.class_opts_funcs.ROGUE(self)
             name = "Y position",
             desc = "Vertical screen position (dragging the frame also updates this).",
             get = function()
-                return tostring(ST:get_class_table().nextaction_y or -180)
+                return tostring(ST:get_class_table().nextaction_y or -65)
             end,
             set = function(_, value)
                 local n = tonumber(value)
@@ -7020,29 +7211,111 @@ function ST:generate_bar_position_options_table()
                 type = "range",
                 order = 1.01 + offset,
                 name = "Width",
-                desc = "The pixel width of the swing timer.",
+                -- Honest per-hand width (operator order 2026-10-28: "off hand should always be
+                -- same width as main hand"; publish-audit E1). bars.lua's size invariant
+                -- renders the OFFHAND at the MAINHAND's width on every layout pass, so the
+                -- offhand's own bar_width key never sizes the bar: this widget shows the
+                -- mainhand's width and is locked, and a write aimed at the offhand is routed
+                -- to the mainhand key (defensive - the lock keeps the UI off that path).
+                -- The hunter melee stack overrides BOTH melee hands for the pass; the
+                -- description says so for every non-ranged hand. The ranged hand is never
+                -- part of either rule.
+                desc = function()
+                    local base = "The pixel width of the swing timer."
+                    if hand == "offhand" then
+                        base = base .. " The offhand always renders at the mainhand's width, "
+                            .. "so this field follows the mainhand."
+                    end
+                    if hand ~= "ranged" and ST.player_class == "HUNTER"
+                        and type(ST.get_class_table) == "function"
+                        and ST:get_class_table().hunter_melee_stack ~= false then
+                        return base .. " While the hunter melee stack is on, this hand follows "
+                            .. "the ranged bar's width; turn it off under Hunter -> Melee Bars."
+                    end
+                    return base
+                end,
                 min = 100, max = 600, step = 1,
                 get = function()
-                    return ST:get_hand_table(hand).bar_width
+                    if hand == "offhand" then
+                        -- The width the offhand actually renders at: the mainhand's key.
+                        local mainhand = ST:get_hand_table("mainhand")
+                        if type(mainhand) == "table" and type(mainhand.bar_width) == "number" then
+                            return mainhand.bar_width
+                        end
+                    end
+                    local db = ST:get_hand_table(hand)
+                    return type(db) == "table" and db.bar_width or nil
                 end,
                 set = function(_, value)
-                    ST:get_hand_table(hand).bar_width = value
-                    ST:configure_bar_size_and_positions(hand)
-                    ST:configure_bar_appearances(hand)
-                    ST:configure_bar_outline(hand)
-                    ST:configure_gcd_markers(hand)
-                    ST:set_gcd_marker_positions(hand)
-                    ST:configure_deadzone(hand)
-                    ST:set_deadzone_width(hand)
-                end
+                    -- A write aimed at the offhand lands on the key that actually sizes it
+                    -- (the mainhand's); the disabled gate below keeps the UI off this path.
+                    local target = hand
+                    if hand == "offhand" then
+                        target = "mainhand"
+                    end
+                    local db = ST:get_hand_table(target)
+                    if type(db) == "table" then
+                        db.bar_width = value
+                    end
+                    -- The mainhand pass also cascades to the built offhand (bars.lua), so one
+                    -- hand's reconfigure covers the rendered pair.
+                    ST:configure_bar_size_and_positions(target)
+                    ST:configure_bar_appearances(target)
+                    ST:configure_bar_outline(target)
+                    ST:configure_gcd_markers(target)
+                    ST:set_gcd_marker_positions(target)
+                    ST:configure_deadzone(target)
+                    ST:set_deadzone_width(target)
+                end,
+                disabled = function()
+                    -- Locked: the offhand's own width key never sizes the bar, so showing it
+                    -- as editable would be the lie this widget exists to end.
+                    return hand == "offhand"
+                end,
             },
             [hand .. "bar_height"] = {
                 type = "range",
                 order = 1.02 + offset,
                 name = "Height",
-                desc = "The pixel height of the swing timer.",
+                -- Honest per-hand height (operator order 2026-10-28; brief L3). Two rules
+                -- decide what this widget may show:
+                --   * while the class-level melee pair height is set, BOTH melee hands render
+                --     at it, so the widget shows it and is locked (the pair widget below owns
+                --     the value);
+                --   * the OFFHAND always renders at the mainhand's height (the size
+                --     invariant in bars.lua), so with no pair height its widget shows the
+                --     MAINHAND's height and is locked - the offhand's own saved key never
+                --     sizes the bar, so showing it would be a lie.
+                -- The ranged hand is never part of either rule.
+                desc = function()
+                    local base = "The pixel height of the swing timer."
+                    if hand == "offhand" then
+                        return base .. " The offhand always renders at the mainhand's height, "
+                            .. "so this field follows the mainhand."
+                    end
+                    if hand == "mainhand" and type(ST.melee_pair_height) == "function"
+                        and ST:melee_pair_height() ~= nil then
+                        return base .. " Both melee bars currently follow the melee pair "
+                            .. "height below; clear it there to size them separately."
+                    end
+                    return base
+                end,
                 min = 6, max = 60, step = 1,
                 get = function()
+                    if hand == "mainhand" or hand == "offhand" then
+                        if type(ST.melee_pair_height) == "function" then
+                            local pair = ST:melee_pair_height()
+                            if pair ~= nil then
+                                return pair
+                            end
+                        end
+                    end
+                    if hand == "offhand" then
+                        local mainhand = ST:get_hand_table("mainhand")
+                        if type(mainhand) == "table" and type(mainhand.bar_height) == "number" then
+                            return mainhand.bar_height
+                        end
+                    end
                     return ST:get_hand_table(hand).bar_height
                 end,
                 set = function(_, value)
@@ -7054,7 +7327,19 @@ function ST:generate_bar_position_options_table()
                     ST:set_gcd_marker_positions(hand)
                     ST:configure_deadzone(hand)
                     ST:set_deadzone_width(hand)
-                end
+                end,
+                disabled = function()
+                    if hand == "offhand" then
+                        -- Locked always: the mainhand's height (or the pair's) is what the
+                        -- offhand renders at; its own key is never read for sizing.
+                        return true
+                    end
+                    if hand ~= "mainhand" then
+                        return false
+                    end
+                    return type(ST.melee_pair_height) == "function"
+                        and ST:melee_pair_height() ~= nil
+                end,
             },
             [hand .. "_x"] = {
                 type = "range",
@@ -7115,6 +7400,94 @@ function ST:generate_bar_position_options_table()
         for k, v in pairs(g) do
             opts_group.args[k] = v
         end
+    end
+
+    -- Melee pair height (operator order 2026-10-28; brief L3): ONE height for the mainhand
+    -- and the offhand together. It is a CLASS-level key (documented in config_presets.lua),
+    -- so it cannot live inside the per-hand loop above; order 3.5 puts it right after the
+    -- last melee hand's controls and before the ranged hand's. Only a class that owns both
+    -- melee hands gets it. The bounds mirror the per-hand Height widget (6..60 px).
+    -- The hand set comes from iter_hands (the same authority the loop above uses), so a
+    -- sandbox that stubs only iter_hands still builds the tree.
+    local has_mainhand, has_offhand = false, false
+    for hand in self:iter_hands() do
+        if hand == "mainhand" then
+            has_mainhand = true
+        elseif hand == "offhand" then
+            has_offhand = true
+        end
+    end
+    if has_mainhand and has_offhand then
+        opts_group.args.melee_pair_header = {
+            type = "header",
+            order = 3.5,
+            name = "Melee pair (mainhand + offhand)",
+        }
+        opts_group.args.melee_pair_desc = {
+            type = "description",
+            order = 3.51,
+            name = "One height for both melee bars. While it is set the mainhand and the "
+                .. "offhand render at exactly this height (the offhand already matches the "
+                .. "mainhand's width). Clear it to size the two hands separately again.",
+        }
+        opts_group.args.melee_pair_height = {
+            type = "range",
+            order = 3.52,
+            name = "Melee pair height (both hands)",
+            desc = "Pixel height applied to BOTH melee bars. Clear it with the button below "
+                .. "to go back to each hand's own height.",
+            min = 6, max = 60, step = 1,
+            get = function()
+                if type(ST.melee_pair_height) == "function" then
+                    local pair = ST:melee_pair_height()
+                    if pair ~= nil then
+                        return pair
+                    end
+                end
+                local mainhand = ST:get_hand_table("mainhand")
+                return (type(mainhand) == "table" and mainhand.bar_height) or 20
+            end,
+            set = function(_, value)
+                local height = tonumber(value)
+                if height == nil or height <= 0 then
+                    return
+                end
+                local class_db = ST:get_class_table()
+                if type(class_db) ~= "table" then
+                    return
+                end
+                class_db.melee_bar_height = height
+                -- One pass sizes the mainhand and the built offhand (the size cascade).
+                if type(ST.configure_bar_size_and_positions) == "function" then
+                    ST:configure_bar_size_and_positions("mainhand")
+                end
+            end,
+        }
+        opts_group.args.melee_pair_height_reset = {
+            type = "execute",
+            order = 3.53,
+            name = "Use each hand's own height",
+            desc = "Clears the pair height so the mainhand and offhand use their own saved "
+                .. "heights again (the offhand still follows the mainhand).",
+            func = function()
+                local class_db = ST:get_class_table()
+                if type(class_db) ~= "table" then
+                    return
+                end
+                -- nil = the shipped behaviour (config_presets.lua documents why there is no
+                -- stored default for this key). No per-hand key is rewritten.
+                class_db.melee_bar_height = nil
+                if type(ST.configure_bar_size_and_positions) == "function" then
+                    ST:configure_bar_size_and_positions("mainhand")
+                end
+                if ST.options_table_name then
+                    local ok, ACR = pcall(LibStub, "AceConfigRegistry-3.0", true)
+                    if ok and type(ACR) == "table" and type(ACR.NotifyChange) == "function" then
+                        pcall(ACR.NotifyChange, ACR, ST.options_table_name)
+                    end
+                end
+            end,
+        }
     end
     self.opts_table.args.positions = opts_group
 end

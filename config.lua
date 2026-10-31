@@ -114,7 +114,8 @@ ST.defaults = {
 -- colour (the getters read lazily at panel render). main.lua creates AceDB and then calls
 -- set_opts() (main.lua:416-424), and the bars are built later in init_libs, so that is the
 -- first settings-aware seam on the init path. Idempotent: the profile flag makes a second
--- call a no-op.
+-- call a no-op - and the flag is READ WITH rawget (see the function), because a plain read
+-- of an absent profile key is a WRITE on a real AceDB profile.
 ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG = "appearance_defaults_213"
 
 -- The exact old default this migration may raise. A future default move adds its own
@@ -155,19 +156,38 @@ end
 -- profile. Returns the number of hand colours it changed (0 on a second run). Nil-safe
 -- by construction: a nil profile, a corrupt class row, a non-table hand or a non-table
 -- colour is skipped, never thrown on - this runs on the login path.
+--
+-- THE FLAG IS READ WITH rawget, NOT A PLAIN INDEX. The live profile root is an AceDB table
+-- carrying the '**' defaults metatable (ST.defaults.profile['**'] = ST.class_defaults;
+-- Libs/AceDB-3.0/AceDB-3.0.lua:88-107): its __index CREATES a defaults-filled table, rawsets
+-- it on the profile and returns it. A plain read is therefore truthy on the very FIRST
+-- login and rawsets junk - which is exactly how the 2026-10-25 order (0.85 -> 1.0 backdrop)
+-- silently never reached a single saved profile: this function returned 0 forever. rawget
+-- reads only what was actually saved.
+--
+-- ONLY THE PLAIN BOOLEAN THIS FUNCTION WRITES COUNTS AS DONE. A table at the key is not a
+-- run marker: it is what the defective read created, and the defective code returned 0
+-- before it could ever reach its own write. Accepting any truthy value would leave every
+-- profile that logged in with that build at 0.85 forever - the same silent failure in a new
+-- shape - so a table (or any non-true value) runs the migration, then is replaced by `true`.
 function ST.migrate_appearance_defaults(profile)
 	if type(profile) ~= "table" then
 		return 0
 	end
-	if profile[ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG] then
+	if rawget(profile, ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG) == true then
 		return 0
 	end
 	local old = ST.APPEARANCE_OLD_BACKGROUND_COLOR
 	local raised = 0
 	for _, token in ipairs(APPEARANCE_CLASS_TOKENS) do
-		local class_db = profile[token]
+		-- rawget for the same reason: a class row the profile does not carry must stay
+		-- absent (AceDB fills the shipped rows itself); a plain read would create one.
+		local class_db = rawget(profile, token)
 		if type(class_db) == "table" then
 			for _, hand in pairs(class_db) do
+				-- A hand table carries no '**' metatable of its own (bar_defaults has no
+				-- '*'/'**' entry, so AceDB only copies leaves into it), which is why the
+				-- leaf reads here stay plain - they cannot create anything.
 				if type(hand) == "table"
 					and colors_equal(hand.background_color, old)
 					and not preset_owns_background_color(hand) then
@@ -177,7 +197,8 @@ function ST.migrate_appearance_defaults(profile)
 			end
 		end
 	end
-	profile[ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG] = true
+	-- rawset: the marker is this function's own plain value, never a metatable write path.
+	rawset(profile, ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG, true)
 	return raised
 end
 

@@ -34,18 +34,41 @@ local function addon()
     return cached_addon
 end
 
+-- The shipped fallback channel. The only sound_channel default this build ships is the
+-- PALADIN class row's (config_presets.lua:788); the profile root ships none, so "Master"
+-- is also what a non-paladin class previews on.
+local DEFAULT_SOUND_CHANNEL = "Master"
+
 -- The audio channel for previews: the class table's sound_channel (this build's
 -- location, the same value classes/paladin.lua's twist playback uses), then the
 -- profile's own top-level sound_channel (the archive's location), then "Master".
+--
+-- EVERY read here is rawget, and the answer must be a STRING. Both the profile root and
+-- each class row are AceDB tables carrying the '**' defaults metatable
+-- (ST.defaults.profile['**'] = ST.class_defaults and each ST.<CLASS>.defaults['**'] =
+-- ST.bar_defaults; Libs/AceDB-3.0/AceDB-3.0.lua:88-107): a plain read of an ABSENT key
+-- runs __index, which CREATES a defaults-filled table, rawsets it into the saved profile
+-- and returns it. A plain read therefore answers a truthy TABLE on most classes - the old
+-- code handed exactly that to PlaySoundFile. rawget reads only what was actually saved
+-- (the same lesson as the config.lua appearance migration), and the string requirement
+-- keeps a corrupt saved value (a table, a number, a boolean) off the client call.
 local function sound_channel()
     local ST = addon()
-    local channel
-    if ST and ST.db and ST.db.profile then
-        local class_db = ST.player_class and ST.db.profile[ST.player_class]
-        channel = class_db and class_db.sound_channel
-        channel = channel or ST.db.profile.sound_channel
+    if ST and type(ST.db) == "table" and type(ST.db.profile) == "table" then
+        local profile = ST.db.profile
+        -- rawget, not profile[class]: a class token the defaults do not list must stay
+        -- absent instead of materialising a defaults row on a live profile.
+        local class_db = type(ST.player_class) == "string"
+            and rawget(profile, ST.player_class) or nil
+        local channel = type(class_db) == "table" and rawget(class_db, "sound_channel") or nil
+        if type(channel) ~= "string" then
+            channel = rawget(profile, "sound_channel")
+        end
+        if type(channel) == "string" then
+            return channel
+        end
     end
-    return channel or "Master"
+    return DEFAULT_SOUND_CHANNEL
 end
 
 -- One upvalue of a function by name, through the standard Lua debug API; nil when the
@@ -120,10 +143,12 @@ local function sound_map()
 end
 
 -- The preview handle so "sweeping across the list" cannot stack sounds (archive 34-53).
+-- pcall: a handle the client no longer knows (or a client whose StopSound throws) must
+-- never raise out of a list rebuild.
 local preview_handle
 local function stop_preview()
     if preview_handle and stop_sound then
-        stop_sound(preview_handle)
+        pcall(stop_sound, preview_handle)
     end
     preview_handle = nil
 end
@@ -137,12 +162,17 @@ function st.widgets.preview_sound(key)
     end
     local map = sound_map()
     local path = key and map and map[key]
-    if not path then
+    -- PlaySoundFile takes a path string or a numeric fileDataID; anything else (a corrupt
+    -- map entry) is a silent no-op rather than a client call with a bad argument.
+    if type(path) ~= "string" and type(path) ~= "number" then
         return
     end
     stop_preview()
-    local will_play, handle = play_sound_file(path, sound_channel())
-    if will_play then
+    -- pcall: a missing file, a bad channel or a client that throws instead of returning
+    -- false must never error out of a dropdown hover. On failure nothing is latched, so
+    -- the next hover is a clean attempt (the archive's guards were silent no-ops too).
+    local ok, will_play, handle = pcall(play_sound_file, path, sound_channel())
+    if ok and will_play then
         preview_handle = handle
     end
 end

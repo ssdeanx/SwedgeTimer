@@ -793,7 +793,8 @@ function ST.PALADIN.glow_start(self)
     local db_hand = self:get_hand_table("mainhand")
     -- PROPER: a missing hand table falls back to thickness 1, this file's own
     -- minimum (never a guessed colour, only the neutral width floor).
-    local thickness = (db_hand and db_hand.border_width) or 1
+    local border_width = (type(db_hand) == "table") and rawget(db_hand, "border_width") or nil
+    local thickness = border_width or 1
     if thickness == 0 then
         thickness = 1
     end
@@ -1149,11 +1150,30 @@ ST.PALADIN.twist_sounds = twist_sounds
 -- no-op when the key has no entry (unknown/renamed key) or the client offers no
 -- PlaySoundFile, so a mismatched setting can never error.
 local function play_twist_sound(db, key, fallback_key)
-    local path = twist_sounds[key or fallback_key]
+    -- Sound key must be a real string: an absent key on a '**'-metatabulated
+    -- class row materialises a defaults table, which must not reach twist_sounds
+    -- (and must not replace the shipped fallback key).
+    local chosen = key
+    if type(chosen) ~= "string" then
+        chosen = fallback_key
+    end
+    local path = twist_sounds[chosen]
     if path == nil or PlaySoundFile == nil then
         return
     end
-    PlaySoundFile(path, db.sound_channel or "Master")
+    -- AceDB '**' trap: a plain read of an absent key on a '**'-metatabulated
+    -- profile row materialises a defaults table instead of nil, so `db.sound_channel
+    -- or "Master"` would hand a truthy TABLE to PlaySoundFile. rawget + a type
+    -- gate keep the channel a string (or "Master"), and pcall contains any client
+    -- that still rejects the channel name.
+    local channel = nil
+    if type(db) == "table" then
+        channel = rawget(db, "sound_channel")
+    end
+    if type(channel) ~= "string" then
+        channel = "Master"
+    end
+    pcall(PlaySoundFile, path, channel)
 end
 
 -- Fallback colours used whenever a db key is missing (or malformed), so the visuals
@@ -1701,9 +1721,18 @@ function ST.PALADIN.get_twist_window_time_before_swing(self)
     -- PROPER: {} reads exactly the file's own calibration defaults (lag 1.4/15,
     -- no padding, no lust override), identical to unset options.
     local raw_ms = (self.latency and self.latency.world_ms) or 0
-    local lag_ms = raw_ms * (db.lag_multiplier or 1.4) + (db.lag_offset or 15)
+    -- AceDB '**' trap: rawget so absent keys yield nil (then the shipped
+    -- fallbacks) instead of a materialised defaults table, which would
+    -- otherwise break the arithmetic / comparisons below.
+    local lag_multiplier = (type(db) == "table") and rawget(db, "lag_multiplier") or nil
+    if type(lag_multiplier) ~= "number" then lag_multiplier = 1.4 end
+    local lag_offset = (type(db) == "table") and rawget(db, "lag_offset") or nil
+    if type(lag_offset) ~= "number" then lag_offset = 15 end
+    local twist_padding_mode = (type(db) == "table") and rawget(db, "twist_padding_mode") or nil
+    local twist_window_padding_ms = (type(db) == "table") and rawget(db, "twist_window_padding_ms") or nil
+    local lag_ms = raw_ms * lag_multiplier + lag_offset
     local window = st.twist.get_window_seconds(
-        db.twist_padding_mode, lag_ms, db.twist_window_padding_ms)
+        twist_padding_mode, lag_ms, twist_window_padding_ms)
     -- SoD twist builds twist inside 200 ms, not 400 ms (all SoD twist APLs):
     -- the baseline narrows on rune detection while the user's padding rides
     -- on top unchanged. Resolved here (not latched) so the band and the guide
@@ -1753,8 +1782,11 @@ function ST.PALADIN.setup_twist_visuals(self)
     text:SetJustifyH("CENTER")
     local db = self:get_class_table()
     local db_hand = self:get_hand_table("mainhand")
-    local font_path = LSM:Fetch("font", db_hand.text_font) or STANDARD_TEXT_FONT
-    text:SetFont(font_path, db.twist_success_text_size or 24, "OUTLINE")
+    local text_font = (type(db_hand) == "table") and rawget(db_hand, "text_font") or nil
+    local font_path = LSM:Fetch("font", text_font) or STANDARD_TEXT_FONT
+    local twist_text_size = (type(db) == "table") and rawget(db, "twist_success_text_size") or nil
+    if type(twist_text_size) ~= "number" then twist_text_size = 24 end
+    text:SetFont(font_path, twist_text_size, "OUTLINE")
     text:Hide()
     vf.twist_text = text
     self.PALADIN.apply_twist_text_anchor(self)
@@ -2106,7 +2138,8 @@ function ST.PALADIN.on_bar_update(self, hand)
     -- swing-landing handler clears the latch for the next swing.
     -- The archive cued the sound 0.20 s BEFORE the window (audio lead-in), not at it.
     if db.twist_sound_enabled and remaining <= window + 0.20 and self.twist_sound_played ~= true then
-        play_twist_sound(db, db.twist_sound_choice, "pop")
+        local sound_choice = (type(db) == "table") and rawget(db, "twist_sound_choice") or nil
+        play_twist_sound(db, sound_choice, "pop")
         self.twist_sound_played = true
     end
     local gcd_remaining = (self.gcd and self.gcd.expires
@@ -2115,9 +2148,11 @@ function ST.PALADIN.on_bar_update(self, hand)
     -- helper (the archived build's lag_calibrated_ms), so the deadzone
     -- calibration is not applied twice.
     local lag_ms = (self.latency and self.latency.world_ms) or 0
+    local impossible_lm = (type(db) == "table") and rawget(db, "lag_multiplier") or nil
+    local impossible_lo = (type(db) == "table") and rawget(db, "lag_offset") or nil
     local impossible = st.twist.is_twist_impossible(
         db.lag_detection_enabled, remaining, gcd_remaining, lag_ms,
-        db.lag_multiplier, db.lag_offset, window)
+        impossible_lm, impossible_lo, window)
     self.twist_impossible = impossible
 
     if db.twist_feedback_enabled ~= false
@@ -2166,7 +2201,8 @@ function ST.PALADIN.on_twist_attempt(self)
     -- gates below (archive parity: the archived build played it at the top of its
     -- attempt handler, ahead of the glow effect).
     if db.twist_success_sound_enabled then
-        play_twist_sound(db, db.twist_success_sound_choice, "TadaFanfare")
+        local success_choice = (type(db) == "table") and rawget(db, "twist_success_sound_choice") or nil
+        play_twist_sound(db, success_choice, "TadaFanfare")
     end
     -- Twist-success glow (archive bar.lua:568-615): fires on the attempt, ahead of
     -- the visual feedback gates below, like the sound above. The per-frame hook
@@ -3271,7 +3307,9 @@ function ST.PALADIN.gather_guide_inputs(self, out)
         and d.ends_at and d.start and not d.is_full)
     inputs.gcd_remaining = (gcd and gcd.expires and math.max(0, gcd.expires - now)) or 0
     inputs.twist_window = self.PALADIN.get_twist_window_time_before_swing(self)
-    inputs.reaction = (db.nextaction_reaction_time_ms or 100) / 1000
+    local _reaction_ms = (type(db) == "table") and rawget(db, "nextaction_reaction_time_ms") or nil
+    if type(_reaction_ms) ~= "number" then _reaction_ms = 100 end
+    inputs.reaction = _reaction_ms / 1000
     -- Era family flag for the engine's Era branch (false everywhere else, so
     -- all other families keep the archived behaviour bit-identically).
     inputs.era = is_era_family
@@ -3282,7 +3320,9 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     -- over-delays CS. CONFLICT: Wrath wants ~0 (no twist to protect) — one
     -- default cannot serve both; the option range is unchanged. See the same
     -- note on the engine fallback in nextaction.lua.
-    inputs.cs_delay_max = (db.nextaction_cs_max_delay_ms or 900) / 1000
+    local _cs_delay_ms = (type(db) == "table") and rawget(db, "nextaction_cs_max_delay_ms") or nil
+    if type(_cs_delay_ms) ~= "number" then _cs_delay_ms = 900 end
+    inputs.cs_delay_max = _cs_delay_ms / 1000
 
     -- Active seal for the decision tree ("soc" | "sob" | "none"; Command's
     -- remaining time guards the engine's reseal branch). Era feeds the twist
@@ -3448,8 +3488,12 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     inputs.target_count = inputs.creature_type ~= nil and 1 or nil
     inputs.jotc_remaining = get_guide_jotc_remaining(self, now)
     inputs.gcd_before_swing = self:get_gcd_time_before_swing_seconds("mainhand")
-    inputs.mana_consecration_threshold = db.nextaction_filler_mana_consecration or 35
-    inputs.mana_exorcism_threshold = db.nextaction_filler_mana_exorcism or 30
+    local _mana_cons = (type(db) == "table") and rawget(db, "nextaction_filler_mana_consecration") or nil
+    if type(_mana_cons) ~= "number" then _mana_cons = 35 end
+    inputs.mana_consecration_threshold = _mana_cons
+    local _mana_exo = (type(db) == "table") and rawget(db, "nextaction_filler_mana_exorcism") or nil
+    if type(_mana_exo) ~= "number" then _mana_exo = 30 end
+    inputs.mana_exorcism_threshold = _mana_exo
     local consecration_remaining
     local exorcism_remaining
     if na then

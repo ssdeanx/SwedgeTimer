@@ -103,6 +103,30 @@ ST.class_defaults = {
     -- ST.weave_range_default_enabled below, which the options getter shares.
     weave_range_enabled = false,
 
+    -- Power bar (power_bar.lua): the primary resource bar under the bottom-most visible
+    -- melee bar. ON by default - the operator request of 2026-10-27 ("can we implement a
+    -- power bar, for mana for hunter ... warrior have rage bar, rogue energy") is the
+    -- explicit gate for this default-visible change. Nil-safe: only an explicit false
+    -- hides it, and the profile/class master switches still gate it.
+    power_bar_enabled = true,
+    power_bar_height = 14,
+    power_bar_text_enabled = true,
+
+    -- Melee pair height (bars.lua: ST:melee_pair_height, hand_bar_size). Operator order
+    -- 2026-10-28: "off hand should always be same width as main hand. maybe have it so u
+    -- can adjust the height for both". ONE class-level key that sizes the mainhand AND
+    -- the offhand together; the offhand width invariant (the mainhand's) is untouched.
+    -- SHIPPED VALUE: nil, so there is deliberately NO entry in this table (AceDB stores no
+    -- default for it and a profile saved before the key existed reads the shipped
+    -- behaviour). Nil-safe by construction: nil, false and any non-positive value all mean
+    -- "off" and each melee hand keeps its own saved bar_height (the offhand still follows
+    -- the mainhand); a positive number is the height both melee bars render at. The ranged
+    -- hand is never part of the pair. Options -> Positioning -> "Melee pair height (both
+    -- hands)" sets it, and the widget's "Use each hand's own height" button (or an explicit
+    -- false) clears it back to this shipped behaviour - nothing rewrites a saved key.
+    -- Read by bars.lua only; no other module caches the value.
+    -- melee_bar_height = <number>,
+
     -- Class activation (main.lua: ST:activate_class). Operator order 2026-10-21: only
     -- the SELECTED class's module executes. "Auto" is the default: it activates the
     -- class being played, so a rogue session is unchanged. An explicit class token
@@ -157,7 +181,7 @@ ST.bar_defaults = {
     -- IS the gate for the default-visible change). "Wglass" is registered as a
     -- statusbar medium in main.lua, so it is selectable in the texture dropdown.
     bar_texture_key = "Wglass",
-    bar_color_default = {93, 58, 207, 0.85},
+    bar_color_default = {93, 58, 207, 0.9},
 
     -- Background and border appearance
     -- The BACKDROP fill behind the progress bar (bars.lua:499-526 applies it through
@@ -364,8 +388,8 @@ ST.DRUID.defaults = {
     nextaction_locked = true,
     nextaction_visibility_key = "in_combat",
     nextaction_icon_size = 45,
-    nextaction_x = 0,
-    nextaction_y = -180,
+    nextaction_x = 127,
+    nextaction_y = -65,
     guide_rip_refresh = 4,
     guide_rake_refresh = 4,
     -- TBC Rip combo-point floor (T1 override: nil falls back to the frozen
@@ -506,6 +530,13 @@ ST.HUNTER.defaults = {
     enable_steady_shot_color = false,
     steady_shot_color = {211, 145, 12, 1.0},
 
+    -- Hunter melee stack (hunter_ui.lua, operator request 2026-10-27): pin the thin
+    -- mainhand/offhand bars under the ranged bar at the ranged bar's width (ranged ->
+    -- MH -> OH). ON by default; nil reads on (a profile saved before the key existed
+    -- gets the requested layout), and only an explicit false turns it off and restores
+    -- each hand's own width + LibWindow position.
+    hunter_melee_stack = true,
+
     -- Hunter visual set (hunter_ui.lua): the cast bar above the ranged bar, the 4-state
     -- range helper strip, the Rapid Fire aura bar and the aspect icon. All enabled by
     -- default; the widgets only appear while the ranged bar is usable (never on clients
@@ -549,8 +580,8 @@ ST.HUNTER.defaults = {
     nextaction_locked = true,
     nextaction_visibility_key = "in_combat",
     nextaction_icon_size = 45,
-    nextaction_x = 0,
-    nextaction_y = -180,
+    nextaction_x = 127,
+    nextaction_y = -65,
 
     -- Cooldown HUD: the hunter slot toggles (the shared hud_* keys live in
     -- ST.class_defaults; the descriptors they gate are ST.HUNTER.HUD_SLOTS in
@@ -602,11 +633,9 @@ ST.HUNTER.defaults = {
         show_condition = "either",
         bar_color_default = {93, 58, 207, 0.9},
         bar_height = 14,
-		bar_width = 200,
         show_gcd_underlay = false,
         gcd1a_marker_enabled = false,
         gcd1b_marker_enabled = false,
-        border_width = 1,
         text_size = 10,
         y = -142,
     },
@@ -618,9 +647,7 @@ ST.HUNTER.defaults = {
         gcd1a_marker_enabled = false,
         gcd1b_marker_enabled = false,
         bar_height = 14,
-		bar_width = 200,
         text_size = 10,
-        border_width = 1,
         y = -158,
 	},
 	ranged = {
@@ -761,8 +788,8 @@ ST.PALADIN.defaults = {
     nextaction_locked = true,
     nextaction_visibility_key = "in_combat",
     nextaction_icon_size = 45,
-    nextaction_x = 0,
-    nextaction_y = -180,
+    nextaction_x = 127,
+    nextaction_y = -65,
     nextaction_reaction_time_ms = 100,
     -- TBC: researched CS delay is under 1 s (was 1700). CONFLICT: Wrath wants
     -- ~0 (no twist to protect); revisit with a family branch if needed. The
@@ -1042,8 +1069,8 @@ ST.ROGUE.defaults = {
     nextaction_locked = true,
     nextaction_visibility_key = "in_combat",
     nextaction_icon_size = 45,
-    nextaction_x = 0,
-    nextaction_y = -180,
+    nextaction_x = 127,
+    nextaction_y = -65,
 
     -- Cooldown HUD: the rogue slot toggles (the shared hud_* keys live in
     -- ST.class_defaults; the descriptors they gate are ST.ROGUE.HUD_SLOTS in
@@ -1090,8 +1117,17 @@ ST.ROGUE.defaults = {
         show_condition = "either",
         require_in_range = false,
 		bar_height = 15,
-		bar_width = 200,
-        y = -166,
+        -- ABOVE the melee row, never below it (operator order 2026-10-28: "ranged bar
+        -- shouldnt be below mh/oh bar because thats where power bar should be for each
+        -- class"). The slot under the bottom-most melee row belongs to power_bar.lua;
+        -- the shipped -166 put the ranged hand exactly there. -98 clears the mainhand
+        -- row (y -120, 20 px) by ~4 px, the same order the hunter ships (ranged above
+        -- MH/OH). A FRESH profile starts here; an existing profile is moved once by the
+        -- runtime rule in bars.lua (ST:migrate_ranged_placement). That rule is FORCED -
+        -- operator: "it should stay with the rest, aka the new way" - so a dragged or
+        -- scaled row is re-placed once into this layout too, then latched at
+        -- RANGED_PLACEMENT_VERSION; a drag made AFTER that pass is preserved.
+        y = -98,
 		bar_color_default = {112, 8, 11, 0.8},
 		font_size = 10,
         show_gcd_underlay = false,
@@ -1197,8 +1233,8 @@ ST.SHAMAN.defaults = {
     nextaction_locked = true,
     nextaction_visibility_key = "in_combat",
     nextaction_icon_size = 45,
-    nextaction_x = 0,
-    nextaction_y = -180,
+    nextaction_x = 127,
+    nextaction_y = -65,
     guide_flameshock_refresh = 0,
     -- The TBC APL's "Filler Shock" choice (the Shocks group picks ONE filler: the
     -- valueVariables default is Earth Shock 25454 r8, the ALTERNATIVE is Frost Shock
@@ -1393,8 +1429,8 @@ ST.WARRIOR.defaults = {
     nextaction_locked = true,
     nextaction_visibility_key = "in_combat",
     nextaction_icon_size = 45,
-    nextaction_x = 0,
-    nextaction_y = -180,
+    nextaction_x = 127,
+    nextaction_y = -65,
     guide_execute_pct = 20,
 
     -- Nil-off key: guide_forever_rend_upkeep (no entry ships - nil stays off).
@@ -1470,8 +1506,17 @@ ST.WARRIOR.defaults = {
         show_condition = "either",
         require_in_range = false,
 		bar_height = 15,
-		bar_width = 200,
-        y = -166,
+        -- ABOVE the melee row, never below it (operator order 2026-10-28: "ranged bar
+        -- shouldnt be below mh/oh bar because thats where power bar should be for each
+        -- class"). The slot under the bottom-most melee row belongs to power_bar.lua;
+        -- the shipped -166 put the ranged hand exactly there. -98 clears the mainhand
+        -- row (y -120, 20 px) by ~4 px, the same order the hunter ships (ranged above
+        -- MH/OH). A FRESH profile starts here; an existing profile is moved once by the
+        -- runtime rule in bars.lua (ST:migrate_ranged_placement). That rule is FORCED -
+        -- operator: "it should stay with the rest, aka the new way" - so a dragged or
+        -- scaled row is re-placed once into this layout too, then latched at
+        -- RANGED_PLACEMENT_VERSION; a drag made AFTER that pass is preserved.
+        y = -98,
 		bar_color_default = {112, 8, 11, 0.8},
 		font_size = 10,
         show_gcd_underlay = false,

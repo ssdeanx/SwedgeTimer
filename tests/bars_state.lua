@@ -142,6 +142,13 @@ local function make_region_common(region, sb, kind)
         sb.touches = sb.touches + 1
         region.point = { point, ... }
     end
+    function region:GetPoint(index)
+        local p = region.point
+        if p == nil then
+            return nil
+        end
+        return p[1], p[2], p[3], p[4], p[5]
+    end
     function region:ClearAllPoints()
         sb.touches = sb.touches + 1
         region.point = nil
@@ -271,7 +278,6 @@ local function make_frame(sb, frame_type, name, parent, template)
     function f:SetScale(scale) f.scale = scale end
     function f:GetScale() return f.scale or 1 end
     function f:GetCenter() return f.center_x or 0, f.center_y or 0 end
-    function f:GetPoint() return nil end
     function f:GetBottom() return f.bottom or 0 end
     function f:StartMoving() end
     function f:StopMovingOrSizing() end
@@ -352,6 +358,9 @@ local function build(opts)
         -- resolve_family_spell drops ranks api.is_spell_known rejects, so without it the
         -- shaman catalogue would never resolve and every weave visual would stay inert.
         known_spells = { [403] = true },
+        -- The vendored engine's player unit table (getUnit shape): casting/prevent are
+        -- read by main.lua's ranged-shot reset guard. Idle by default.
+        swing_unit = { casting = false },
         power = {},
         power_type = nil,
         power_token = nil,
@@ -478,6 +487,16 @@ local function build(opts)
         SwingTimerInfo = function(_, hand)
             local t = sb.swing[hand] or { 2.6, sb.clock + 2.6, sb.clock }
             return t[1], t[2], t[3]
+        end,
+        -- The vendored library's own unit accessor. main.lua's melee-reset guard (and
+        -- classes/hunter.lua's shot guard) read the engine's `casting` /
+        -- `preventSwingReset` / last-cast fields off this table; the fixture exposes
+        -- one player unit so a test can arm exactly what the lib would report.
+        getUnit = function(_, unit_id)
+            if unit_id == "player" then
+                return sb.swing_unit
+            end
+            return nil
         end,
     }
     local source_engine = {
@@ -2196,8 +2215,8 @@ do
     sb.cast = { name = "Steady Shot", spell_id = 56641, start_ms = (sb.clock - 0.1) * 1000, end_ms = (sb.clock + 0.9) * 1000 }
     tick(b, "ranged")
     eq(ui.cast_frame.tint.shown, true, "hunter tint: shown for a live cast")
-    vertex_eq(ui.cast_frame.tint.color_texture, { 0.2, 0.78, 0.25, 0.4 },
-        "hunter tint: steady shot fits the grace window (safe tint)")
+    vertex_eq(ui.cast_frame.tint.color_texture, { 1, 1, 1, 0.55 },
+        "hunter tint: steady shot fits the grace window (safe white)")
     sb.cast = { name = "Multi-Shot", spell_id = 2643, start_ms = (sb.clock - 0.1) * 1000, end_ms = (sb.clock + 0.9) * 1000 }
     tick(b, "ranged")
     vertex_eq(ui.cast_frame.tint.color_texture, { 1, 0, 0, 0.4 },
@@ -2218,25 +2237,32 @@ do
     tick(b, "ranged")
     eq(ui.cast_frame.shown, false, "hunter window: hidden outside the cast window")
 
-    -- Melee bars are NOT re-anchored by the ranged UI. The reference re-anchor
-    -- (UpdateHunterMeleeBarAnchor) was retired on 2026-10-25: its trigger is "the cast
-    -- bar is visible", and the cast bar is ALSO visible for the Auto Shot hidden-window
-    -- face, so the melee bars hopped into the ranged stack once per Auto Shot cycle at
-    -- range (the operator's "main hand bar mixed up with the ranged bar" report). The
-    -- pins below are the inverse of the old ones: a visible cast bar must leave the
-    -- melee anchors alone, and hiding it must not restore anything either.
+    -- Melee stack (2026-10-27): the thin MH/OH bars are pinned under the ranged bar at
+    -- the ranged width ONCE, then stay put. The 2026-10-25 regression was a cast-bar-gated
+    -- re-anchor that fired for the Auto Shot window every cycle; the stable stack has no
+    -- cast-bar dependency, so a visible cast bar must add no further restore/move.
+    local mh_anchor = b.ST.mainhand.anchor_frame
+    local ranged_bar = b.ST:get_bar_frame("ranged")
+    local mh_p, mh_rel, mh_rel_p, mh_x, mh_y = mh_anchor:GetPoint(1)
+    eq(mh_p, "TOPLEFT", "hunter stack: the mainhand is stacked under the ranged bar")
+    eq(mh_rel, ranged_bar, "hunter stack: the anchor target is the ranged bar frame")
+    eq(mh_rel_p, "BOTTOMLEFT", "hunter stack: the mainhand uses the ranged bottom-left")
+    near(mh_y, -2, 1e-9, "hunter stack: the stack gap is applied")
+    near(mh_x, 0, 1e-9, "hunter stack: the mainhand keeps the ranged left edge")
+    near(mh_anchor.width, hand_db(b, "ranged").bar_width, 1e-9,
+        "hunter stack: the mainhand takes the ranged width")
     local restores_before = #sb.lwin_restores
     sb.cast = { name = "Steady Shot", spell_id = 56641, start_ms = sb.clock * 1000, end_ms = (sb.clock + 1.5) * 1000 }
     tick(b, "ranged")
     eq(ui.cast_frame.shown, true, "hunter anchor: cast bar visible again")
     eq(#sb.lwin_restores, restores_before,
-        "hunter anchor: a visible cast bar moves no melee bar")
+        "hunter stack: a visible cast bar adds no restore/move")
     sb.cast = nil
     sb.clock = sb.clock + 3.0 -- past the window: the cast face hides
     tick(b, "ranged")
     eq(ui.cast_frame.shown, false, "hunter anchor: cast bar hidden")
     eq(#sb.lwin_restores, restores_before,
-        "hunter anchor: hiding the cast bar restores nothing (no anchor was shifted)")
+        "hunter stack: hiding the cast bar changes nothing (the stack is not cast-state)")
 
     -- Range helper: the four states and the all-unknown/absent-target hides.
     ST.has_attackable_target = true
@@ -2321,7 +2347,14 @@ do
     db.enabled = true
     sb.cast = nil
 
-    -- Queue colouring through the real event chain.
+    -- Queue colouring through the real event chain. Re-cut 2026-10-28: the parallel
+    -- hunter-tint lane's B1 contract paints the queue tint only on a LIVE main-hand
+    -- cycle (a hunter at range must never recolour the melee fill), so this pin brings
+    -- the hunter into melee first - the old pin asserted the tint with no cycle at all,
+    -- which is exactly the leak that lane removed.
+    ST.in_combat = true
+    sb.clock = 41.5
+    start_swing(b, "mainhand", 2.6, 2.6)
     sb.current_spell = 2973
     ST:CURRENT_SPELL_CAST_CHANGED("CURRENT_SPELL_CAST_CHANGED", false)
     eq(ST.raptor_strike_queued, true, "hunter queue: a current Raptor Strike sets the flag")
@@ -2332,6 +2365,7 @@ do
     sb.current_spell = 56641
     ST:CURRENT_SPELL_CAST_CHANGED("CURRENT_SPELL_CAST_CHANGED", false)
     eq(ST.steady_shot_queued, false, "hunter queue: Steady Shot colouring is off by default")
+    ST.in_combat = false
 end
 
 -- HUNTER G1 (Era boot): INTERRUPTED/FAILED clears the Raptor/Steady tint by id;
@@ -3119,6 +3153,806 @@ do
         "font: bars.lua has no direct SetFont call (the shared chain owns every font)")
     check(src:find("st.utils.fetch_font_path", 1, true) ~= nil,
         "font: bars.lua resolves the font key through the shared chain")
+end
+
+--=========================================================================================
+-- 11) bars-decouple (2026-10-28): ranged and melee hands are independent
+--=========================================================================================
+-- Operator report on 2.1.3: "offhand should only show when offhand is being used";
+-- "ranged is showing for warrior, during mh swing and mh is activating when ranged goes
+-- off"; "off hand should be same size as mh"; "ranged bar shouldnt be below mh/oh bar
+-- because thats where power bar should be for each class".
+--
+-- Pinned here:
+--   * the ranged and offhand hands are activity-driven - combat state alone never shows
+--     them, a real shot / real swing receipt does, a receipt lasts a small number of
+--     cycles (no flicker between two shots) and then the hand hides again;
+--   * a mainhand swing is NOT an offhand receipt, and a vendored engine START is not a
+--     receipt at all (the library also starts cycles from combat-enter/equipment/cast
+--     resets, so its START cannot prove the hand was used);
+--   * the offhand renders at the mainhand's width and height for every class that has
+--     one, and a mainhand size change resizes it in the same pass (without writing the
+--     offhand's saved keys);
+--   * the shipped ranged position is ABOVE the melee row, never in the power-bar slot;
+--   * a ranged shot no longer restarts a melee hand: our own utility-reset list no longer
+--     carries the shot ids, and the engine's melee-reset field is armed for a shot cast.
+do
+    -- HUNTER: the activity gate over the real visibility pass.
+    local b = boot({ class = "HUNTER" })
+    local sb = b.sb
+    local ST = b.ST
+    local function shown(hand)
+        local frame = ST:get_bar_frame(hand)
+        return frame ~= nil and frame.shown == true
+    end
+
+    ST.in_combat = true
+    ST.has_attackable_target = true
+    sb.clock = 10.0
+    ST:set_bar_visibilities()
+    eq(shown("mainhand"), true, "decouple: the mainhand keeps its configured combat visibility")
+    eq(shown("ranged"), false, "decouple: combat + target alone never shows the ranged bar")
+    eq(shown("offhand"), false, "decouple: combat + target alone never shows the offhand bar")
+
+    -- A completed shot is a ranged receipt (the real SUCCEEDED path, Auto Shot id).
+    ST:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", nil, 75)
+    eq(ST.ranged.has_activity, true, "decouple: a completed shot marks the ranged hand in use")
+    ST:set_bar_visibilities()
+    eq(shown("ranged"), true, "decouple: the shot shows the ranged bar")
+    eq(shown("offhand"), false, "decouple: the shot does not show the offhand bar")
+
+    -- The window is two cycles of the hand's speed (2.8 s here): one cycle later the bar
+    -- is still up (consecutive shots cannot flicker), past two cycles it hides.
+    ST.ranged.speed = 2.8
+    sb.clock = 10.0 + 2.8
+    ST:set_bar_visibilities()
+    eq(shown("ranged"), true, "decouple: one cycle after the shot the bar is still up (no flicker)")
+    sb.clock = 10.0 + (2.8 * 2) + 0.1
+    ST:set_bar_visibilities()
+    eq(shown("ranged"), false, "decouple: two idle cycles hide the ranged bar")
+
+    -- Auto Shot armed counts as ranged use between two cycle events.
+    ST.ranged.auto_repeat_active = true
+    ST:set_bar_visibilities()
+    eq(shown("ranged"), true, "decouple: Auto Shot armed shows the ranged bar with no fresh shot")
+    ST.ranged.auto_repeat_active = false
+    ST:set_bar_visibilities()
+    eq(shown("ranged"), false, "decouple: Auto Shot off returns the hand to idle")
+
+    -- Offhand: only a real offhand swing is a receipt (the CLEU shape: isOffHand is
+    -- return 21 on SWING_DAMAGE and return 13 on SWING_MISSED, the lib's own slots).
+    local function cleu(subevent, ...)
+        ST:COMBAT_LOG_EVENT_UNFILTERED("COMBAT_LOG_EVENT_UNFILTERED", sb.clock,
+            subevent, false, "Player-1", "Tester", 0, 0, "Creature-1", "Dummy", 0, 0, ...)
+    end
+    ST.offhand.speed = 1.5
+    sb.clock = 30.0
+    cleu("SWING_DAMAGE", 100, nil, nil, nil, nil, nil, nil, nil, nil, false)
+    eq(ST.offhand.has_activity, false, "decouple: a mainhand swing is not an offhand receipt")
+    ST:set_bar_visibilities()
+    eq(shown("offhand"), false, "decouple: a mainhand swing never shows the offhand bar")
+    cleu("SWING_DAMAGE", 100, nil, nil, nil, nil, nil, nil, nil, nil, true)
+    eq(ST.offhand.has_activity, true, "decouple: an offhand swing marks the offhand in use")
+    ST:set_bar_visibilities()
+    eq(shown("offhand"), true, "decouple: the offhand swing shows the offhand bar")
+    sb.clock = 30.0 + 1.5
+    ST:set_bar_visibilities()
+    eq(shown("offhand"), true, "decouple: one offhand cycle later the bar is still up")
+    sb.clock = 30.0 + (1.5 * 2) + 0.1
+    ST:set_bar_visibilities()
+    eq(shown("offhand"), false, "decouple: two idle offhand cycles hide the offhand bar")
+    -- SWING_MISSED carries the flag in its own slot.
+    sb.clock = 40.0
+    cleu("SWING_MISSED", "DODGE", true, nil)
+    eq(ST.offhand.has_activity, true, "decouple: an offhand miss is an offhand receipt too")
+    ST.offhand.has_activity = false
+
+    -- The vendored engine's own START is not a receipt (it also fires on a combat
+    -- enter, an equipment swap, a spell cast and - on Wrath/Cata - every melee swing).
+    ST:SWING_TIMER_START("SWING_TIMER_START", 1.5, sb.clock + 1.5, "offhand")
+    eq(ST.offhand.has_activity, false, "decouple: a vendored engine START is not an activity receipt")
+    ST:SWING_TIMER_START("SWING_TIMER_START", 2.8, sb.clock + 2.8, "ranged")
+    eq(ST.ranged.has_activity, true, "decouple: the engine START does not undo an earlier real receipt")
+    ST.ranged.has_activity = false
+    ST.ranged.last_activity_at = nil
+    ST:set_bar_visibilities()
+    eq(shown("ranged"), false, "decouple: nothing genuinely fired, so the ranged bar stays hidden")
+    ST.in_combat = false
+end
+
+-- FOREVER: the swing source only fires SWING_TIMER_START from a real PLAYER_SWING, so
+-- there its START is the receipt (the classic library's is not - see above).
+do
+    local b = boot({ class = "WARRIOR", project = 18, interface = 16001, engine = "source" })
+    eq(b.st.family, "FOREVER", "decouple: the Forever boot maps to FOREVER")
+    eq(b.ST.swing_engine, "forever-source", "decouple: the Forever boot uses the swing source")
+    b.ST:SWING_TIMER_START("SWING_TIMER_START", 1.5, b.sb.clock + 1.5, "offhand")
+    eq(b.ST.offhand.has_activity, true, "decouple: a Forever PLAYER_SWING START is an offhand receipt")
+    b.ST:SWING_TIMER_START("SWING_TIMER_START", 2.8, b.sb.clock + 2.8, "ranged")
+    eq(b.ST.ranged.has_activity, true, "decouple: a Forever PLAYER_SWING START is a ranged receipt")
+end
+
+-- The operator's own case: a WARRIOR ranged bar (shipped off, enabled by the user) must
+-- not appear from a mainhand swing, and must appear when the warrior actually shoots.
+do
+    local b = boot({ class = "WARRIOR" })
+    local sb = b.sb
+    local ST = b.ST
+    local db = ST:get_hand_table("ranged")
+    db.enabled = true
+    ST.ranged.has_weapon = true
+    eq(ST:bring_up_hand("ranged"), true, "decouple: the warrior ranged bar builds on enable/equip")
+    ST.in_combat = true
+    ST.has_attackable_target = true
+    sb.clock = 5.0
+    ST:SWING_TIMER_START("SWING_TIMER_START", 2.6, sb.clock + 2.6, "mainhand")
+    ST:set_bar_visibilities()
+    eq(ST:get_bar_frame("ranged").shown, false,
+        "decouple: a warrior's ranged bar stays hidden during a mainhand swing")
+    ST:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", nil, 75)
+    ST:set_bar_visibilities()
+    eq(ST:get_bar_frame("ranged").shown, true, "decouple: a warrior's shot shows the ranged bar")
+    ST.in_combat = false
+end
+
+-- Offhand size invariant: every class with an offhand renders it at the mainhand's
+-- width and height, and a mainhand size change (the options call configure for one hand)
+-- resizes the offhand in the same pass without writing its saved keys.
+do
+    local with_offhand = { "WARRIOR", "HUNTER", "SHAMAN", "ROGUE" }
+    for i = 1, #with_offhand do
+        local key = with_offhand[i]
+        local b = boot({ class = key })
+        local ST = b.ST
+        local mh = ST.mainhand.anchor_frame
+        local oh = ST.offhand.anchor_frame
+        near(oh.width, mh.width, 1e-9, key .. ": offhand width equals the mainhand at init")
+        near(oh.height, mh.height, 1e-9, key .. ": offhand height equals the mainhand at init")
+        -- A layout pass that moves geometry (the hunter melee stack resizes both rows)
+        -- keeps them equal.
+        tick(b, "mainhand")
+        near(oh.width, mh.width, 1e-9, key .. ": the offhand stays the mainhand's width after a layout pass")
+        near(oh.height, mh.height, 1e-9, key .. ": the offhand stays the mainhand's height after a layout pass")
+        -- A mainhand size change is an offhand size change, in the same pass.
+        local mh_db = hand_db(b, "mainhand")
+        local oh_db = hand_db(b, "offhand")
+        local oh_saved_width, oh_saved_height = oh_db.bar_width, oh_db.bar_height
+        mh_db.bar_width = mh_db.bar_width + 40
+        mh_db.bar_height = mh_db.bar_height + 6
+        ST:configure_bar_size_and_positions("mainhand")
+        near(oh.width, mh_db.bar_width, 1e-9, key .. ": a mainhand width change resizes the offhand")
+        near(oh.height, mh_db.bar_height, 1e-9, key .. ": a mainhand height change resizes the offhand")
+        eq(oh_db.bar_width, oh_saved_width, key .. ": the invariant does not write the offhand's saved width")
+        eq(oh_db.bar_height, oh_saved_height, key .. ": the invariant does not write the offhand's saved height")
+        -- The operator's own shape ("off hand should be same size as mh"): a profile
+        -- saved with a DIFFERENT offhand size must still render at the mainhand's size.
+        -- This is the pin the invariant exists for - the shipped defaults are already
+        -- equal, so only a divergent saved pair can prove the rule.
+        oh_db.bar_width = mh_db.bar_width - 75
+        oh_db.bar_height = mh_db.bar_height - 6
+        ST:configure_bar_size_and_positions("offhand")
+        near(oh.width, mh_db.bar_width, 1e-9,
+            key .. ": a divergent saved offhand width renders at the mainhand's")
+        near(oh.height, mh_db.bar_height, 1e-9,
+            key .. ": a divergent saved offhand height renders at the mainhand's")
+    end
+end
+
+-- The shipped layouts: the ranged hand is never below the melee row (that slot belongs
+-- to the power bar), for the two classes that ship a ranged hand in a melee layout.
+do
+    local b = boot({ class = "WARRIOR" })
+    local ST = b.ST
+    local base_y = ST.bar_defaults.y
+    check(type(base_y) == "number" and type(ST.ROGUE.defaults.ranged.y) == "number",
+        "decouple: the rogue/warrior ranged defaults carry a y")
+    check(ST.ROGUE.defaults.ranged.y > base_y,
+        "decouple: the rogue ranged default sits above the mainhand row (not in the power slot)")
+    check(ST.WARRIOR.defaults.ranged.y > base_y,
+        "decouple: the warrior ranged default sits above the mainhand row (not in the power slot)")
+    check(ST.ROGUE.defaults.ranged.y > ST.ROGUE.defaults.offhand.y,
+        "decouple: the rogue ranged default sits above the offhand row")
+    check(ST.WARRIOR.defaults.ranged.y > ST.WARRIOR.defaults.offhand.y,
+        "decouple: the warrior ranged default sits above the offhand row")
+end
+
+-- A ranged shot never restarts a melee hand: our own utility-reset list no longer holds
+-- the shot ids, and the engine's melee-reset field is armed while a shot cast is live.
+do
+    local b = boot({ class = "WARRIOR" })
+    local sb = b.sb
+    local ST = b.ST
+    sb.clock = 5.0
+    start_swing(b, "mainhand", 2.6, 2.6)
+    local planted = ST.mainhand.ends_at
+    sb.clock = 6.0
+    ST:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", nil, 3018)
+    eq(ST.mainhand.ends_at, planted, "decouple: a Shoot does not restart the mainhand cycle")
+    eq(ST.ranged.has_activity, true, "decouple: the Shoot still counts as ranged activity")
+    -- The engine's own branch is armed for a shot cast (tick arm, real 0.05 s poll).
+    local unit = sb.swing_unit
+    sb.target_yards = 20
+    unit.casting = true
+    unit.lastCastSpellId = 75
+    unit.lastCastName = "Auto Shot"
+    ST:rf_update()
+    eq(unit.preventSwingReset, true, "decouple: a live shot cast arms the engine's melee-reset guard")
+    eq(ST.ranged_shot_guard_count, 1, "decouple: the guard arm is counted (diag-readable)")
+    -- A melee cast in progress is not a shot: nothing is armed.
+    unit.preventSwingReset = false
+    unit.lastCastSpellId = 47475
+    unit.lastCastName = "Slam"
+    ST:rf_update()
+    eq(unit.preventSwingReset, false, "decouple: a melee cast leaves the engine's reset field alone")
+    -- The event arm: a shot's cast start arms it directly (Shoot token).
+    unit.casting = false
+    ST:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", nil, 3018)
+    eq(unit.preventSwingReset, true, "decouple: a shot cast start arms the guard directly")
+end
+
+--=========================================================================================
+-- 12) layout-finish + ranged-forced (2026-10-28): ranged placement, melee pair height,
+--     rogue parity
+--=========================================================================================
+-- Operator orders this section pins:
+--   "the ranged bar for other melee classes should be moved." (the power-bar row is not the
+--   ranged hand's slot - at RUNTIME, not only for fresh profiles);
+--   "it should stay with the rest, aka the new way." (the 2026-10-28 ruling, brief
+--   ranged-forced: every class that OWNS a ranged hand is forced into the new layout, so a
+--   legacy saved row - dragged or scaled - does not win, while the power-bar row directly
+--   under the melee stack is never given up);
+--   "off hand should always be same width as main hand. maybe have it so u can adjust the
+--   height for both." (ONE class-level height for the melee pair);
+--   "Also do client for all melee, i dont want ranged showing up on rogue sameway it does
+--   for warrior." (the activity gate is class-agnostic: rogue === warrior).
+do
+    -- ---- 12a. The range/placement geometry helpers --------------------------------
+    -- Warrior rows: mainhand y -120 h 20 (top -110, bottom -130), offhand y -142 h 20
+    -- (top -132, bottom -152). The power slot hangs one gap + its own height under the
+    -- bottom-most row: bottom -152 - 2 - 14 = -168. The band is therefore [-168, -110].
+    local b = boot({ class = "WARRIOR" })
+    local ST = b.ST
+    local profile = ST.db.profile.WARRIOR
+    -- rawget: AceDB's class-row '**' metatable CREATES a table for any missing-key read
+    -- (Libs/AceDB-3.0/AceDB-3.0.lua:88-107), so a plain read would answer a defaults table
+    -- and hide whether the latch was ever written. The rule reads its own latch the same way.
+    eq(rawget(profile, "ranged_placement_213"), ST.RANGED_PLACEMENT_VERSION,
+        "placement: OnInitialize latches the class row with the rule's version")
+    eq(profile.ranged.y, -98,
+        "placement: the fresh shipped ranged row is left exactly where it ships")
+    local band_top, band_bottom = ST:melee_reserved_band()
+    eq(band_top, -110, "placement: the reserved band starts at the top of the melee stack")
+    eq(band_bottom, -168, "placement: the reserved band reaches through the power-bar slot")
+    check(ST:row_intersects_band(-158.5, -173.5, band_top, band_bottom) == true,
+        "placement: the old -166 ranged row (h 15) demonstrably intersects the band")
+    check(ST:row_intersects_band(-90.5, -105.5, band_top, band_bottom) == false,
+        "placement: the shipped -98 ranged row clears the band")
+    check(ST:row_intersects_band(-110, -130, band_top, band_bottom) == true,
+        "placement: a row parked on the mainhand row intersects")
+    check(ST:row_intersects_band(-110, -130, -130, -168) == false,
+        "placement: touching edges do not count as an intersection")
+
+    -- ---- 12a-bis. A saved row is readable at ANY LibWindow anchor and scale ------------
+    -- The band is computed from the melee rows' own saved geometry, so the extent reader
+    -- must read a dragged anchor and a scaled row: the first pass refused both, which is
+    -- exactly why a profile whose melee bar had been dragged was skipped (U2, closed by
+    -- the 2026-10-28 ruling).
+    local function extent_eq(hand, top, bottom, label)
+        local got_top, got_bottom = ST:saved_row_extent(hand)
+        eq(got_top, top, label .. " (top)")
+        eq(got_bottom, bottom, label .. " (bottom)")
+    end
+    extent_eq("mainhand", -110, -130,
+        "extent: a CENTER row spans y +/- half its height")
+    extent_eq("offhand", -132, -152, "extent: the offhand row reads its own saved y")
+    -- The SAME rendered row, saved with a dragged anchor: LibWindow stores the anchored
+    -- edge, so a TOP row's y IS its top and a BOTTOM row's y is its bottom.
+    local mh = hand_db(b, "mainhand")
+    local mh_point, mh_y, mh_scale, mh_height = mh.point, mh.y, mh.scale, mh.bar_height
+    mh.point, mh.y = "TOPLEFT", -110
+    extent_eq("mainhand", -110, -130, "extent: a TOP-anchored row's y is its top edge")
+    mh.point, mh.y = "BOTTOMLEFT", -130
+    extent_eq("mainhand", -110, -130, "extent: a BOTTOM-anchored row's y is its bottom edge")
+    -- A scaled row renders taller: 20 px at scale 1.5 is a 30 px row.
+    mh.point, mh.y, mh.scale = "CENTER", -100, 1.5
+    extent_eq("mainhand", -85, -115, "extent: a scaled row is read at its rendered height")
+    -- A missing/garbage scale restores at the frame's own 1 (LibWindow's behaviour).
+    mh.scale, mh.y = nil, -120
+    extent_eq("mainhand", -110, -130, "extent: a missing scale reads as 1")
+    mh.scale, mh.y = "junk", -120
+    extent_eq("mainhand", -110, -130, "extent: a garbage scale reads as 1")
+    -- Unreadable rows still answer nil (no guess): no y, no positive height.
+    mh.scale, mh.y = mh_scale, -120
+    mh.y = nil
+    eq(ST:saved_row_extent("mainhand"), nil, "extent: a missing y is unreadable (nil)")
+    mh.y = -120
+    mh.bar_height = 0
+    eq(ST:saved_row_extent("mainhand"), nil, "extent: a non-positive height is unreadable (nil)")
+    mh.bar_height = mh_height
+    -- A DRAGGED melee row still yields a band: the ranged row must not be skipped.
+    mh.point, mh.y = "TOPLEFT", -110
+    local dragged_top, dragged_bottom = ST:melee_reserved_band()
+    eq(dragged_top, -110, "band: a dragged melee anchor still yields the band's top")
+    eq(dragged_bottom, -168, "band: a dragged melee anchor still yields the power slot")
+    -- A SCALED melee row is read at its rendered size in the band too.
+    mh.point, mh.y, mh.scale = "CENTER", -100, 1.5
+    local scaled_top, scaled_bottom = ST:melee_reserved_band()
+    eq(scaled_top, -85, "band: a scaled melee row raises the band to its rendered top")
+    eq(scaled_bottom, -168, "band: the power slot still hangs under the offhand row")
+    mh.point, mh.y, mh.scale = mh_point, mh_y, mh_scale
+    -- An unreadable melee row makes the band nil (the rule answers "unknown", no guess).
+    mh.y = nil
+    eq(ST:melee_reserved_band(), nil, "band: an unreadable melee row answers nil (no guess)")
+    mh.y = mh_y
+
+    -- ---- 12b. The rule itself (each case clears the latch and the saved row) ------
+    local function fresh_case(class, y)
+        local case = boot({ class = class })
+        local hand = case.ST.db.profile[class].ranged
+        hand.x, hand.y, hand.point, hand.scale = 0, y, "CENTER", 1
+        rawset(case.ST.db.profile[class], "ranged_placement_213", nil)
+        return case, hand
+    end
+
+    -- A write-counting proxy around the ranged row, so "no write" is PROVEN rather than
+    -- inferred from unchanged values (R3: the migration must not double-write a profile
+    -- that is already right). Reads fall through to the real row; every field write counts.
+    local function counted_ranged(case, class)
+        local real = case.ST.db.profile[class].ranged
+        local writes = 0
+        case.ST.db.profile[class].ranged = setmetatable({}, {
+            __index = function(_, key) return real[key] end,
+            __newindex = function(_, key, value)
+                writes = writes + 1
+                real[key] = value
+            end,
+        })
+        return real, function() return writes end
+    end
+
+    -- R3: a fresh profile already IS the new layout - the rule keeps it and writes nothing.
+    do
+        local case = boot({ class = "WARRIOR" })
+        local class_row = case.ST.db.profile.WARRIOR
+        rawset(class_row, "ranged_placement_213", nil)
+        local real, writes = counted_ranged(case, "WARRIOR")
+        local prints_before = #case.sb.prints
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "kept",
+            "forced: a fresh profile is already the new layout (kept)")
+        eq(writes(), 0, "forced: a fresh profile is not double-written (0 field writes)")
+        eq(real.y, -98, "forced: the fresh row stays on its shipped y")
+        eq(real.x, 0, "forced: the fresh row keeps the shipped x")
+        eq(real.point, "CENTER", "forced: the fresh row keeps the shipped anchor point")
+        eq(real.scale, 1, "forced: the fresh row keeps the shipped scale")
+        eq(#case.sb.prints, prints_before, "forced: a fresh profile prints nothing")
+        eq(rawget(class_row, "ranged_placement_213"), case.ST.RANGED_PLACEMENT_VERSION,
+            "forced: the latch is written even when the row is already right")
+    end
+
+    -- The operator's existing-profile case, for both pre-move melee classes that own a
+    -- ranged hand: the old -166 row is re-placed onto the shipped row once.
+    for _, class in ipairs({ "WARRIOR", "ROGUE" }) do
+        local case, hand = fresh_case(class, -166)
+        local prints_before = #case.sb.prints
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "forced: " .. class .. " holding the old shipped -166 is re-placed")
+        eq(#case.sb.prints, prints_before + 1,
+            "forced: " .. class .. " tells the user once that its saved row moved")
+        local notice = case.sb.prints[#case.sb.prints]
+        check(type(notice) == "string" and notice:find("ranged bar was moved", 1, true) ~= nil,
+            "forced: " .. class .. " the notice names what moved")
+        eq(hand.y, -98, "forced: " .. class .. " lands on the shipped row a fresh profile gets")
+        eq(hand.x, 0, "forced: " .. class .. " keeps the shipped x")
+        eq(hand.point, "CENTER", "forced: " .. class .. " keeps the shipped anchor point")
+        eq(hand.scale, 1, "forced: " .. class .. " keeps the shipped scale")
+        eq(rawget(case.ST.db.profile[class], "ranged_placement_213"),
+            case.ST.RANGED_PLACEMENT_VERSION,
+            "forced: " .. class .. " latches the rule's version after a move")
+        -- R2: a second run is a no-op - no write, no notice, a later row untouched.
+        hand.x, hand.y, hand.point, hand.scale = 320, -166, "TOPLEFT", 0.8
+        local real, writes = counted_ranged(case, class)
+        local prints_kept = #case.sb.prints
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "done",
+            "forced: " .. class .. " never re-evaluates once latched (a later drag wins)")
+        eq(writes(), 0, "forced: " .. class .. " a latched run writes nothing")
+        eq(#case.sb.prints, prints_kept,
+            "forced: " .. class .. " a latched run prints nothing")
+        eq(real.x, 320, "forced: the latched rule leaves a later x untouched")
+        eq(real.y, -166, "forced: the latched rule leaves a later y untouched")
+        eq(real.point, "TOPLEFT", "forced: the latched rule leaves a later anchor untouched")
+        eq(real.scale, 0.8, "forced: the latched rule leaves a later scale untouched")
+    end
+
+    -- A ranged row saved on the shared bar default (-120, the pre-hunter default and the
+    -- row a profile without its own ranged default carries) sits ON the mainhand row.
+    do
+        local case, hand = fresh_case("WARRIOR", -120)
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "placement: a ranged row on the mainhand row is re-placed")
+        eq(hand.y, -98, "placement: it lands on the shipped row")
+    end
+
+    -- R4: a DRAGGED row (a user x, a non-CENTER anchor) is MOVED. This pin replaces the
+    -- old "a drag wins" contract: the operator's ruling is that the row stays with the rest.
+    do
+        local case, hand = fresh_case("WARRIOR", -166)
+        hand.x, hand.point = 320, "TOPLEFT"
+        local prints_before = #case.sb.prints
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "forced: a dragged row is moved to the new layout (the drag does not win)")
+        eq(hand.x, 0, "forced: a dragged x is reset to the shipped anchor")
+        eq(hand.point, "CENTER", "forced: a dragged anchor point is reset to the shipped one")
+        eq(hand.y, -98, "forced: a dragged row lands on the shipped row")
+        eq(#case.sb.prints, prints_before + 1, "forced: the dragged-row move prints once")
+        local notice = case.sb.prints[#case.sb.prints]
+        check(type(notice) == "string" and notice:find("ranged bar was moved", 1, true) ~= nil,
+            "forced: the dragged-row notice names what moved")
+    end
+
+    -- R4: a SCALED row is moved too - the new layout's row is scale 1.
+    do
+        local case, hand = fresh_case("WARRIOR", -166)
+        hand.scale = 1.6
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "forced: a scaled row is moved to the new layout (the scale does not win)")
+        eq(hand.scale, 1, "forced: the scale is reset to the shipped 1")
+        eq(hand.point, "CENTER", "forced: the scaled row keeps the shipped anchor point")
+        eq(hand.y, -98, "forced: the scaled row lands on the shipped row")
+    end
+
+    -- A legacy row parked ABOVE the band (a hand-picked spot) is still normalised to the
+    -- class's shipped row: the ruling is about the layout, not only about collisions. The
+    -- notice tells the two reasons apart.
+    do
+        local case, hand = fresh_case("WARRIOR", -60)
+        hand.x = -420
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "forced: a legacy row above the band is moved to the new layout")
+        eq(hand.y, -98, "forced: it lands on the class's shipped row")
+        eq(hand.x, 0, "forced: its x is reset too")
+        local notice = case.sb.prints[#case.sb.prints]
+        check(type(notice) == "string"
+            and notice:find("placed in the standard layout", 1, true) ~= nil,
+            "forced: the out-of-band notice says the row was placed in the standard layout")
+        check(type(notice) == "string"
+            and notice:find("belongs to the power bar", 1, true) == nil,
+            "forced: the out-of-band notice does not blame the power-bar row")
+    end
+
+    -- A colliding y the addon never shipped is moved too (the old rule kept it).
+    do
+        local case, hand = fresh_case("WARRIOR", -170)
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "forced: a colliding y that was never shipped is moved (no saved-y whitelist)")
+        eq(hand.y, -98, "forced: it lands on the shipped row")
+    end
+
+    -- HUNTER: the ranged bar is the TOP bar (its melee stack hangs under it), so its own
+    -- shipped row is restored - for an old shipped default and for a dragged row alike.
+    do
+        local case, hand = fresh_case("HUNTER", -166)
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "forced: a hunter holding the old row is re-placed too")
+        eq(hand.y, -120, "forced: the hunter lands on its own shipped ranged row (-120)")
+        local dragged, dragged_hand = fresh_case("HUNTER", -166)
+        dragged_hand.x, dragged_hand.point = 200, "TOPLEFT"
+        eq(dragged.ST:migrate_ranged_placement(dragged.ST.db.profile), "moved",
+            "forced: a dragged hunter row is moved to the hunter's new layout")
+        eq(dragged_hand.y, -120, "forced: the dragged hunter row lands on -120")
+    end
+
+    -- THE OPERATOR'S OWN PROFILE: it may already hold the first pass's latch (`true`) from
+    -- today's weaker rule, which left a dragged or scaled row exactly where it was. The
+    -- version latch must re-evaluate it once under the ruling, then never again.
+    do
+        local case, hand = fresh_case("WARRIOR", -166)
+        hand.x, hand.y, hand.point, hand.scale = 250, -166, "TOPRIGHT", 1.4
+        local class_row = case.ST.db.profile.WARRIOR
+        rawset(class_row, "ranged_placement_213", true)   -- the first pass's latch value
+        local prints_before = #case.sb.prints
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "forced: a profile latched by the first pass is re-evaluated once under the ruling")
+        eq(hand.x, 0, "forced: the upgraded row gets the shipped x")
+        eq(hand.y, -98, "forced: the upgraded row gets the shipped y")
+        eq(hand.point, "CENTER", "forced: the upgraded row gets the shipped anchor point")
+        eq(hand.scale, 1, "forced: the upgraded row gets the shipped scale")
+        eq(rawget(class_row, "ranged_placement_213"), case.ST.RANGED_PLACEMENT_VERSION,
+            "forced: the old latch is upgraded to the rule's version")
+        eq(#case.sb.prints, prints_before + 1, "forced: the upgrade tells the user once")
+        hand.y = -166
+        local prints_upgraded = #case.sb.prints
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "done",
+            "forced: the upgraded profile never runs the rule again")
+        eq(#case.sb.prints, prints_upgraded, "forced: the upgraded profile stays quiet")
+        eq(hand.y, -166, "forced: a post-upgrade drag stays where the user put it")
+    end
+
+    -- R1/R5: the HAND SET decides, never a class name. Every class that owns a ranged hand
+    -- is forced into the new layout; every class without one keeps answering "no-ranged".
+    for _, class in ipairs({ "WARRIOR", "ROGUE", "HUNTER", "MAGE", "PRIEST", "WARLOCK" }) do
+        local case = boot({ class = class })
+        local class_row = case.ST.db.profile[class]
+        local hand = class_row.ranged
+        check(type(hand) == "table", "class matrix: " .. class .. " ships a ranged row")
+        if type(hand) == "table" then
+            -- R3 for every class: the fresh shipped row is ALREADY the new layout, so the
+            -- rule keeps it and writes nothing (proven with the write-counting proxy).
+            rawset(class_row, "ranged_placement_213", nil)
+            local real, writes = counted_ranged(case, class)
+            eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "kept",
+                "class matrix: " .. class .. " fresh profile is already the new layout")
+            eq(writes(), 0, "class matrix: " .. class .. " fresh profile is not double-written")
+            eq(real.y, case.ST:shipped_ranged_y(),
+                "class matrix: " .. class .. " fresh y is the class's shipped row")
+            rawset(class_row, "ranged", real)   -- back to the plain row for the drag case
+            -- R1/R4 for every class: a dragged+scaled legacy row becomes the new layout.
+            hand.x, hand.y, hand.point, hand.scale = 300, -166, "TOPLEFT", 1.3
+            rawset(class_row, "ranged_placement_213", nil)
+            eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+                "class matrix: " .. class .. " has its dragged row forced into the new layout")
+            eq(hand.x, 0, "class matrix: " .. class .. " x reset")
+            eq(hand.point, "CENTER", "class matrix: " .. class .. " anchor reset")
+            eq(hand.scale, 1, "class matrix: " .. class .. " scale reset")
+            eq(hand.y, case.ST:shipped_ranged_y(),
+                "class matrix: " .. class .. " lands on its own shipped row")
+        end
+    end
+    for _, class in ipairs({ "PALADIN", "SHAMAN", "DRUID", "DEATHKNIGHT" }) do
+        local case = boot({ class = class })
+        rawset(case.ST.db.profile[class], "ranged_placement_213", nil)
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "no-ranged",
+            "class matrix: " .. class .. " owns no ranged hand (no-ranged)")
+        eq(rawget(case.ST.db.profile[class], "ranged_placement_213"),
+            case.ST.RANGED_PLACEMENT_VERSION,
+            "class matrix: " .. class .. " still latches (it is not re-evaluated every login)")
+    end
+
+    -- A profile whose class default itself sits in the band falls back to the computed
+    -- clearing row (ceil of the band top + the gap + half the ranged row) - never a hop.
+    do
+        local case, hand = fresh_case("WARRIOR", -166)
+        local ranged_defaults = case.ST.defaults.profile.WARRIOR.ranged
+        local saved_default = ranged_defaults.y
+        ranged_defaults.y = -150
+        local outcome = case.ST:migrate_ranged_placement(case.ST.db.profile)
+        ranged_defaults.y = saved_default
+        eq(outcome, "moved", "forced: a colliding shipped default still moves the row")
+        eq(hand.y, -100, "forced: the computed row clears the band (ceil of -110+2+7.5)")
+        check(hand.y - (15 / 2) >= -110 + case.ST.RANGED_PLACEMENT_GAP,
+            "forced: the computed row's bottom edge keeps the 2 px gap to the melee stack")
+    end
+
+    -- ---- 12e. F2 FIXED: the appearance migration RUNS on a live AceDB profile --------
+    -- Found by this lane: the profile root carries a '**' metatable whose __index CREATES
+    -- a defaults-filled table for any missing key (Libs/AceDB-3.0/AceDB-3.0.lua:88-107),
+    -- so config.lua's `if profile[FLAG] then return 0 end` was truthy on the FIRST call,
+    -- the migration returned 0 forever, and the 2026-10-25 opaque-backdrop order never
+    -- reached a saved profile. This block used to be an ACCEPTED-KNOWN-DEFECT pin; it is
+    -- now the POSITIVE assertion because this suite owns a real booted AceDB profile. The
+    -- mechanism itself (a real '**' fixture, no-junk and the re-load path) is pinned in
+    -- tests/appearance_defaults_state.lua section 8.
+    do
+        local case = boot({ class = "WARRIOR" })
+        -- Deliberately NOT named `profile`: the placement block above owns that name.
+        local live_profile = case.ST.db.profile
+        live_profile.WARRIOR.mainhand.background_color = { 0.0, 0.0, 0.0, 0.85 }  -- old default
+        rawset(live_profile, "appearance_defaults_213", nil)
+        check(type(case.ST.migrate_appearance_defaults) == "function",
+            "F2: config.lua ships the appearance migration")
+        local raised = case.ST.migrate_appearance_defaults(live_profile)
+        eq(raised, 1, "F2: the migration raises the saved old default on a live AceDB profile")
+        check(live_profile.WARRIOR.mainhand.background_color[4] == 1.0,
+            "F2: the saved 0.85 backdrop became opaque (the 2026-10-25 order applies)")
+        eq(rawget(live_profile, "appearance_defaults_213"), true,
+            "F2: the flag is the plain boolean true, not a created '**' table")
+        eq(case.ST.migrate_appearance_defaults(live_profile), 0,
+            "F2: a second run on the same profile changes nothing (once per profile)")
+    end
+
+    -- Static wiring: the rule is called once from OnInitialize, before the options build,
+    -- and it is pcall'd (a bad profile can never abort login). No per-tick work is a
+    -- structural property too: the name may appear in bars.lua exactly ONCE - its
+    -- definition - so no OnUpdate/callback path in the module can reach it.
+    do
+        local fh = assert(io.open(ROOT .. "main.lua", "r"))
+        local main_src = fh:read("*a")
+        fh:close()
+        check(main_src:find("migrate_ranged_placement", 1, true) ~= nil,
+            "placement: main.lua calls the ranged placement rule")
+        check(main_src:find("pcthis", 1, true) == nil, "placement: (sentinel)")
+        local bh = assert(io.open(ROOT .. "bars.lua", "r"))
+        local bars_src = bh:read("*a")
+        bh:close()
+        -- Count the name in CODE only (whole-line comments stripped), so the header comment
+        -- that documents the rule does not mask a per-tick call: exactly one code mention is
+        -- the definition itself. Any call shape - `self:name`, `self.name`, `ST:name` -
+        -- adds a second mention and fails this pin.
+        local code_mentions = 0
+        for line in bars_src:gmatch("[^\n]+") do
+            local stripped = line:gsub("^%s*%-%-.*$", "")
+            if stripped:find("migrate_ranged_placement", 1, true) ~= nil then
+                code_mentions = code_mentions + 1
+            end
+        end
+        eq(code_mentions, 1,
+            "forced: the rule is named once in bars.lua's code (its definition only: no per-tick call)")
+    end
+
+    -- ---- 12c. Melee pair height --------------------------------------------------
+    do
+        local pair_b = boot({ class = "WARRIOR" })
+        local pair_st = pair_b.ST
+        eq(pair_st:melee_pair_height(), nil, "pair: no shipped default (nil = shipped behaviour)")
+        -- rawget pin: AceDB's class-row '**' metatable CREATES a defaults table for any
+        -- missing-key read (Libs/AceDB-3.0/AceDB-3.0.lua:88-107), so a plain read of the
+        -- unset pair key would persist a junk table in SavedVariables on the first layout
+        -- pass. The key must be ABSENT after a full boot + sizing pass, not a table.
+        check(rawget(class_db(pair_b), "melee_bar_height") == nil,
+            "pair: an unset pair leaves no key behind (no AceDB '**' table pollution)")
+        pair_st:configure_bar_size_and_positions("mainhand")
+        check(rawget(class_db(pair_b), "melee_bar_height") == nil,
+            "pair: a sizing pass does not create the unset key either")
+        eq(visuals(pair_b, "mainhand"):GetHeight(), 16,
+            "pair: unset keeps the mainhand's own 20 px row (20 minus the 2x2 px border)")
+        eq(visuals(pair_b, "offhand"):GetHeight(), 16, "pair: unset keeps the offhand matched")
+
+        class_db(pair_b).melee_bar_height = 30
+        pair_st:configure_bar_size_and_positions("mainhand")
+        eq(visuals(pair_b, "mainhand"):GetHeight(), 26,
+            "pair: the pair height sizes the mainhand in the same pass")
+        eq(visuals(pair_b, "offhand"):GetHeight(), 26,
+            "pair: the pair height sizes the offhand in the same pass")
+        eq(hand_db(pair_b, "mainhand").bar_height, 20,
+            "pair: no saved per-hand key is rewritten")
+        eq(hand_db(pair_b, "offhand").bar_height, 20,
+            "pair: the offhand's saved key is not rewritten either")
+        eq(hand_db(pair_b, "offhand").bar_width, hand_db(pair_b, "mainhand").bar_width,
+            "pair: the offhand width invariant still holds")
+        -- The ranged hand is a separate widget and needs its own enable + build (HU-22).
+        hand_db(pair_b, "ranged").enabled = true
+        pair_st:bring_up_hand("ranged")
+        eq(visuals(pair_b, "ranged"):GetHeight(), 11,
+            "pair: the ranged hand is never part of the pair (its own 15 px row)")
+        -- The hunter stack's per-pass width override keeps the pair height.
+        pair_st:configure_bar_size_and_positions("mainhand", 200)
+        eq(visuals(pair_b, "mainhand"):GetHeight(), 26,
+            "pair: a width-override pass keeps the pair height")
+        eq(visuals(pair_b, "mainhand"):GetWidth(), 196,
+            "pair: the width override still wins for its own pass")
+
+        -- Nil-safe: false (the options' reset), 0, junk and a negative all read as unset.
+        for _, unset in ipairs({ false, 0, -5, "junk", {} }) do
+            class_db(pair_b).melee_bar_height = unset
+            eq(pair_st:melee_pair_height(), nil,
+                "pair: " .. tostring(unset) .. " reads as unset (nil-safe)")
+            pair_st:configure_bar_size_and_positions("mainhand")
+            eq(visuals(pair_b, "mainhand"):GetHeight(), 16,
+                "pair: clearing " .. tostring(unset) .. " restores the per-hand height")
+        end
+        -- A numeric string is a number (the options range always stores numbers, but a
+        -- hand-edited SavedVariables file can carry one).
+        class_db(pair_b).melee_bar_height = "25"
+        eq(pair_st:melee_pair_height(), 25, "pair: a numeric string is accepted as a height")
+        pair_st:configure_bar_size_and_positions("mainhand")
+        eq(visuals(pair_b, "mainhand"):GetHeight(), 21,
+            "pair: a numeric string sizes both melee bars")
+    end
+
+    -- ---- 12c2. A resize pass keeps the fill's live progress ----------------------
+    -- 2026-10-28 (hunter mainhand report: "the bar stays full ... it never starts").
+    -- The tick owns the fill width and paints it from the live progress. The hunter
+    -- melee stack re-runs configure_bar_size_and_positions between two ticks (it sizes
+    -- the melee rows from the ranged bar on every pass); resetting the fill texture to
+    -- the full visuals width there left a full-width fill owning the rest of the cycle,
+    -- and the texture then showed the tick's cropped TexCoord stretched across the whole
+    -- bar - exactly the "never animates" shape. A configure pass must repaint what the
+    -- tick would paint, not a full bar.
+    do
+        local p = boot({ class = "WARRIOR" })
+        local p_st = p.ST
+        local p_vf = visuals(p, "mainhand")
+        local p_fill = p_vf.bar
+        local p_width = p_vf:GetWidth()
+        for _, progress in ipairs({ 0, 0.25, 0.5, 1 }) do
+            p_st.mainhand.current_progress = progress
+            p_st:configure_bar_size_and_positions("mainhand", p_width + 2)
+            local vf_after = p_st.mainhand.vf_width
+            near(p_fill:GetWidth(), math.max(1, vf_after * progress), 1e-9,
+                "configure: progress " .. tostring(progress) .. " survives the resize")
+            near(p_fill.texcoord[2], progress, 1e-9,
+                "configure: progress " .. tostring(progress) .. " keeps the fill's crop")
+        end
+        -- A fresh hand (the tick has not recorded a progress yet) keeps the full-width
+        -- build default; the first tick paints the real value.
+        p_st.mainhand.current_progress = false
+        p_st:configure_bar_size_and_positions("mainhand")
+        near(p_fill:GetWidth(), p_vf:GetWidth(), 1e-9,
+            "configure: a hand with no progress yet keeps the full-width default")
+    end
+
+    -- ---- 12c3. The fill is the tick's last word -----------------------------------
+    -- A class hook or a layout pass can resize a hand while the tick runs. The fill has
+    -- to end the frame at this hand's own progress (2026-10-28, hunter mainhand: the
+    -- thin bar read as permanently full because the resize's full-width repaint won
+    -- over the tick's cropped fill).
+    do
+        local h = boot({ class = "WARRIOR" })
+        local h_st = h.ST
+        local h_vf = visuals(h, "mainhand")
+        h_st:configure_bar_size_and_positions("mainhand", h_vf:GetWidth() + 2)
+        local vf_after = h_st.mainhand.vf_width
+        h_st.mainhand.start = 0
+        h_st.mainhand.speed = 4
+        h_st.mainhand.ends_at = 4
+        h_st.mainhand.is_paused = false
+        h.sb.clock = 2 -- halfway through the cycle
+        local class = h_st[h_st.player_class]
+        local original = class.on_bar_update
+        local hook_ran = false
+        class.on_bar_update = function(_, hand)
+            if hand == "mainhand" and h_vf.bar then
+                hook_ran = true
+                -- What a configure pass does mid-tick: the fill back at full width.
+                h_vf.bar:SetWidth(h_vf:GetWidth())
+            end
+        end
+        h_st:onupdate_common("mainhand", 0.1)
+        check(hook_ran, "tick: the class hook ran mid-tick")
+        near(h_vf.bar:GetWidth(), math.max(1, vf_after * 0.5), 1e-9,
+            "tick: the fill ends the frame at the hand's own progress")
+        near(h_vf.bar.texcoord[2], 0.5, 1e-9, "tick: the crop matches that same progress")
+        class.on_bar_update = original
+    end
+
+    -- ---- 12d. ROGUE === WARRIOR: the activity gate is class-agnostic -------------
+    local function ranged_shown(case)
+        local frame = case.ST:get_bar_frame("ranged")
+        return frame ~= nil and frame.shown == true
+    end
+    for _, actor in ipairs({ { class = "WARRIOR", shot = 2764 }, { class = "ROGUE", shot = 3018 } }) do
+        local case = boot({ class = actor.class })
+        local case_sb = case.sb
+        local case_st = case.ST
+        -- The operator has the ranged bar enabled on both classes.
+        hand_db(case, "ranged").enabled = true
+        case_st:bring_up_hand("ranged")
+        case_st.in_combat = true
+        case_st.has_attackable_target = true
+        case_sb.clock = 10.0
+        case_st:set_bar_visibilities()
+        eq(ranged_shown(case), false,
+            "parity " .. actor.class .. ": combat + target alone never shows the ranged bar")
+        -- A real ranged shot is the receipt, for whichever shot id that class uses.
+        case_st:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", nil, actor.shot)
+        case_st:set_bar_visibilities()
+        eq(ranged_shown(case), true,
+            "parity " .. actor.class .. ": a completed shot (" .. actor.shot
+                .. ") shows the ranged bar")
+        -- Two idle cycles later the hand is idle again.
+        case_sb.clock = case_sb.clock + (case_st:hand_activity_window("ranged") + 0.5)
+        case_st:set_bar_visibilities()
+        eq(ranged_shown(case), false,
+            "parity " .. actor.class .. ": the ranged bar hides after its activity window")
+        -- A mainhand swing is not a ranged receipt on either class.
+        start_swing(case, "mainhand", 2.6, 2.6)
+        case_st:set_bar_visibilities()
+        eq(ranged_shown(case), false,
+            "parity " .. actor.class .. ": a mainhand swing never surfaces the ranged bar")
+    end
+    -- The gate names HANDS, never classes: the source of the rule has no class branch.
+    do
+        local fh = assert(io.open(ROOT .. "main.lua", "r"))
+        local main_src = fh:read("*a")
+        fh:close()
+        local start_at = main_src:find("function ST:hand_visibility_needs_activity", 1, true)
+        check(start_at ~= nil, "parity: main.lua defines the activity-gate hand predicate")
+        local next_at = main_src:find("function ST:", start_at + 1, true)
+        local body = main_src:sub(start_at, next_at or #main_src)
+        check(body:find("player_class", 1, true) == nil,
+            "parity: the gate never reads the class (it is hand-shaped, not warrior-shaped)")
+        check(body:find('"offhand"', 1, true) ~= nil and body:find('"ranged"', 1, true) ~= nil,
+            "parity: the gate covers offhand and ranged by hand name")
+    end
 end
 
 if failures == 0 then

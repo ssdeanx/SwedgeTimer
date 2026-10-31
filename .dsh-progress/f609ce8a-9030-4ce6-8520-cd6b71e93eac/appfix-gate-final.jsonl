@@ -1,0 +1,13 @@
+{"v":1,"task":"appfix-gate-final","state":"running","msg":"started: bash tests/run.sh","at":1793178270919}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/warrior_state.lua","at":1793178271923}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/hunter_state.lua","at":1793178272926}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/druid_energy_state.lua","at":1793178273931}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/druid_guide_state.lua","at":1793178274936}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/practice_progress_ui_state.lua","at":1793178275941}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/neutral_actions_state.lua","at":1793178277951}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/prepull_contract_state.lua","at":1793178280966}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/engine_matrix_state.lua","at":1793178282976}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/toc_check.lua","at":1793178284985}
+{"v":1,"task":"appfix-gate-final","msg":"PASS  lua5.1 tests/wiring_check.lua","at":1793178324170}
+{"v":1,"task":"appfix-gate-final","msg":"54 steps, 0 failed","at":1793178332411}
+{"v":1,"task":"appfix-gate-final","state":"done","pct":100,"msg":"finished","at":1793178332411}

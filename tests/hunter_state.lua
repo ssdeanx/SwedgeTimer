@@ -5,7 +5,9 @@
 -- on-next-attack colour matrix, the config/option wiring of the new keys, the
 -- hunter_ui hook wiring (post_init/on_bar_update dispatch), the Multi-Shot cast-grace
 -- classifier, and the hunter_ui sandbox (frame creation, off-gates skipping their
--- scans/API reads, deferred creation under lockdown, inert ranged hands).
+-- scans/API reads, deferred creation under lockdown, inert ranged hands), including the
+-- HU-37 decouple: the visual set ticks from the hand's anchor frame while the activity
+-- gate hides the ranged bar (14n).
 local script_dir = (arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
 local ROOT = script_dir .. "/../"
 
@@ -41,6 +43,22 @@ local function colour_eq(vertex, db_table, label)
     near(vertex[2], db_table[2] / 255, label .. " (green)")
     near(vertex[3], db_table[3] / 255, label .. " (blue)")
     near(vertex[4], db_table[4], label .. " (alpha)")
+end
+
+-- HU-37 (2026-10-28): the hunter visual set is ticked by a hunter-installed hook on the
+-- hand's anchor frame whenever the ranged bar's own OnUpdate cannot run (the activity
+-- gate hid the bar). A pin that exercises the set in that state calls the host's real
+-- OnUpdate, exactly like the client's frame loop; `sb` is a build_ui sandbox.
+local function tick_host(sb)
+    local ui = sb.st and sb.st.hunter_ui
+    local host = ui and ui.tick_host
+    check(host ~= nil, "fixture: the hunter UI tick host exists")
+    local onupdate = host and host.scripts and host.scripts.OnUpdate
+    check(type(onupdate) == "function",
+        "fixture: the hunter UI tick host carries its OnUpdate")
+    if type(onupdate) == "function" then
+        onupdate(host, 0.001)
+    end
 end
 
 -- The Raptor Strike ranks in classes/hunter.lua, as of this revision. Used to size the
@@ -83,6 +101,25 @@ end
 
 -- The Era Aimed Shot ranks in classes/hunter.lua (the six verified vanilla ranks).
 local AIMED_RANKS = 6
+
+-- The live main-hand melee cycle the queue tint now requires (hunter-tint 2026-10-28,
+-- B1): the reference's IsHunterMeleeActive shape - in combat plus a live mh cycle -
+-- expressed on the tree's swing fields. The tint-matrix sections opt in through this
+-- helper; the ranged-play negatives use its absence.
+local function arm_melee_cycle(sb, opts)
+    opts = opts or {}
+    local now = opts.now or 10
+    sb.clock = now
+    sb.ST.in_combat = true
+    sb.ST.mainhand = {
+        start = opts.start or (now - 1),
+        speed = opts.speed or 2.6,
+        ends_at = opts.ends_at or (now + 1.6),
+        is_full = opts.is_full or false,
+        engine_dead = opts.engine_dead,
+    }
+    return sb
+end
 
 --=========================================================================================
 -- Sandbox builder
@@ -302,6 +339,19 @@ local function build(opts)
         return sb.channel_name or "Steady Shot", "", "icon", 1000, 2000, false, false, sb.channel_spell
     end
 
+    -- Target identity for the queue-tint target-change clear (hunter-tint 2026-10-28).
+    -- Opt-in: the default sandbox has no UnitGUID, which models a client that cannot
+    -- answer (both sides nil = no change).
+    if opts.unit_guid ~= nil then
+        sb.target_guid = opts.unit_guid
+        env.UnitGUID = function(unit)
+            if unit == "target" then
+                return sb.target_guid
+            end
+            return nil
+        end
+    end
+
     -- Opt-in mana fixture for the OOM Viper probe (compat reads UnitPower through
     -- _G; absent reads the unknown 0/0 shape, which the probe maps to nil).
     if opts.mana ~= nil then
@@ -394,6 +444,11 @@ local function build(opts)
         },
     }
     ST.interfaces_are_initialised = false
+    -- The real main.lua always creates the hand tables at post_init (main.lua:582-591:
+    -- start/speed/ends_at nil, is_full true). Mirror that idle shape so the tint gate
+    -- reads the client's state instead of a nil table; the melee fixtures replace it
+    -- through arm_melee_cycle.
+    ST.mainhand = { is_full = true }
     ST.get_class_table = function() return class_db end
     -- The game client answers this (main.lua); the sandbox default is "every hand
     -- enabled", so a test opts out explicitly (the H2 sampler reads the gate).
@@ -609,7 +664,10 @@ do
     end
 
     -- Nothing queued means nothing painted: the guards fire before any frame access.
-    eq(sb.bar_color_calls, 4, "only the two spellcast clear paths dispatch a recolour")
+    -- RE-CUT (hunter-tint 2026-10-28, B2): the combat-exit repaint carries the
+    -- interfaces_are_initialised guard (wiring_check check 3), so the two pre-init
+    -- on_combat_exit passes dispatch no recolour - only the spellcast clear paths do.
+    eq(sb.bar_color_calls, 4, "the pre-init spellcast clear paths dispatch a recolour")
     eq(sb.set_vertex_calls, 0, "a pre-init dispatch with nothing queued paints nothing")
     eq(ST.raptor_strike_queued, false, "combat exit leaves the flag down pre-init")
 
@@ -669,6 +727,10 @@ do
     local sb = build({ GetSpellInfo = queue_spell_info })
     local ST = sb.ST
     ST.interfaces_are_initialised = true
+    -- RE-CUT (hunter-tint 2026-10-28, B1): the queue tint rides a live main-hand melee
+    -- cycle now. The tint matrix arms one; the ranged-play negative in section 10c
+    -- proves its absence refuses the colour.
+    arm_melee_cycle(sb)
     ST.raptor_strike_queued = false
 
     -- Option on, nothing queued: every rank is probed and the flag stays down.
@@ -705,13 +767,16 @@ do
     sb.bar_color_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
     eq(ST.raptor_strike_queued, false, "an unrelated queued spell clears raptor_strike_queued")
-    eq(sb.bar_color_calls, 0, "clearing a stale queue does not force a recolour")
+    -- RE-CUT (hunter-tint 2026-10-28, B2): the clear branch repaints in the same path,
+    -- so a stale tint cannot survive the queue going away.
+    eq(sb.bar_color_calls, 1, "clearing a stale queue repaints the fill immediately")
 
     -- Option off: no probing at all, and the existing flag is left untouched.
     sb.class_db.enable_raptor_strike_color = false
     sb.current_spell = "Raptor Strike"
     ST.raptor_strike_queued = true
     sb.is_current_spell_calls = 0
+    sb.bar_color_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
     eq(sb.is_current_spell_calls, 0, "the colour option off means zero IsCurrentSpell calls")
     eq(ST.raptor_strike_queued, true, "the colour option off leaves the queue flag untouched")
@@ -738,7 +803,9 @@ do
     local ok, err = pcall(ST.HUNTER.on_combat_exit, ST)
     check(ok, "on_combat_exit does not error (" .. tostring(err) .. ")")
     eq(ST.raptor_strike_queued, false, "combat exit clears raptor_strike_queued")
-    eq(sb.bar_color_calls, 0, "combat exit does not recolour by itself")
+    -- RE-CUT (hunter-tint 2026-10-28, B2): combat exit repaints the main-hand fill in
+    -- the same path, so the last tint cannot outlive the fight.
+    eq(sb.bar_color_calls, 1, "combat exit repaints the main-hand fill")
 
     -- Pre-init combat exit is safe too, and idempotent.
     ST.interfaces_are_initialised = false
@@ -757,6 +824,8 @@ do
     local sb = build()
     local ST = sb.ST
     ST.interfaces_are_initialised = true
+    -- RE-CUT (hunter-tint 2026-10-28, B1): a live main-hand cycle is the tint's context.
+    arm_melee_cycle(sb)
 
     -- Offhand is never a class override.
     ST.raptor_strike_queued = true
@@ -961,6 +1030,8 @@ do
     local sb = build({ GetSpellInfo = queue_spell_info })
     local ST = sb.ST
     ST.interfaces_are_initialised = true
+    -- RE-CUT (hunter-tint 2026-10-28, B1): a live main-hand cycle is the tint's context.
+    arm_melee_cycle(sb)
     ST.steady_shot_queued = false
 
     -- Option off (the real default): the raptor probe still runs, but the steady branch
@@ -1016,7 +1087,8 @@ do
     sb.bar_color_calls = 0
     ST.HUNTER.on_current_spell_cast_changed(ST, false)
     eq(ST.steady_shot_queued, false, "an unrelated queued spell clears steady_shot_queued")
-    eq(sb.bar_color_calls, 0, "clearing a stale steady queue does not force a recolour")
+    -- RE-CUT (hunter-tint 2026-10-28, B2): the clear branch repaints in the same path.
+    eq(sb.bar_color_calls, 1, "clearing a stale steady queue repaints the fill immediately")
 
     -- Mainline-code clients surface the queued Steady Shot as a channel instead of
     -- IsCurrentSpell. The channel spell id is the 8th value (no castID).
@@ -1049,6 +1121,8 @@ do
         end
         local tbc = build({ project = 5, GetSpellInfo = steady_book })
         tbc.class_db.enable_steady_shot_color = true
+        -- RE-CUT (hunter-tint 2026-10-28, B1): the channel queue rides a live melee cycle.
+        arm_melee_cycle(tbc)
         tbc.channel_idless = true
         tbc.ST.steady_shot_queued = false
         tbc.ST.HUNTER.on_current_spell_cast_changed(tbc.ST, false)
@@ -1136,12 +1210,13 @@ do
     check(ok2, "a nil spell id does not error on the steady path (" .. tostring(err2) .. ")")
     eq(ST.steady_shot_queued, true, "a nil spell id leaves the steady flag alone")
 
-    -- Combat exit wipes the steady queue without recolouring by itself.
+    -- Combat exit wipes the steady queue and repaints the fill in the same path.
     sb.bar_color_calls = 0
     local ok3, err3 = pcall(ST.HUNTER.on_combat_exit, ST)
     check(ok3, "on_combat_exit does not error with a queued Steady Shot (" .. tostring(err3) .. ")")
     eq(ST.steady_shot_queued, false, "combat exit clears steady_shot_queued")
-    eq(sb.bar_color_calls, 0, "combat exit does not recolour by itself")
+    -- RE-CUT (hunter-tint 2026-10-28, B2): combat exit repaints.
+    eq(sb.bar_color_calls, 1, "combat exit repaints the main-hand fill")
 end
 
 --=========================================================================================
@@ -1153,6 +1228,8 @@ do
     ST.interfaces_are_initialised = true
     sb.class_db.enable_raptor_strike_color = false
     sb.class_db.enable_steady_shot_color = true
+    -- RE-CUT (hunter-tint 2026-10-28, B1): a live main-hand cycle is the tint's context.
+    arm_melee_cycle(sb)
 
     -- Offhand is never a class override.
     ST.steady_shot_queued = true
@@ -1188,6 +1265,171 @@ do
     sb.vertex = nil
     eq(ST.HUNTER.set_bar_color(ST, "mainhand"), true, "the raptor branch claims the bar first")
     colour_eq(sb.vertex, sb.class_db.raptor_strike_color, "the raptor colour wins over the steady colour")
+end
+
+--=========================================================================================
+-- 10c) hunter-tint (2026-10-28): the queue tint is a MELEE-cycle read
+--=========================================================================================
+-- Operator report on 2.1.3 (TBC Anniversary, family TBC): "why is mh changing colors
+-- for hunter when using ranged" / "the only thing the bar does is change color when im
+-- using ranged". The flags are set by the current-spell probe and cleared by several
+-- paths that used to drop the flag WITHOUT repainting, so the last tint could survive
+-- into a ranged stretch.
+--   B1: the tint may only apply while a live main-hand melee cycle exists.
+--   B2: every clear path repaints in the same path (swing consumed / combat exit /
+--       target change / the current-spell clear branch).
+--   B4: nothing here may read self.ranged - a live ranged cycle must not keep the tint.
+do
+    -- B1: a queued tint with a live RANGED cycle but no main-hand cycle never paints.
+    local sb = build()
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.in_combat = true
+    ST.ranged = { start = 10, speed = 2.8, ends_at = 12.8, is_full = false }
+    ST.in_ranged_range = true
+    ST.raptor_strike_queued = true
+    sb.vertex = nil
+    eq(ST.HUNTER.set_bar_color(ST, "mainhand"), false,
+        "B1: a queued tint with no main-hand cycle claims no colour (ranged play)")
+    eq(sb.set_vertex_calls, 0,
+        "B1: the main-hand fill is never recoloured during ranged play")
+
+    -- B1: the same flag with a live main-hand cycle DOES paint (the control).
+    arm_melee_cycle(sb)
+    eq(ST.HUNTER.set_bar_color(ST, "mainhand"), true,
+        "B1 control: a live main-hand cycle lets the queued tint paint")
+    colour_eq(sb.vertex, sb.class_db.raptor_strike_color,
+        "B1 control: the Raptor colour is applied in melee")
+
+    -- B1: every non-live shape is refused: out of combat, a full/idle bar, an expired
+    -- cycle, a dead engine. (The live-cycle gate is a conjunction of all of them.)
+    for _, shape in ipairs({
+        { label = "out of combat", set = function() ST.in_combat = false end },
+        { label = "a full bar", set = function() ST.mainhand.is_full = true end },
+        { label = "an expired cycle", set = function() sb.clock = ST.mainhand.ends_at + 0.01 end },
+        { label = "a dead engine", set = function() ST.mainhand.engine_dead = true end },
+    }) do
+        arm_melee_cycle(sb)
+        ST.raptor_strike_queued = true
+        sb.set_vertex_calls = 0
+        shape.set()
+        eq(ST.HUNTER.set_bar_color(ST, "mainhand"), false,
+            "B1: " .. shape.label .. " claims no colour")
+        eq(sb.set_vertex_calls, 0, "B1: " .. shape.label .. " paints nothing")
+    end
+
+    -- B2 (swing consumed): a new main-hand cycle `start` is a new swing, which consumes
+    -- the queued next-attack - the fill goes back to the default in that same call.
+    arm_melee_cycle(sb)
+    ST.raptor_strike_queued = true
+    sb.set_vertex_calls = 0
+    eq(ST.HUNTER.set_bar_color(ST, "mainhand"), true, "B2: the tint paints on the current swing")
+    ST.mainhand.start = ST.mainhand.start + 2.6
+    ST.mainhand.ends_at = ST.mainhand.ends_at + 2.6
+    sb.vertex = nil
+    eq(ST.HUNTER.set_bar_color(ST, "mainhand"), false,
+        "B2: the swing that consumes the queue restores the default fill")
+    eq(ST.raptor_strike_queued, false, "B2: the consumed queue flag is dropped")
+    eq(sb.set_vertex_calls, 1,
+        "B2: the consuming swing paints nothing itself (bars.lua draws the default)")
+
+    -- B2 (the current-spell clear branch): dropping a live queue repaints immediately.
+    arm_melee_cycle(sb)
+    ST.HUNTER.set_bar_color(ST, "mainhand") -- record this cycle's start (no queue yet)
+    ST.raptor_strike_queued = true
+    eq(ST.HUNTER.set_bar_color(ST, "mainhand"), true,
+        "B2: the queue paints on the recorded live swing")
+    sb.current_spell = nil
+    sb.bar_color_calls = 0
+    ST.HUNTER.on_current_spell_cast_changed(ST, false)
+    eq(ST.raptor_strike_queued, false, "B2: the current-spell clear drops the flag")
+    eq(sb.bar_color_calls, 1, "B2: the current-spell clear repaints the main-hand fill")
+
+    -- B2 (combat exit): the fill is repainted with the flags dropped.
+    arm_melee_cycle(sb)
+    ST.HUNTER.set_bar_color(ST, "mainhand") -- record this cycle's start (no queue yet)
+    ST.raptor_strike_queued = true
+    eq(ST.HUNTER.set_bar_color(ST, "mainhand"), true, "B2: the queue paints before combat exit")
+    sb.bar_color_calls = 0
+    ST.HUNTER.on_combat_exit(ST)
+    eq(sb.bar_color_calls, 1, "B2: combat exit repaints the main-hand fill")
+
+    -- B2 (target change): the maintenance tick clears a tint painted against the old
+    -- target, even though the melee cycle is still live.
+    local tb = build({ unit_guid = "target-a" })
+    local TST = tb.ST
+    TST.interfaces_are_initialised = true
+    arm_melee_cycle(tb)
+    TST.raptor_strike_queued = true
+    eq(TST.HUNTER.set_bar_color(TST, "mainhand"), true,
+        "B2: the tint paints against the live target")
+    tb.target_guid = "target-b"
+    tb.bar_color_calls = 0
+    TST.HUNTER.on_bar_update(TST, "ranged")
+    eq(TST.raptor_strike_queued, false, "B2: a target change drops the queue flag")
+    eq(tb.bar_color_calls, 1,
+        "B2: a target change repaints from the RANGED tick (the main-hand bar may be hidden)")
+
+    -- B1 (cycle gone): the maintenance tick clears a tint whose cycle ended, and does
+    -- nothing while the cycle is live.
+    local mb = build()
+    local MST = mb.ST
+    MST.interfaces_are_initialised = true
+    arm_melee_cycle(mb)
+    MST.raptor_strike_queued = true
+    mb.bar_color_calls = 0
+    MST.HUNTER.on_bar_update(MST, "ranged")
+    eq(MST.raptor_strike_queued, true,
+        "B1: a live cycle keeps the queued tint across a tick")
+    eq(mb.bar_color_calls, 0, "B1: a live cycle does not repaint")
+    MST.mainhand.is_full = true
+    MST.HUNTER.on_bar_update(MST, "ranged")
+    eq(MST.raptor_strike_queued, false, "B1: the tick clears the flag when the cycle is gone")
+    eq(mb.bar_color_calls, 1, "B1: the tick repaints the fill when the cycle is gone")
+
+    -- B4: a LIVE ranged cycle must not keep a main-hand tint alive (nothing reads it).
+    local rb = build()
+    local RST = rb.ST
+    RST.interfaces_are_initialised = true
+    arm_melee_cycle(rb)
+    RST.ranged = { start = rb.clock, speed = 2.8, ends_at = rb.clock + 2.8, is_full = false }
+    RST.in_ranged_range = true
+    RST.raptor_strike_queued = true
+    RST.mainhand.is_full = true
+    rb.bar_color_calls = 0
+    RST.HUNTER.on_bar_update(RST, "mainhand")
+    eq(RST.raptor_strike_queued, false,
+        "B4: a live ranged cycle does not keep the main-hand tint alive")
+    eq(rb.bar_color_calls, 1, "B4: the ranged state is not consulted; the fill repaints")
+
+    -- B3: this lane does not flip a shipped default - the two tint keys keep their
+    -- shipped values (raptor ON, steady OFF); a change is an operator decision.
+    local pf = assert(io.open(ROOT .. "config_presets.lua", "r"))
+    local presets = pf:read("*a")
+    pf:close()
+    check(presets:find("enable_raptor_strike_color = true", 1, true) ~= nil,
+        "B3: the shipped Raptor tint default is still ON")
+    check(presets:find("enable_steady_shot_color = false", 1, true) ~= nil,
+        "B3: the shipped Steady tint default is still OFF")
+
+    -- B4 (structural): the new gate, the tint painter and the maintenance read the
+    -- main-hand cycle and the target only - never self.ranged.
+    local hf = assert(io.open(ROOT .. "classes/hunter.lua", "r"))
+    local hsource = hf:read("*a")
+    hf:close()
+    for _, entry in ipairs({
+        { label = "the live-cycle gate",
+          body = hsource:match("local function hunter_mainhand_cycle_live%(self%)(.-)\nend") },
+        { label = "set_bar_color",
+          body = hsource:match("function ST%.HUNTER%.set_bar_color%(self, hand%)(.-)\nend") },
+        { label = "maintain_queue_tint",
+          body = hsource:match("function ST%.HUNTER%.maintain_queue_tint%(self%)(.-)\nend") },
+    }) do
+        check(type(entry.body) == "string", "B4: " .. entry.label .. " is found in the source")
+        check(type(entry.body) == "string"
+            and entry.body:find("self.ranged", 1, true) == nil,
+            "B4: " .. entry.label .. " never reads self.ranged")
+    end
 end
 
 --=========================================================================================
@@ -1267,8 +1509,14 @@ do
         cold.ST.interfaces_are_initialised = true
         local ok, err = pcall(cold.ST.HUNTER.on_current_spell_cast_changed, cold.ST, false)
         check(ok, "a cold TBC spell cache does not error (" .. tostring(err) .. ")")
-        eq(cold.ST.raptor_strike_queued, false, "TBC: an unresolvable name never queues")
-        eq(cold.is_current_spell_calls, 0, "TBC: an unresolvable name spends no probe")
+        eq(cold.ST.raptor_strike_queued, false, "TBC: unknown names never queue")
+        -- HU-34: a cold name now probes the rank ids, so the queue is still
+        -- detectable when the client's spell data has not answered yet.
+        eq(cold.is_current_spell_calls, 11,
+            "TBC: a cold name spends one probe per rank id (id fallback)")
+        local cold_strings, cold_numbers = token_types(cold.is_current_spell_tokens)
+        eq(cold_strings, 0, "TBC: a cold cache sends no name token")
+        eq(cold_numbers, 11, "TBC: a cold cache sends the rank ids")
     end
     do
         -- Era control: the same fixture by id (the default spell data answers
@@ -1658,10 +1906,14 @@ end
 local build_ui
 do
     local function new_region(kind, name, parent)
+        -- Child regions default one frame level above their parent, exactly like the
+        -- client's CreateFrame; an explicit SetFrameLevel wins from then on.
         local region = {
             kind = kind, name = name, parent = parent,
-            shown = true, width = 200, height = 15, scale = 1, frame_level = 1,
+            shown = true, width = 200, height = 15, scale = 1,
+            frame_level = (parent and parent.frame_level and parent.frame_level + 1) or 1,
             center_y = 0, bottom = 0, points = {}, restored = 0,
+            scripts = {},
         }
         setmetatable(region, {
             __index = function(t, key)
@@ -1680,18 +1932,23 @@ do
         function region:CreateFontString() return new_region("FontString", nil, self) end
         function region:CreateFrame() return new_region("Frame", nil, self) end
         function region:SetPoint(point, relative, relative_point, x, y)
-            self.points[#self.points + 1] = { point = point, relative = relative, x = x, y = y }
+            self.points[#self.points + 1] = {
+                point = point, relative = relative, relative_point = relative_point,
+                x = x, y = y,
+            }
             if point == "CENTER" then
                 self.center_y = y or 0
             end
         end
+        function region:SetScript(event, fn) self.scripts[event] = fn end
+        function region:GetScript(event) return self.scripts[event] end
         function region:ClearAllPoints() self.points = {} end
         function region:GetPoint(index)
             local p = self.points[index or 1]
             if not p then
                 return nil
             end
-            return p.point, p.relative, p.point, p.x or 0, p.y or 0
+            return p.point, p.relative, p.relative_point, p.x or 0, p.y or 0
         end
         function region:SetWidth(w) self.width = w end
         function region:GetWidth() return self.width end
@@ -1739,6 +1996,7 @@ do
         local sb = {
             now = opts.now or 0,
             calls = { cast = 0, aura = 0, in_range = 0, distance = 0, restore = 0 },
+            configure_calls = {},
             live_cast = opts.live_cast,
             auras = opts.auras,
             pet_auras = opts.pet_auras,
@@ -1942,6 +2200,22 @@ do
         ST.get_class_table = function() return class_db end
         ST.get_hand_table = function(_, hand) return hand_db[hand] end
         ST.bar_is_enabled = function(_, hand) return hand == "ranged" and sb.ranged_available end
+        -- The melee stack resizes through the real bars.lua entry point; this fixture
+        -- records the override and models the frame geometry it would produce.
+        ST.configure_bar_size_and_positions = function(_, hand, width_override)
+            sb.configure_calls[#sb.configure_calls + 1] = {
+                hand = hand, width = width_override,
+            }
+            local hdb = hand_db[hand]
+            local width = width_override or (hdb and hdb.bar_width)
+            local anchor = (hand == "mainhand" and mh_anchor)
+                or (hand == "offhand" and oh_anchor) or nil
+            if anchor then
+                anchor.width = width
+                anchor.restored = (anchor.restored or 0) + 1
+                sb.calls.restore = sb.calls.restore + 1
+            end
+        end
 
         env.LibStub = function(major)
             if major == "AceAddon-3.0" then
@@ -2018,12 +2292,15 @@ do
         sb.mh_anchor = mh_anchor
         sb.oh_anchor = oh_anchor
         sb.ranged_bar_frame = ranged_bar_frame
+        sb.ranged_anchor = ranged_anchor
         return sb
     end
 
-    -- 10c) Hunter UI range tokens: TBC names (nil when the data has not
-    -- answered), Era names-or-id. build_ui is defined above, so these pins
-    -- live here rather than in section 10b.
+    -- 10c) Hunter UI range tokens: the operator's family matrix. Era (SoD
+    -- included) probes by numeric id; TBC Anniversary and Wrath/Titanforge probe
+    -- the localized name first and the id second (HU-34: the id fallback is
+    -- approved). A cold spell cache on a name family therefore yields the id,
+    -- never a nil token. build_ui is defined above, so these pins live here.
     do
         local tbc = build_ui({})
         tbc.st.family = "TBC" -- compat sets this before post_init in-game
@@ -2031,17 +2308,35 @@ do
         eq(tbc.st.hunter_ui.wing_clip_token, "Wing Clip", "TBC: the melee token is the name")
         eq(tbc.st.hunter_ui.raptor_token, "Raptor Strike", "TBC: the raptor token is the name")
         eq(tbc.st.hunter_ui.auto_shot_token, "Auto Shot", "TBC: the ranged token is the name")
+        eq(tbc.st.hunter_ui.auto_shot_name, "Auto Shot", "TBC: the display name resolves too")
+
         local cold = build_ui({ missing_spells = { [2974] = true } })
         cold.st.family = "TBC"
         cold.st.hunter_ui.build(cold.ST, cold.ranged_bar_frame)
-        eq(cold.st.hunter_ui.wing_clip_token, nil,
-            "TBC: an unanswered token hides (never a bare id)")
+        eq(cold.st.hunter_ui.wing_clip_token, 2974,
+            "TBC: a cold name falls back to the id (never nil)")
         eq(cold.st.hunter_ui.raptor_token, "Raptor Strike",
-            "TBC: answered tokens still resolve")
-        local era = build_ui({ missing_spells = { [2974] = true } })
+            "TBC: answered tokens still resolve by name")
+
+        local wrath = build_ui({})
+        wrath.st.family = "WRATH"
+        wrath.st.hunter_ui.build(wrath.ST, wrath.ranged_bar_frame)
+        eq(wrath.st.hunter_ui.wing_clip_token, "Wing Clip", "Wrath: the melee token is the name")
+        eq(wrath.st.hunter_ui.auto_shot_token, "Auto Shot", "Wrath: the ranged token is the name")
+
+        local era = build_ui({})
         era.st.family = "ERA"
         era.st.hunter_ui.build(era.ST, era.ranged_bar_frame)
-        eq(era.st.hunter_ui.wing_clip_token, 2974, "Era: an unanswered token keeps the id")
+        eq(era.st.hunter_ui.wing_clip_token, 2974,
+            "Era: the probe token is the id even when the spell data answers")
+        eq(era.st.hunter_ui.auto_shot_token, 75, "Era: the ranged probe token is the id")
+        eq(era.st.hunter_ui.auto_shot_name, "Auto Shot",
+            "Era: the display name still resolves for the label")
+
+        local era_cold = build_ui({ missing_spells = { [2974] = true } })
+        era_cold.st.family = "ERA"
+        era_cold.st.hunter_ui.build(era_cold.ST, era_cold.ranged_bar_frame)
+        eq(era_cold.st.hunter_ui.wing_clip_token, 2974, "Era: a cold name keeps the id")
     end
 
     -- 14a) the creation is deferred under combat lockdown and runs on the next tick.
@@ -2105,8 +2400,8 @@ do
         eq(sb.st.hunter_ui.aspect_icon.shown, false, "the aspect icon stays hidden")
     end
 
-    -- 14d) the Auto Shot window renders, hands over to a live cast, and the melee bars
-    -- re-anchor while the cast bar is visible and restore when it hides.
+    -- 14d) the Auto Shot window renders and hands over to a live cast; the thin melee
+    -- bars are stacked under the ranged bar once and never move with the cast bar.
     do
         local sb = build_ui({ ranged_start = -1.6, ranged_speed = 2 })
         sb.ST.HUNTER.post_init(sb.ST)
@@ -2127,6 +2422,30 @@ do
         near(sb.ST.ranged.hidden_window_duration, 0.5,
             "the hidden window duration is cached on the ranged state")
 
+        -- 2026-10-27 layout: the thin melee bars are stacked once under the ranged
+        -- bar at the ranged width. The stack is a layout policy, not a cast-window
+        -- state, so the Auto Shot window cannot move it.
+        eq(#sb.configure_calls, 2, "the first tick sizes both melee hands")
+        eq(sb.configure_calls[1].hand, "mainhand", "the mainhand is sized first")
+        eq(sb.configure_calls[1].width, 275, "the mainhand takes the ranged width")
+        eq(sb.configure_calls[2].hand, "offhand", "the offhand follows the mainhand")
+        eq(sb.configure_calls[2].width, 275, "the offhand takes the ranged width too")
+        eq(sb.mh_anchor.width, 275, "the mainhand anchor is the ranged width")
+        eq(sb.oh_anchor.width, 275, "the offhand anchor is the ranged width")
+        local mh_point, mh_rel, mh_rel_point, mh_x, mh_y = sb.mh_anchor:GetPoint(1)
+        eq(mh_point, "TOPLEFT", "the mainhand anchors below the ranged bar")
+        eq(mh_rel, sb.ranged_bar_frame, "the mainhand anchor target is the ranged bar")
+        eq(mh_rel_point, "BOTTOMLEFT", "the mainhand hangs off the ranged bar's bottom")
+        near(mh_x, 0, "the mainhand is left-aligned with the ranged bar")
+        near(mh_y, -2, "the mainhand gap is MELEE_STACK_GAP")
+        local oh_point, oh_rel, oh_rel_point, oh_x, oh_y = sb.oh_anchor:GetPoint(1)
+        eq(oh_point, "TOPLEFT", "the offhand anchors below the mainhand")
+        eq(oh_rel, sb.mh_anchor, "the offhand anchor target is the mainhand")
+        eq(oh_rel_point, "BOTTOMLEFT", "the offhand hangs off the mainhand's bottom")
+        near(oh_x, 0, "the offhand keeps the mainhand's left edge")
+        near(oh_y, -2, "the offhand gap is MELEE_STACK_GAP")
+        local restored_after_stack = sb.mh_anchor.restored
+
         -- An id-less live Auto Shot reading with a cold spell cache is still
         -- excluded (reference IsAutoShotSpell: id OR name): the window face
         -- persists instead of a bogus "Auto Shot" live cast.
@@ -2142,16 +2461,16 @@ do
         sb.live_cast = nil
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
 
-        -- The AUTO SHOT WINDOW FACE (cast bar visible, no live cast) must NOT move a
-        -- melee bar. This is the 2026-10-25 regression pin: the retired reference
-        -- re-anchor fired on exactly this state, once per ranged cycle, so the melee
-        -- bars hopped into the ranged stack at range with no melee activity.
-        near(sb.mh_anchor.center_y, -142,
-            "the Auto Shot window face leaves the mainhand at its stored position")
-        near(sb.oh_anchor.center_y, -158,
-            "the Auto Shot window face leaves the offhand at its stored position")
-        eq(sb.mh_anchor.restored, 0,
-            "the window face issues no LibWindow restore for the mainhand")
+        -- The AUTO SHOT WINDOW FACE (cast bar visible, no live cast) must not move the
+        -- stack. This is the 2026-10-25 regression pin, re-cut for the stable stack:
+        -- the old cast-bar-gated re-anchor fired once per ranged cycle.
+        local wx, wr, wrp, _, wy = sb.mh_anchor:GetPoint(1)
+        eq(wx, "TOPLEFT", "the window face leaves the mainhand stacked")
+        eq(wr, sb.ranged_bar_frame, "the window face keeps the ranged-bar target")
+        eq(wrp, "BOTTOMLEFT", "the window face keeps the bottom-left point")
+        near(wy, -2, "the window face keeps the stack gap")
+        eq(sb.mh_anchor.restored, restored_after_stack,
+            "the window face issues no further LibWindow restore for the mainhand")
         local restored_after_show = sb.mh_anchor.restored
 
         -- A live cast hands the bar over in the very next tick, no event needed.
@@ -2162,19 +2481,63 @@ do
         local tint = ui.cast_frame.tint.color
         check(tint ~= nil and tint[1] == 1 and tint[2] == 0 and tint[3] == 0
             and math.abs(tint[4] - 0.4) < 1e-9, "the tint is the reference red for a clipping cast")
-        near(sb.mh_anchor.center_y, -142,
-            "a live cast also leaves the mainhand at its stored position")
-        near(sb.oh_anchor.center_y, -158,
-            "a live cast also leaves the offhand at its stored position")
+        do
+            local lp, lr, lrp, _, ly = sb.mh_anchor:GetPoint(1)
+            eq(lp, "TOPLEFT", "a live cast leaves the mainhand stacked")
+            eq(lr, sb.ranged_bar_frame, "a live cast keeps the ranged-bar target")
+            eq(lrp, "BOTTOMLEFT", "a live cast keeps the bottom-left point")
+            near(ly, -2, "a live cast keeps the stack gap")
+        end
 
         sb.live_cast = nil
         sb.class_db.hunter_cast_bar_enabled = false
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
         eq(ui.cast_frame.shown, false, "disabling the option hides the cast bar")
         eq(sb.mh_anchor.restored, restored_after_show,
-            "the melee anchors are never shifted, so nothing is handed back to LibWindow")
+            "casting does not re-run the LibWindow restore (the stack is already applied)")
         eq(sb.oh_anchor.restored, restored_after_show,
-            "the offhand anchor is never shifted either")
+            "the offhand restore count is stable too")
+    end
+
+    -- 14d2b) the stack tolerates a hairline width read (2026-10-28) ---------------
+    -- The exact compare re-ran the resize - and with it the fill-width reset - once
+    -- per tick whenever the live width read drifted by a fraction (a float or a scaled
+    -- frame). That pinned the mainhand fill at 100%: the operator's "bar stays full, it
+    -- never starts" report. Half a UI unit of tolerance, and a whole-unit change still
+    -- resizes.
+    do
+        local tb = build_ui({ ranged_start = -1.6, ranged_speed = 2 })
+        tb.ST.HUNTER.post_init(tb.ST)
+        tb.ST.HUNTER.on_bar_update(tb.ST, "ranged")
+        eq(#tb.configure_calls, 2, "tolerance: the first tick sizes both melee hands")
+        local before_tolerance = #tb.configure_calls
+        tb.mh_anchor.width = 274.8
+        tb.ST.HUNTER.on_bar_update(tb.ST, "ranged")
+        eq(#tb.configure_calls, before_tolerance,
+            "tolerance: a sub-unit width read is not a new target (no per-tick resize)")
+        tb.mh_anchor.width = 200
+        tb.ST.HUNTER.on_bar_update(tb.ST, "ranged")
+        eq(#tb.configure_calls, before_tolerance + 1,
+            "tolerance: a whole-unit mismatch is still a real resize")
+        near(tb.mh_anchor.width, 275, 1e-9, "tolerance: the resize lands on the ranged width")
+    end
+
+    -- 14d3) the stack off switch: no geometry work, then the explicit restore.
+    do
+        local sb = build_ui({ ranged_start = -1.6, ranged_speed = 2 })
+        sb.class_db.hunter_melee_stack = false
+        sb.ST.HUNTER.post_init(sb.ST)
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(#sb.configure_calls, 0, "stack off: no hand is resized")
+        eq(#sb.mh_anchor.points, 1, "stack off: the mainhand keeps its own point")
+        eq(sb.mh_anchor.points[1].relative, sb.env.UIParent,
+            "stack off: the mainhand keeps its LibWindow parent")
+        near(sb.mh_anchor.center_y, -142, "stack off: the mainhand keeps its saved y")
+        sb.st.hunter_ui.restore_melee_layout(sb.ST)
+        eq(#sb.configure_calls, 2,
+            "stack off + restore: both melee hands are configured from their own db")
+        eq(sb.configure_calls[1].width, nil, "restore passes no width override")
+        eq(sb.configure_calls[2].width, nil, "restore passes no width override twice")
     end
 
     -- 14d2) a ranged re-anchor drops the previous cycle's cache: the cast bar
@@ -2306,9 +2669,11 @@ do
         -- Fixed 0.5 s window over a 2 s cycle on a 275 px bar: 0.25 * 275, never
         -- widened by the 100 ms latency.
         near(ui.cast_zone.width, 0.25 * 275, "the zone width is the fixed 0.5 s window fraction")
-        near(ui.cast_zone.color[1], 0.2,
-            "standing still with no stop stamp reads the safe green")
-        near(ui.cast_zone.color[2], 0.78, "the safe green's second channel")
+        near(ui.cast_zone.color[1], 1,
+            "standing still with no stop stamp reads the safe white")
+        near(ui.cast_zone.color[2], 1, "the safe white's green channel")
+        near(ui.cast_zone.color[4], 0.55,
+            "the safe white carries more alpha than the unsafe red")
         eq(ui.cast_zone_marker.shown, true, "the threshold marker shows with the zone")
         near(ui.cast_zone_marker.points[1].x, 275 - 0.25 * 275 - 1.5,
             "the marker sits on the window boundary at the end of the bar")
@@ -2326,7 +2691,7 @@ do
         -- Stopped at or before the open: safe again.
         sb.ST.last_stopped_moving_at = -0.3
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
-        near(ui.cast_zone.color[1], 0.2, "an early stop reads the safe green")
+        near(ui.cast_zone.color[2], 1, "an early stop reads the safe white")
 
         -- No live ranged cycle: the zone hides rather than guessing.
         sb.ST.ranged.start = nil
@@ -2891,6 +3256,211 @@ do
         lib:UNIT_SPELLCAST_START("UNIT_SPELLCAST_START", "player", "g", 34120)
         lib:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", "g", 34120)
         eq(flat(), "", "real engine: an exempt Steady Shot cast fires no swing event")
+    end
+
+    -- 14n) HU-37 (audit P2): the visual set ticks from a hunter-installed hook that keeps
+    -- running while the activity gate hides the ranged bar, so a cast / proc badge / range
+    -- reading paints. The bar's own tick stays the single source while it is visible (no
+    -- double tick). RED-FIRST: reverting to the ranged-tick-only wiring (no anchor hook)
+    -- fails the "cast paints while the bar is hidden" leg below.
+    do
+        local sb = build_ui({
+            ranged_start = -10, ranged_speed = 2,
+            live_cast = { name = "Steady Shot", spell_id = 34120,
+                start_ms = -500, end_ms = 1500 },
+        })
+        -- The profile-wide draw level is applied to the bar frame before the hunter UI
+        -- builds: the tick host must start on the same layering (child creation then
+        -- defaults to bar-level + 1, what the widgets had as the bar's children).
+        sb.ranged_bar_frame.frame_level = 4
+        sb.ST.HUNTER.post_init(sb.ST)
+        local ui = sb.st.hunter_ui
+        local host = ui.tick_host
+
+        -- The host: the hand's anchor frame - bars.lua's per-hand top-level frame and
+        -- the one hide_bar() never hides. The hook on it is hunter-installed.
+        eq(host, sb.ranged_anchor, "HU-37: the tick rides the ranged hand's anchor frame")
+        eq(host and host.parent, sb.env.UIParent,
+            "HU-37: the tick host is the UIParent-owned anchor the gate cannot hide")
+        eq(host and host.shown, true, "HU-37: the tick host is shown")
+        check(host and type(host.scripts.OnUpdate) == "function",
+            "HU-37: the anchor frame carries the hunter tick")
+        eq(host and host.frame_level, 4,
+            "HU-37: the tick host starts on the ranged bar's frame level")
+        eq(ui.cast_frame.frame_level, 6,
+            "HU-37: the cast bar keeps bar-level + 2 (its explicit level)")
+        eq(ui.rapid_fire_bar.frame_level, 5,
+            "HU-37: a widget keeps the bar-level + 1 it had as the bar's child")
+        eq(ui.range_helper.frame_level, 5,
+            "HU-37: the range helper keeps the bar-level + 1 it had as the bar's child")
+
+        -- The widgets render from the anchor frame; the bar frame is only their anchor.
+        eq(ui.cast_frame.parent, host, "HU-37: the cast bar parents to the tick host")
+        eq(ui.range_helper.parent, host, "HU-37: the range helper parents to the tick host")
+        eq(ui.rapid_fire_bar.parent, host,
+            "HU-37: the Rapid Fire bar parents to the tick host")
+        eq(ui.aspect_icon.parent, host, "HU-37: the aspect icon parents to the tick host")
+        eq(ui.bw_badge.parent, host, "HU-37: the BW badge parents to the tick host")
+        eq(ui.frenzy_badge.parent, host, "HU-37: the Frenzy badge parents to the tick host")
+        local point, relative, relative_point = ui.cast_frame:GetPoint(1)
+        eq(point, "BOTTOMLEFT", "HU-37: the cast bar keeps its point")
+        eq(relative, sb.ranged_bar_frame,
+            "HU-37: the cast bar still anchors to the ranged bar frame")
+        eq(relative_point, "TOPLEFT", "HU-37: the cast bar keeps its relative point")
+
+        -- The host mirrors the bar's effective layering, including a later option pass.
+        sb.ranged_bar_frame.frame_level = 7
+        tick_host(sb)
+        eq(host and host.frame_level, 7,
+            "HU-37: the tick host follows the bar's frame level")
+        sb.ranged_bar_frame.frame_level = 4
+
+        -- THE DEFECT: the activity gate hid the ranged bar (no shot receipt and no Auto
+        -- Shot auto-repeat). The bar's tick cannot run; feed the ANCHOR TICK instead.
+        sb.ranged_bar_frame:Hide()
+        ui.cast_frame:Hide()
+        tick_host(sb)
+        eq(sb.ranged_bar_frame.shown, false,
+            "HU-37: the anchor tick never resurrects the ranged bar (the gate owns it)")
+        eq(ui.cast_frame.shown, true,
+            "HU-37: a Steady Shot cast paints while the ranged bar is hidden")
+        eq(ui.cast_frame.text.text, "Steady Shot 1.5",
+            "HU-37: the hidden-bar cast carries the live cast's own label")
+        eq(ui.cast_frame.tint.shown, true,
+            "HU-37: the hidden-bar cast still paints its no-clip tint")
+        eq(ui.rapid_fire_bar.width, 275,
+            "HU-37: the Rapid Fire bar width still follows the ranged bar")
+        eq(ui.range_helper.width, 7, "HU-37: the range helper keeps its width")
+        local rf_point, rf_relative = ui.rapid_fire_bar:GetPoint(1)
+        eq(rf_point, "BOTTOM", "HU-37: the Rapid Fire bar keeps its point")
+        eq(rf_relative, ui.cast_frame,
+            "HU-37: the Rapid Fire bar still stacks above the cast bar")
+        local helper_bottom = ui.range_helper.points[2]
+        eq(helper_bottom and helper_bottom.relative, sb.ranged_bar_frame,
+            "HU-37: the range helper's bottom edge still reads the ranged bar")
+        near(helper_bottom and helper_bottom.x, -3,
+            "HU-37: the range helper keeps its gap")
+
+        -- A proc badge and the range helper paint from the same anchor tick.
+        sb.ST.has_attackable_target = true
+        sb.in_range = { ["Auto Shot"] = 1 }
+        sb.class_db.hunter_bw_badge_enabled = true
+        sb.auras = {
+            { name = "Bestial Wrath", spell_id = 19574, duration = 18, expiration = 18 },
+        }
+        sb.now = 0.5 -- past the 0.2 s badge scan throttle
+        tick_host(sb)
+        eq(ui.range_helper.shown, true,
+            "HU-37: the range helper paints while the ranged bar is hidden")
+        eq(ui.bw_badge.shown, true,
+            "HU-37: a proc badge paints while the ranged bar is hidden")
+
+        -- NO DOUBLE TICK: a visible bar that carries its own tick owns the frame; the
+        -- anchor tick defers to it, which is the pre-fix wiring for the state it always
+        -- had - so the set is updated exactly once per frame in both states.
+        ui.cast_frame:Hide()
+        sb.ranged_bar_frame.shown = true
+        sb.ranged_bar_frame:SetScript("OnUpdate", function() end)
+        tick_host(sb)
+        eq(ui.cast_frame.shown, false,
+            "HU-37: the anchor tick defers while the visible bar's own tick is live")
+        sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+        eq(ui.cast_frame.shown, true,
+            "HU-37: the visible bar's tick still drives the set exactly as before")
+
+        -- A visible bar WITHOUT its tick (a fixture build, or frames that came up
+        -- without bring_up_hand) leaves the frame to the anchor tick, not blank.
+        sb.ranged_bar_frame:SetScript("OnUpdate", nil)
+        ui.cast_frame:Hide()
+        tick_host(sb)
+        eq(ui.cast_frame.shown, true,
+            "HU-37: a visible bar with no tick leaves the frame to the anchor tick")
+
+        -- ... and the anchor tick takes the very next frame the bar's tick stops running.
+        ui.cast_frame:Hide()
+        sb.ranged_bar_frame:Hide()
+        tick_host(sb)
+        eq(ui.cast_frame.shown, true,
+            "HU-37: the anchor tick takes over the frame the bar's tick stops running")
+
+        -- The CONFIGURED half of the visibility rule still hides the set: ignoring the
+        -- activity gate must not surface what the user's own configuration hides.
+        sb.class_db.class_enabled = false
+        tick_host(sb)
+        eq(ui.cast_frame.shown, false, "HU-37: the class switch-off hides the set")
+        sb.class_db.class_enabled = true
+        sb.ST.hand_show_condition_met = function() return false end
+        tick_host(sb)
+        eq(ui.cast_frame.shown, false,
+            "HU-37: the hand's show rule hides the set while the bar is idle")
+        sb.ST.hand_show_condition_met = function() return true end
+        tick_host(sb)
+        eq(ui.cast_frame.shown, true, "HU-37: a met show rule lets the set paint")
+        sb.ST.check_bar_enable_settings = function() return false end
+        tick_host(sb)
+        eq(ui.cast_frame.shown, false, "HU-37: the hand/spec enable gate hides the set")
+        sb.ST.check_bar_enable_settings = nil
+        sb.ST.hand_show_condition_met = nil
+
+        -- INERT: the ranged hand switched off after the build. The anchor hook keeps
+        -- running (the anchor is never hidden) but the tick is a silent no-op: no
+        -- engine reads at all.
+        sb.ranged_available = false
+        local cast_reads, aura_reads, range_reads =
+            sb.calls.cast, sb.calls.aura, sb.calls.in_range
+        local ok, err = pcall(tick_host, sb)
+        check(ok, "HU-37: a disabled ranged hand leaves the anchor tick silent ("
+            .. tostring(err) .. ")")
+        eq(sb.calls.cast, cast_reads, "HU-37: the disabled hand reads no casts")
+        eq(sb.calls.aura, aura_reads, "HU-37: the disabled hand reads no auras")
+        eq(sb.calls.in_range, range_reads, "HU-37: the disabled hand reads no ranges")
+        eq(ui.cast_frame.shown, false, "HU-37: the disabled hand hides the cast bar")
+        sb.ranged_available = true
+
+        -- INERT: no ranged hand state at all (a profile without the hand).
+        local saved_ranged = sb.ST.ranged
+        sb.ST.ranged = nil
+        local ok2, err2 = pcall(tick_host, sb)
+        check(ok2, "HU-37: a missing ranged hand leaves the anchor tick silent ("
+            .. tostring(err2) .. ")")
+        eq(ui.cast_frame.shown, false, "HU-37: no ranged hand hides the set")
+        sb.ST.ranged = saved_ranged
+    end
+
+    -- 14n-ii) the anchor hook is guarded (H3, the power_bar/weave_range pattern): a
+    -- throwing tick never escapes the OnUpdate, and after the shared quarantine
+    -- threshold the hook uninstalls and the set hides instead of erroring every frame.
+    do
+        local sb = build_ui({ ranged_start = 0, ranged_speed = 2 })
+        sb.ST.HUNTER.post_init(sb.ST)
+        local ui = sb.st.hunter_ui
+        local saved_update = ui.update
+        ui.update = function() error("hunter ui tick exploded", 0) end
+        sb.ranged_bar_frame:Hide()
+        ui.cast_frame:Show()
+        for _ = 1, 25 do
+            tick_host(sb)
+        end
+        ui.update = saved_update
+        eq(ui.tick_failures, 25, "HU-37: every throwing anchor tick is counted")
+        eq(sb.ranged_anchor.scripts.OnUpdate, nil,
+            "HU-37: the hook gives up after the shared quarantine threshold")
+        eq(ui.cast_frame.shown, false, "HU-37: a quarantined tick hides the set")
+    end
+
+    -- 14n-i) Retail / disabled-ranged-hand shape: nothing is built, so no anchor hook is
+    -- installed and nothing can tick (the first-wave inert contract).
+    do
+        local sb = build_ui({ ranged_available = false })
+        local ok, err = pcall(sb.ST.HUNTER.post_init, sb.ST)
+        check(ok, "HU-37: post_init without a ranged hand does not error ("
+            .. tostring(err) .. ")")
+        eq(sb.st.hunter_ui.ready, nil, "HU-37: the set stays unbuilt (Retail inert)")
+        eq(sb.st.hunter_ui.tick_host, nil,
+            "HU-37: no tick host is claimed for a disabled ranged hand")
+        eq(sb.ranged_anchor.scripts.OnUpdate, nil,
+            "HU-37: no hunter hook is installed on the anchor (nothing can tick)")
+        eq(sb.calls.cast, 0, "HU-37: no casting reads are performed at all")
     end
 end
 
@@ -6148,6 +6718,15 @@ do
         "NILSWEEP HU2 the ranged tick hides the UI without a class row")
     check(sb.ST.bar_hook_errors == nil or (sb.ST.bar_hook_errors.count or 0) == 0,
         "NILSWEEP HU2 no sub-feature site runs (and none errors) without a class row")
+    -- HU-37 re-cut: the same nil class row through the anchor tick (the source the set
+    -- uses while the ranged bar is hidden) stays contained and hidden.
+    sb.ranged_bar_frame:Hide()
+    sb.st.hunter_ui.cast_frame:Show()
+    local ok_host, err_host = pcall(tick_host, sb)
+    check(ok_host, "NILSWEEP HU2 the anchor tick tolerates a missing class row (error: "
+        .. tostring(err_host) .. ")")
+    check(sb.st.hunter_ui.cast_frame:IsShown() == false,
+        "NILSWEEP HU2 the anchor tick hides the UI without a class row")
     -- The re-anchor branch reads the lock setting only while the cast bar is up, so
     -- show it: that is the live state the guard protects (nil row = shipped locked).
     if sb.st.hunter_ui.cast_frame then

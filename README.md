@@ -19,6 +19,31 @@ omit the swing-timer library, so they load with the same inert stand-in as Retai
 rotation label, design mode and options still work, the bars never move. They are **not**
 supported clients: there is no live swing engine, so the rotation scenario is refused there.
 
+Every character can show a **power bar** (mana, rage, energy or focus as the client reports it) in the
+slot directly under the melee stack: it follows the **offhand row** for a class that can use an offhand
+— even while that hand is idle — and the mainhand row otherwise, and it hides when no melee bar is on
+screen. The offhand bar always renders at the mainhand's width and height, and **Melee pair height** in
+the Positioning options sizes both melee bars together (clear it to return each hand to its own saved
+height). Hunters' thin mainhand/offhand bars are stacked under the ranged bar at its width by default;
+the stack has its own toggle and restores the saved hand positions when turned off.
+
+Offhand and ranged bars are activity-driven: they appear after a real offhand swing or a real ranged
+shot (or while Auto Shot is armed) — not merely because you are in combat — and hide again after about
+two cycles of that hand. On the first login after updating, the ranged bar is moved once into the
+standard layout above the melee stack for every class that owns one, a dragged or scaled saved row
+included, with one chat notice; a drag made afterwards is respected.
+
+The hunter's aids read as one set. Every hand is measured on a single clock: the precise clock drives
+the tick, `GetTime()` owns the domain (it re-anchors on every read, so a loading screen cannot skew
+it), and engine timestamps are converted onto that axis — a cycle is exactly one weapon speed long,
+so the fill, the countdown and the queue tint cannot drift apart. Each hand's fill is painted from
+that hand's own cycle (a late layout pass can no longer leave the mainhand bar looking full), the
+Auto Shot zone and the cast bar share one colour language (white while a cast is safe, red while it
+is not, same alphas), every bar sits at 0.9 opacity with the same border, and each HUD icon draws a
+single cooldown number. Bars default to 275 px wide on every class; the next-action guide has its
+own frame at the upper right of the screen (127, -65) and stays locked until its own lock toggle is
+opened.
+
 ## Screenshots
 
 PENDING — screenshots to be added. No images yet.
@@ -34,7 +59,7 @@ PENDING — screenshots to be added. No images yet.
 - <span style="color:#FFD700">`/st`</span> — open options
 - <span style="color:#FFD700">`/st practice`</span> — toggle the practice trainer
 - <span style="color:#FFD700">`/st design`</span> — toggle layout mode
-- <span style="color:#FFD700">`/st diag`</span> — print a diagnostic report (include it verbatim when reporting an issue)
+- <span style="color:#FFD700">`/st diag`</span> — print a diagnostic report (include it verbatim when reporting an issue); it now carries a per-hand bar-state line, the power-bar state and a guard-quarantine line
 
 ## Classes
 

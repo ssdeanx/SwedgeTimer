@@ -2,7 +2,7 @@
 ## Title: SwedgeTimer
 ## Notes: General purpose swing timer addon for all WoW clients.
 ## IconTexture: SwedgeTimer_v2_transparent.tga
-## Author: AcidBomb
+## Author: Swedge
 ## Version: "2.1.3"
 ## DefaultState: enabled
 ## OptDeps: Ace3, LibSharedMedia-3.0, LibStub
@@ -56,6 +56,7 @@ practice_progress.lua
 practice_progress_ui.lua
 main.lua
 bars.lua
+power_bar.lua
 ldb.lua
 nextaction_ui.lua
 practice_ui.lua

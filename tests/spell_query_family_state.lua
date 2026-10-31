@@ -386,13 +386,16 @@ do
     eq(wrath_numbers, 0, "queue WRATH/Titanforge: no bare id reaches IsCurrentSpell")
     check(wrath_strings > 0, "queue WRATH/Titanforge: the probe ran by name")
 
-    -- The queue helper deliberately stays one token SHAPE per family: an entry whose
-    -- name the client cannot resolve is skipped, never replaced by a mixed id token.
+    -- HU-34: the queue helper probes the IDs of entries whose name is cold, so a
+    -- cold cache is still detectable and never a silently empty probe list.
     local cold_ST, cold_tokens = queue_profile({ project = 11, interface = 38002,
         GetSpellInfo = function() return nil end, current_spell = "Raptor Strike" })
     cold_ST.HUNTER.on_current_spell_cast_changed(cold_ST, false)
-    eq(cold_ST.raptor_strike_queued, false, "queue cold cache: nothing queues from an unknown token")
-    eq(#cold_tokens.current, 0, "queue cold cache: an unknown token spends no probe")
+    eq(cold_ST.raptor_strike_queued, false, "queue cold cache: an unknown name never matches")
+    eq(#cold_tokens.current, 11, "queue cold cache: every rank id is probed as the fallback")
+    local cold_c_strings, cold_c_numbers = token_types(cold_tokens.current)
+    eq(cold_c_strings, 0, "queue cold cache: no name token is invented")
+    eq(cold_c_numbers, 11, "queue cold cache: the probes are the rank ids")
 end
 
 --=========================================================================================
@@ -463,8 +466,23 @@ do
         .. "    end\n    if st.family ~= \"TBC\" and st.family ~= \"WRATH\" then"),
         "hunter: spell_token gates TBC and WRATH separately")
     check(has("classes/hunter.lua",
-        "local function queue_tokens(id_table)\n    if st.family ~= \"TBC\" and st.family ~= \"WRATH\" then"),
+        "local function queue_tokens(id_table)\n    local tokens, seen = {}, {}\n"
+        .. "    if st.family ~= \"TBC\" and st.family ~= \"WRATH\" then"),
         "hunter: queue_tokens follows the same rule")
+    check(has("classes/hunter.lua",
+        "local names, ids = {}, {}\n    for spell_id in pairs(id_table) do\n"
+        .. "        local name = api.GetSpellInfo(spell_id)\n"
+        .. "        if type(name) == \"string\" then"),
+        "hunter: queue_tokens separates names from cold ids")
+    check(has("classes/hunter.lua", "        else\n            ids[#ids + 1] = spell_id"),
+        "hunter: queue_tokens keeps the approved id fallback for a cold name")
+    check(has("hunter_ui.lua",
+        "if st.family == \"TBC\" or st.family == \"WRATH\" then\n"
+        .. "        if type(api.get_spell_query) == \"function\" then\n"
+        .. "            return api.get_spell_query(name, spell_id) or spell_id, name"),
+        "hunter_ui: range tokens are names with the approved id fallback on TBC/WRATH")
+    check(has("hunter_ui.lua", "    return spell_id, name"),
+        "hunter_ui: Era range tokens are numeric ids")
     check(has("classes/shaman.lua",
         "local function spell_query(id, name)\n\tif st.family == \"TBC\" then\n\t\treturn name or id\n"
         .. "\telseif st.family == \"WRATH\" then\n\t\treturn name or id"),

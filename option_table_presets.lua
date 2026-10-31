@@ -125,8 +125,14 @@ function ST:construct_latency_settings_table()
             set = "latency_setter",
             disabled = function(panel)
                 local db = panel.db.profile
-                local is_fixed = db.gcd_marker_offset_mode == "Fixed"
-                local is_calibrated = db.gcd_marker_offset_mode == "Calibrated"
+                -- AceDB '**' trap: rawget so a missing key returns nil (widget disabled)
+                -- without materialising a defaults row on the profile.
+                local mode = nil
+                if type(db) == "table" then
+                    mode = rawget(db, "gcd_marker_offset_mode")
+                end
+                local is_fixed = mode == "Fixed"
+                local is_calibrated = mode == "Calibrated"
                 return not (is_fixed or is_calibrated)
             end,
         },
@@ -255,7 +261,14 @@ function ST:construct_bar_appearance_settings_table()
             type = "range",
             order = 0.3,
             name = "Height",
-            desc = "The height of the swing timer.",
+            -- Melee pair height (operator order 2026-10-28; brief L3): while the class-level
+            -- pair height is set, the mainhand and offhand RENDER at it, and this widget's
+            -- handler (set_opts_funcs in option_tables.lua) shows and edits that shared
+            -- value for those two hands - so the number here is always the height that is
+            -- actually drawn, never an inert per-hand key. The ranged hand keeps its own.
+            desc = "The height of the swing timer. While a melee pair height is set "
+                .. "(Positioning -> Melee pair), the mainhand and offhand show and edit that "
+                .. "shared height here and the offhand matches the mainhand.",
             min = 6,
             max = 60,
             step = 1,

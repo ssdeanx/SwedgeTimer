@@ -4535,6 +4535,267 @@ do
 end
 
 
+--=========================================================================================
+-- 30) Melee pair height (2026-10-28): the single widget and the honest per-hand heights
+--=========================================================================================
+-- Operator order: "off hand should always be same width as main hand. maybe have it so u
+-- can adjust the height for both." ONE class-level key (config_presets.lua documents it as
+-- a comment, because nil is its shipped value). The per-hand Height widgets must never lie
+-- while the pair height is set: they show it, they are locked in the Positioning panel, and
+-- their setter (the Appearance panel's handler) writes the pair key instead of an inert
+-- per-hand key. bars.lua (not loaded in this sandbox) owns the sizing; this suite pins the
+-- OPTIONS half: presence, placement next to the Hand Height widgets, bounds, nil-safety and
+-- the getter/setter routing once a pair height is reported.
+do
+    local function contains(text, needle, label)
+        check(type(text) == "string" and text:find(needle, 1, true) ~= nil, label)
+    end
+    -- hand_dbs is created lazily by the fixture's get_hand_table: seed a row before a
+    -- widget getter reads it.
+    local function seed_hand(sb, hand, height)
+        sb.hand_dbs[hand] = sb.hand_dbs[hand] or {}
+        sb.hand_dbs[hand].bar_height = height
+    end
+    local PAIR_CLASSES = { "Warrior", "Rogue", "Hunter", "Shaman" }
+
+    for _, pretty in ipairs(PAIR_CLASSES) do
+        local sb = build(pretty)
+        check(sb ~= nil, "PAIR: " .. pretty .. " builds its option tree")
+        local positions = sb and sb.ST.opts_table.args.positions
+        check(type(positions) == "table", "PAIR: " .. pretty .. " has the Positioning panel")
+        if positions then
+            local w = positions.args.melee_pair_height
+            check(type(w) == "table", "PAIR: " .. pretty .. " has the one melee pair height widget")
+            if type(w) == "table" then
+                eq(w.type, "range", "PAIR: " .. pretty .. " pair height is a range widget")
+                eq(w.min, 6, "PAIR: " .. pretty .. " pair height floor matches the per-hand Height")
+                eq(w.max, 60, "PAIR: " .. pretty .. " pair height ceiling matches the per-hand Height")
+                eq(w.step, 1, "PAIR: " .. pretty .. " pair height steps by one pixel")
+                -- It sits between the last melee hand's controls and the ranged hand's.
+                check(type(w.order) == "number" and w.order > 3.4 and w.order < 4.0,
+                    "PAIR: " .. pretty .. " pair widget sits next to the melee Height widgets")
+                -- Unset reads the mainhand's own height (what is actually rendered), not 0.
+                seed_hand(sb, "mainhand", 22)
+                eq(w.get(), 22, "PAIR: " .. pretty .. " unset reads the mainhand height")
+                -- Junk never writes; a real number writes the CLASS key only.
+                w.set(nil, nil)
+                eq(sb.class_db.melee_bar_height, nil, "PAIR: " .. pretty .. " nil writes nothing")
+                w.set(nil, -4)
+                eq(sb.class_db.melee_bar_height, nil, "PAIR: " .. pretty .. " a negative writes nothing")
+                w.set(nil, 26)
+                eq(sb.class_db.melee_bar_height, 26, "PAIR: " .. pretty .. " a number writes the class key")
+                eq(sb.hand_dbs.mainhand.bar_height, 22,
+                    "PAIR: " .. pretty .. " the per-hand key is untouched")
+            end
+            local reset = positions.args.melee_pair_height_reset
+            check(type(reset) == "table" and reset.type == "execute",
+                "PAIR: " .. pretty .. " has the use-each-hand reset button")
+            if type(reset) == "table" then
+                reset.func()
+                eq(sb.class_db.melee_bar_height, nil,
+                    "PAIR: " .. pretty .. " the reset clears the pair key (nil = shipped)")
+            end
+        end
+    end
+
+    -- Classes without a melee PAIR get no widget: a single melee hand (Paladin/Druid) and
+    -- the casters (mainhand + ranged) have nothing to size together.
+    for _, pretty in ipairs({ "Paladin", "Druid", "Mage", "Priest", "Warlock" }) do
+        local sb = build(pretty)
+        local positions = sb and sb.ST.opts_table.args.positions
+        check(type(positions) == "table", "PAIR: " .. pretty .. " still has the Positioning panel")
+        if positions then
+            check(positions.args.melee_pair_height == nil,
+                "PAIR: " .. pretty .. " has no melee pair widget (no pair exists)")
+            check(positions.args.melee_pair_height_reset == nil,
+                "PAIR: " .. pretty .. " has no pair reset button")
+        end
+    end
+
+    -- A Death Knight owns a melee pair (mainhand + offhand) but ships no class panel: the
+    -- widget comes from the hand set, never from class logic.
+    do
+        local sb = build("Warrior")
+        check(sb.ST.opts_table.args.positions.args.melee_pair_height ~= nil,
+            "PAIR: the widget is driven by the hand set, not by a class panel")
+    end
+
+    -- ---- The honest per-hand heights while a pair height is set -------------------
+    -- bars.lua reports the pair; this sandbox injects that seam (it does not load
+    -- bars.lua). With it reporting 30:
+    --   * Positioning -> Mainhand/Offhand Height show 30 and are locked;
+    --   * Positioning -> Ranged Height keeps its own value and stays editable;
+    --   * Appearance -> Mainhand/Offhand Height show 30 and their setter writes the pair.
+    local sb = build("Warrior")
+    local ST = sb.ST
+    local pair = 30
+    ST.melee_pair_height = function() return pair end
+    local positions = ST.opts_table.args.positions
+    seed_hand(sb, "mainhand", 20)
+    seed_hand(sb, "offhand", 20)
+    seed_hand(sb, "ranged", 15)
+    eq(positions.args.mainhandbar_height.get(), 30,
+        "PAIR-UI: the mainhand Height shows the pair height that is rendered")
+    eq(positions.args.offhandbar_height.get(), 30,
+        "PAIR-UI: the offhand Height shows the same pair height")
+    eq(positions.args.rangedbar_height.get(), 15,
+        "PAIR-UI: the ranged Height keeps its own value (never part of the pair)")
+    eq(positions.args.mainhandbar_height.disabled(), true,
+        "PAIR-UI: the mainhand Height is locked while the pair owns it")
+    eq(positions.args.offhandbar_height.disabled(), true,
+        "PAIR-UI: the offhand Height is locked while the pair owns it")
+    eq(positions.args.rangedbar_height.disabled(), false,
+        "PAIR-UI: the ranged Height stays editable")
+    contains(positions.args.mainhandbar_height.desc(), "melee pair height",
+        "PAIR-UI: the mainhand Height says it follows the pair")
+    contains(positions.args.rangedbar_height.desc(), "pixel height",
+        "PAIR-UI: the ranged Height keeps the plain description")
+
+    -- The Appearance panel's Height goes through the hand handler (getter / bar_setter).
+    -- bars.lua's configure_* seams are free functions this sandbox does not load: stub them
+    -- so the setter's production tail runs (the routing above it is what is under test).
+    for _, name in ipairs({
+        "configure_bar_size_and_positions", "configure_bar_appearances",
+        "configure_bar_outline", "configure_gcd_markers", "set_gcd_marker_positions",
+        "configure_deadzone", "set_deadzone_width",
+    }) do
+        ST[name] = function() end
+    end
+    local mainhand_handler = ST.opts_funcs.mainhand
+    eq(mainhand_handler.getter(nil, { "bar_appearance_group", "bar_height" }), 30,
+        "PAIR-UI: the Appearance mainhand Height shows the pair height")
+    eq(ST.opts_funcs.ranged.getter(nil, { "bar_appearance_group", "bar_height" }), 15,
+        "PAIR-UI: the Appearance ranged Height shows its own height")
+    mainhand_handler.bar_setter(nil, { "bar_appearance_group", "bar_height" }, 34)
+    eq(sb.class_db.melee_bar_height, 34,
+        "PAIR-UI: editing the mainhand Appearance Height writes the pair key")
+    eq(sb.hand_dbs.mainhand.bar_height, 20,
+        "PAIR-UI: the inert per-hand key is not rewritten")
+    -- With no pair height, the routing is the shipped per-hand behaviour again.
+    pair = nil
+    seed_hand(sb, "mainhand", 20)
+    eq(mainhand_handler.getter(nil, { "bar_appearance_group", "bar_height" }), 20,
+        "PAIR-UI: unset returns to the hand's own height")
+    mainhand_handler.bar_setter(nil, { "bar_appearance_group", "bar_height" }, 24)
+    eq(sb.hand_dbs.mainhand.bar_height, 24,
+        "PAIR-UI: unset writes the per-hand key again")
+    eq(sb.class_db.melee_bar_height, 34,
+        "PAIR-UI: the per-hand write leaves the old class key untouched")
+    -- Without a pair height the OFFHAND still renders at the mainhand's height (the size
+    -- invariant), so its widgets must show and edit the MAINHAND key, never its own inert
+    -- one. That is the other half of "do not make the per-hand height options lie".
+    local offhand_handler = ST.opts_funcs.offhand
+    eq(offhand_handler.getter(nil, { "bar_appearance_group", "bar_height" }), 24,
+        "PAIR-UI: with no pair the offhand Height shows the mainhand height it renders at")
+    offhand_handler.bar_setter(nil, { "bar_appearance_group", "bar_height" }, 26)
+    eq(sb.hand_dbs.mainhand.bar_height, 26,
+        "PAIR-UI: editing the offhand Height writes the mainhand key")
+    eq(sb.hand_dbs.offhand.bar_height, 20,
+        "PAIR-UI: the inert offhand key is left alone")
+    eq(positions.args.offhandbar_height.get(), 26,
+        "PAIR-UI: the Positioning offhand Height follows the mainhand with no pair")
+    eq(positions.args.offhandbar_height.disabled(), true,
+        "PAIR-UI: the Positioning offhand Height stays locked (it follows the mainhand)")
+    eq(positions.args.mainhandbar_height.disabled(), false,
+        "PAIR-UI: with no pair the mainhand Height is editable again")
+    eq(positions.args.rangedbar_height.get(), 15,
+        "PAIR-UI: the ranged Height is unaffected by the melee routing")
+end
+
+--=========================================================================================
+-- 31) Offhand Width (2026-10-28): locked to the width it actually renders (audit E1)
+--=========================================================================================
+-- bars.lua's size invariant renders the offhand at the MAINHAND's width on every layout
+-- pass (hand_bar_size), so the offhand's own bar_width key never sizes the bar. The
+-- Positioning Width widget therefore shows the mainhand's width, is locked and says so,
+-- and any write aimed at the offhand is routed to the mainhand key - the same treatment
+-- the Height widget already has. E1: "a control that accepts input and does nothing is
+-- unacceptable in a publishable build."
+do
+    local function contains(text, needle, label)
+        check(type(text) == "string" and text:find(needle, 1, true) ~= nil, label)
+    end
+    local SETTER_TAIL = {
+        "configure_bar_size_and_positions", "configure_bar_appearances",
+        "configure_bar_outline", "configure_gcd_markers", "set_gcd_marker_positions",
+        "configure_deadzone", "set_deadzone_width",
+    }
+    for _, pretty in ipairs({ "Warrior", "Rogue", "Hunter", "Shaman" }) do
+        local sb = build(pretty)
+        check(sb ~= nil, "WIDTH: " .. pretty .. " builds its option tree")
+        local positions = sb and sb.ST.opts_table.args.positions
+        check(type(positions) == "table", "WIDTH: " .. pretty .. " has the Positioning panel")
+        if positions then
+            local offhand = positions.args.offhandbar_width
+            local mainhand = positions.args.mainhandbar_width
+            local ranged = positions.args.rangedbar_width
+            check(type(offhand) == "table", "WIDTH: " .. pretty .. " has the offhand Width widget")
+            check(type(mainhand) == "table", "WIDTH: " .. pretty .. " has the mainhand Width widget")
+            if type(offhand) == "table" and type(mainhand) == "table" then
+                eq(offhand.type, "range", "WIDTH: " .. pretty .. " offhand Width is a range")
+                eq(offhand.min, 100, "WIDTH: " .. pretty .. " offhand Width floor matches the hand Width")
+                eq(offhand.max, 600, "WIDTH: " .. pretty .. " offhand Width ceiling matches the hand Width")
+                eq(offhand.step, 1, "WIDTH: " .. pretty .. " offhand Width steps by one pixel")
+                -- The widget shows the width the offhand actually renders at (mainhand key).
+                sb.hand_dbs.mainhand = sb.hand_dbs.mainhand or {}
+                sb.hand_dbs.mainhand.bar_width = 240
+                sb.hand_dbs.offhand = sb.hand_dbs.offhand or {}
+                sb.hand_dbs.offhand.bar_width = 175
+                eq(offhand.get(), 240,
+                    "WIDTH: " .. pretty .. " offhand Width shows the mainhand width it renders at")
+                eq(mainhand.get(), 240, "WIDTH: " .. pretty .. " mainhand Width keeps its own key")
+                eq(offhand.disabled(), true, "WIDTH: " .. pretty .. " offhand Width is locked")
+                eq(mainhand.disabled(), false, "WIDTH: " .. pretty .. " mainhand Width stays editable")
+                if type(ranged) == "table" then
+                    eq(ranged.disabled(), false, "WIDTH: " .. pretty .. " ranged Width stays editable")
+                end
+                contains(offhand.desc(), "follows the mainhand",
+                    "WIDTH: " .. pretty .. " offhand description says it follows the mainhand")
+                if pretty == "Hunter" then
+                    contains(offhand.desc(), "hunter melee stack",
+                        "WIDTH: the offhand description keeps the hunter-stack exception")
+                end
+                -- A write aimed at the offhand lands on the key that sizes it, and the
+                -- offhand's own inert key is never rewritten.
+                for _, name in ipairs(SETTER_TAIL) do
+                    sb.ST[name] = function() end
+                end
+                offhand.set(nil, 300)
+                eq(sb.hand_dbs.mainhand.bar_width, 300,
+                    "WIDTH: " .. pretty .. " an offhand write routes to the mainhand key")
+                eq(sb.hand_dbs.offhand.bar_width, 175,
+                    "WIDTH: " .. pretty .. " the inert offhand width key is left alone")
+                mainhand.set(nil, 320)
+                eq(sb.hand_dbs.mainhand.bar_width, 320,
+                    "WIDTH: " .. pretty .. " a mainhand write hits its own key")
+                sb.hand_dbs.mainhand.bar_width = nil
+                check(pcall(offhand.get), "WIDTH: " .. pretty .. " a missing mainhand width never throws")
+            end
+        end
+    end
+
+    -- A single-melee-hand class has no offhand width widget at all (nothing to lock).
+    for _, pretty in ipairs({ "Paladin", "Druid", "Mage", "Priest" }) do
+        local sb = build(pretty)
+        local positions = sb and sb.ST.opts_table.args.positions
+        if positions then
+            check(positions.args.offhandbar_width == nil,
+                "WIDTH: " .. pretty .. " has no offhand Width widget (no offhand hand)")
+        end
+    end
+end
+
+do
+    -- LATENT L4: gcd_marker_offset_mode read uses rawget.
+    local f = assert(io.open(ROOT .. "option_table_presets.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    check(src:find('mode = rawget(db, "gcd_marker_offset_mode")', 1, true) ~= nil,
+        "LATENT L4 gcd_marker_offset_mode uses rawget")
+    check(src:find('db.gcd_marker_offset_mode == "Fixed"', 1, true) == nil,
+        "LATENT L4 no plain metatable-triggering gcd_marker_offset_mode read remains")
+end
+
 print(string.format("%d checks, %d failed", checks, failures))
 if failures > 0 then os.exit(1) end
 os.exit(0)

@@ -28,13 +28,48 @@
   nothing.
 - Per-client spell querying: state queries use numeric ids on Classic Era (Season of Discovery included)
   and localized spell names first on TBC Anniversary and WotLK Titanforge, with the id form kept as the
-  fallback.
+  fallback. The hunter range tokens now follow the same matrix (Era ids; TBC/Wrath names with the id
+  fallback) and the on-next-attack queue probes cold rank ids instead of silently skipping them.
+- Power bar: a thin primary-resource bar in the slot under the melee stack. It anchors to the **offhand
+  row** whenever the class can use an offhand — even while that hand is idle and hidden — otherwise to
+  the mainhand row; it re-points when the owning row is moved, and it hides when no melee bar is on
+  screen. It reads the client's primary power type, so hunters/paladins/shamans show mana, warriors and
+  bear druids rage, rogues and cat druids energy, and focus is shown where it is primary. Default
+  height 14 px (range 10-30); the value text can be hidden.
+- Hunter melee stack: the thin mainhand/offhand bars are pinned under the ranged bar at its width
+  (ranged -> MH -> OH). It is a stable layout (not tied to the cast-bar window) and has an off switch
+  that restores each hand's own saved width and LibWindow position.
+- Melee pair height (Positioning): one control sizes the mainhand and offhand bars together (6-60 px,
+  one-pixel step), and clearing it hands each bar back to its own saved height. Only a class that owns
+  both melee hands gets the block. The offhand's own Height and Width fields show the size that is
+  actually rendered for that hand and are locked, so neither can claim to size a bar it does not size.
+- `/st diag` now prints a per-hand BAR STATE line — built / shown / alpha / tick / the cycle fields
+  (start, speed, ends_at, now, progress) / full / paused / dead / fill width / saved position, plus the
+  hunter queue flags — a one-line power-bar state (anchor row, shown, width and height, live power type
+  and value, and the reason it is hidden), a `why=` reason token on every hidden hand, the activity
+  gate and receipt fields (`gate=`, `active=`, `win=`, `left=`, `src=`), and a quarantine line naming
+  each guarded site with its throw count. A silent bar, a stuck gate or a quarantined subsystem is now
+  visible without an error being thrown.
 
 ### Changed
-- Hunter mainhand/offhand no longer restart on ranged shots through the addon's own class guard (the
-  vendored swing library stays stock); Wrath/Titanforge's library-level Auto Shot reset entry is the
-  documented residual. The hunter melee cast-bar re-anchor is retired, so the melee bars no longer hop
-  into the ranged stack during the Auto Shot window.
+- Offhand and ranged bars are activity-driven: they show after a real offhand swing or a real ranged
+  shot (Auto Shot, Shoot, Throw, Shoot Wand), or while Auto Shot is armed, and hide again after about
+  two cycles of that hand (clamped to 1.5-8 s). Being in combat with a target no longer shows them, and
+  the hand's configured show rule still applies on top of the gate.
+- The ranged bar is placed once, on the first login after the update, in the standard layout above the
+  melee stack, for every class that owns a ranged hand — a dragged or scaled saved row included. A row
+  already in place is left untouched (no write, no notice); a move announces itself once in chat. A
+  drag made after that pass is respected, and the row directly under the melee stack stays reserved for
+  the power bar.
+- The offhand bar takes the mainhand's width and height instead of its own saved keys (the hunter melee
+  stack still overrides both melee hands to the ranged bar's width); changing the mainhand's size
+  resizes a built offhand in the same pass.
+- A completed ranged shot no longer restarts the melee swing: the addon arms the vendored swing
+  library's own `preventSwingReset` field for every class (not only hunters), and Shoot, Throw and
+  Shoot Wand are no longer in the addon's own melee-reset list. The library itself stays stock, so its
+  Wrath and Cata branches' own reset entries remain the documented residual. The hunter melee cast-bar
+  re-anchor is retired; the melee stack anchors to the ranged bar itself, so it cannot hop during the
+  Auto Shot window.
 - The bar backdrop is opaque by default (alpha 1.0). A one-time migration raises only a profile that
   still holds the untouched old default; custom colours and theme presets are left as saved.
 - The paladin practice session now opens STOPPED (the reference trainer's behaviour): **Start Fight**
@@ -43,6 +78,18 @@
 - Options → Practice offers **Open Practice Panel** (all six class pages): it opens or raises the
   trainer and never ends the session. Closing the options window leaves practice running; only the
   practice panel's X stops it.
+- The hunter cast window now speaks one colour language: the Auto Shot zone and the cast bar's own
+  overlay are white while a cast is safe and red while it is not (was green/red), the safe face carries
+  more alpha (0.55), and the latency end-slice uses the same red at the same alpha. A Steady Shot's
+  landing is easier to read against the zone.
+- The next-action guide ships in its own frame at the upper right of the screen by default (127, -65
+  from the screen centre; was 0, -180), so a fresh profile starts where the operator keeps it. It stays
+  locked by default like every other movable frame; its own lock toggle unlocks dragging.
+- Bar width defaults to 275 px for every hand on every class: the per-class 200 px overrides are gone, so
+  the shared default is the only authority and a fresh profile matches the shipped layout.
+- Bar opacity is one value everywhere (0.9): the shared fill default moved up from 0.85 so it matches
+  every hand's own fill, and the hunter's melee rows now use the shared 2 px border, so the thin stack
+  reads as the same widget as the ranged row above it.
 
 ### Fixed
 - Restored the HU-23 LibRangeCheck protected-call removal after the 2026-10-25 re-vendor: the library no
@@ -51,10 +98,55 @@
   stale cycle, and world entry STOPs live cycles before clearing them instead of dropping a visible bar.
 - Class practice drills previously had no timeline at all; the moving cue strip now appears in every
   session.
+- Base TOC restored to the classic-line fallback (11509, 20506, 38002); it must not advertise a
+  mainline interface while shipping LibClassicSwingTimerAPI. The TOC check now exact-matches both the
+  base and Mainline interface lists.
+- The offline harness no longer writes the tracked luac.out artifact (luac output goes to a temp file),
+  and the repo .gitattributes no longer excludes the required Media fonts/statusbar/sounds from a
+  git-archive release.
+- Hunter mainhand fill: the Raptor Strike / Steady Shot queue tint now paints only while a live
+  main-hand melee cycle exists, and every clear path repaints — the swing that consumes the queue,
+  combat exit, a target change and the current-spell clear. Ranged play can no longer recolour the
+  main-hand fill; shipped defaults are unchanged (Raptor ON, Steady OFF).
+- Classic Era: `COMBAT_RATING_UPDATE` no longer raises. The Classic Era client does not define
+  `CR_HASTE_SPELL`, so the haste rating is now read through the literal rating index 20 and the rating
+  reads are pcall-guarded, with a nil reading treated as unknown rather than a crash.
+- The one-time opaque-backdrop migration now actually reaches a saved profile: the done marker and the
+  class row are read with `rawget` and the marker must be the plain boolean `true`, so AceDB's defaults
+  metatable can no longer answer the read with a table and skip the migration.
+- Hunter cast bar, range helper and proc badges no longer stop painting when the ranged bar is hidden:
+  the visual set is driven from the hand's anchor frame as well, and it stays inert when the ranged
+  hand is disabled.
+- Hunter mainhand bar no longer sits fully filled for the whole cycle: a layout pass that resizes the
+  melee rows (the hunter melee stack) now repaints the fill from the hand's live progress instead of
+  resetting it to the full bar width, the stack only resizes when the target width really changes (a
+  hairline width read no longer re-runs the resize every frame), and the tick re-asserts its own fill
+  as the frame's last write, so nothing that runs mid-tick can leave a full-width fill behind. The bar
+  empties and fills with its own swing instead of reading like a bar that never starts.
+- HUD icons draw one cooldown number instead of two: the icon's cooldown frame suppresses the client's
+  own countdown and is marked `noCooldownCount` (the inter-addon flag external countdown text reads), so
+  the HUD's own text is the single source. The cooldown swipe itself is untouched.
+- Swing timing now lives on ONE clock domain. The precise clock still drives the tick, but it re-anchors
+  to `GetTime()` on every read instead of learning the offset once (a loading screen pauses `GetTime()`
+  while the precise clock runs, so a frozen offset drifts by the loading time), and every swing-engine
+  timestamp is converted onto our axis at the handler boundary (the bias is measured from a START, which
+  always spans exactly one weapon speed). A mainhand cycle now spans exactly its speed - the operator's
+  readout showed `speed=3.50` with only 3.10 s of bar - so the fill, the countdown text and the queue
+  tint all read the same cycle.
 
 ### Hardening
 - Two code-grounded audits (core performance/reliability; feature/class) filed on the bench; no
   user-facing claim beyond the fixes above.
+- AceDB settings reads: the class table, the sound-channel lookups, the latency, GCD-marker and
+  bar-full-delay keys, the appearance migration's marker and the ranged-placement latch are read with
+  `rawget` and type-checked, so a missing key can no longer create and persist a defaults table on the
+  profile.
+- Sound: a saved sound channel must be a string (otherwise `"Master"`), and the options preview and the
+  paladin twist cue run the client's play/stop calls inside `pcall`, so a corrupt sound setting cannot
+  error out of the addon (a corrupt cue choice now falls back to the shipped cue instead of playing
+  nothing).
+- Every 2026-10-28 change above is proven by the offline suites and source review only — the in-client
+  pass on TBC Anniversary and Classic Era is still owed.
 
 ## [2.1.2]
 

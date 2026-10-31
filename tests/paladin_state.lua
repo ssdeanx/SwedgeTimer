@@ -980,6 +980,11 @@ do
         "wiring: swing recency feeds the reseal guard (TBC auto age)")
     check(src:find("has_echo_command == false", 1, true) ~= nil,
         "wiring: the Forever Echo condition degrades the seal (empty = unknown)")
+    -- LATENT L1: play_twist_sound reads sound_channel via rawget + type gate + pcall.
+    check(src:find('rawget(db, "sound_channel")', 1, true) ~= nil,
+        "LATENT L1: play_twist_sound rawgets sound_channel")
+    check(src:find('pcall(PlaySoundFile', 1, true) ~= nil,
+        "LATENT L1: play_twist_sound pcall-guards PlaySoundFile")
 end
 
 --=========================================================================================
@@ -1340,7 +1345,13 @@ do
     near(S.PALADIN.get_twist_window_time_before_swing(S), dialect,
         "G6: the deadzone calibration never leaks into the twist window")
     local src = read("classes/paladin.lua")
-    check(src:find("db.lag_multiplier", 1, true) ~= nil, "G3 wiring: the window getter reads the lag keys")
+    -- Re-cut (paladin-sound, 2026-10-28): the window getter now rawgets the lag keys
+    -- (the same '**' trap sweep as the sound channel), so the literal `db.lag_multiplier`
+    -- form is gone while the intent - the getter reads the configured lag multipliers -
+    -- is unchanged.
+    check(src:find('rawget(db, "lag_multiplier")', 1, true) ~= nil
+        or src:find("db.lag_multiplier", 1, true) ~= nil,
+        "G3 wiring: the window getter reads the lag keys")
     check(src:find("deadzone_scale_factor", 1, true) == nil,
         "G6 wiring: the paladin twist path never references the deadzone calibration")
 end
@@ -3832,6 +3843,240 @@ do
     check(ok, "NILSWEEP P12b get_hud_state tolerates a nil slot")
     if ok then
         eq(s.hidden, true, "NILSWEEP P12b get_hud_state hides a nil slot")
+    end
+end
+
+do
+    -- LATENT L1: play_twist_sound reads sound_channel with rawget + type gate + pcall.
+    local src = read("classes/paladin.lua")
+    check(src:find('rawget(db, "sound_channel")', 1, true) ~= nil,
+        "LATENT L1 play_twist_sound reads sound_channel via rawget")
+    check(src:find('type(channel) ~= "string"', 1, true) ~= nil,
+        "LATENT L1 play_twist_sound requires a string channel")
+    check(src:find('pcall(PlaySoundFile, path, channel)', 1, true) ~= nil,
+        "LATENT L1 play_twist_sound pcall-guards PlaySoundFile")
+    check(src:find('db.sound_channel or "Master"', 1, true) == nil,
+        "LATENT L1 no plain metatable-triggering sound_channel read remains")
+end
+
+--=========================================================================================
+-- 18) Twist playback sound: the AceDB '**' trap on the live path (F2.5 sibling)
+--=========================================================================================
+-- Pre-fix classes/paladin.lua:1151-1157 read the channel as a plain `db.sound_channel`
+-- read and called PlaySoundFile unpcall'd. db is the class row from
+-- self:get_class_table(), i.e. the AceDB profile row; every class row carries the '**'
+-- defaults metatable (config_presets.lua: each ST.<CLASS>.defaults sets
+-- ['**'] = ST.bar_defaults; Libs/AceDB-3.0/AceDB-3.0.lua:88-107), whose __index CREATES a
+-- defaults-filled table, rawsets it into the saved profile and returns it. PALADIN ships
+-- the string leaf (config_presets.lua:788), which is why the defect was latent: on any
+-- row without that leaf the old code could hand PlaySoundFile a truthy TABLE.
+--
+-- The fixture is the SHIPPED database - the real vendored AceDB + config_presets.lua +
+-- config.lua booted over the real addon-object shape (the rotationtext_state.lua section
+-- 7b pattern) - and the real class module is driven through both playback call sites:
+-- on_twist_attempt (attempt cue) and on_bar_update (window cue).
+do
+    local DB_CLASS_TOKENS = {
+        "DEATHKNIGHT", "DRUID", "HUNTER", "MAGE", "PALADIN",
+        "PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR",
+    }
+    local dST = {}
+    for _, token in ipairs(DB_CLASS_TOKENS) do dST[token] = {} end
+    local dst = { debug = false, utils = { print_msg = function() end } }
+
+    -- LibStub answers both shapes: the call (AceAddon-3.0 for config's GetAddon) and
+    -- the embed protocol (NewLibrary/GetLibrary) the vendored AceDB registers through.
+    local dlibs = {}
+    local dLibStub = {}
+    function dLibStub:NewLibrary(major, minor)
+        if dlibs[major] then return nil end
+        dlibs[major] = { major = major, minor = minor }
+        return dlibs[major]
+    end
+    function dLibStub:GetLibrary(major) return dlibs[major] end
+    setmetatable(dLibStub, { __call = function(_, major)
+        if major == "AceAddon-3.0" then return { GetAddon = function() return dST end } end
+        return dlibs[major]
+    end })
+
+    -- AceDB builds its character/realm keys at file scope and registers PLAYER_LOGOUT.
+    local function dCreateFrame()
+        local frame = { events = {}, scripts = {} }
+        function frame:RegisterEvent(event) self.events[#self.events + 1] = event end
+        function frame:SetScript(name, fn) self.scripts[name] = fn end
+        return frame
+    end
+
+    local denv = setmetatable({}, { __index = _G })
+    denv._G = denv
+    denv.LibStub = dLibStub
+    denv.CreateFrame = dCreateFrame
+    denv.GetRealmName = function() return "TestRealm" end
+    denv.UnitName = function() return "Tester" end
+    denv.UnitClass = function() return "Paladin", "PALADIN" end
+    denv.UnitRace = function() return "Human", "Human" end
+    denv.UnitFactionGroup = function() return "Alliance" end
+    denv.GetLocale = function() return "enUS" end
+    denv.GetCurrentRegion = function() return 1 end
+    denv.GetCurrentRegionName = function() return "US" end
+
+    local load_ok = true
+    local db_paths = { "Libs/AceDB-3.0/AceDB-3.0.lua", "config_presets.lua", "config.lua" }
+    for i = 1, #db_paths do
+        local dchunk = assert(loadfile(ROOT .. db_paths[i]))
+        setfenv(dchunk, denv)
+        local ok, err = pcall(dchunk, "SwedgeTimer", dst)
+        if not ok then
+            load_ok = false
+            check(false, db_paths[i] .. " does not load under the AceDB fixture: " .. tostring(err))
+        end
+    end
+    check(load_ok, "S-FIXTURE: the vendored AceDB + the shipped defaults load")
+
+    if load_ok then
+        local AceDB = assert(dlibs["AceDB-3.0"], "S-FIXTURE: the vendored AceDB-3.0 registered")
+        check(type(dST.defaults) == "table", "S-FIXTURE: config.lua declares ST.defaults")
+        local real_db = AceDB:New({}, dST.defaults, true)
+        local profile = real_db.profile
+        local paladin_row = rawget(profile, "PALADIN")
+        local warrior_row = rawget(profile, "WARRIOR")
+
+        -- (a) The real row IS the trap, on the shipped object.
+        check(type(paladin_row) == "table", "S-FIXTURE: the PALADIN row exists")
+        check(type(getmetatable(paladin_row)) == "table"
+            and type(getmetatable(paladin_row).__index) == "function",
+            "S-FIXTURE: the PALADIN row carries AceDB's '**' __index metatable")
+        eq(rawget(paladin_row, "sound_channel"), "Master",
+            "S-FIXTURE: PALADIN ships the string channel that hid the defect")
+        check(type(warrior_row) == "table", "S-FIXTURE: the WARRIOR row exists")
+        eq(rawget(warrior_row, "sound_channel"), nil,
+            "S-FIXTURE: a class row without the shipped leaf has no saved sound_channel")
+        local plain_absent = warrior_row.sound_channel
+        check(type(plain_absent) == "table",
+            "S-FIXTURE: the DEFECTIVE plain read answers a TABLE (got "
+            .. type(plain_absent) .. ")")
+        eq(rawget(warrior_row, "sound_channel"), plain_absent,
+            "S-FIXTURE: that plain read rawsets the defaults table into the saved row")
+        rawset(warrior_row, "sound_channel", nil)
+
+        -- (b) Drive the ATTEMPT cue with the shipped PALADIN row, but with the one leaf
+        -- the defect depends on removed - the shape every other class row has.
+        local b = build({})
+        local T = b.ST
+        T.PALADIN.post_init(T)
+        T.get_class_table = function() return paladin_row end
+        T.in_combat = true
+
+        rawset(paladin_row, "twist_success_sound_enabled", true)
+        rawset(paladin_row, "twist_success_sound_choice", "TadaFanfare")
+        rawset(paladin_row, "sound_channel", nil)
+        eq(rawget(paladin_row, "sound_channel"), nil,
+            "S1: the driven row ships no sound_channel (the latent shape is armed)")
+        local plain_row = paladin_row.sound_channel
+        check(type(plain_row) == "table",
+            "S1: the defective plain read on the driven row answers a TABLE (got "
+            .. type(plain_row) .. ")")
+        eq(rawget(paladin_row, "sound_channel"), plain_row,
+            "S1: and rawsets it into the saved profile")
+        rawset(paladin_row, "sound_channel", nil)
+
+        local before = #b.play_sounds
+        T.PALADIN.on_twist_attempt(T)
+        eq(#b.play_sounds, before + 1, "S1: the attempt cue reaches PlaySoundFile once")
+        local played = b.play_sounds[#b.play_sounds]
+        eq(played.path, "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\TadaFanfare.ogg",
+            "S1: the mapped TadaFanfare path is played")
+        check(type(played.channel) == "string",
+            "S1: the channel handed to PlaySoundFile is a STRING, never the metatable's "
+            .. "table (got " .. type(played.channel) .. ")")
+        eq(played.channel, "Master",
+            "S1: an absent channel falls back to the shipped default string")
+        eq(rawget(paladin_row, "sound_channel"), nil,
+            "S1: the rawget channel read created no key on the saved row")
+        eq(T.twist_score_attempts, 1,
+            "S1: the attempt still counts (the play is not the logic)")
+
+        -- (c) A saved channel wins; a corrupt saved value never reaches the client:
+        -- "string" is the contract, not merely non-nil.
+        rawset(paladin_row, "sound_channel", "SFX")
+        T.PALADIN.on_twist_attempt(T)
+        eq(b.play_sounds[#b.play_sounds].channel, "SFX", "S1: a saved string channel is used")
+        rawset(paladin_row, "sound_channel", { corrupt = true })
+        T.PALADIN.on_twist_attempt(T)
+        check(type(b.play_sounds[#b.play_sounds].channel) == "string",
+            "S1: a corrupt saved channel still yields a string")
+        eq(b.play_sounds[#b.play_sounds].channel, "Master",
+            "S1: a saved table falls back to the default")
+        rawset(paladin_row, "sound_channel", 123)
+        T.PALADIN.on_twist_attempt(T)
+        eq(b.play_sounds[#b.play_sounds].channel, "Master",
+            "S1: a saved number falls back to the default")
+        rawset(paladin_row, "sound_channel", nil)
+
+        -- (d) A client that THROWS is contained: the failed play is a silent no-op and the
+        -- twist logic keeps running (the pre-fix call aborted the handler here).
+        local recorder = b.env.PlaySoundFile
+        b.env.PlaySoundFile = function() error("PlaySoundFile: bad argument #2", 0) end
+        T.twist_attempt_until = nil
+        local ok_attempt, attempt_err = pcall(T.PALADIN.on_twist_attempt, T)
+        check(ok_attempt,
+            "S2: a throwing PlaySoundFile cannot escape the attempt cue (error: "
+            .. tostring(attempt_err) .. ")")
+        eq(T.twist_score_attempts, 5, "S2: the attempt still counts after the failed play")
+        check(type(T.twist_attempt_until) == "number",
+            "S2: the handler kept running past the failed play")
+        b.env.PlaySoundFile = recorder
+
+        -- (e) The WINDOW cue (on_bar_update) uses the same fixed helper.
+        rawset(paladin_row, "twist_sound_enabled", true)
+        rawset(paladin_row, "twist_sound_choice", "pop")
+        b.player_auras[1] = { name = "Seal of Command", spell_id = 20375, expiration = 120 }
+        b.player_auras[2] = { name = "Seal of Blood", spell_id = 31892, expiration = 120 }
+        T.PALADIN.on_aura_change(T)
+        eq(T.twist_active_seals_count, 2, "S3: two twist seals active")
+        T.mainhand.speed, T.mainhand.start = 3.0, b.get_clock()
+        T.mainhand.ends_at, T.mainhand.is_full = b.get_clock() + 0.5, false
+        T.twist_sound_played = nil
+        before = #b.play_sounds
+        T.PALADIN.on_bar_update(T, "mainhand")
+        eq(#b.play_sounds, before + 1, "S3: the window cue reaches PlaySoundFile once")
+        eq(b.play_sounds[#b.play_sounds].path,
+            "Interface\\AddOns\\SwedgeTimer\\Media\\Sounds\\pop.ogg",
+            "S3: the mapped window-sound path is played")
+        check(type(b.play_sounds[#b.play_sounds].channel) == "string",
+            "S3: the window cue also passes a string channel")
+        eq(b.play_sounds[#b.play_sounds].channel, "Master",
+            "S3: the window cue falls back to the shipped default string")
+        eq(rawget(paladin_row, "sound_channel"), nil,
+            "S3: the window cue created no channel key")
+        T.PALADIN.on_bar_update(T, "mainhand")
+        eq(#b.play_sounds, before + 1,
+            "S3: the cue stays latched (one play per swing)")
+
+        -- (f) Source pins: the plain read is gone (comment lines are stripped first -
+        -- the fix's own comment quotes the old expression), both call sites share the
+        -- helper, and the client call is pcall-guarded.
+        local paladin_src = read("classes/paladin.lua")
+        local code_lines = {}
+        for line in paladin_src:gmatch("[^\r\n]+") do
+            local trimmed = line:match("^%s*(.-)%s*$")
+            if trimmed:sub(1, 2) ~= "--" then code_lines[#code_lines + 1] = line end
+        end
+        local paladin_code = table.concat(code_lines, "\n")
+        check(paladin_code:find("db%.sound_channel", 1) == nil,
+            "S4: no plain metatable-triggering sound_channel read remains")
+        check(paladin_code:find('rawget(db, "sound_channel")', 1, true) ~= nil,
+            "S4: the channel is read with rawget")
+        check(paladin_code:find('type(channel) ~= "string"', 1, true) ~= nil,
+            "S4: the channel is required to be a string")
+        check(paladin_code:find("pcall(PlaySoundFile, path, channel)", 1, true) ~= nil
+            or paladin_code:find("pcall(play, path, channel)", 1, true) ~= nil,
+            "S4: the PlaySoundFile call is pcall-guarded")
+        -- One definition + one call from each twist path (the call sites pass their own
+        -- rawget'd choice key, so a pattern on the argument shape would be brittle).
+        local helper_mentions = select(2, paladin_code:gsub("play_twist_sound%(", ""))
+        eq(helper_mentions, 3,
+            "S4: the fixed helper is defined once and called from both twist paths")
     end
 end
 

@@ -1,0 +1,16 @@
+{"v":1,"task":"ui-truth-diag-gate","state":"running","msg":"started: bash tests/run.sh","at":1793182970501}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/warrior_state.lua","at":1793182971507}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/hunter_state.lua","at":1793182972511}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/druid_energy_state.lua","at":1793182973516}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/shaman_guide_state.lua","at":1793182974521}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/practice_progress_ui_state.lua","at":1793182975526}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/practice_ui_state.lua","at":1793182976531}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/neutral_actions_state.lua","at":1793182977536}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/prepull_contract_state.lua","at":1793182979546}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/design_state.lua","at":1793182981546}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/engine_matrix_state.lua","at":1793182982551}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/power_bar_state.lua","at":1793182983556}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/toc_check.lua","at":1793182984561}
+{"v":1,"task":"ui-truth-diag-gate","msg":"PASS  lua5.1 tests/wiring_check.lua","at":1793183015693}
+{"v":1,"task":"ui-truth-diag-gate","msg":"54 steps, 0 failed","at":1793183023313}
+{"v":1,"task":"ui-truth-diag-gate","state":"done","pct":100,"msg":"finished","at":1793183023313}

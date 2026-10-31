@@ -241,7 +241,10 @@ function ST:get_class_table()
 	if type(profile) ~= "table" then
 		return nil
 	end
-	return profile[self.player_class]
+	-- AceDB '**' trap: a plain read of a missing class token materialises a junk
+	-- defaults row instead of nil. rawget keeps the documented nil answer (unknown
+	-- class / pre-AceDB caller) without creating a row on the profile.
+	return rawget(profile, self.player_class)
 end
 
 function ST:get_hand_table(hand)
@@ -329,12 +332,15 @@ function ST:show_bar(hand)
 					hiding_anchor_frame:Show()
 				end
 			else
+				self:note_hand_hide_reason(hand, "form")
 				self:hide_bar(hand)
 			end
 		elseif self.player_class == "WARRIOR" then
 			if db_class and db_class.hide_in_tank_spec and self.has_imp_def_stance then
+				self:note_hand_hide_reason(hand, "spec")
 				self:hide_bar(hand)
 			elseif db_class and db_class.hide_in_arms_spec and self.has_bladestorm then
+				self:note_hand_hide_reason(hand, "spec")
 				self:hide_bar(hand)
 			else
 				self:get_bar_frame(hand):Show()
@@ -351,6 +357,15 @@ function ST:show_bar(hand)
 			end
 		end
 	else
+		-- check_bar_enable_settings refused after the poll above already cleared the class
+		-- and hand enablement: what is left is the per-spec enable toggle.
+		local reason = "spec"
+		if type(db_class) ~= "table" then
+			reason = "class-off"
+		elseif not self:bar_is_enabled(hand) then
+			reason = self:hand_disabled_reason(hand)
+		end
+		self:note_hand_hide_reason(hand, reason)
 		self:hide_bar(hand)
 	end
 end
@@ -415,6 +430,25 @@ function ST:OnInitialize()
 	-- Addon database
 	local SwedgeTimerDB = LibStub("AceDB-3.0"):New(addon_name .. "DB", self.defaults, true)
 	self.db = SwedgeTimerDB
+
+	-- Ranged row placement (operator order 2026-10-28: "the ranged bar for other melee
+	-- classes should be moved"; "it should stay with the rest, aka the new way"). AceDB
+	-- fills defaults but never rewrites a saved key, so any profile created before the
+	-- shipped ranged default moved still holds the power-bar row. The rule (bars.lua,
+	-- layout owner) re-places that row ONCE per profile for every class that owns a ranged
+	-- hand, and it is FORCED: a dragged or scaled row is moved to the new layout too - the
+	-- operator ruled that the ranged bar stays with the rest of the layout, so a legacy
+	-- saved position does not win (RANGED_PLACEMENT_VERSION upgrades a first-pass latch
+	-- exactly once). The power-bar row under the melee stack is never given up. It runs
+	-- before the options tables and before the first frame, so both read the corrected row.
+	-- pcall'd: a bad profile must never abort login; a sandbox without bars.lua is a no-op.
+	if type(self.migrate_ranged_placement) == "function"
+		and type(self.get_profile_table) == "function" then
+		local read_ok, profile = pcall(self.get_profile_table, self)
+		if read_ok then
+			pcall(self.migrate_ranged_placement, self, profile)
+		end
+	end
 
 	-----------------------------------------------------------
 	-- Dynamically construct the options tables
@@ -589,6 +623,14 @@ function ST:OnInitialize()
 	self.mainhand.is_full_timer = nil
 	self.mainhand.is_paused = false
 	self.mainhand.current_progress = false
+	-- Swing receipts (2026-10-28): the offhand/ranged bars are activity-driven, and
+	-- activity is a RECEIPT (a real swing or a real shot), never the engine's own
+	-- START - the engine also starts cycles on a combat enter, an equipment change
+	-- and a spell cast. See "Hand activity" below.
+	-- activity_source names the writer of the last receipt ("cleu" | "forever" |
+	-- "shot"); it is in-memory only and exists for the verbose /st diag receipt field.
+	self.mainhand.has_activity = false
+	self.mainhand.last_activity_at = nil
 
 	-- OH containers
 	self.offhand.start = nil
@@ -599,6 +641,8 @@ function ST:OnInitialize()
 	self.offhand.is_full = false
 	self.offhand.is_full_timer = nil
 	self.offhand.is_paused = false
+	self.offhand.has_activity = false
+	self.offhand.last_activity_at = nil
 
 	-- ranged containers
 	self.ranged.start = nil
@@ -607,6 +651,8 @@ function ST:OnInitialize()
 	self.ranged.inactive_timer = nil
 	self.ranged.has_weapon = false
 	self.ranged.is_full = false
+	self.ranged.has_activity = false
+	self.ranged.last_activity_at = nil
 	-- Auto Shot sync state (hunter phase 1; the maths live in hunter_window.lua):
 	--   synced_duration     - the auto-shot cycle length last read from
 	--                         GetSpellCooldown(75), api.get_time()-domain seconds
@@ -757,7 +803,9 @@ function ST:activate_class()
 	-- No class row means no stored class-module choice; nil selection reads as
 	-- "Auto" below (the shipped default), i.e. activate the class being played.
 	local class_db = self:get_class_table()
-	local selection = type(class_db) == "table" and class_db.class_activation or nil
+	-- rawget: class_activation sits on a '**'-metatabulated class row, so a
+	-- plain read of an absent key materialises a junk hand row.
+	local selection = (type(class_db) == "table") and rawget(class_db, "class_activation") or nil
 	local explicit = type(selection) == "string" and string.lower(selection) ~= "auto"
 	if not explicit then
 		selection = self.player_class
@@ -1005,6 +1053,13 @@ function ST:post_init()
 		self:show_bar(hand)
 	end
 
+	-- Power bar (power_bar.lua): created after the swing bars are built and shown,
+	-- because it anchors to a melee bar's frame. A flavor/sandbox without the module
+	-- is a no-op; the module itself is nil-safe and hides on every unknown read.
+	if st.power_bar and type(st.power_bar.init) == "function" then
+		st.power_bar.init(self)
+	end
+
 	-- TBC Anniversary: UNIT_AURA does not fire reliably there, so start the 0.05 s
 	-- aura re-parse loop (TBC family only; a no-op everywhere else).
 	self:start_aura_poll()
@@ -1092,6 +1147,21 @@ function ST:COMBAT_LOG_EVENT_UNFILTERED(event, ...)
 	-- arg12, arg13, ..., arg15, ...). Only the two subevents below are read.
 	self:note_extra_attack_or_parry(select(4, ...), select(8, ...), select(2, ...),
 		select(12, ...), select(15, ...))
+	-- Offhand activity receipt (2026-10-28): a player-sourced SWING_DAMAGE/SWING_MISSED
+	-- is a real swing, and its isOffHand slot says which hand swung (return 21 on
+	-- SWING_DAMAGE, return 13 on SWING_MISSED - the same two slots the vendored library
+	-- reads, LibClassicSwingTimerAPI.lua:395-407). The offhand bar is activity-driven,
+	-- so this is the only classic-line signal that proves the hand actually swung; the
+	-- engine's own START also fires for combat-enter / equipment / cast resets.
+	local swing_event = select(2, ...)
+	if (swing_event == "SWING_DAMAGE" or swing_event == "SWING_MISSED")
+		and select(4, ...) == self.player_guid then
+		local is_offhand = (swing_event == "SWING_DAMAGE") and select(21, ...)
+			or select(13, ...)
+		if is_offhand then
+			self:note_hand_activity("offhand", nil, "cleu")
+		end
+	end
 	-- Class dispatch through the same "module present and hook present" shape the
 	-- other class hooks use: only the SELECTED class's module runs (operator rule
 	-- 2026-10-21), so the playing class's table can be an empty {} when another
@@ -1156,6 +1226,11 @@ function ST:apply_parry_haste()
 	bar.start = bar.ends_at - speed
 end
 
+-- How far the engine's clock may sit from ours and still be adopted (seconds). Two
+-- frozen precise-clock offsets can only differ by loading-screen time; a reading past
+-- this is a bad payload, not an axis, so the previous bias stays.
+local ENGINE_CLOCK_BIAS_LIMIT = 60
+
 function ST.callback_event_handler(event, ...)
 	-- Func to pass all callbacks to their relevant handler. A throwing handler must
 	-- not break the library's own dispatch (H3): isolate it, count it per event, and
@@ -1186,6 +1261,28 @@ function ST.callback_event_handler(event, ...)
 		and (select(1, ...) == "player" or select(1, ...) == "target") then
 		local n = select("#", ...)
 		local args = { ... }
+		-- Engine clock alignment (2026-10-28): the vendored library keeps its OWN
+		-- precise-clock offset (Libs/LibClassicSwingTimerAPI: EnsurePreciseClockOffset)
+		-- and compat keeps its own; both are frozen, and GetTime() does not advance
+		-- across a loading screen while the precise clock does, so the two axes drift
+		-- apart by the loading time (the operator's readout: speed=3.50 but the bar
+		-- span 3.10). A START always spans exactly one speed (the lib stamps
+		-- expiration = start + speed), so it carries the ENGINE's "now": the difference
+		-- to ours is the live bias each stored stamp is converted by. Measured only on
+		-- the engine payload (the leading unit id) - our own fallback START is already
+		-- on our axis and passes on_our_axis below.
+		if event == "SWING_TIMER_START" then
+			local speed_arg, expiration_arg = args[2], args[3]
+			local get_time = api and api.get_time
+			local stamp = (type(get_time) == "function") and get_time() or nil
+			if type(speed_arg) == "number" and speed_arg > 0
+				and type(expiration_arg) == "number" and type(stamp) == "number" then
+				local bias = stamp - (expiration_arg - speed_arg)
+				if bias == bias and math.abs(bias) <= ENGINE_CLOCK_BIAS_LIMIT then
+					ST.engine_clock_bias = bias
+				end
+			end
+		end
 		-- The engine's own ranged START/UPDATE is the liveness proof the TBC
 		-- ranged fallback reads (see maybe_drive_ranged_fallback): stamp it so
 		-- the fallback never double-drives a live engine. A pending fallback
@@ -1355,8 +1452,14 @@ function ST:SWING_TIMER_PAUSED(_, hand)
 	bar.is_paused = true
 end
 
-function ST:SWING_TIMER_START(_, speed, expiration_time, hand)
+function ST:SWING_TIMER_START(_, speed, expiration_time, hand, on_our_axis)
 	self:note_swing_wire(hand, "START")
+	-- Engine stamps live on the engine's own clock axis; convert once, at the top, so
+	-- every branch below (including the slam-pause rewrite, which is already on our
+	-- axis) stores our domain. See ENGINE_CLOCK_BIAS_LIMIT.
+	if type(expiration_time) == "number" and not on_our_axis then
+		expiration_time = expiration_time + (self.engine_clock_bias or 0)
+	end
 	-- Slam-pause conversion (G3, our side; reference PAUSE_SWING_SPELLS +
 	-- AdjustSwingTimesAfterPause in SuperSwingTimer_State.lua:855-872): on Era/BCC
 	-- the lib's pause tables are empty (LibClassicSwingTimerAPI.lua Era:953 /
@@ -1445,6 +1548,14 @@ function ST:SWING_TIMER_START(_, speed, expiration_time, hand)
 		bar.ends_at = now + speed
 	end
 	self:set_bar_color(hand)
+	-- Forever engine: its SWING_TIMER_START is fired only from a real PLAYER_SWING
+	-- (swing_source has no combat-enter/equipment/cast reset path), so it is a genuine
+	-- activity receipt for the in-use hands. The classic library is excluded on
+	-- purpose: it also starts cycles from resets (see "Hand activity" below).
+	if self.swing_engine == "forever-source"
+		and (hand == "offhand" or hand == "ranged") then
+		self:note_hand_activity(hand, now, "forever")
+	end
 	-- Next-action guide: count melee swings started while in combat (the guide's
 	-- filler suggestion waits for more than two swings; paladins only have a
 	-- mainhand, so one count per swing).
@@ -1493,7 +1604,12 @@ function ST:SWING_TIMER_STOP(_, hand)
 		self:trigger_swing_flash(hand)
 	end
 	local db_shared = self.db and self.db.profile
-	local bar_full_delay = db_shared and db_shared.bar_full_delay
+	-- AceDB '**' trap: rawget so a missing key (or a '**'-metatabulated profile
+	-- root) does not materialise a defaults table on the profile root.
+	local bar_full_delay = nil
+	if type(db_shared) == "table" then
+		bar_full_delay = rawget(db_shared, "bar_full_delay")
+	end
 	if bar_full_delay == nil then
 		bar_full_delay = 0.5
 	end
@@ -1512,8 +1628,11 @@ function ST:SWING_TIMER_STOP(_, hand)
 	end
 end
 
-function ST:SWING_TIMER_UPDATE(_, speed, expiration_time, hand)
+function ST:SWING_TIMER_UPDATE(_, speed, expiration_time, hand, on_our_axis)
 	self:note_swing_wire(hand, "UPDATE")
+	if type(expiration_time) == "number" and not on_our_axis then
+		expiration_time = expiration_time + (self.engine_clock_bias or 0)
+	end
 	local bar = self[hand]
 	if not bar then
 		if not self.swing_unknown_hand_notice_shown then
@@ -1880,14 +1999,18 @@ end
 -- (Repentance, Ghost Wolf, Feign Death...), this re-anchor lands on the same tick in
 -- the same clock domain and converges to the identical anchor. Classic line only
 -- (HU-31): Retail/Forever stay on their own APIs.
+--
+-- This table is the MELEE-reset list and only holds utility casts. Shoot (3018), Throw
+-- (2764) and Shoot Wand (5019) used to sit here too; they are RANGED SHOTS, and a shot
+-- restarting the melee hands is exactly the ranged->melee coupling the operator reports
+-- (2026-10-28). The library already starts the ranged cycle from those ids on every
+-- classic branch (ranged_swing), so they are handled by the shot path (activity receipt
+-- + melee-reset guard) and never by this list.
 local SWING_RESET_SPELL_IDS = {
 	[16589] = true,                                             -- Noggenfogger Elixir
 	[2645] = true,                                              -- Ghost Wolf
 	[51533] = true,                                             -- Feral Spirit
-	[2764] = true,                                              -- Throw
-	[3018] = true,                                              -- Shoot
 	[5384] = true,                                              -- Feign Death
-	[5019] = true,                                              -- Shoot Wand
 	[20066] = true,                                             -- Repentance
 	[853] = true,
 	[5588] = true,
@@ -1929,6 +2052,102 @@ local function is_swing_reset_token(token)
 		end
 	end
 	return swing_reset_names[token] == true
+end
+
+-- Ranged-shot casts: the client's own shot spells, the same ids the vendored library's
+-- ranged_swing tables key on every classic branch (Era 1030-1033, BCC 1143-1146,
+-- Wrath 1419-1422, Cata 1525-1528). A shot is a RANGED action: it may start/refresh the
+-- ranged cycle, and it must never restart a melee hand (operator report 2026-10-28:
+-- "mh is activating when ranged goes off"). This one table feeds the activity receipt
+-- (a shot marks the ranged hand in use) and the engine's melee-reset guard below.
+local RANGED_SHOT_SPELL_IDS = {
+	[75] = true,                                                 -- Auto Shot
+	[3018] = true,                                               -- Shoot
+	[2764] = true,                                               -- Throw
+	[5019] = true,                                               -- Shoot Wand
+}
+local ranged_shot_names
+
+local function is_ranged_shot_token(token)
+	if token == nil then
+		return false
+	end
+	local id = tonumber(token)
+	if id ~= nil and RANGED_SHOT_SPELL_IDS[id] == true then
+		return true
+	end
+	if type(token) ~= "string" then
+		return false
+	end
+	if ranged_shot_names == nil then
+		ranged_shot_names = {}
+		for spell_id in pairs(RANGED_SHOT_SPELL_IDS) do
+			local ok, name = pcall(api.GetSpellInfo, spell_id)
+			if ok and type(name) == "string" then
+				ranged_shot_names[name] = true
+			end
+		end
+	end
+	return ranged_shot_names[token] == true
+end
+
+-- The engine's player unit table, cached after the first successful lookup. The
+-- vendored library exposes the two fields the melee-reset guard needs (`casting` and
+-- `preventSwingReset`) on it; getUnit is the library's own accessor, so this is a
+-- documented read of the engine we own, not a patch of the vendored file. Nil-safe
+-- before ADDON_LOADED: a nil answer retries on the next call.
+function ST:swing_player_unit()
+	local cached = self.swing_unit_cache
+	if type(cached) == "table" then
+		return cached
+	end
+	if type(STL) ~= "table" or type(STL.getUnit) ~= "function" then
+		return nil
+	end
+	local ok, unit = pcall(STL.getUnit, STL, "player")
+	if not ok or type(unit) ~= "table" then
+		return nil
+	end
+	self.swing_unit_cache = unit
+	return unit
+end
+
+-- Arm the engine's own reset-suppression field for one ranged-shot cast:
+-- `preventSwingReset` is exactly what the library's cast-completion branch tests
+-- (LibClassicSwingTimerAPI.lua:596), and the library recomputes it at every cast start
+-- (:683), so an arm covers only the cast it was made on. Wrath/Cata residual: those
+-- branches also list the shot ids in reset_swing_spells (:1159-1163/:1438-1441), and
+-- that OR's first clause wins, so the arm is inert there - documented, lib untouched.
+function ST:arm_ranged_shot_reset_guard(spell_id, cast_name)
+	if self.swing_engine ~= "vendored-lib" then
+		return false
+	end
+	if not is_ranged_shot_token(spell_id) and not is_ranged_shot_token(cast_name) then
+		return false
+	end
+	local unit = self:swing_player_unit()
+	if type(unit) ~= "table" then
+		return false
+	end
+	unit.preventSwingReset = true
+	self.ranged_shot_guard_count = (self.ranged_shot_guard_count or 0) + 1
+	return true
+end
+
+-- Tick arm (the 0.05 s poll): the library's own UNIT_SPELLCAST_START handler runs on
+-- its own frame and recomputes preventSwingReset there, so an event arm alone can be
+-- overwritten depending on frame dispatch order. Re-arming while the engine reports a
+-- live cast of ours covers the whole cast window; idle cost is one element read of the
+-- engine's table per poll.
+function ST:arm_ranged_shot_reset_guard_tick()
+	if self.swing_engine ~= "vendored-lib" then
+		return false
+	end
+	local unit = self:swing_player_unit()
+	if type(unit) ~= "table" or unit.casting ~= true then
+		return false
+	end
+	return self:arm_ranged_shot_reset_guard(unit.lastCastSpellId, unit.lastCastName)
 end
 
 -- Restarts one hand's cycle now (the in-game reset semantic): same anchor writes
@@ -2015,6 +2234,12 @@ function ST:UNIT_SPELLCAST_SUCCEEDED(_event, unit_id, cast_guid, spell_id)
 	local class = self[self.player_class]
 	if type(class) == "table" and class.on_spellcast_succeeded then
 		class.on_spellcast_succeeded(self, unit_id, cast_guid, spell_id)
+	end
+	-- A completed shot is the ranged hand's activity receipt: the hand is in use from
+	-- the shot onward (its bar must not appear from combat state, and must not vanish
+	-- between two shots). The same token set arms the melee-reset guard at cast start.
+	if is_ranged_shot_token(spell_id) or is_ranged_shot_token(cast_guid) then
+		self:note_hand_activity("ranged", nil, "shot")
 	end
 	-- Utility-cast swing resets (G4, our side): HoJ/Holy Wrath-style instants the
 	-- lib never resets (no explicit entry, no casting flag). Converges with the
@@ -2105,7 +2330,8 @@ function ST:maybe_drive_ranged_fallback(spell_id)
 			pcall(function() pending:Cancel() end)
 		end
 	end
-	self.callback_event_handler("SWING_TIMER_START", speed, now + speed, "ranged")
+	-- `true` = already on our clock axis: the handler must not add the engine bias.
+	self.callback_event_handler("SWING_TIMER_START", speed, now + speed, "ranged", true)
 	-- The engine would STOP the cycle at its end; without it the bar would
 	-- sit full instead of marking full through the shared STOP path. The
 	-- engine's next START/UPDATE cancels this (see the dispatcher), as does
@@ -2131,6 +2357,14 @@ function ST:UNIT_SPELLCAST_START(event, unit_id, cast_guid, spell_id)
 	-- cast start, and it arms the clock only when the source allows it.
 	self:update_pull_clock(unit_id)
 	self:class_on_spellcast_event(event, unit_id, cast_guid, spell_id)
+	-- Ranged-shot cast: arm the engine's melee-reset guard for the completion (the
+	-- library restarts mainhand + offhand on any completed cast while its own
+	-- `casting` flag is up, and a shot is such a cast). Operator report 2026-10-28:
+	-- "mh is activating when ranged goes off". The 0.05 s poll re-arms it as well, so
+	-- frame dispatch order cannot decide the outcome.
+	if unit_id == "player" then
+		self:arm_ranged_shot_reset_guard(spell_id, cast_guid)
+	end
 end
 
 function ST:UNIT_SPELLCAST_DELAYED(event, unit_id, cast_guid, spell_id)
@@ -2379,9 +2613,16 @@ end
 function ST:set_adjusted_latencies()
 	-- Set the calibrated latencies
 	local db = self:get_profile_table()
-	local home = (self.latency.home_ms * db.latency_scale_factor) + db.latency_linear_offset
+	-- rawget: these keys live on a '**'-metatabulated profile root, so a plain
+	-- read of an absent key materialises a junk class row. Fall back to the
+	-- shipped defaults when nothing usable is stored.
+	local scale = (type(db) == "table") and rawget(db, "latency_scale_factor") or nil
+	if type(scale) ~= "number" then scale = 1.0 end
+	local linear = (type(db) == "table") and rawget(db, "latency_linear_offset") or nil
+	if type(linear) ~= "number" then linear = 0.0 end
+	local home = (self.latency.home_ms * scale) + linear
 	self.latency.calibrated_home_ms = home
-	local world = (self.latency.world_ms * db.latency_scale_factor) + db.latency_linear_offset
+	local world = (self.latency.world_ms * scale) + linear
 	self.latency.calibrated_world_ms = world
 end
 
@@ -2389,12 +2630,17 @@ function ST:get_gcd_marker_time_offset_seconds()
 	-- Gets the time offset in seconds according to the settings.
 	local db = self:get_profile_table()
 	local offset = 0
-	if db.gcd_marker_offset_mode == "Dynamic" then
+	-- rawget: gcd_marker_offset_mode / latency_linear_offset sit on a
+	-- '**'-metatabulated profile root.
+	local mode = (type(db) == "table") and rawget(db, "gcd_marker_offset_mode") or nil
+	local linear = (type(db) == "table") and rawget(db, "latency_linear_offset") or nil
+	if type(linear) ~= "number" then linear = 0.0 end
+	if mode == "Dynamic" then
 		offset = self.latency.world_ms
-	elseif db.gcd_marker_offset_mode == "Calibrated" then
+	elseif mode == "Calibrated" then
 		offset = self.latency.calibrated_world_ms
-	elseif db.gcd_marker_offset_mode == "Fixed" then
-		offset = db.latency_linear_offset
+	elseif mode == "Fixed" then
+		offset = linear
 	end
 	offset = offset / 1000
 	return offset
@@ -2528,6 +2774,9 @@ function ST:rf_update()
 	end
 	self.rf_failure_count = 0
 	self.rf_retry_delay = nil
+	-- Ranged-shot guard re-arm (see arm_ranged_shot_reset_guard_tick): the poll is the
+	-- addon's 0.05 s heartbeat, so a live shot cast is covered for its whole window.
+	self:arm_ranged_shot_reset_guard_tick()
 	self:set_bar_visibilities()
 	self:handle_oor()
 	C_Timer.After(self.rangefinder_interval, function() self:rf_update() end)
@@ -2571,6 +2820,96 @@ end
 ------------------------------------------------------------------------------------
 -- Bar visibility
 ------------------------------------------------------------------------------------
+-- Hand activity (operator order 2026-10-28: "offhand should only show when offhand is
+-- being used"; "ranged is showing for warrior, during mh swing"; "ranged and melee are
+-- not the same thing why are they affecting each other?"). The offhand and ranged hands
+-- are IN-USE hands: their bar exists only while that hand is actually swinging/shooting.
+-- Combat state is not use - being in a fight must never surface a hand that has not
+-- acted - so those two hands get this gate on top of their configured condition.
+--
+-- What counts as use is a RECEIPT, not the engine's START: the vendored library also
+-- starts cycles from PLAYER_ENTER_COMBAT, PLAYER_EQUIPMENT_CHANGED, spell casts and (on
+-- Wrath/Cata) from every melee swing, all with isReset=true and no swing behind them.
+--   * offhand: a player-sourced SWING_DAMAGE/SWING_MISSED with isOffHand set (CLEU, the
+--     classic line), or - on the Forever engine, which has no classic combat log - its
+--     PLAYER_SWING START (that engine only fires on a real swing).
+--   * ranged: a completed ranged shot (Auto Shot / Shoot / Throw / Shoot Wand - the ids
+--     the library's own ranged_swing tables key), plus the client's Auto Shot auto-repeat
+--     reading, which says ranged is armed between two cycle events.
+-- A receipt stays valid for a small number of cycles (never less than a cycle), so
+-- consecutive swings/shots cannot flicker the bar; after that the hand is idle and hides.
+local HAND_ACTIVITY_CYCLES = 2
+local HAND_ACTIVITY_MIN_SECONDS = 1.5
+local HAND_ACTIVITY_MAX_SECONDS = 8
+
+function ST:hand_visibility_needs_activity(hand)
+	-- The mainhand is the always-there melee bar and keeps its configured visibility.
+	return hand == "offhand" or hand == "ranged"
+end
+
+function ST:note_hand_activity(hand, now, source)
+	-- One receipt for one hand: the bar is in use from this moment for its window.
+	-- `source` is the caller's stable token for WHAT proved the activity ("cleu" - a
+	-- player-sourced offhand combat-log swing; "forever" - the Forever engine's
+	-- PLAYER_SWING START; "shot" - a completed ranged shot). It is kept on the hand
+	-- state for the verbose /st diag receipt field; nil leaves the previous token.
+	local state = self[hand]
+	if type(state) ~= "table" then
+		return false
+	end
+	if type(now) ~= "number" then
+		now = api.get_time()
+	end
+	if type(now) ~= "number" then
+		return false
+	end
+	state.has_activity = true
+	state.last_activity_at = now
+	if type(source) == "string" and source ~= "" then
+		state.activity_source = source
+	end
+	return true
+end
+
+function ST:hand_activity_window(hand)
+	-- How long one receipt keeps a hand "in use": a small number of that hand's own
+	-- cycles, clamped so a fast dagger cannot flicker and a slow weapon cannot linger.
+	local state = self[hand]
+	local speed = type(state) == "table" and state.speed or nil
+	local seconds = type(speed) == "number" and speed > 0
+		and speed * HAND_ACTIVITY_CYCLES or nil
+	if seconds == nil then
+		seconds = HAND_ACTIVITY_MIN_SECONDS
+	end
+	if seconds < HAND_ACTIVITY_MIN_SECONDS then
+		seconds = HAND_ACTIVITY_MIN_SECONDS
+	elseif seconds > HAND_ACTIVITY_MAX_SECONDS then
+		seconds = HAND_ACTIVITY_MAX_SECONDS
+	end
+	return seconds
+end
+
+function ST:hand_is_in_use(hand)
+	local state = self[hand]
+	if type(state) ~= "table" then
+		return false
+	end
+	-- Auto Shot armed: ranged is being used between two cycle events (hunter only -
+	-- the cached reading is written by the class hook).
+	if hand == "ranged" and state.auto_repeat_active == true then
+		return true
+	end
+	if state.has_activity ~= true then
+		return false
+	end
+	local now = api.get_time()
+	local last = state.last_activity_at
+	if type(now) ~= "number" or type(last) ~= "number" then
+		return false
+	end
+	return (now - last) <= self:hand_activity_window(hand)
+end
+
 function ST:bar_is_enabled(hand)
 	local db = self:get_hand_table(hand)
 	-- No hand row means the hand is not configured: it cannot be enabled, so it
@@ -2592,6 +2931,70 @@ function ST:bar_is_enabled(hand)
 	end
 end
 
+function ST:hand_show_condition_met(hand, db)
+	-- The configured show rule, exactly as the branches below painted it before the
+	-- activity gate existed: "always" wins, otherwise in_combat / has_target / both /
+	-- either with the optional in-range requirement. The "either" leg keeps its own
+	-- historical shape (in combat shows without consulting range).
+	if type(db) ~= "table" then
+		return false
+	end
+	if db.show_behaviour == "always" then
+		return true
+	end
+	local in_range = true
+	if db.require_in_range then
+		in_range = self:get_in_range(hand) == true
+	end
+	local condition = db.show_condition
+	if condition == "in_combat" then
+		return self.in_combat == true
+	elseif condition == "has_target" then
+		return self.has_attackable_target == true and in_range
+	elseif condition == "both" then
+		return self.in_combat == true and self.has_attackable_target == true and in_range
+	end
+	-- "either" (the shipped default) and any unknown spelling.
+	if self.in_combat == true then
+		return true
+	end
+	return self.has_attackable_target == true and in_range
+end
+
+-- Why a hand's bar is not on screen (the verbose /st diag `why=` field). The reason is
+-- written at the SAME point the visibility decision hides the bar, so the report cannot
+-- drift from what the poll actually did. In-memory only (never SavedVariables). Tokens:
+--   class-off  - the class master switch is off (or there is no class row at all)
+--   off        - the hand is not configured / its own Enabled toggle is off
+--   no-weapon  - the hand is enabled but no weapon of that hand type is equipped
+--   spec       - a class/spec rule hides it (the warrior tank/arms hides, or the
+--                per-spec enable toggles behind check_bar_enable_settings)
+--   form       - the druid form rule hides it (should_show_bar_this_form is false)
+--   show-rule  - the configured show condition (combat / target / range) is not met
+--   idle       - the activity gate has no live receipt (offhand/ranged only)
+-- nil means "nothing recorded": /st diag renders that as "?" rather than a guess.
+function ST:note_hand_hide_reason(hand, reason)
+	local state = self[hand]
+	if type(state) ~= "table" then
+		return
+	end
+	state.hide_reason = reason
+end
+
+-- The disabled branch of the visibility poll: why bar_is_enabled() just refused. Mirrors
+-- that function's own branches (missing row / hand toggle / missing weapon).
+function ST:hand_disabled_reason(hand)
+	local db = self:get_hand_table(hand)
+	if type(db) ~= "table" or not db.enabled then
+		return "off"
+	end
+	local state = self[hand]
+	if hand ~= "mainhand" and (type(state) ~= "table" or not state.has_weapon) then
+		return "no-weapon"
+	end
+	return "off"
+end
+
 function ST:handle_bar_visibility(hand)
 	-- Determines if the bar should be shown or not.
 	local db = self:get_hand_table(hand)
@@ -2599,64 +3002,28 @@ function ST:handle_bar_visibility(hand)
 	-- state: a bar may only be visible because its configuration says so, and
 	-- there is no configuration here. (hide_bar is a no-op for an unbuilt hand.)
 	if type(db) ~= "table" then
+		self:note_hand_hide_reason(hand, "off")
 		self:hide_bar(hand)
 		return
 	end
-	if db.show_behaviour == "always" then
-		self:show_bar(hand)
+	if not self:hand_show_condition_met(hand, db) then
+		self:note_hand_hide_reason(hand, "show-rule")
+		self:hide_bar(hand)
 		return
 	end
-	if db.show_condition == "in_combat" then
-		if self.in_combat then
-			self:show_bar(hand)
-		else
-			self:hide_bar(hand)
-		end
-	elseif db.show_condition == "has_target" then
-		if not self.has_attackable_target then
-			self:hide_bar(hand)
-			return
-		end
-		if db.require_in_range then
-			if not self:get_in_range(hand) then
-				self:hide_bar(hand)
-				return
-			end
-		end
-		self:show_bar(hand)
-	elseif db.show_condition == "both" then
-		if not self.in_combat then
-			self:hide_bar(hand)
-			return
-		end
-		if not self.has_attackable_target then
-			self:hide_bar(hand)
-			return
-		end
-		if db.require_in_range then
-			if not self:get_in_range(hand) then
-				self:hide_bar(hand)
-				return
-			end
-		end
-		self:show_bar(hand)
-	elseif db.show_condition == "either" then
-		if self.in_combat then
-			self:show_bar(hand)
-			return
-		end
-		if not self.has_attackable_target then
-			self:hide_bar(hand)
-			return
-		end
-		if db.require_in_range then
-			if not self:get_in_range(hand) then
-				self:hide_bar(hand)
-				return
-			end
-		end
-		self:show_bar(hand)
+	-- Activity gate for the in-use hands (offhand, ranged): the configured condition
+	-- above is the outer requirement ("always" still means "no combat/target rule"),
+	-- and this is the inner one - the hand must actually be in use. Combat state alone
+	-- can no longer surface either hand.
+	if self:hand_visibility_needs_activity(hand) and not self:hand_is_in_use(hand) then
+		self:note_hand_hide_reason(hand, "idle")
+		self:hide_bar(hand)
+		return
 	end
+	-- Both gates are open: clear the recorded reason. show_bar records its own token in
+	-- the class/spec/form branches that can still hide the bar.
+	self:note_hand_hide_reason(hand, nil)
+	self:show_bar(hand)
 end
 
 function ST:set_bar_visibilities()
@@ -2668,6 +3035,7 @@ function ST:set_bar_visibilities()
 	-- not a guess and not a silent skip.
 	if type(db_class) ~= "table" or not db_class.class_enabled then
 		for hand in self:iter_hands() do
+			self:note_hand_hide_reason(hand, "class-off")
 			self:hide_bar(hand)
 		end
 		return
@@ -2676,6 +3044,7 @@ function ST:set_bar_visibilities()
 	for hand in self:iter_hands() do
 		-- st.utils.print_msg(string.format("%s in range: %s", hand, tostring(in_range)))
 		if not self:bar_is_enabled(hand) then
+			self:note_hand_hide_reason(hand, self:hand_disabled_reason(hand))
 			self:hide_bar(hand)
 		else
 			self:handle_bar_visibility(hand)

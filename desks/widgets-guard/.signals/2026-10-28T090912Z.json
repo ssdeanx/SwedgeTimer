@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T09:09:12Z",
+  "run_id": "ses-88719739-57bc-4627-9554-a35de6bdf4c0",
+  "agent_name": "widgets-guard",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Driving the real vendored AceDB-3.0 with the shipped defaults made the '**' fixture the client's own shape, so the trap is asserted rather than described; mutation proofs (pre-fix read, no pcall, partial rawget) each failed red-first with the exact 'got table' evidence.",
+    "what_was_hard": "The brief's wording says both reads hand a table to PlaySoundFile; the class-row read fires first and the 'or' short-circuit means the profile-root read is normally never evaluated. Fixed both anyway and reported the precision. /tmp/opencode is shared with other lanes and was wiped mid-run, so the mutation block had to be re-run atomically in a lane-namespaced dir.",
+    "skill_gap": "None blocking. A live client is the only missing instrument for the actual audible preview and the client's PlaySoundFile return arity."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Dispatch a follow-up lane for classes/paladin.lua:1151-1157 (play_twist_sound plain class-row read + unpcall'd PlaySoundFile on the real twist playback path) and main.lua:240-244 get_class_table; both outside this lane's scope, listed in bench/widgets_guard_2026-10-28.md §6."
+  }
+}

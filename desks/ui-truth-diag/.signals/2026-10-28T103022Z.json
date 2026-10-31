@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-10-28T10:30:22Z",
+  "run_id": "ui-truth-diag-2026-10-28",
+  "agent_name": "ui-truth-diag",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Hiding the offhand size options was already half-done by layout-finish; mirroring its exact pattern (show effective value + locked + description + routed write) made E1 a small, low-risk widget change with no saved-key migration. For P4, recording the hide reason at the same place the poll hides the bar (rather than re-deriving visibility in diag.lua) means the report and the decision cannot drift; the power bar got the same receipt pattern (pb.resolve -> pb.last_state read by diag). Mutation proofs found two weak test texts (mutations that left the pinned phrase intact) before they could linger as false confidence.",
+    "what_was_hard": "The working tree was not quiet: another lane was rewriting hunter_ui.lua mid-wave, which once showed up as 15 phantom hunter failures in tests/bars_state.lua and briefly as one extra hunter-owned frame against that file's HUNTER extra_frames pin. /tmp is also being purged by another actor, so a tree copy for mutation proofs vanished between commands (and one scripted mutation briefly landed in the real option_tables.lua before being restored and verified) - the mutation harness was rewritten to patch files in memory through io.open/loadfile substitution, touching nothing on disk.",
+    "skill_gap": "Should have checked /tmp stability before designing the evidence method, and should have used an in-place-safe harness from the start instead of a copy that can disappear (and can fall through to the real tree if the cd fails)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Operator in-client pass on the six unverified items (report section 6). Two follow-ups are outside this desk's write scope: a behavioral hide_reason pin in tests/bars_state.lua, and a re-cut of tests/bars_state.lua:992 (HUNTER extra_frames) if the other lane's hunter driver frame returns."
+  }
+}

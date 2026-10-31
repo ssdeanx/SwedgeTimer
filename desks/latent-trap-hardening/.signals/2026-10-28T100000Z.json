@@ -1,0 +1,1 @@
+{"kind":"done","lane":"latent-trap-hardening","scope":["classes/paladin.lua","main.lua","option_table_presets.lua","tests/main_init_state.lua","tests/paladin_state.lua","tests/options_load_state.lua"],"timestamp":"2026-10-28T10:00:00Z","harness":"54 steps, 0 failed; luacheck 2 warnings / 0 errors","report":"bench/latent_trap_hardening_2026-10-28.md"}

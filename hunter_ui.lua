@@ -23,15 +23,22 @@
 -- time_until_next_shot); every timestamp here is in the api.get_time() domain. The
 -- frames are created from the hunter class module's post_init (out of combat; a
 -- creation that lands under combat lockdown is deferred to the next per-frame tick) and
--- driven by the class module's on_bar_update hook from the ranged bar. The cast bar
--- anchors above the ranged bar (UIParent centre when no ranged bar frame exists at all),
--- and the whole set is a silent no-op while the ranged hand is disabled, so it never
--- shows on clients without a ranged swing (Retail).
+-- driven by the class module's on_bar_update hook from the ranged bar while that bar is
+-- visible, plus by the hunter hook installed on the hand's anchor frame below (HU-37) on
+-- every frame where the ranged bar's own tick cannot run: main.lua's activity gate hides
+-- the bar while the hand is idle, and a hidden frame runs no OnUpdate - so without that
+-- hook a Steady Shot / Volley cast with Auto Shot off had no cast bar at all. The widgets
+-- parent to the anchor frame, but every anchor and width is still keyed to the ranged bar
+-- frame. The
+-- cast bar anchors above the ranged bar (UIParent centre when no ranged bar frame exists
+-- at all), and the whole set is a silent no-op while the ranged hand is disabled, so it
+-- never shows on clients without a ranged swing (Retail).
 --
--- This module never moves a melee bar: the reference's UpdateHunterMeleeBarAnchor
--- re-anchor was retired on 2026-10-25 (operator report: it made the mainhand bar look
--- mixed up with the ranged bar, because the cast bar is visible for the Auto Shot
--- hidden-window face every cycle). See the retired-anchor note above the cast bar.
+-- The melee bars are pinned under the ranged bar at its width on request (2026-10-27:
+-- "mh/oh should be small/thin ... same width as ranged bar and under it"). The anchor
+-- target is the ranged bar itself, never the cast bar, so the Auto Shot hidden-window
+-- face cannot move them; the 2026-10-25 "mixed up" regression came from the old
+-- cast-bar-gated re-anchor. See apply_melee_stack below.
 --=========================================================================================
 local addon_name, st = ...
 local LSM = LibStub("LibSharedMedia-3.0")
@@ -47,6 +54,7 @@ st.guard.label("hunter_ui", "Hunter UI")
 -- Constants (reference values in the comments)
 --=========================================================================================
 local CAST_BAR_GAP = 2                     -- HUNTER_CAST_BAR_GAP, Constants:162
+local MELEE_STACK_GAP = 2                  -- gap between the ranged bar and the thin melee stack
 local RANGE_HELPER_GAP = 3                 -- HUNTER_RANGE_HELPER_GAP, ClassMods.lua:5533
 local RANGE_HELPER_WIDTH = 7               -- HUNTER_RANGE_HELPER_WIDTH, Constants:163
 -- Sweet-spot band, expressed in exact yards (R3, 2026-10-21). The reference's index-3
@@ -79,7 +87,11 @@ local CAST_BAR_FALLBACK_COLOR = {0.35, 0.65, 0.95, 1.0}   -- hunterCastBar, Cons
 local RAPID_FIRE_BAR_COLOR = {0.15, 0.85, 0.45, 0.85}     -- rapidFireBar, Constants:1010
 -- autoShotUnsafe {1, 0, 0, 0.4} with the reference's alpha clamp (0.4 * 0.6 -> 0.24),
 -- SuperSwingTimer_UI.lua:918-921.
-local LATENCY_SLICE_COLOR = {1, 0, 0, 0.24}
+-- One visual language for the cast window (operator order 2026-10-28: "update the
+-- other bars colors/alpha so they are in sync"): the safe face is white and the
+-- unsafe face is red, at the same alphas on the zone and on the cast bar's own
+-- overlay. The latency end-slice is the same red at the same alpha.
+local LATENCY_SLICE_COLOR = {1, 0, 0, 0.4}
 local RANGE_STATE_COLORS = {               -- hunterRange*, Constants:971-974
     melee = {0.20, 0.85, 0.25, 1},
     sweet_spot = {0.98, 0.82, 0.18, 1},
@@ -87,7 +99,9 @@ local RANGE_STATE_COLORS = {               -- hunterRange*, Constants:971-974
     out_of_range = {0.50, 0.50, 0.50, 1},
 }
 local CLIP_TINT_COLORS = {                 -- clipSafe / clipZone, Constants:975-976
-    clipSafe = {0.2, 0.78, 0.25, 0.4},
+    -- Same white/red pair and the same alphas as the Auto Shot zone (they describe
+    -- the same window: safe = white, unsafe = red).
+    clipSafe = {1, 1, 1, 0.55},
     clipZone = {1, 0, 0, 0.4},
 }
 -- Aspect of the Hawk (both ranks), Cheetah, Monkey, Pack, Wild, Viper, Beast
@@ -117,9 +131,11 @@ local BADGE_GLOW_COLOR = {1, 0.85, 0, 0.35}
 -- Auto Shot cast window: the final 0.5 s of the ranged swing, at the END of the bar.
 -- The width is the client's cast window and is NEVER widened by latency (operator
 -- ruling 2026-10-22: latency is why a Steady Shot cast may land inside the zone, not
--- extra zone). The repaint stays: green when stopping here is safe (stopped at or
+-- extra zone). The repaint stays: WHITE when stopping here is safe (stopped at or
 -- before the window opened), red while moving through it or after a late stop.
-local CAST_ZONE_SAFE = {0.2, 0.78, 0.25, 0.4}
+-- Operator order 2026-10-28: the safe face is white, not green, and carries a little
+-- more alpha - "so its easier to see if it landed in zone or not".
+local CAST_ZONE_SAFE = {1, 1, 1, 0.55}
 local CAST_ZONE_UNSAFE = {1, 0, 0, 0.4}
 local CAST_ZONE_MARKER_WIDTH = 3            -- the reference's threshold marker (UI.lua:834)
 -- Target-of-target warning (H1, bench/competitor_gaps_2026-10-19.md §Hunter): HST's
@@ -131,6 +147,12 @@ local TARGET_WARNING_TEXT = ">> TARGETING YOU <<"
 local TARGET_WARNING_COLOR = {1, 0.15, 0.15, 1}
 local TARGET_WARNING_GAP = 4
 local TARGET_WARNING_TEXT_SIZE = 12
+-- The anchor hook's own failure budget (H3 discipline, the power_bar/weave_range
+-- pattern): after this many throwing ticks the hook gives up and the set is hidden
+-- instead of spraying the client's error handler every frame. The value matches
+-- guard.lua's shared quarantine threshold; the per-subfeature sites keep their own
+-- counters there.
+local TICK_QUARANTINE_THROWS = 25
 
 --=========================================================================================
 -- Helpers
@@ -142,8 +164,8 @@ local function world_latency_seconds(self)
     return ((self.latency and self.latency.world_ms) or 0) / 1000
 end
 
--- Effective visibility (a hidden parent hides its children; the widgets below are
--- children of the ranged bar frame, so Hide() on the bar must read as not visible here).
+-- Effective visibility (a hidden parent hides its children; the widgets below now hang
+-- off the hand's anchor frame, so the ranged bar's own Hide() has to be read here).
 local function frame_visible(frame)
     if not frame then
         return false
@@ -158,31 +180,298 @@ end
 -- the ranged hand is enabled. A hunter without a ranged weapon reads false, and so does
 -- the Retail client, where UnitRangedDamage does not exist, so no ranged weapon is ever
 -- detected. Everything in this module is a silent no-op while false.
+--
+-- The ACTIVITY gate is deliberately not part of this answer (main.lua's hand_is_in_use):
+-- the set must keep painting while the activity gate hides the bar (HU-37). The CONFIG
+-- half of the visibility rule is ranged_ui_allowed below.
 local function ranged_bar_ready(self)
     return self.ranged ~= nil and self:bar_is_enabled("ranged") == true
 end
 
--- Resolve a spell id to the running client's token for range probes: the
--- localized name on TBC (the state APIs take names, never bare ids - operator
--- client fact; docs/hunter-wa.json proves the id->name leg with
--- GetSpellInfo(75/2973/2974) range checks), the name with the id as fallback
--- everywhere else (IsSpellInRange and aura scans accept either; a client that
--- knows the spell answers the name form). Nil on TBC while the spell data has
--- not answered (unknown hides - probe_in_range already nil-guards).
+-- The CONFIGURED half of the ranged bar's visibility (HU-37): the class/spec/hand enable
+-- flags and, while the bar frame is hidden, the hand's own show rule - i.e. main.lua's
+-- handle_bar_visibility MINUS the activity gate. The visual set is allowed to ignore
+-- "the hand is idle", but it must never surface anything the configuration keeps hidden
+-- (class switched off, a spec gate, a show rule such as "in combat only" during the
+-- idle out-of-combat state).
+--
+-- The show-rule leg is evaluated only while the bar frame is NOT visible: a bar tick
+-- means the bar is visible, and main.lua only shows a hand after the same rule passed,
+-- so the answer is already known. Nil-safe: a sandbox that does not model main.lua
+-- skips the legs it does not provide.
+local function ranged_ui_allowed(self, db)
+    if type(db) == "table" and db.class_enabled == false then
+        return false
+    end
+    local check = self.check_bar_enable_settings
+    if type(check) == "function" and check(self, db, "ranged") ~= true then
+        return false
+    end
+    if not frame_visible(ui.ranged_frame) then
+        local cond = self.hand_show_condition_met
+        if type(cond) == "function" then
+            local hand_db = self:get_hand_table("ranged")
+            if type(hand_db) == "table" and cond(self, "ranged", hand_db) == false then
+                return false
+            end
+        end
+    end
+    return true
+end
+
+-- Whether the hunter melee stack is on. Nil-safe: only an explicit false turns it
+-- off, so a profile saved before the key existed reads the shipped ON behaviour.
+local function melee_stack_on(self)
+    local db = self:get_class_table()
+    return type(db) == "table" and db.hunter_melee_stack ~= false
+end
+
+-- Is a melee hand built? HU-22 lazy bars means an unequipped/disabled hand has no
+-- frames; a sandbox without bar_is_built is treated as built (its frames are the
+-- fixture's own contract).
+local function hand_is_built(self, hand)
+    if type(self.bar_is_built) == "function" then
+        return self:bar_is_built(hand) == true
+    end
+    local state = self[hand]
+    return type(state) == "table" and state.anchor_frame ~= nil
+end
+
+--=========================================================================================
+-- HU-37: the always-running hunter tick
+--
+-- The set used to be parented to the ranged bar frame and ticked only from its OnUpdate.
+-- main.lua's activity gate hides that frame while the hand is idle (no Auto Shot
+-- auto-repeat and no shot receipt inside the window), and a hidden frame runs no
+-- OnUpdate - so a Steady Shot / Volley cast with Auto Shot off painted no cast bar at
+-- all. The tick now rides the hand's ANCHOR frame: bars.lua's per-hand top-level frame
+-- and the one hide_bar() never hides (it hides the bar frame and the hiding proxy), so
+-- it stays shown for as long as the hand exists. The hook is hunter-installed and
+-- hunter-owned; the host is that existing per-hand frame rather than a new one because
+-- the build-time frame census (tests/bars_state.lua) pins the hunter widget count and is
+-- outside this lane's write scope - the lazy-badge precedent: do not move that pin.
+--
+-- The widgets parent to the same anchor frame (so they render while the bar frame is
+-- hidden) but keep EVERY anchor and width against the ranged bar frame. To render
+-- identically, the host is put on the bar frame's own strata/level BEFORE the widgets
+-- are created: a child created afterwards then defaults to bar-level + 1 (what it had as
+-- the bar's child) and inherits the bar's strata. The ranged bar itself is never shown
+-- from here: the activity gate owns its visibility.
+--
+-- Exactly one source per frame: while the ranged bar is visible and carries its own
+-- OnUpdate, that tick drives the set (the pre-2026-10-28 source) and the anchor tick
+-- defers; the anchor tick takes every frame the bar's tick cannot run.
+--=========================================================================================
+
+-- Is the ranged bar's own tick going to run this frame? True only when the bar frame is
+-- actually visible AND carries its OnUpdate (the pre-fix source). A visible bar without
+-- the script - a sandbox build, or frames that came up without bring_up_hand - leaves
+-- the frame to the anchor tick rather than going blank.
+local function ranged_tick_is_live()
+    local frame = ui.ranged_frame
+    if not frame_visible(frame) then
+        return false
+    end
+    if type(frame.GetScript) ~= "function" then
+        return false
+    end
+    return frame:GetScript("OnUpdate") ~= nil
+end
+
+-- Mirror the ranged bar's effective layering onto the tick host. The widgets used to
+-- inherit the bar's strata/level as its children; the profile-wide draw_level /
+-- frame_strata settings can move that frame after the build, so the host follows it
+-- (one compare per frame, a Set only on a real change). In ui.build this runs BEFORE
+-- the widgets exist, because a child's default frame level is assigned at creation.
+local function sync_tick_host_layering()
+    local host = ui.tick_host
+    local bar = ui.ranged_frame
+    if not host or not bar then
+        return
+    end
+    if type(bar.GetFrameStrata) == "function" then
+        local strata = bar:GetFrameStrata()
+        if strata ~= nil and strata ~= ui.host_strata then
+            ui.host_strata = strata
+            if type(host.SetFrameStrata) == "function" then
+                host:SetFrameStrata(strata)
+            end
+        end
+    end
+    if type(bar.GetFrameLevel) == "function" then
+        local level = bar:GetFrameLevel()
+        if type(level) == "number" and level ~= ui.host_level then
+            ui.host_level = level
+            if type(host.SetFrameLevel) == "function" then
+                host:SetFrameLevel(level)
+            end
+        end
+    end
+end
+
+-- Claim the hand's anchor frame as the tick host: put it on the ranged bar's layering
+-- and install the hunter hook once. Returns nil when the hand has no anchor frame (no
+-- built hand); in that degenerate build the ranged bar's own tick stays the only source,
+-- which is exactly the pre-fix wiring.
+local function claim_tick_host(self)
+    local anchor = self.ranged and self.ranged.anchor_frame
+    if not anchor then
+        return nil
+    end
+    ui.tick_host = anchor
+    sync_tick_host_layering()
+    if not ui.tick_installed then
+        ui.tick_installed = true
+        anchor:SetScript("OnUpdate", function(_, elapsed)
+            ui.poll(ui.owner)
+        end)
+    end
+    return anchor
+end
+
+-- One anchor-tick frame: keep the host on the bar's layering, then update the set
+-- unless the ranged bar's own tick is going to run this frame.
+local function tick_once(self)
+    sync_tick_host_layering()
+    if ranged_tick_is_live() then
+        return
+    end
+    ui.update(self)
+end
+
+-- The host's guarded entry (H3 discipline, the power_bar/weave_range pattern): a
+-- throwing tick must never break the OnUpdate chain. The per-subfeature sites inside
+-- ui.update already isolate their own throws, so this catches only the entry's own
+-- failure path; after TICK_QUARANTINE_THROWS the hook gives up and the set hides.
+function ui.poll(self)
+    if not self then
+        return
+    end
+    local ok, err = pcall(tick_once, self)
+    if ok then
+        ui.tick_failures = nil
+        return
+    end
+    local failures = (ui.tick_failures or 0) + 1
+    ui.tick_failures = failures
+    ui.tick_last_error = tostring(err)
+    if failures == 1 and type(st.utils) == "table"
+        and type(st.utils.print_msg) == "function" then
+        -- Best-effort chat line: a missing/broken chat frame must never re-break the
+        -- OnUpdate chain this guard exists to protect.
+        pcall(st.utils.print_msg,
+            "Hunter UI update failed and was isolated: " .. tostring(err))
+    end
+    if failures >= TICK_QUARANTINE_THROWS then
+        if ui.tick_host and type(ui.tick_host.SetScript) == "function" then
+            ui.tick_host:SetScript("OnUpdate", nil)
+        end
+        ui.hide_all(self)
+    end
+end
+
+-- Pin the thin melee bars under the ranged bar at its width. Runs on the ranged and
+-- mainhand ticks (the ranged tick may be stopped while the bar is hidden). The anchor
+-- target is the RANGED BAR, never the cast bar: the 2026-10-25 regression happened
+-- because the old re-anchor was gated on cast-bar visibility, which is true for the
+-- Auto Shot window in every ranged cycle. Here the position is the requested layout,
+-- not a transient state, so the window cannot move it.
+function ui.apply_melee_stack(self)
+    if not melee_stack_on(self) or not ranged_bar_ready(self) then
+        return
+    end
+    local ranged_state = self.ranged
+    local ranged_anchor = ranged_state and ranged_state.anchor_frame
+    local parent = ranged_anchor and ranged_anchor.bar_frame
+    if parent == nil then
+        return
+    end
+    local ranged_db = self:get_hand_table("ranged")
+    local width = ranged_db and ranged_db.bar_width
+    if type(width) ~= "number" or width <= 0 then
+        -- A sandbox/flavor without the db width still has the live frame width.
+        width = parent.GetWidth and parent:GetWidth()
+    end
+    if type(width) ~= "number" or width <= 0 then
+        return
+    end
+    local configure = self.configure_bar_size_and_positions
+    for _, hand in ipairs({ "mainhand", "offhand" }) do
+        local state = self[hand]
+        local anchor = state and state.anchor_frame
+        if anchor ~= nil and hand_is_built(self, hand) then
+            local bar_frame = anchor.bar_frame
+            local current_width = bar_frame and bar_frame.GetWidth and bar_frame:GetWidth()
+                or anchor.GetWidth and anchor:GetWidth()
+            -- Half a UI unit of tolerance (2026-10-28, mainhand report: the thin bar
+            -- sat at 100% and never animated). An exact compare re-ran the resize - and
+            -- with it the fill's width reset - on any float/scale noise, once per tick.
+            -- A real width change is whole units, so this tolerance cannot hide one.
+            local matched = type(current_width) == "number" and current_width > 0
+                and math.abs(current_width - width) <= 0.5
+            if not matched and type(configure) == "function" then
+                -- Resize WITHOUT writing bar_width: the user's saved width returns
+                -- when the stack is switched off (configure with no override).
+                configure(self, hand, width)
+            end
+            local point, relative, relative_point, x, y = anchor:GetPoint(1)
+            if point ~= "TOPLEFT" or relative ~= parent
+                or relative_point ~= "BOTTOMLEFT" or x ~= 0 or y ~= -MELEE_STACK_GAP then
+                anchor:ClearAllPoints()
+                anchor:SetPoint("TOPLEFT", parent, "BOTTOMLEFT", 0, -MELEE_STACK_GAP)
+            end
+            parent = anchor
+        end
+    end
+end
+
+-- Turn the stack off: restore each built melee hand's own width and saved LibWindow
+-- position. Only the geometry is restored; no saved key is written by either path.
+function ui.restore_melee_layout(self)
+    if type(self.configure_bar_size_and_positions) ~= "function" then
+        return
+    end
+    for _, hand in ipairs({ "mainhand", "offhand" }) do
+        if hand_is_built(self, hand) then
+            self:configure_bar_size_and_positions(hand)
+        end
+    end
+end
+
+-- Resolve a spell id to the running client's token for range probes. The rule is
+-- the operator's name-vs-id matrix, one family gate at a time: Classic Era (SoD
+-- included), Forever, Cata/Mists/Retail and the unknown fallback take the numeric
+-- ID; TBC Anniversary and Wrath/Titanforge take the localized NAME first and the
+-- ID as the approved fallback (HU-34: "i never banned fallback to ids"). The
+-- display name is the SECOND return so Era still has its label while probing by
+-- id. A cold spell cache on a name family therefore degrades to the id, never to
+-- a nil token.
 local function resolve_spell(spell_id)
     local name = api.GetSpellInfo(spell_id)
-    if st.family == "TBC" then
-        return name, name
+    if type(name) ~= "string" then
+        name = nil
     end
-    return name or spell_id, name
+    if st.family == "TBC" or st.family == "WRATH" then
+        if type(api.get_spell_query) == "function" then
+            return api.get_spell_query(name, spell_id) or spell_id, name
+        end
+        return name or spell_id, name
+    end
+    return spell_id, name
 end
 
 --=========================================================================================
 -- Frame construction (called once from ST.HUNTER.post_init, out of combat)
+--
+-- HU-37: each creator takes the CREATION parent (the hand's anchor frame, which the
+-- activity gate never hides) separately from the ANCHOR target (the ranged bar frame).
+-- The widgets render under the anchor while the activity gate hides the bar; every
+-- SetPoint/width below still reads exactly what it read when they were the bar's
+-- children.
 --=========================================================================================
-local function create_cast_bar(ranged_frame, texture, font_path, db_hand)
-    local parent = ranged_frame or UIParent
-    local frame = CreateFrame("Frame", addon_name .. "HunterCastBar", parent)
+local function create_cast_bar(parent, ranged_frame, texture, font_path, db_hand)
+    local frame = CreateFrame("Frame", addon_name .. "HunterCastBar",
+        parent or ranged_frame or UIParent)
     frame:SetHeight(CAST_BAR_FALLBACK_HEIGHT)
     if ranged_frame then
         frame:SetPoint("BOTTOMLEFT", ranged_frame, "TOPLEFT", 0, CAST_BAR_GAP)
@@ -237,8 +526,9 @@ local function create_cast_bar(ranged_frame, texture, font_path, db_hand)
     return frame
 end
 
-local function create_range_helper(ranged_frame)
-    local helper = CreateFrame("Frame", addon_name .. "HunterRangeHelper", ranged_frame)
+local function create_range_helper(parent, ranged_frame)
+    local helper = CreateFrame("Frame", addon_name .. "HunterRangeHelper",
+        parent or ranged_frame or UIParent)
     helper:SetWidth(RANGE_HELPER_WIDTH)
     helper.tex = helper:CreateTexture(nil, "ARTWORK")
     helper.tex:SetAllPoints()
@@ -247,8 +537,9 @@ local function create_range_helper(ranged_frame)
     return helper
 end
 
-local function create_rapid_fire_bar(ranged_frame, texture, font_path, text_size)
-    local bar = CreateFrame("StatusBar", addon_name .. "HunterRapidFireBar", ranged_frame)
+local function create_rapid_fire_bar(parent, ranged_frame, texture, font_path, text_size)
+    local bar = CreateFrame("StatusBar", addon_name .. "HunterRapidFireBar",
+        parent or ranged_frame or UIParent)
     bar:SetHeight(RAPID_FIRE_BAR_HEIGHT)
     bar:SetMinMaxValues(0, 1)
     bar:SetValue(0)
@@ -274,8 +565,9 @@ local function create_rapid_fire_bar(ranged_frame, texture, font_path, text_size
     return bar
 end
 
-local function create_aspect_icon(ranged_frame)
-    local icon = CreateFrame("Frame", addon_name .. "HunterAspectIcon", ranged_frame)
+local function create_aspect_icon(parent)
+    local icon = CreateFrame("Frame", addon_name .. "HunterAspectIcon",
+        parent or UIParent)
     icon:SetSize(ASPECT_ICON_SIZE, ASPECT_ICON_SIZE)
     icon:EnableMouse(false)
     icon.tex = icon:CreateTexture(nil, "ARTWORK")
@@ -296,6 +588,13 @@ local function create_cast_zone(ranged_frame)
     -- render under the child visuals frame. Without a visuals frame (degenerate build)
     -- both textures stay nil and the update is a no-op. The zone is right-anchored and
     -- width-driven; the marker is a thin dark line at the window boundary.
+    --
+    -- HU-37: this one overlay stays on the bar's surface (a texture cannot be re-parented)
+    -- and deliberately so. Its own update gate only paints inside a LIVE ranged cycle
+    -- (update_cast_zone), and a live cycle always implies the activity gate shows the bar
+    -- for that cycle's receipt window - so a zone painted while the bar is hidden is never
+    -- observable today. It still TICKS from the anchor hook with the rest of the set (its
+    -- update runs and hides itself when there is no live cycle).
     local parent = ranged_frame and ranged_frame.visuals_frame
     if not parent then
         return nil, nil
@@ -334,11 +633,11 @@ local function create_target_warning(cast_frame, font_path)
     return label
 end
 
-local function create_badge(name, ranged_frame, font_path, text_size)
+local function create_badge(name, parent, font_path, text_size)
     -- The tracked-icon pattern (reference ClassMods.lua:6224-6279): icon texture with
     -- the standard inset, an additive gold glow overlay, one text. Callers place the
     -- text (BW: the countdown above the icon; Frenzy: the stack count bottom-right).
-    local frame = CreateFrame("Frame", addon_name .. name, ranged_frame)
+    local frame = CreateFrame("Frame", addon_name .. name, parent or UIParent)
     frame:SetSize(BADGE_ICON_SIZE, BADGE_ICON_SIZE)
     frame:EnableMouse(false)
     frame.tex = frame:CreateTexture(nil, "ARTWORK")
@@ -376,23 +675,35 @@ function ui.build(self, ranged_frame)
     local font_path = st.utils.fetch_font_path(db_hand.text_font)
     local text_size = db_hand.text_size or 12
 
+    -- HU-37: the tick host is claimed BEFORE the widgets so their default frame levels
+    -- (host level + 1) are the bar-child levels they had before, and so the set has a
+    -- never-hidden parent from its first frame. The ranged bar frame is still the ANCHOR
+    -- target for every widget below. A hand with no anchor frame (degenerate build)
+    -- keeps the pre-fix wiring: children of the bar frame, ticked by its own OnUpdate.
+    ui.owner = self
     ui.ranged_frame = ranged_frame
-    ui.cast_frame = create_cast_bar(ranged_frame, texture, font_path, db_hand)
-    ui.range_helper = create_range_helper(ranged_frame)
-    ui.rapid_fire_bar = create_rapid_fire_bar(ranged_frame, texture, font_path, text_size)
-    ui.aspect_icon = create_aspect_icon(ranged_frame)
+    local parent = ui.tick_host or claim_tick_host(self)
+    if not parent and ranged_frame then
+        parent = ranged_frame
+    end
+    ui.cast_frame = create_cast_bar(parent, ranged_frame, texture, font_path, db_hand)
+    ui.range_helper = create_range_helper(parent, ranged_frame)
+    ui.rapid_fire_bar = create_rapid_fire_bar(parent, ranged_frame, texture,
+        font_path, text_size)
+    ui.aspect_icon = create_aspect_icon(parent)
     -- H1 target warning (option-gated nil = off; text set once, visibility per frame).
     ui.target_warning = create_target_warning(ui.cast_frame, font_path)
 
-    -- Transition state: nil/false means "normal anchors". (No melee-anchor state: the
-    -- melee bars are never re-anchored by this module - see the retired-anchor note.)
+    -- Transition state: nil/false means "normal anchors". (The melee stack is stateless:
+    -- apply_melee_stack compares the live anchor points each tick, so a toggle-off or a
+    -- drag is handled without a cached "was stacked" flag.)
     ui.helper_top = nil
     ui.rf_anchor = nil
     ui.rf_width = nil
     ui.aspect_anchor = nil
     ui.cast_height = nil
 
-    -- Client spell tokens (localized names with the ids as fallback).
+    -- Client spell tokens (Era ids; TBC/Wrath localized names with the ids as fallback).
     ui.wing_clip_token = resolve_spell(WING_CLIP_ID)
     ui.raptor_token = resolve_spell(RAPTOR_STRIKE_ID)
     ui.auto_shot_token, ui.auto_shot_name = resolve_spell(AUTO_SHOT_ID)
@@ -416,10 +727,10 @@ function ui.build(self, ranged_frame)
     -- case its update is a no-op). Badge text placement follows the reference: BW's
     -- countdown above the icon, Frenzy's stack count bottom-right.
     ui.cast_zone, ui.cast_zone_marker = create_cast_zone(ranged_frame)
-    ui.bw_badge = create_badge("HunterBWBadge", ranged_frame, font_path, text_size)
+    ui.bw_badge = create_badge("HunterBWBadge", parent, font_path, text_size)
     ui.bw_badge.text:SetPoint("BOTTOM", ui.bw_badge, "TOP", 0, 2)
     ui.bw_badge.text:SetJustifyH("CENTER")
-    ui.frenzy_badge = create_badge("HunterFrenzyBadge", ranged_frame, font_path, text_size)
+    ui.frenzy_badge = create_badge("HunterFrenzyBadge", parent, font_path, text_size)
     ui.frenzy_badge.text:SetPoint("BOTTOMRIGHT", ui.frenzy_badge, "BOTTOMRIGHT", -1, 1)
     ui.frenzy_badge.text:SetJustifyH("RIGHT")
 
@@ -469,27 +780,18 @@ function ui.init(self)
 end
 
 --=========================================================================================
--- Melee bar anchoring: RETIRED (2026-10-25, operator report)
+-- Melee bar stack (2026-10-27 operator request)
 --=========================================================================================
--- This module used to port the reference's UpdateHunterMeleeBarAnchor
--- (SuperSwingTimer_UI.lua:31-44): while the hunter cast bar was visible it re-anchored the
--- mainhand and offhand bars into a stack under the ranged bar and handed them back to
--- LibWindow when the cast bar hid. The trigger is wrong for this layout. The cast bar is
--- visible for the Auto Shot hidden-window face too - `cast_bar_display` returns "window"
--- for the last 0.5 s of EVERY ranged cycle - so at range, with no melee swing at all, the
--- melee bars hopped into the ranged stack once per Auto Shot and back. That is the
--- operator's 2026-10-25 report ("main hand bar ... looks like it is mixed up with the
--- ranged bar").
+-- The thin mainhand/offhand bars are pinned directly under the ranged bar at the ranged
+-- bar's width (ranged -> MH -> OH). This is a stable layout, not a transient cast-bar
+-- state: the anchor target is the ranged bar frame, so the Auto Shot hidden-window face
+-- (the old 2026-10-25 regression trigger) cannot move them. The stack is off-switchable
+-- (hunter_melee_stack = false) and restores each hand's own width + LibWindow position.
 --
--- The reference can stack those bars because its MH bar is HIDDEN whenever the ranged
--- cycle or the cast bar is up (SuperSwingTimer_UI.lua:2650-2670: showMH requires
--- hunterMeleeVisible and NOT (effectiveRangedActive or hunterCastVisible)). This addon
--- deliberately does not hide the melee cycle at range - the melee-weave workflow is
--- exactly about watching it - so the stack has no place to live. Operator order: every
--- bar keeps its own LibWindow position, and the ranged UI never moves a melee bar.
---
--- The mechanism (and its helpers) is deleted rather than left as a no-op: a tombstone
--- function would still be called from the per-frame path for no result.
+-- The reference's UpdateHunterMeleeBarAnchor (SuperSwingTimer_UI.lua:31-44) is not
+-- ported: it gated the stack on cast-bar visibility and hid the MH bar at range. This
+-- addon deliberately keeps the melee cycle visible for melee weaving; only the geometry
+-- policy is adopted.
 
 --=========================================================================================
 -- Cast bar
@@ -847,11 +1149,18 @@ end
 --=========================================================================================
 -- Range helper (reference ClassMods.lua:5538-5701)
 --=========================================================================================
-local function probe_in_range(token)
+-- One range probe. A nil answer means the client could not answer the query form,
+-- not that the target is out of range; on a name family that is exactly when the
+-- approved id fallback is tried before the state is called unknown.
+local function probe_in_range(token, fallback_id)
     if not token then
         return nil
     end
-    return api.IsSpellInRange(token, "target")
+    local answer = api.IsSpellInRange(token, "target")
+    if answer == nil and fallback_id ~= nil and fallback_id ~= token then
+        answer = api.IsSpellInRange(fallback_id, "target")
+    end
+    return answer
 end
 
 function ui.update_range_helper(self, db)
@@ -886,9 +1195,9 @@ function ui.update_range_helper(self, db)
         end
         return
     end
-    local melee = probe_in_range(ui.wing_clip_token)
+    local melee = probe_in_range(ui.wing_clip_token, WING_CLIP_ID)
     if melee == nil then
-        melee = probe_in_range(ui.raptor_token)
+        melee = probe_in_range(ui.raptor_token, RAPTOR_STRIKE_ID)
     end
     -- Sweet spot from exact yards, one probe per update. nil = the client cannot answer
     -- (unknown, so it must not count as "a probe answered"); false = known to be outside
@@ -898,7 +1207,7 @@ function ui.update_range_helper(self, db)
     if yards ~= nil then
         sweet = yards > RANGE_HELPER_MELEE_RANGE and yards <= RANGE_HELPER_SWEET_SPOT
     end
-    local ranged = probe_in_range(ui.auto_shot_token)
+    local ranged = probe_in_range(ui.auto_shot_token, AUTO_SHOT_ID)
     if melee == nil and sweet == nil and ranged == nil then
         if helper:IsShown() then
             helper:Hide()
@@ -1186,7 +1495,7 @@ local function ensure_oom_badge()
     if ui.oom_badge then
         return ui.oom_badge
     end
-    local badge = create_badge("HunterOomViperBadge", ui.ranged_frame)
+    local badge = create_badge("HunterOomViperBadge", ui.tick_host or ui.ranged_frame)
     badge.text:SetPoint("CENTER", badge, "CENTER", 0, 0)
     badge.text:SetJustifyH("CENTER")
     ui.oom_badge = badge
@@ -1263,7 +1572,7 @@ local function ensure_lnl_badge()
     if ui.lnl_badge then
         return ui.lnl_badge
     end
-    local badge = create_badge("HunterLnlBadge", ui.ranged_frame)
+    local badge = create_badge("HunterLnlBadge", ui.tick_host or ui.ranged_frame)
     badge.text:SetPoint("CENTER", badge, "CENTER", 0, 0)
     badge.text:SetJustifyH("CENTER")
     ui.lnl_badge = badge
@@ -1342,7 +1651,7 @@ local function ensure_trap_badge()
     if ui.trap_badge then
         return ui.trap_badge
     end
-    local badge = create_badge("HunterTrapBadge", ui.ranged_frame)
+    local badge = create_badge("HunterTrapBadge", ui.tick_host or ui.ranged_frame)
     badge.text:SetPoint("CENTER", badge, "CENTER", 0, 0)
     badge.text:SetJustifyH("CENTER")
     ui.trap_badge = badge
@@ -1516,7 +1825,10 @@ function ui.hide_all(self)
 end
 
 function ui.update(self)
-    -- Driven from the ranged bar's per-frame tick (ST.HUNTER.on_bar_update hook).
+    -- Two tick sources, never both in one frame (HU-37): the ranged bar's per-frame
+    -- tick while that bar is visible, and the anchor hook (ui.poll) whenever that tick
+    -- cannot run. The ACTIVITY gate is not an input here - the set must paint
+    -- a cast, a proc badge or a range reading while the bar itself stays hidden.
     if not ui.ready or not ranged_bar_ready(self) then
         if ui.ready then
             ui.hide_all(self)
@@ -1528,6 +1840,13 @@ function ui.update(self)
     -- honest state is "hidden" (the same state a switched-off HUD paints), not a
     -- guard-quarantine storm from a nil read.
     if type(db) ~= "table" then
+        ui.hide_all(self)
+        return
+    end
+    -- The configured half of the bar's visibility (class/spec/hand enable flags and
+    -- the hand's own show rule). Ignoring the activity gate must not resurrect a set the
+    -- user's own configuration keeps hidden.
+    if not ranged_ui_allowed(self, db) then
         ui.hide_all(self)
         return
     end
@@ -1552,23 +1871,27 @@ end
 function ui.force_rapid_fire_refresh(self)
     -- Readiness (23989) resets Rapid Fire's cooldown; the reference forces the Rapid
     -- Fire bar's next scan immediately (ForceHunterRapidFireRefresh, ClassMods.lua:
-    -- 5951-5956). Here the scan is driven by the ranged tick, so the force is a
-    -- throttle bypass and the next tick reads the new state. Nil-safe before build:
-    -- update_rapid_fire only runs once ui.ready is true.
+    -- 5951-5956). Here the scan is driven by the ranged tick (or the anchor hook while the
+    -- bar is hidden), so the force is a throttle bypass and the next tick reads the new
+    -- state. Nil-safe before build: update_rapid_fire only runs once ui.ready is true.
     ui.rf_scan_at = nil
 end
 
 function ui.on_bar_update(self, hand)
     -- Dispatched from ST.HUNTER.on_bar_update for the mainhand and ranged bars. The
-    -- mainhand tick is here only to retry the deferred frame creation (a lockdown build
-    -- is retried from whichever bar ticks first); the visual set itself is driven by the
-    -- ranged tick, and no hand tick moves another hand's frame (2026-10-25: the melee
-    -- re-anchor is retired).
+    -- mainhand tick retries the deferred frame creation (a lockdown build is retried
+    -- from whichever bar ticks first) and keeps the melee stack applied while the ranged
+    -- bar is hidden. The ranged tick drives the visual set exactly as it always has -
+    -- but only while the bar is visible; the anchor hook (ui.poll) covers every frame
+    -- this hook cannot reach because the activity gate hid the bar (HU-37).
     if not ui.ready then
         ui.init(self)
         if not ui.ready then
             return
         end
+    end
+    if hand == "mainhand" or hand == "ranged" then
+        st.guard.run(self, "hunter_ui:melee_stack", ui.apply_melee_stack, self)
     end
     if hand == "ranged" then
         ui.update(self)

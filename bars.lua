@@ -249,11 +249,354 @@ function ST:configure_draw_layers(hand)
     if f.gcd1b_marker then f.gcd1b_marker:SetDrawLayer("OVERLAY", -1) end
 end
 
-function ST:configure_bar_size_and_positions(hand)
+-- width_override / height_override are for per-hand layout policies that must resize a
+-- hand without writing its saved bar_width/bar_height (the hunter melee stack: the MH/OH
+-- bars follow the ranged bar's width). They change only this pass's geometry; the saved
+-- keys are the authority again on the next call without an override, which is exactly how
+-- the stack toggle restores the user's own size.
+--
+-- Offhand size invariant (operator order 2026-10-28: "off hand should be same size as
+-- mh", for every class): the offhand is the same bar one hand later, so its rendered
+-- width and height are the MAINHAND's on every pass - not its own saved keys. A profile
+-- saved before this rule (or an offhand key left at an old default) can therefore never
+-- leave the two hands different sizes. An explicit override still wins for that pass,
+-- because a layout policy (the hunter stack) owns the whole row while it applies.
+--
+-- Melee pair height (operator order 2026-10-28: "off hand should always be same width as
+-- main hand. maybe have it so u can adjust the height for both"): ONE class-level key,
+-- `melee_bar_height` (documented in config_presets.lua as a comment because nil is its
+-- shipped value - AceDB stores no default for it). While it is a positive number BOTH
+-- melee hands render at exactly that height, which makes the offhand-follows-mainhand
+-- rule trivially true for the pair; nil, false or any non-positive value keeps the
+-- shipped behaviour (each hand's own bar_height, offhand following the mainhand's
+-- effective height). The ranged hand is never part of the pair, and an explicit per-pass
+-- height override still wins (a layout policy owns the whole row while it applies).
+function ST:melee_pair_height()
+    local class_db = self:get_class_table()
+    if type(class_db) ~= "table" then
+        return nil
+    end
+    -- rawget, NOT a plain read: AceDB gives every class row a '**' metatable whose __index
+    -- CREATES a defaults-filled sub-table and rawsets it for any missing key
+    -- (Libs/AceDB-3.0/AceDB-3.0.lua:88-107). A plain read here would persist a junk
+    -- melee_bar_height table in SavedVariables on the first layout pass.
+    -- tonumber() reads false (the "use each hand's own height" reset in the options) and
+    -- any junk as nil, so the nil-safe gate is one comparison.
+    local height = tonumber(rawget(class_db, "melee_bar_height"))
+    if height == nil or height <= 0 then
+        return nil
+    end
+    return height
+end
+
+function ST:hand_bar_size(hand, width_override, height_override)
+    local db = self:get_hand_table(hand)
+    if type(db) ~= "table" then
+        return nil, nil
+    end
+    local width_override_on = type(width_override) == "number" and width_override > 0
+    local height_override_on = type(height_override) == "number" and height_override > 0
+    -- The melee pair height is authoritative for the two melee hands only.
+    local pair_height = nil
+    if hand == "mainhand" or hand == "offhand" then
+        pair_height = self:melee_pair_height()
+    end
+    local bar_width = width_override_on and width_override or db.bar_width
+    local bar_height = height_override_on and height_override or pair_height or db.bar_height
+    if hand == "offhand" then
+        local mainhand = self:get_hand_table("mainhand")
+        if type(mainhand) == "table" then
+            if not width_override_on and type(mainhand.bar_width) == "number" then
+                bar_width = mainhand.bar_width
+            end
+            if not height_override_on then
+                -- The mainhand's EFFECTIVE height: the pair height when set, else its own
+                -- saved key. Reading the raw key here would silently undo the pair.
+                bar_height = pair_height
+                    or ((type(mainhand.bar_height) == "number") and mainhand.bar_height or bar_height)
+            end
+        end
+    end
+    return bar_width, bar_height
+end
+
+--=========================================================================================
+-- Ranged row placement policy (operator order 2026-10-28; brief ranged-forced)
+--
+-- The slot directly below the bottom-most melee row belongs to the POWER BAR
+-- (power_bar.lua: "ranged bar shouldnt be below mh/oh bar because thats where power bar
+-- should be for each class"). The ranged hand is a separate widget and must never sit in
+-- that row. A FRESH profile ships above the melee stack, but AceDB never rewrites a saved
+-- key: a profile created before that default move (or one whose row the user dragged or
+-- scaled) keeps a legacy row. The operator's ruling of 2026-10-28 closes that: the ranged
+-- bar "should stay with the rest, aka the new way" - a legacy saved position does not win.
+--
+-- The rule (ST:migrate_ranged_placement, called once from main.lua's OnInitialize before
+-- any frame or options table exists) therefore NORMALISES the ranged row to the new
+-- layout for EVERY class that owns a ranged hand:
+--   * the anchor becomes x = 0, point = CENTER, scale = 1 (the shipped LibWindow anchor),
+--     so a legacy drag and a legacy scale are replaced, not preserved;
+--   * y becomes the class's shipped ranged row when that row clears the melee stack and
+--     the power slot by RANGED_PLACEMENT_GAP, else the lowest integer y that clears them -
+--     the same row a fresh profile gets, so a migrated row never lands between two
+--     layouts;
+--   * the band is read from the melee rows' own SAVED geometry (melee_reserved_band),
+--     including a dragged anchor point or a scale, so a profile whose melee row was
+--     dragged still gets the ranged row above the stack instead of being skipped;
+--   * the row is written only while it is not already exactly the target row, so a fresh
+--     profile is never touched (AceDB's own defaults already ARE the new layout) and
+--     nothing is rewritten after the first pass;
+--   * a per-class profile latch, stored as the rule's VERSION, makes it a once-per-profile
+--     pass: no per-tick work, no geometry hopping, at most one notice per class per
+--     session, and a drag made AFTER the pass is never fought.
+-- The version matters: the first, weaker pass (version 1, stored as `true`) skipped a
+-- dragged/scaled row, so a profile that already ran it is evaluated exactly once more
+-- under this ruling and then latched at the current version - otherwise the operator's own
+-- profile would keep its legacy row forever.
+--=========================================================================================
+-- Latch, per profile (the appearance migration's shape: config.lua owns that precedent).
+ST.RANGED_PLACEMENT_FLAG = "ranged_placement_213"
+-- The placement rule's own version. 1 was the first pass (shipped-default rows only, a
+-- drag won); 2 is this forced pass. Any other stored value - including the `true` the
+-- first pass wrote - is evaluated exactly once more, then latched here.
+ST.RANGED_PLACEMENT_VERSION = 2
+-- The shipped LibWindow anchor of an untouched row (ST.bar_defaults in config_presets.lua).
+ST.SHIPPED_HAND_X = 0
+ST.SHIPPED_HAND_POINT = "CENTER"
+ST.SHIPPED_HAND_SCALE = 1
+-- Clearance kept between the ranged row and the band it must not enter (px).
+ST.RANGED_PLACEMENT_GAP = 2
+
+-- One saved row's vertical extent (top, bottom) in the db's own units, read from the row's
+-- LibWindow anchor. LibWindow-1.1 stores the offset of the ANCHORED EDGE from the same edge
+-- of the parent (LibWindow-1.1.lua SavePosition/RestorePosition; the bar anchor frame's
+-- parent is UIParent, so the stored units are UIParent units), which means a TOP row's
+-- saved y IS its top edge, a BOTTOM row's saved y is its bottom edge, and every other
+-- point (CENTER/LEFT/RIGHT) stores the vertical centre. The row is as tall as the hand
+-- renders (hand_bar_size) times the row's scale, because LibWindow scales the anchor
+-- frame - so a dragged anchor and a scaled row are read at their real size instead of
+-- being refused. nil only when the row is missing or its y/height is unreadable: the
+-- anchor point is never guessed, because every point LibWindow can save has a defined
+-- vertical edge.
+function ST:saved_row_extent(hand)
+    local db = self:get_hand_table(hand)
+    if type(db) ~= "table" then
+        return nil
+    end
+    local y = tonumber(db.y)
+    local _, height = self:hand_bar_size(hand)
+    height = tonumber(height)
+    if y == nil or height == nil or height <= 0 then
+        return nil
+    end
+    local scale = tonumber(db.scale)
+    if scale == nil or scale <= 0 then
+        -- LibWindow restores a missing/garbage scale with the frame's own (1 at creation).
+        scale = 1
+    end
+    local row_height = height * scale
+    local vertical = nil
+    if type(db.point) == "string" then
+        vertical = db.point:match("^TOP") or db.point:match("^BOTTOM")
+    end
+    if vertical == "TOP" then
+        return y, y - row_height
+    end
+    if vertical == "BOTTOM" then
+        return y + row_height, y
+    end
+    return y + (row_height / 2), y - (row_height / 2)
+end
+
+-- The band the ranged row must stay out of: the melee stack (every owned hand except the
+-- ranged one) plus the power-bar slot hanging under its bottom edge. Returns (top, bottom),
+-- or nil when any involved row is unreadable or the class has no melee row. The extents
+-- come from the rows' SAVED geometry (saved_row_extent), so a dragged or scaled melee row
+-- is read at its real position and the rule still lands the ranged row above the stack.
+function ST:melee_reserved_band()
+    local top, bottom
+    for hand in self:iter_hands() do
+        if hand ~= "ranged" then
+            local row_top, row_bottom = self:saved_row_extent(hand)
+            if row_top == nil or row_bottom == nil then
+                return nil
+            end
+            if top == nil or row_top > top then
+                top = row_top
+            end
+            if bottom == nil or row_bottom < bottom then
+                bottom = row_bottom
+            end
+        end
+    end
+    if top == nil or bottom == nil then
+        return nil
+    end
+    -- The power slot: one gap under the bottom-most melee row, at the class's own height.
+    -- power_bar.lua is loaded after this file in the TOC, so the module is read at call
+    -- time (a sandbox without it keeps the shipped constants). The slot is reserved even
+    -- while the power bar itself is switched off: the operator's rule is about the row,
+    -- and a reserved slot cannot start colliding when the bar is switched back on.
+    local gap = ST.RANGED_PLACEMENT_GAP
+    local power_height = 14
+    local pb = rawget(st, "power_bar")
+    if type(pb) == "table" then
+        if tonumber(pb.GAP) ~= nil then
+            gap = tonumber(pb.GAP)
+        end
+        if type(pb.height_for) == "function" then
+            local ok, height = pcall(pb.height_for, self:get_class_table())
+            if ok and tonumber(height) ~= nil then
+                power_height = tonumber(height)
+            end
+        end
+    end
+    return top, bottom - gap - power_height
+end
+
+-- Does a row (top, bottom) intersect a band (band_top, band_bottom)? Touching edges do not
+-- intersect; only a real overlap counts, so a row parked exactly one gap away is left alone.
+function ST:row_intersects_band(row_top, row_bottom, band_top, band_bottom)
+    if type(row_top) ~= "number" or type(row_bottom) ~= "number" then
+        return false
+    end
+    if type(band_top) ~= "number" or type(band_bottom) ~= "number" then
+        return false
+    end
+    return row_top > band_bottom and row_bottom < band_top
+end
+
+-- The class's shipped ranged y (its own default, else the shared bar default), or nil when
+-- the assembled defaults are unreadable. Read-only: the defaults table is never mutated.
+function ST:shipped_ranged_y()
+    local defaults = self.defaults
+    local profile_defaults = type(defaults) == "table" and defaults.profile or nil
+    local class_defaults = type(profile_defaults) == "table"
+        and profile_defaults[self.player_class] or nil
+    if type(class_defaults) ~= "table" then
+        return nil
+    end
+    local ranged_defaults = class_defaults.ranged
+    if type(ranged_defaults) == "table" and tonumber(ranged_defaults.y) ~= nil then
+        return tonumber(ranged_defaults.y)
+    end
+    local bar_defaults = class_defaults["**"]
+    if type(bar_defaults) == "table" then
+        return tonumber(bar_defaults.y)
+    end
+    return nil
+end
+
+-- The one-time rule. Returns an outcome token (tests pin it, and the bench report quotes
+-- it): "moved" | "kept" | "done" | "no-ranged" | "unknown". Only "moved" writes a position,
+-- and the version latch is written BEFORE the geometry is read, so every outcome - an
+-- unreadable layout included - is evaluated at most once and an unreadable layout is left
+-- alone for good, because the user owns it. The latch lives on the CLASS row, not on the
+-- profile: the rows being corrected are the class's own, so a second class in the same
+-- profile must still get its own evaluation. `profile` is the profile table the addon runs
+-- on (main.lua passes get_profile_table()); the geometry is read back through
+-- get_hand_table, which is the same row in production.
+--
+-- THE LATCH MUST BE READ WITH rawget. AceDB gives the profile root and every class row a
+-- '**' metatable whose __index CREATES a defaults-filled sub-table and rawsets it for any
+-- missing key (Libs/AceDB-3.0/AceDB-3.0.lua:88-107). A plain `class_row[flag]` read would
+-- therefore be truthy on the first login, would persist a junk table in SavedVariables and
+-- would make the rule dead exactly as production runs it. The class row itself is only
+-- trusted when the shipped defaults name it (a real class); an unsupported class answers
+-- "unknown" instead of writing a phantom row.
+function ST:migrate_ranged_placement(profile)
+    if type(profile) ~= "table" then
+        return "unknown"
+    end
+    local defaults = self.defaults
+    local profile_defaults = type(defaults) == "table" and defaults.profile or nil
+    if type(profile_defaults) ~= "table" or type(profile_defaults[self.player_class]) ~= "table" then
+        return "unknown"
+    end
+    local class_row = rawget(profile, self.player_class)
+    if type(class_row) ~= "table" then
+        return "unknown"
+    end
+    -- The exact VERSION, not a truthy read: a profile that ran the first, weaker pass holds
+    -- `true` and must be evaluated once more under this ruling (the operator's own profile
+    -- is exactly that case), while a profile that already ran this pass holds the number
+    -- and is never touched again.
+    if rawget(class_row, ST.RANGED_PLACEMENT_FLAG) == ST.RANGED_PLACEMENT_VERSION then
+        return "done"
+    end
+    class_row[ST.RANGED_PLACEMENT_FLAG] = ST.RANGED_PLACEMENT_VERSION
+    if not self:has_hand("ranged") then
+        -- Paladin/shaman/druid have no ranged bar at all (main.lua class_hands): there is
+        -- nothing to place. The check is the hand set, never the class name, so a class
+        -- that ever gains a ranged bar picks the rule up with no edit here.
+        return "no-ranged"
+    end
+    -- rawget: a plain read of a missing hand row would CREATE a defaults table through the
+    -- class row's '**' metatable (AceDB-3.0.lua:88-107) and persist it. A ranged-owning
+    -- class always has the row, because the shipped defaults name it.
+    local ranged = rawget(class_row, "ranged")
+    if type(ranged) ~= "table" then
+        return "unknown"
+    end
+    local band_top, band_bottom = self:melee_reserved_band()
+    local _, ranged_height = self:hand_bar_size("ranged")
+    ranged_height = tonumber(ranged_height)
+    if band_top == nil or band_bottom == nil or ranged_height == nil or ranged_height <= 0 then
+        return "unknown"
+    end
+    -- The new layout's row: the class's own shipped ranged y when it clears the band by
+    -- RANGED_PLACEMENT_GAP, else the lowest integer y that does - the same arithmetic a
+    -- fresh profile ships, so a migrated row lands exactly where a new one starts.
+    local minimum = band_top + ST.RANGED_PLACEMENT_GAP + (ranged_height / 2)
+    local target = self:shipped_ranged_y()
+    if target == nil or target < minimum then
+        target = math.ceil(minimum)
+    end
+    -- Already the target row: no write and no notice. This is every fresh profile (AceDB
+    -- filled the shipped row, which is the new layout) and every profile this pass already
+    -- moved, so a login never rewrites a row that is already right.
+    if tonumber(ranged.x) == ST.SHIPPED_HAND_X
+        and tonumber(ranged.y) == target
+        and ranged.point == ST.SHIPPED_HAND_POINT
+        and tonumber(ranged.scale) == ST.SHIPPED_HAND_SCALE then
+        return "kept"
+    end
+    -- Why the row moves, for the notice: a row whose SAVED extent sits inside the reserved
+    -- band was occupying the power-bar slot; anything else is a legacy drag/scale that the
+    -- new layout replaces. Read before the write, from the row's own geometry.
+    local row_top, row_bottom = self:saved_row_extent("ranged")
+    local was_in_band = self:row_intersects_band(row_top, row_bottom, band_top, band_bottom)
+    ranged.x = ST.SHIPPED_HAND_X
+    ranged.y = target
+    ranged.point = ST.SHIPPED_HAND_POINT
+    ranged.scale = ST.SHIPPED_HAND_SCALE
+    -- No silent paths: the rule changed a saved position, so say so ONCE. Best-effort
+    -- through the addon's single chat path (utils.print_msg) and pcall'd: a missing/broken
+    -- chat frame must never undo the placement or throw out of login.
+    if type(st.utils) == "table" and type(st.utils.print_msg) == "function" then
+        local notice
+        if was_in_band then
+            notice = "the ranged bar was moved above the melee bars (that row belongs to "
+                .. "the power bar). Drag it to reposition it; your position is never "
+                .. "changed again."
+        else
+            notice = "the ranged bar was placed in the standard layout above the melee "
+                .. "bars. Drag it to reposition it; your position is never changed again."
+        end
+        pcall(st.utils.print_msg, notice)
+    end
+    return "moved"
+end
+
+function ST:configure_bar_size_and_positions(hand, width_override, height_override)
     if not self:bar_is_built(hand) then
         return
     end
     local db = self:get_hand_table(hand)
+    if type(db) ~= "table" then
+        return
+    end
+    local bar_width, bar_height = self:hand_bar_size(hand, width_override, height_override)
 
     -- First set the anchor frame and bar frames
     -- to the full size in the settings, and restore their
@@ -262,8 +605,8 @@ function ST:configure_bar_size_and_positions(hand)
     if anchor_frame then
         anchor_frame:ClearAllPoints()
         anchor_frame:SetPoint("CENTER")
-        anchor_frame:SetWidth(db.bar_width)
-        anchor_frame:SetHeight(db.bar_height)
+        anchor_frame:SetWidth(bar_width)
+        anchor_frame:SetHeight(bar_height)
         LWIN.RestorePosition(anchor_frame)
         anchor_frame:Show()
     end
@@ -273,8 +616,8 @@ function ST:configure_bar_size_and_positions(hand)
     if hiding_anchor_frame then
         hiding_anchor_frame:ClearAllPoints()
         hiding_anchor_frame:SetPoint("CENTER")
-        hiding_anchor_frame:SetWidth(db.bar_width)
-        hiding_anchor_frame:SetHeight(db.bar_height)
+        hiding_anchor_frame:SetWidth(bar_width)
+        hiding_anchor_frame:SetHeight(bar_height)
         hiding_anchor_frame:Show()
     end
 
@@ -283,16 +626,16 @@ function ST:configure_bar_size_and_positions(hand)
     if bar_frame then
         bar_frame:ClearAllPoints()
         bar_frame:SetPoint("CENTER")
-        bar_frame:SetWidth(db.bar_width)
-        bar_frame:SetHeight(db.bar_height)
+        bar_frame:SetWidth(bar_width)
+        bar_frame:SetHeight(bar_height)
     end
 
     -- For the visuals frame, we calculate a reduced size
     -- based on the backplane settings.
     -- Set it internally for use elsewhere
     local visuals_frame = self:get_visuals_frame(hand)
-    local vf_width = db.bar_width - (db.border_width * 2)
-    local vf_height = db.bar_height - (db.border_width * 2)
+    local vf_width = bar_width - (db.border_width * 2)
+    local vf_height = bar_height - (db.border_width * 2)
     if self[hand] then
         self[hand].vf_width = vf_width
         self[hand].vf_height = vf_height
@@ -306,7 +649,33 @@ function ST:configure_bar_size_and_positions(hand)
         if visuals_frame.bar then
             visuals_frame.bar:SetPoint("TOPLEFT", 0, 0)
             visuals_frame.bar:SetHeight(vf_height)
-            visuals_frame.bar:SetWidth(vf_width)
+            -- A resize is not a progress reset (2026-10-28, hunter mainhand report: "the
+            -- bar stays full ... it never starts"). The tick owns the fill width and
+            -- paints it from the live progress; this function runs BETWEEN two ticks
+            -- whenever a layout policy re-applies a hand (the hunter melee stack sizes
+            -- the melee bars from the ranged bar on every pass). Painting the fill full
+            -- here left a full-width fill owning the rest of the cycle - the fill texture
+            -- then showed the tick's cropped TexCoord stretched across the whole bar,
+            -- which reads exactly like a bar that never animates. Repaint the hand's own
+            -- progress instead, so a configure pass cannot outlive one frame. A fresh
+            -- hand (or one whose state has no progress yet) keeps the full-width
+            -- default; its first tick paints the real value.
+            local progress
+            local state = self[hand]
+            if type(state) == "table" then
+                progress = tonumber(state.current_progress)
+            end
+            if progress ~= nil then
+                if progress < 0 then
+                    progress = 0
+                elseif progress > 1 then
+                    progress = 1
+                end
+                visuals_frame.bar:SetWidth(max(1, vf_width * progress))
+                visuals_frame.bar:SetTexCoord(0, progress, 0, 1)
+            else
+                visuals_frame.bar:SetWidth(vf_width)
+            end
         end
         if visuals_frame.gcd_bar then
             visuals_frame.gcd_bar:SetHeight(vf_height)
@@ -321,6 +690,13 @@ function ST:configure_bar_size_and_positions(hand)
     self:configure_texts(hand)
     self:configure_gcd_markers(hand)
     self:configure_bar_outline(hand)
+    -- A mainhand size change IS an offhand size change (the invariant above), and the
+    -- options call this for one hand only, so re-apply the paired hand here. Guarded on
+    -- no override: a layout policy pass (the hunter stack) sizes both hands itself.
+    if hand == "mainhand" and width_override == nil and height_override == nil
+        and self:bar_is_built("offhand") then
+        self:configure_bar_size_and_positions("offhand")
+    end
 end
 
 function ST:configure_frame_strata(hand)
@@ -921,6 +1297,21 @@ function ST:onupdate_common(hand, elapsed)
         -- must not escape the tick. The bar is already painted above, so an isolated
         -- feed throw costs the feed and nothing else.
         st.guard.run(self, "ldb:update", st.ldb.update, self, hand)
+    end
+
+    -- The fill is this hand's OWN progress, and it is the tick's last word. Everything
+    -- above can resize the hand while the tick runs - the class hook (the hunter melee
+    -- stack sizes the melee rows from the ranged bar) and a layout pass both call
+    -- configure_bar_size_and_positions, whose own fill repaint is one frame stale. That
+    -- is how the thin mainhand bar read as permanently full (2026-10-28: the fill
+    -- texture stayed at the full visuals width while the tick's TexCoord crop shrank, so
+    -- the bar showed a squeezed full-width fill). Re-asserting the value painted at the
+    -- top of this tick makes the last write per frame the real progress, whatever ran in
+    -- between. Two writes on a frame where nothing resized; correctness on the frames
+    -- that do.
+    if frame.bar then
+        frame.bar:SetWidth(max(1, timer_width))
+        frame.bar:SetTexCoord(0, progress, 0, 1)
     end
 end
 
