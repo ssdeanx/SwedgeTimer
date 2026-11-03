@@ -803,27 +803,30 @@ HUD.known_names = HUD.known_names or {}
 local function hud_known_query(slot)
     local spell = slot and slot.spell or nil
     if spell == nil then
-        return nil
+        return nil, nil
     end
-    if type(spell) == "string" then
-        return spell
+    if st.family == "ERA" then
+        return type(spell) == "number" and spell or nil, nil
     end
-    if type(spell) ~= "number" then
-        return nil
+    local name = slot.spell_name
+    if type(name) ~= "string" and type(spell) == "number" then
+        name = HUD.known_names[spell]
+        if name == nil then
+            local ok, n = pcall(api.GetSpellInfo, spell)
+            if ok and type(n) == "string" then
+                HUD.known_names[spell] = n
+                name = n
+            end
+        end
     end
-    if st.family ~= "TBC" then
-        return spell
+    if type(name) ~= "string" and type(spell) == "string" then
+        name = spell
     end
-    local cached = HUD.known_names[spell]
-    if cached ~= nil then
-        return cached
+    if type(name) ~= "string" and type(slot.title) == "string" then
+        name = slot.title
     end
-    local ok, name = pcall(api.GetSpellInfo, spell)
-    if ok and type(name) == "string" then
-        HUD.known_names[spell] = name
-        return name
-    end
-    return spell
+    local fallback_id = type(spell) == "number" and spell or nil
+    return name or fallback_id, fallback_id
 end
 
 -- True when the slot may show: the player knows the spell, or the client
@@ -834,28 +837,26 @@ function HUD.spell_known_allows(slot)
     if slot == nil or slot.inv_slot ~= nil then
         return true
     end
-    local query = hud_known_query(slot)
-    if query == nil then
+    local query, fallback_id = hud_known_query(slot)
+    if query == nil and fallback_id == nil then
         return true
     end
-    local fallback_name = slot.spell_name or slot.title
-    if type(api.is_any_rank_known_state) == "function" then
-        local known, state = api.is_any_rank_known_state(query, fallback_name)
-        if state == "unknown" then
-            return true
-        end
-        return known == true
-    end
     if type(api.is_spell_known_state) == "function" then
-        local known, state = api.is_spell_known_state(query)
+        local known, state = api.is_spell_known_state(query, fallback_id)
+        if state == "unknown" and fallback_id and fallback_id ~= query then
+            known, state = api.is_spell_known_state(fallback_id)
+        end
         if state == "unknown" then
             return true
         end
         return known == true
     end
     if type(api.is_spell_known) == "function" then
-        local ok, known = pcall(api.is_spell_known, query)
-        if not ok then
+        local ok, known = pcall(api.is_spell_known, query, fallback_id)
+        if (not ok or known == nil) and fallback_id and fallback_id ~= query then
+            ok, known = pcall(api.is_spell_known, fallback_id)
+        end
+        if not ok or known == nil then
             return true
         end
         return known == true
@@ -1196,7 +1197,7 @@ function HUD.paint(self, icon, s, now)
     if text_remaining == nil then
         text_remaining = s.remaining
     end
-    if db.hud_show_text and text_remaining and text_remaining > 0
+    if db.hud_show_text ~= false and text_remaining and text_remaining > 0
         and not (s.duration and s.duration < GCD_TEXT_HIDE) then
         local rounded
         if text_remaining < WARN_SECONDS then
@@ -1218,6 +1219,12 @@ function HUD.paint(self, icon, s, now)
         end
         if icon.text_hidden then
             icon.text_hidden = false
+            if icon.text_frame and icon.cooldown then
+                icon.text_frame:SetFrameLevel(icon.cooldown:GetFrameLevel() + 5)
+            end
+            if icon.text_frame then
+                icon.text_frame:Show()
+            end
             icon.text:Show()
         end
     elseif not icon.text_hidden then

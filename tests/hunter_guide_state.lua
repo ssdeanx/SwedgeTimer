@@ -1620,7 +1620,7 @@ local function build(opts)
                 return true
             end
         end
-        if opts.project == 5 and opts.spell_infos then
+        if known == nil and opts.project == 5 and opts.spell_infos then
             if opts.spell_infos[spell] ~= nil then
                 return true
             end
@@ -4155,6 +4155,60 @@ do
         check(shared > 0, case.family .. ": the guide and the HUD share at least one slot")
         check(agree, case.family .. ": the guide and the HUD carry the same id for every shared slot")
     end
+end
+
+--=========================================================================================
+-- 8) TBC Leveling gate: unlearned Kill Command cleanly falls through rotation
+--=========================================================================================
+do
+    local TBC_SPELLS = {
+        [34120] = { name = "Steady Shot", icon = "icon_steady_tbc", cast_ms = 1500 },
+        [27014] = { name = "Raptor Strike", icon = "icon_raptor_tbc", cast_ms = 0 },
+        [34026] = { name = "Kill Command", icon = "icon_kc", cast_ms = 0 },
+        [27021] = { name = "Multi-Shot", icon = "icon_multi", cast_ms = 500 },
+        [19574] = { name = "Bestial Wrath", icon = "icon_bw", cast_ms = 0 },
+        [3045] = { name = "Rapid Fire", icon = "icon_rf", cast_ms = 0 },
+    }
+    -- Case A: Level 60 hunter on TBC without Kill Command learned
+    local leveling_known = {
+        [34120] = true, ["Steady Shot"] = true,
+        [27021] = true, ["Multi-Shot"] = true,
+        [27014] = true, ["Raptor Strike"] = true,
+        -- Note: 34026 (Kill Command) is NOT known (level 60 hunter)
+    }
+    local leveling = build({
+        project = 5,
+        spell_infos = TBC_SPELLS,
+        known_spells = leveling_known,
+    })
+    local lST = leveling.ST
+    lST.in_combat = true
+    lST.ranged = { start = 99.0, speed = 3.0, ends_at = 102.0, auto_repeat_active = true }
+    lST.HUNTER.post_init(lST)
+
+    leveling.clock = 100
+    leveling.cast = nil
+    leveling.cooldowns = {}
+    leveling.is_spell_in_range = 1
+
+    local lgathered = lST.HUNTER.guide.gather(lST, {})
+    eq(lgathered.kc_known, false, "TBC leveling: Kill Command is unlearned (kc_known is false)")
+    eq(lgathered.multi_known, true, "TBC leveling: Multi-Shot is known")
+    eq(lgathered.steady_known, true, "TBC leveling: Steady Shot is known")
+
+    -- Outside the Auto Shot hidden window (now = 100, cycle = [99, 102], window = [101.5, 102]):
+    -- Multi-Shot is ready and clip-safe -> rotation evaluates to Multi-Shot, NOT Kill Command or HOLD!
+    local lout = lST.HUNTER.guide.evaluate(lgathered, {})
+    eq(lout.action, "multi", "TBC leveling: rotation falls through unlearned KC to Multi-Shot")
+    eq(lout.hold, false, "TBC leveling: rotation does not falsely hold")
+
+    -- Case B: When Kill Command is learned (e.g. level 66+)
+    leveling_known[34026] = true
+    leveling_known["Kill Command"] = true
+    local kgathered = lST.HUNTER.guide.gather(lST, {})
+    eq(kgathered.kc_known, true, "TBC level 66: Kill Command is learned (kc_known is true)")
+    local kout = lST.HUNTER.guide.evaluate(kgathered, {})
+    eq(kout.action, "kill_command", "TBC level 66: Kill Command is prioritized when known")
 end
 
 if failures == 0 then

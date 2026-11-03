@@ -269,20 +269,28 @@ end
 -- Every probe call is pcall-wrapped: a probe that throws is "no answer" (the chain
 -- moves on), so a client-side throw costs the answer, never the caller's init. The
 -- probe order is unchanged (classic global first, C_SpellBook probes after it).
-function api.is_spell_known_state(spell_id)
+function api.is_spell_known_state(spell_id, fallback_id)
 	-- Neither a spell id nor a spell name can be a probe argument: fail closed before any
 	-- client call. pcall would contain the throw, but there is nothing to resolve either.
 	if type(spell_id) ~= "number" and type(spell_id) ~= "string" then
-		return false, "unknown"
+		if type(fallback_id) == "number" or type(fallback_id) == "string" then
+			spell_id = fallback_id
+			fallback_id = nil
+		else
+			return false, "unknown"
+		end
 	end
-	local fallback_id
-	local fallback_ready = false
+	local fallback_id = fallback_id
+	local fallback_resolved = false
 	for i = 1, #spell_known_probes do
 		local ok, known = pcall(spell_known_probes[i], spell_id)
 		if not ok then
-			if not fallback_ready then
-				fallback_id = spell_known_name_id(spell_id)
-				fallback_ready = true
+			if not fallback_resolved then
+				local resolved_id = spell_known_name_id(spell_id)
+				if resolved_id ~= nil then
+					fallback_id = resolved_id
+				end
+				fallback_resolved = true
 			end
 			if fallback_id ~= nil then
 				ok, known = pcall(spell_known_probes[i], fallback_id)
@@ -302,8 +310,8 @@ end
 
 -- The boolean form: the answer half of the state above, unchanged for every caller
 -- (true / false, never nil).
-function api.is_spell_known(spell_id)
-	local known = api.is_spell_known_state(spell_id)
+function api.is_spell_known(spell_id, fallback_id)
+	local known = api.is_spell_known_state(spell_id, fallback_id)
 	return known
 end
 
@@ -318,29 +326,59 @@ end
 local classic_get_spell_cooldown = GetSpellCooldown
 local retail_get_spell_cooldown = C_Spell and C_Spell.GetSpellCooldown
 
-function api.GetSpellCooldown(spell)
+local function raw_query_spell_cooldown(token)
+	if token == nil then
+		return 0, 0, 0, 0
+	end
 	local start_time, duration, enabled, mod_rate
 	if classic_get_spell_cooldown then
-		start_time, duration, enabled, mod_rate = classic_get_spell_cooldown(spell)
-	elseif retail_get_spell_cooldown then
-		local info = retail_get_spell_cooldown(spell)
-		if info then
-			-- isEnabled is tested for secrecy before it is coerced, so a restricted
-			-- boolean is also caught by the whole-read degrade below.
-			local enabled_raw = info.isEnabled
-			if is_secret(enabled_raw) then
-				return 0, 0, 0, 0
-			end
-			start_time = info.startTime
-			duration = info.duration
-			enabled = enabled_raw and 1 or 0
-			mod_rate = info.modRate
+		local ok, s, d, e, m = pcall(classic_get_spell_cooldown, token)
+		if ok and s and not is_secret(s) then
+			start_time = s
+			duration = d
+			enabled = e
+			mod_rate = m
 		end
 	end
-	-- A secret reading reports "no cooldown" - the shape every caller already treats as
-	-- idle (duration == 0 / duration <= 1.51 / no latch). Exact no-op without the probe.
+	if (not duration or duration == 0) and retail_get_spell_cooldown then
+		local ok, info = pcall(retail_get_spell_cooldown, token)
+		if ok and type(info) == "table" and not is_secret(info.startTime) then
+			local enabled_raw = info.isEnabled
+			if not is_secret(enabled_raw) then
+				start_time = info.startTime
+				duration = info.duration
+				enabled = enabled_raw and 1 or 0
+				mod_rate = info.modRate
+			end
+		end
+	end
 	if is_secret(start_time) or is_secret(duration) or is_secret(enabled) or is_secret(mod_rate) then
 		return 0, 0, 0, 0
+	end
+	return start_time or 0, duration or 0, enabled or 0, mod_rate or 0
+end
+
+function api.GetSpellCooldown(spell, fallback_id)
+	if type(spell) ~= "number" and type(spell) ~= "string" then
+		if type(fallback_id) == "number" or type(fallback_id) == "string" then
+			spell = fallback_id
+			fallback_id = nil
+		else
+			return 0, 0, 0, 0
+		end
+	end
+	local start_time, duration, enabled, mod_rate = raw_query_spell_cooldown(spell)
+	if duration and duration > 0 then
+		return start_time, duration, enabled, mod_rate
+	end
+	if fallback_id and fallback_id ~= spell then
+		local fb_s, fb_d, fb_e, fb_m = raw_query_spell_cooldown(fallback_id)
+		if fb_d and fb_d > 0 then
+			return fb_s, fb_d, fb_e, fb_m
+		end
+		if start_time == 0 and fb_s and fb_s > 0 then
+			return fb_s, fb_d, fb_e, fb_m
+		end
 	end
 	return start_time or 0, duration or 0, enabled or 0, mod_rate or 0
 end
@@ -1611,50 +1649,6 @@ local function client_spell_name(id)
 	return nil
 end
 
--- Rank-aware spell knowledge -------------------------------------------------------------
--- IsSpellKnown / C_SpellBook.IsSpellKnown checks only the exact numeric rank id passed.
--- While leveling (or when a static slot descriptor carries a max/cross-expansion rank id),
--- the player may know an earlier rank in their spellbook. GetSpellInfo / C_Spell.GetSpellInfo
--- resolves a spell NAME only when the player knows the spell in their spellbook, returning
--- the player's learned rank spellID as its 7th return (spell_known_name_id).
---
--- Returns: known (boolean), state ("known" | "not_known" | "unknown"), effective_query
-api.spell_name_cache = api.spell_name_cache or {}
-
-function api.is_any_rank_known_state(query, fallback_name)
-	local known, state = api.is_spell_known_state(query)
-	if known == true or state == "unknown" then
-		return known, state, query
-	end
-	if st.family ~= "ERA" and type(query) == "number" then
-		local name = api.spell_name_cache[query]
-		if name == nil then
-			name = client_spell_name(query)
-			if type(name) == "string" then
-				api.spell_name_cache[query] = name
-			end
-		end
-		if type(name) ~= "string" and type(fallback_name) == "string" then
-			name = fallback_name
-		end
-		if type(name) == "string" then
-			local learned_id = spell_known_name_id(name)
-			if type(learned_id) == "number" and learned_id ~= query then
-				local rk = api.is_spell_known_state(learned_id)
-				if rk == true then
-					return true, "known", learned_id
-				end
-			end
-		end
-	end
-	return false, "not_known", query
-end
-
-function api.is_any_rank_known(query, fallback_name)
-	local known = api.is_any_rank_known_state(query, fallback_name)
-	return known
-end
-
 -- One spell-data answer, reduced to what the walk needs:
 --   true  - the client answered with this spell's data
 --   false - the client answered "not found"
@@ -1675,7 +1669,7 @@ end
 --   false - the client's own spell data refutes it (definitive absence)
 --   nil   - the client could not answer either way (cold or unreadable client)
 local function family_spell_exists(id)
-	if st.family ~= "TBC" and st.family ~= "WRATH" then
+	if st.family == "ERA" then
 		local ok, info = pcall(api.GetSpellInfo, id)
 		return spell_data_present(ok, info)
 	end
@@ -1791,9 +1785,11 @@ function api.get_spell_query(name, id)
 	elseif client_family == "WRATH" then
 		-- classic_titan 3.80.2 (Titanforge): localized NAME first, id fallback.
 		return name or id
+	elseif client_family == "FOREVER" or client_family ~= "ERA" then
+		-- Forever 1.60.1 and all other non-Era clients: localized NAME first, id fallback.
+		return name or id
 	end
-	-- ERA (1.15.9, SoD included): ids. FOREVER 1.60.1 / CATA / MISTS / RETAIL /
-	-- UNKNOWN: ids, unchanged until that client is proven to take names.
+	-- ERA (1.15.9, SoD included): ids.
 	return id
 end
 

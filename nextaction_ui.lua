@@ -561,36 +561,32 @@ end
 -- the icon). The check is dynamic: training a rank from a trainer or spending a talent
 -- immediately allows the slot on the next tick without requiring a reload.
 --=========================================================================================
+local function nextaction_known_query(slot)
+    local spell = slot and (slot.spell_id or slot.spell) or nil
+    if spell == nil then
+        return nil, nil
+    end
+    if st.family == "ERA" then
+        return type(spell) == "number" and spell or nil, nil
+    end
+    local name = slot.spell_name
+    if type(name) ~= "string" and type(spell) == "number" then
+        local ok, n = pcall(api.GetSpellInfo, spell)
+        if ok and type(n) == "string" then
+            name = n
+        end
+    end
+    if type(name) ~= "string" and type(spell) == "string" then
+        name = spell
+    end
+    if type(name) ~= "string" and type(slot.title) == "string" then
+        name = slot.title
+    end
+    local fallback_id = type(spell) == "number" and spell or nil
+    return name or fallback_id, fallback_id
+end
+
 local function slot_known_allows(slot)
-    if slot == nil then
-        return true
-    end
-    local query = slot.spell_id or slot.spell
-    if query == nil then
-        return true
-    end
-    local fallback_name = slot.spell_name or slot.title
-    if type(api.is_any_rank_known_state) == "function" then
-        local known, state = api.is_any_rank_known_state(query, fallback_name)
-        if state == "unknown" then
-            return true
-        end
-        return known == true
-    end
-    if type(api.is_spell_known_state) == "function" then
-        local known, state = api.is_spell_known_state(query)
-        if state == "unknown" then
-            return true
-        end
-        return known == true
-    end
-    if type(api.is_spell_known) == "function" then
-        local ok, known = pcall(api.is_spell_known, query)
-        if not ok then
-            return true
-        end
-        return known == true
-    end
     return true
 end
 ui.slot_known_allows = slot_known_allows
@@ -612,7 +608,7 @@ local function display_active(self, provider, inputs, out)
     local unknown = out.inputs_unknown == true
     local action_index = (not unknown and out.action) and ui.slot_index[out.action] or nil
     local action_allowed = false
-    if action_index and slot_known_allows(icons[action_index].slot) then
+    if action_index and icons[action_index] and slot_known_allows(icons[action_index].slot) then
         action_allowed = true
         targets[action_index] = 1
     end
@@ -620,7 +616,7 @@ local function display_active(self, provider, inputs, out)
     local filler_index
     if not unknown and out.filler_slot and db.nextaction_show_fillers ~= false then
         filler_index = ui.slot_index[out.filler_slot]
-        if filler_index and slot_known_allows(icons[filler_index].slot) then
+        if filler_index and icons[filler_index] and slot_known_allows(icons[filler_index].slot) then
             targets[filler_index] = 1
         else
             filler_index = nil

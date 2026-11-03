@@ -183,7 +183,7 @@ local function resolve_spell_name(spell_id)
 end
 
 local function spell_query(spell_id)
-    if st.family ~= "TBC" and st.family ~= "WRATH" then
+    if st.family == "ERA" then
         return spell_id
     end
     if type(spell_id) == "string" then
@@ -202,8 +202,7 @@ end
 -- Wrath/Titanforge with the id fallback (operator-approved), the numeric id
 -- elsewhere; a cold name-family book probes the id instead of nil.
 local function is_spell_known_query(spell_id)
-    local probe = api.is_any_rank_known or api.is_spell_known
-    return probe(spell_query(spell_id)) == true
+    return api.is_spell_known(spell_query(spell_id), spell_id) == true
 end
 
 --=========================================================================================
@@ -2445,16 +2444,6 @@ local function get_guide_cooldown_remaining(self, spell, latch_key, duration_key
     -- Name-vs-id rule: the query is the localized name on TBC, the numeric id
     -- elsewhere (filler names pass through untouched on both).
     local query = spell_query(spell)
-    local state_probe = api.is_any_rank_known_state or api.is_spell_known_state
-    if type(state_probe) == "function" then
-        local known, state, resolved = state_probe(query)
-        if state ~= "unknown" and not known then
-            return nil
-        end
-        if resolved ~= nil then
-            query = resolved
-        end
-    end
     local start_time, duration = api.GetSpellCooldown(query)
     if not start_time or not duration or duration == 0 then
         return 0
@@ -3527,17 +3516,21 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     local consecration_remaining
     local exorcism_remaining
     if na then
-        if filler_name_consecration == nil and na.CONSECRATION_SPELL_ID then
-            filler_name_consecration = api.GetSpellInfo(na.CONSECRATION_SPELL_ID)
+        if na.CONSECRATION_SPELL_ID and is_spell_known_query(na.CONSECRATION_SPELL_ID) then
+            if filler_name_consecration == nil then
+                filler_name_consecration = api.GetSpellInfo(na.CONSECRATION_SPELL_ID)
+            end
+            if filler_name_consecration then
+                consecration_remaining = get_guide_cooldown_remaining(self, filler_name_consecration)
+            end
         end
-        if filler_name_consecration then
-            consecration_remaining = get_guide_cooldown_remaining(self, filler_name_consecration)
-        end
-        if filler_name_exorcism == nil and na.EXORCISM_SPELL_ID then
-            filler_name_exorcism = api.GetSpellInfo(na.EXORCISM_SPELL_ID)
-        end
-        if filler_name_exorcism then
-            exorcism_remaining = get_guide_cooldown_remaining(self, filler_name_exorcism)
+        if na.EXORCISM_SPELL_ID and is_spell_known_query(na.EXORCISM_SPELL_ID) then
+            if filler_name_exorcism == nil then
+                filler_name_exorcism = api.GetSpellInfo(na.EXORCISM_SPELL_ID)
+            end
+            if filler_name_exorcism then
+                exorcism_remaining = get_guide_cooldown_remaining(self, filler_name_exorcism)
+            end
         end
     end
     inputs.filler_remaining = nil
@@ -4162,7 +4155,7 @@ local function hud_ability_cooldown(self, slot, now)
         if not name then
             return 0, 0
         end
-        local start_time, duration = api.GetSpellCooldown(spell_query(name))
+        local start_time, duration = api.GetSpellCooldown(spell_query(name), slot.spell)
         if start_time and duration and duration > 1.51 then
             local remaining = start_time + duration - now
             if remaining > 0 then
@@ -4264,7 +4257,7 @@ function ST.PALADIN.get_hud_state(self, slot, now)
         -- Only "not_known" hides. The HUD's frozen state table has no room for
         -- a reason, so the class keeps the last answer per band slot (a
         -- diagnostic surface: the operator's in-client check reads it).
-        local known, known_state = api.is_spell_known_state(spell_query(slot.spell))
+        local known, known_state = api.is_spell_known_state(spell_query(slot.spell), slot.spell)
         ST.PALADIN.hud_band_spell_state[slot.key] = known_state
         if known ~= true and known_state ~= "unknown" then
             s.hidden = true
@@ -4382,7 +4375,7 @@ function ST.PALADIN.get_hud_state(self, slot, now)
         if not is_era_family then
             s.hidden = true
         else
-            local am_known, am_state = api.is_spell_known_state(spell_query(AM_SPELL_ID))
+            local am_known, am_state = api.is_spell_known_state(spell_query(AM_SPELL_ID), AM_SPELL_ID)
             if am_known ~= true and am_state ~= "unknown" then
                 s.hidden = true
             else

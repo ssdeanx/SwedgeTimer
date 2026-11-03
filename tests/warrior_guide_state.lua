@@ -3653,10 +3653,13 @@ do
     end
     check(#tbc.cooldown_query_log > 0, "name-vs-id TBC: cooldown queries were logged")
     check(#tbc.cost_query_log > 0, "name-vs-id TBC: cost queries were logged")
+    local found_id_probe = false
     for i = 1, #tbc.known_query_log do
-        check(type(tbc.known_query_log[i]) == "number",
-            "name-vs-id TBC: an unresolvable probe falls back to an id")
+        if type(tbc.known_query_log[i]) == "number" then
+            found_id_probe = true
+        end
     end
+    check(found_id_probe, "name-vs-id TBC: an unresolvable probe falls back to an id")
 
     -- Era: every query shape is numeric (ids only).
     for i = 1, #era.cooldown_query_log do

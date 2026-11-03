@@ -993,7 +993,7 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 	inputs.ttd = ST.ROGUE.get_time_to_die(self, now)
 
 	-- Rupture / Expose Armor: target debuffs.
-	local known_probe = api.is_any_rank_known or api.is_spell_known
+	local known_probe = api.is_spell_known
 	local rupture_entry = resolve_named_spell("guide:rupture", GUIDE_SPELL_NAMES.rupture, now)
 	local rupture_found, rupture_remains = false, nil
 	if rupture_entry then
@@ -1236,8 +1236,12 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 		-- against a guess).
 		local garrote_entry = resolve_named_spell("guide:garrote", "Garrote", now)
 		if garrote_entry then
-			local ok, costs = pcall(api.GetSpellPowerCost, rogue_query(garrote_entry))
-			if ok then
+			local query = rogue_query(garrote_entry)
+			local ok, costs = pcall(api.GetSpellPowerCost, query)
+			if (not ok or not costs) and garrote_entry.id and query ~= garrote_entry.id then
+				ok, costs = pcall(api.GetSpellPowerCost, garrote_entry.id)
+			end
+			if ok and costs then
 				inputs.garrote_energy_cost = energy_cost_of(costs)
 			end
 		end

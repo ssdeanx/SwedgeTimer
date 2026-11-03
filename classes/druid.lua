@@ -366,12 +366,62 @@ local maul_current_id
 -- nil name falls back to the id on a name family (operator-approved), so unknown
 -- only when both are nil.
 local function spell_query(id, name)
-    if st.family == "TBC" then
-        return name or id
-    elseif st.family == "WRATH" then
+    if st.family == "ERA" then
+        return id
+    end
+    if type(api.get_spell_query) == "function" then
+        return api.get_spell_query(name, id) or name or id
+    end
+    if st.family ~= "ERA" then
         return name or id
     end
     return id
+end
+
+local function is_druid_spell_known(spell_id, spell_name)
+    if spell_id == nil and spell_name == nil then
+        return false
+    end
+    local query = spell_query(spell_id, spell_name)
+    local fb_id = type(spell_id) == "number" and spell_id or nil
+    if type(api.is_spell_known_state) == "function" then
+        local known, state = api.is_spell_known_state(query, fb_id)
+        if (known ~= true or state == "unknown") and fb_id and fb_id ~= query then
+            local fb_known, fb_state = api.is_spell_known_state(fb_id)
+            if fb_known == true or fb_state == "known" then
+                return true
+            end
+            if fb_state == "not_known" then
+                return false
+            end
+        end
+        if state == "not_known" then
+            return false
+        end
+        if known == true or state == "known" then
+            return true
+        end
+        return true
+    end
+    if type(api.is_spell_known) == "function" then
+        local ok, known = pcall(api.is_spell_known, query, fb_id)
+        if ok and known == true then
+            return true
+        end
+        if fb_id and fb_id ~= query then
+            local fb_ok, fb_known = pcall(api.is_spell_known, fb_id)
+            if fb_ok and fb_known == true then
+                return true
+            end
+            if fb_ok and fb_known == false then
+                return false
+            end
+        end
+        if ok and known == false then
+            return false
+        end
+    end
+    return true
 end
 
 -- English names for the name path (rank-invariant; the localized name is shared
@@ -2177,16 +2227,6 @@ end
 -- these abilities' cooldowns). 0 means ready-or-filtered; unreadable (nil)
 -- readings degrade to 0 too, so callers must gate on spell knowledge first.
 local function guide_cooldown_remaining(query, now)
-    local state_probe = api.is_any_rank_known_state or api.is_spell_known_state
-    if type(state_probe) == "function" then
-        local known, state, resolved = state_probe(query)
-        if state ~= "unknown" and not known then
-            return nil
-        end
-        if resolved ~= nil then
-            query = resolved
-        end
-    end
     local start_time, duration = api.GetSpellCooldown(query)
     if type(start_time) == "number" and type(duration) == "number"
         and duration > 1.51 then
@@ -2293,6 +2333,7 @@ function ST.DRUID.resolve_guide_icons()
         guide_slot_rake.spell_id = RAKE_NAME
         guide_slot_bite.spell_id = BITE_NAME
         guide_slot_shred.spell_id = SHRED_NAME
+        guide_slot_claw.spell_id = CLAW_NAME
         return
     end
     maul_current_id = resolve_rank(maul_ids, maul_current_id)
@@ -2829,6 +2870,14 @@ function ST.DRUID.gather_guide_inputs(self, out)
     -- The refresh thresholds from the options (0-10 s, defaults 4).
     inputs.rip_refresh = db.guide_rip_refresh or 4
     inputs.rake_refresh = db.guide_rake_refresh or 4
+
+    -- Dynamic spellbook knowledge checks (leveling gates, fail-visible):
+    inputs.mangle_known = is_druid_spell_known(33878, MANGLE_NAME)
+    inputs.rip_known = is_druid_spell_known(1079, RIP_NAME)
+    inputs.rake_known = is_druid_spell_known(1822, RAKE_NAME)
+    inputs.shred_known = is_druid_spell_known(5221, SHRED_NAME)
+    inputs.bite_known = is_druid_spell_known(22568, BITE_NAME)
+    inputs.claw_known = is_druid_spell_known(9850, CLAW_NAME)
     return inputs
 end
 
@@ -3067,7 +3116,7 @@ end
 -- A missing reading means ready, which is the steady state for these slots.
 local function hud_ability_cooldown(self, slot, now)
     local query = hud_slot_name(slot) or slot.spell
-    local start_time, duration = api.GetSpellCooldown(query)
+    local start_time, duration = api.GetSpellCooldown(query, slot.spell)
     if start_time and duration and duration > 1.51 then
         local remaining = start_time + duration - now
         if remaining > 0 then

@@ -129,14 +129,11 @@ local BADGE_GLOW_WINDOW = 4
 -- churn (documented deviation in the build-out report).
 local BADGE_GLOW_COLOR = {1, 0.85, 0, 0.35}
 -- Auto Shot cast window: the final 0.5 s of the ranged swing, at the END of the bar.
--- The width is the client's cast window and is NEVER widened by latency (operator
--- ruling 2026-10-22: latency is why a Steady Shot cast may land inside the zone, not
--- extra zone). The repaint stays: WHITE when stopping here is safe (stopped at or
--- before the window opened), red while moving through it or after a late stop.
--- Operator order 2026-10-28: the safe face is white, not green, and carries a little
--- more alpha - "so its easier to see if it landed in zone or not".
-local CAST_ZONE_SAFE = {1, 1, 1, 0.55}
-local CAST_ZONE_UNSAFE = {1, 0, 0, 0.4}
+-- Operator order: constant red ("the endzone part of the ranged should be just red
+-- because the changing colors is just confusing").
+local CAST_ZONE_COLOR = {1, 0, 0, 0.4}
+local CAST_ZONE_SAFE = CAST_ZONE_COLOR
+local CAST_ZONE_UNSAFE = CAST_ZONE_COLOR
 local CAST_ZONE_MARKER_WIDTH = 3            -- the reference's threshold marker (UI.lua:834)
 -- Target-of-target warning (H1, bench/competitor_gaps_2026-10-19.md §Hunter): HST's
 -- "target warning state ... when your target's target is you", as a red label above
@@ -451,7 +448,7 @@ local function resolve_spell(spell_id)
     if type(name) ~= "string" then
         name = nil
     end
-    if st.family == "TBC" or st.family == "WRATH" then
+    if st.family ~= "ERA" then
         if type(api.get_spell_query) == "function" then
             return api.get_spell_query(name, spell_id) or spell_id, name
         end
@@ -1083,10 +1080,10 @@ function ui.update_cast_zone(self, db, now)
     local safe = st.hunter_window.is_stopped_position_safe(
         self.is_moving == true, self.last_stopped_moving_at,
         ranged.start, cycle_duration, cast_window)
-    if ui.zone_safe ~= safe then
+    if ui.zone_safe ~= safe or not ui.zone_colored then
         ui.zone_safe = safe
-        local color = safe and CAST_ZONE_SAFE or CAST_ZONE_UNSAFE
-        zone:SetColorTexture(color[1], color[2], color[3], color[4])
+        ui.zone_colored = true
+        zone:SetColorTexture(CAST_ZONE_COLOR[1], CAST_ZONE_COLOR[2], CAST_ZONE_COLOR[3], CAST_ZONE_COLOR[4])
     end
     if ui.zone_width ~= width then
         ui.zone_width = width

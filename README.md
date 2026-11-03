@@ -41,12 +41,13 @@ the tick, `GetTime()` owns the domain (it re-anchors on every read, so a loading
 it), and engine timestamps are converted onto that axis — a cycle is exactly one weapon speed long,
 so the fill, the countdown and the queue tint cannot drift apart. Each hand's fill is painted from
 that hand's own cycle (a late layout pass can no longer leave the mainhand bar looking full), the
-Auto Shot zone and the cast bar share one colour language (white while a cast is safe, red while it
-is not, same alphas), every bar sits at 0.9 opacity with the same border, base progress fills automatically use each class's raid class color (with canonical Shaman blue on Classic Era), and each HUD icon draws a
+Auto Shot zone and the cast bar share one colour language (white while a cast is safe, solid red during the unshootable clip endzone), every bar sits at 0.9 opacity with the same border, base progress fills automatically use each class's raid class color (including Hunter class color and canonical Shaman blue on Classic Era), and each HUD icon draws a
 single cooldown number (with full suppression flags and isolated font strings so external cooldown
 addons like OmniCC/ElvUI never double-draw or collide with third-party text). Bars default to 275 px
 wide on every class; the next-action guide has its own frame at the upper right of the screen (127, -65)
 and stays locked until its own lock toggle is opened.
+
+Both the Cooldown HUD and the Next Action Guide feature dynamic spellbook leveling gating: unlearned abilities are automatically hidden, and rotations smoothly fall back to available leveling spells (Hunter falls back to Multi-Shot/Arcane Shot/Serpent Sting; Warrior falls back to Heroic Strike/Cleave/Rend/Sunder; Shaman falls back to Earth Shock/Searing Totem/Lightning Bolt; Druid cat falls back to Claw; Rogue falls back to Sinister Strike and Eviscerate; Paladin falls back to available seals and judgements). Progression updates dynamically when new spells or talents are learned without requiring a `/reload`. Classic Era queries by numeric IDs, while TBC Anniversary, Titanforge, WoW Forever, and modern families query by localized names with numeric ID fallback.
 
 ## Screenshots
 
@@ -116,7 +117,7 @@ there is no account, no telemetry and no export.
 
 ## HUD & designer
 
-Every class ships a cooldown HUD: ability slots with swipe, glow, and tint (queue states, procs, OOM), plus counters where they matter. Both the Cooldown HUD and Next Action Guide feature real-time leveling progression: unlearned abilities and talents are automatically omitted from display and rotation queues until trained at a class trainer or allocated in talent trees, reflowing seamlessly without requiring a `/reload`. Instead of configuring every element, pick a ready-made layout template per class in options — three curated templates for each of the six classes (18 in all, plus a Custom fallback), setting slots, sizes, and spacing in one click; any manual tweak drops back to Custom. `/st design` previews and arranges bars, HUD, rotation text and the practice elements live, with on-the-fly HUD template switching and style adjustment directly inside the Design Mode options menu. Template looks were researched from popular WeakAuras layouts (links only, nothing copied).
+Every class ships a cooldown HUD: ability slots with swipe, glow, and tint (queue states, procs, OOM), plus counters where they matter. Both the Cooldown HUD and Next Action Guide feature real-time leveling progression across all six classes: unlearned abilities and talents are automatically omitted from display and rotation queues (with unlearned spells like Kill Command smoothly yielding priority to available abilities like Multi-Shot and Steady Shot), dynamically reflowing without requiring a `/reload`. Cross-client spell detection adheres strictly to family contracts: Classic Era queries by numeric spell IDs, while TBC Anniversary, WotLK Titanforge, and WoW Forever query by localized spell names with verified numeric ID fallbacks to automatically recognize any learned rank. Instead of configuring every element, pick a ready-made layout template per class in options — three curated templates for each of the six classes (18 in all, plus a Custom fallback), setting slots, sizes, and spacing in one click; any manual tweak drops back to Custom. `/st design` previews and arranges bars, HUD, rotation text and the practice elements live, with on-the-fly HUD template switching and style adjustment directly inside the Design Mode options menu. Template looks were researched from popular WeakAuras layouts (links only, nothing copied).
 
 ## Visuals & Themes
 

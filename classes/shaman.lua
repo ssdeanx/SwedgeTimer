@@ -152,12 +152,62 @@ local WEAVE_LB_NAME = "Lightning Bolt"
 -- nil name falls back to the id on a name family (operator-approved), so unknown
 -- only when both are nil.
 local function spell_query(id, name)
-	if st.family == "TBC" then
-		return name or id
-	elseif st.family == "WRATH" then
+	if st.family == "ERA" then
+		return id
+	end
+	if type(api.get_spell_query) == "function" then
+		return api.get_spell_query(name, id) or name or id
+	end
+	if st.family ~= "ERA" then
 		return name or id
 	end
 	return id
+end
+
+local function is_shaman_spell_known(id, name)
+	if id == nil and name == nil then
+		return false
+	end
+	local query = spell_query(id, name)
+	local fb_id = type(id) == "number" and id or nil
+	if type(api.is_spell_known_state) == "function" then
+		local known, state = api.is_spell_known_state(query, fb_id)
+		if (known ~= true or state == "unknown") and fb_id and fb_id ~= query then
+			local fb_known, fb_state = api.is_spell_known_state(fb_id)
+			if fb_known == true or fb_state == "known" then
+				return true
+			end
+			if fb_state == "not_known" then
+				return false
+			end
+		end
+		if state == "not_known" then
+			return false
+		end
+		if known == true or state == "known" then
+			return true
+		end
+		return true
+	end
+	if type(api.is_spell_known) == "function" then
+		local ok, known = pcall(api.is_spell_known, query, fb_id)
+		if ok and known == true then
+			return true
+		end
+		if fb_id and fb_id ~= query then
+			local fb_ok, fb_known = pcall(api.is_spell_known, fb_id)
+			if fb_ok and fb_known == true then
+				return true
+			end
+			if fb_ok and fb_known == false then
+				return false
+			end
+		end
+		if ok and known == false then
+			return false
+		end
+	end
+	return true
 end
 
 -- Rockbiter Weapon imbue badge (discover #6; reference
@@ -2864,7 +2914,7 @@ end
 -- Name-vs-id: TBC probes the NAME, every other family probes the id.
 local function get_guide_cooldown_known(spell_id, spell_name)
 	local query = spell_query(spell_id, spell_name)
-	local known_probe = api.is_any_rank_known or api.is_spell_known
+	local known_probe = api.is_spell_known
 	if not known_probe(query, spell_name) then
 		return nil, nil
 	end
@@ -3198,7 +3248,8 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	-- ERA without the observed SoD rune suppresses the maintain; SoD (observed)
 	-- and every other family keep it. Older callers that predate the input read
 	-- allowed (nil), so the old behaviour survives off-client.
-	inputs.flameshock_allowed = st.family ~= "ERA" or self.weave_mw_observed == true
+	local fs_known = is_shaman_spell_known(WEAVE_FLAME_SHOCK_BASE_SPELL_ID, WEAVE_FLAME_SHOCK_NAME)
+	inputs.flameshock_allowed = fs_known and (st.family ~= "ERA" or self.weave_mw_observed == true)
 
 	-- S4 FS-collision guard: while the target's Flame Shock is inside its final
 	-- MW5_FS_GUARD_SECONDS and the shock cooldown is ready, the five-stack weave is
@@ -3214,6 +3265,7 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	-- Name-vs-id: TBC reads the NAME, Era reads the id.
 	inputs.stormstrike_remaining, inputs.stormstrike_duration =
 		get_guide_cooldown(spell_query(WEAVE_STORMSTRIKE_SPELL_ID, WEAVE_STORMSTRIKE_NAME))
+	inputs.stormstrike_known = is_shaman_spell_known(WEAVE_STORMSTRIKE_SPELL_ID, WEAVE_STORMSTRIKE_NAME)
 	-- The swipe's FALLBACK length is per family (S-23 / U-09): the static slot
 	-- descriptor cannot know the family at load time and the SoD build only
 	-- becomes known when the MW rune is observed, so the gather refreshes the
@@ -3261,10 +3313,12 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	end
 	inputs.shock_remaining =
 		get_guide_cooldown(weave_flameshock_query or spell_query(WEAVE_FLAME_SHOCK_BASE_SPELL_ID, WEAVE_FLAME_SHOCK_NAME))
+	inputs.earthshock_known = is_shaman_spell_known(WEAVE_EARTH_SHOCK_SPELL_ID, WEAVE_EARTH_SHOCK_NAME)
 
 	-- Fire Nova cooldown, GCD echo filtered (the rule matrix reads the remaining).
 	inputs.firenova_remaining, inputs.firenova_duration =
 		get_guide_cooldown(spell_query(WEAVE_FIRE_NOVA_SPELL_ID, WEAVE_FIRE_NOVA_NAME))
+	inputs.firenova_known = is_shaman_spell_known(WEAVE_FIRE_NOVA_SPELL_ID, WEAVE_FIRE_NOVA_NAME)
 
 	-- Wrath top-parse cooldowns (research docs/research/rotations_wrath.md #1-2 and
 	-- #12): known-gated, so an unconfirmed id feeds nil (never prompts) on every
@@ -3277,6 +3331,7 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 		get_guide_cooldown_known(WEAVE_FERAL_SPIRIT_SPELL_ID, WEAVE_FERAL_SPIRIT_NAME)
 	inputs.lavalash_remaining, inputs.lavalash_duration =
 		get_guide_cooldown_known(WEAVE_LAVA_LASH_SPELL_ID, WEAVE_LAVA_LASH_NAME)
+	inputs.lavalash_known = is_shaman_spell_known(WEAVE_LAVA_LASH_SPELL_ID, WEAVE_LAVA_LASH_NAME)
 
 	-- SoD name feeds (audit 2026-10-19 SoD §2: Feral Spirit / Lava Lash never
 	-- prompted - the Wrath ids never resolve on SoD). ERA clients that have
@@ -3413,6 +3468,9 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	inputs.strength_of_earth_remaining = nil
 	local earth_remaining = ST.SHAMAN.get_totem_slot_clock(self, WEAVE_TOTEM_SLOTS.EARTH, now)
 	inputs.strength_of_earth_remaining = earth_remaining
+	inputs.soe_known = is_shaman_spell_known(
+		ST.SHAMAN.APL_UTILITY.strength_of_earth.ids[st.family] or 8075,
+		ST.SHAMAN.APL_UTILITY.strength_of_earth.name)
 	-- The Mana Spring read (TBC only): the water slot clock. On TBC the water
 	-- slot carries Mana Spring (the TBC APL's Totems group row 4); the SoD and
 	-- Forever Mana Spring rows are PRE-PULL rows (HU-12), so no other family
@@ -3420,6 +3478,9 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	inputs.mana_spring_remaining = nil
 	if st.family == "TBC" then
 		inputs.mana_spring_remaining = inputs.water_remaining
+		inputs.mana_spring_known = is_shaman_spell_known(
+			ST.SHAMAN.APL_UTILITY.mana_spring.ids.TBC or 5675,
+			ST.SHAMAN.APL_UTILITY.mana_spring.name)
 	end
 	-- The Bloodlust cooldown (Wrath only): the client cooldown behind the known
 	-- gate, so a client without the spell never sees the prompt.
@@ -3473,6 +3534,7 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 		end
 	end
 	inputs.magma_refresh = st.shaman_guide and st.shaman_guide.MAGMA_REFRESH_DEFAULT or 3
+	inputs.magma_known = is_shaman_spell_known(WEAVE_MAGMA_TOTEM_SPELL_ID, WEAVE_MAGMA_TOTEM_NAME)
 
 	-- Fight clock (main.lua PLAYER_REGEN_DISABLED stamp, api.get_time()
 	-- domain): seconds since combat-enter for the Searing fight-age gate
@@ -3501,6 +3563,7 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	-- Every field is still written on every call, so no stale value survives.
 	inputs.searing_elapsed = nil
 	inputs.searing_down = nil
+	inputs.searing_known = is_shaman_spell_known(WEAVE_SEARING_TOTEM_SPELL_ID, WEAVE_SEARING_TOTEM_NAME)
 	do
 		local slot_empty, holding = self.SHAMAN.refresh_searing_from_totems(self)
 		if slot_empty == true then
@@ -3534,7 +3597,7 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	-- resolved id (the shipped id is the Forever sim's and never resolves on the
 	-- classic-line clients); an unknown id answers false, so the feed stays
 	-- silent rather than prompting on a guess.
-	local known_probe = api.is_any_rank_known or api.is_spell_known
+	local known_probe = api.is_spell_known
 	if not known_probe(spell_query(guide_slot_searing.spell_id, WEAVE_SEARING_TOTEM_NAME), WEAVE_SEARING_TOTEM_NAME) then
 		inputs.searing_down = nil
 	end
@@ -3871,7 +3934,7 @@ end
 
 local function hud_ability_cooldown(self, slot, now)
 	local query = hud_slot_name(slot) or slot.spell
-	local start_time, duration = api.GetSpellCooldown(query)
+	local start_time, duration = api.GetSpellCooldown(query, slot.spell)
 	if start_time and duration and duration > 1.51 then
 		local remaining = start_time + duration - now
 		if remaining > 0 then

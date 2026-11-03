@@ -884,6 +884,7 @@ function st.shaman_guide.evaluate(inputs, out)
             -- nil threshold twists as before, unknown mana never pauses).
             action = "twist"
         elseif inputs.stormstrike_hold_enabled == true
+            and inputs.stormstrike_known ~= false
             and is_off_cooldown(inputs.stormstrike_remaining)
             and should_delay_stormstrike(inputs) then
             -- 8. Stormstrike ready but the Windfury ICD clears within this swing:
@@ -891,7 +892,7 @@ function st.shaman_guide.evaluate(inputs, out)
             -- every sim casts Stormstrike on cooldown, so the default presses it.
             hold = true
             hold_text = "WAIT"
-        elseif st.shaman_guide.get_strength_of_earth_due(st.family,
+        elseif inputs.soe_known ~= false and st.shaman_guide.get_strength_of_earth_due(st.family,
             inputs.strength_of_earth_remaining, inputs.mw_observed) then
             -- 8a. The Strength of Earth Totem upkeep (the APL utility layer):
             -- the Era APL's i=0 row (the aura down), the TBC APL's Totems group
@@ -913,16 +914,16 @@ function st.shaman_guide.evaluate(inputs, out)
             -- is unknown, so it can never overwrite a known Windfury and
             -- thrash the shared air slot.
             action = "goa"
-        elseif st.shaman_guide.get_mana_spring_due(st.family,
+        elseif inputs.mana_spring_known ~= false and st.shaman_guide.get_mana_spring_due(st.family,
             inputs.mana_spring_remaining) then
             -- 8d. The Mana Spring Totem upkeep (TBC only): the TBC APL's Totems
             -- group row 4, refreshed at 5 s left. The read is the water slot
             -- clock - on TBC the water slot carries Mana Spring.
             action = "mana_spring"
-        elseif is_off_cooldown(inputs.stormstrike_remaining) then
+        elseif inputs.stormstrike_known ~= false and is_off_cooldown(inputs.stormstrike_remaining) then
             -- 9. Stormstrike is ready.
             action = "stormstrike"
-        elseif st.shaman_guide.get_searing_upkeep_due(st.family, inputs.fight_elapsed,
+        elseif inputs.searing_known ~= false and st.shaman_guide.get_searing_upkeep_due(st.family, inputs.fight_elapsed,
             inputs.searing_down, inputs.mw_observed) then
             -- 9b. The Searing Totem maintain (S-17): the fire slot affirmatively
             -- holds no Searing and the fight is older than the family's gate
@@ -938,11 +939,12 @@ function st.shaman_guide.evaluate(inputs, out)
             -- this gate keeps them silent. An unknown water read (nil) never
             -- prompts (unknown-hides).
             action = "coe"
-        elseif type(inputs.magma_remaining) == "number"
+        elseif inputs.magma_known ~= false and type(inputs.magma_remaining) == "number"
             and inputs.magma_remaining <= magma_refresh then
             -- 10. Magma Totem due for (re-)drop.
             action = "magma"
         elseif st.family ~= "ERA" and st.family ~= "FOREVER"
+            and inputs.firenova_known ~= false
             and is_off_cooldown(inputs.firenova_remaining)
             and inputs.fireele_active ~= true then
             -- 11. Fire Nova ready while Stormstrike is down - except on Era (the
@@ -960,7 +962,7 @@ function st.shaman_guide.evaluate(inputs, out)
             -- Shield row, so they never see the prompt. A nil feed never prompts
             -- (unknown-hides).
             action = "lightningshield"
-        elseif type(inputs.lavalash_remaining) == "number"
+        elseif inputs.lavalash_known ~= false and type(inputs.lavalash_remaining) == "number"
             and inputs.lavalash_remaining <= 0 then
             -- 12. Lava Lash ready.
             action = "lavalash"
@@ -989,7 +991,8 @@ function st.shaman_guide.evaluate(inputs, out)
             -- this arm only fires when the choice is stated - and then rules
             -- 14 and 17 stay silent, because the group picks ONE filler.
             action = "frostshock"
-        elseif es_permitted and is_off_cooldown(inputs.shock_remaining)
+        elseif es_permitted and inputs.earthshock_known ~= false
+            and is_off_cooldown(inputs.shock_remaining)
             and not uses_frost_shock_filler(inputs) then
             -- 14. The shock-capped Earth Shock filler: only while the shared shock
             -- cooldown is actually ready, so Molten Blast below alternates on the
@@ -1001,6 +1004,7 @@ function st.shaman_guide.evaluate(inputs, out)
             -- 15. Molten Blast ready (SoD filler below Earth Shock).
             action = "moltenblast"
         elseif st.family == "FOREVER"
+            and inputs.firenova_known ~= false
             and is_off_cooldown(inputs.firenova_remaining)
             and (inputs.clearcasting_active == true
                 or (type(inputs.mana_fraction) == "number"
@@ -1008,7 +1012,7 @@ function st.shaman_guide.evaluate(inputs, out)
             -- 16. Forever Fire Nova: free on Clearcasting, else a mana dump above
             -- 10% - ranked below Earth Shock the way the sim ranks it.
             action = "firenova"
-        elseif es_permitted and not uses_frost_shock_filler(inputs) then
+        elseif es_permitted and inputs.earthshock_known ~= false and not uses_frost_shock_filler(inputs) then
             -- 17. The shock filler.
             action = "earthshock"
         end

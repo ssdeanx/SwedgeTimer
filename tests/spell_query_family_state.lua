@@ -143,8 +143,10 @@ do
 
     local forever = compat_profile(PROFILES.FOREVER)
     eq(forever.family, "FOREVER", "get_spell_query: the Forever profile reports FOREVER")
-    eq(forever.api.get_spell_query("Kick", 107), 107,
-        "FOREVER: the state token is the numeric id (unchanged)")
+    eq(forever.api.get_spell_query("Kick", 107), "Kick",
+        "FOREVER: the state token is the localized NAME (name first, id fallback)")
+    eq(forever.api.get_spell_query(nil, 107), 107,
+        "FOREVER: a missing name falls back to the id (operator-approved fallback)")
 end
 
 --=========================================================================================
@@ -441,33 +443,34 @@ do
 end
 
 --=========================================================================================
--- 6) Every class token helper gates WRATH/Titanforge explicitly (one rule per helper)
+-- 6) Every class token helper gates Era explicitly (Era = id only, all others = name id fallback)
 --=========================================================================================
 -- The compat helper is the shared rule; these pins keep each class's own helper on that
 -- rule (the inline fallback branches are load-order protection, so they must carry the
--- same family gate). Exact snippets, normalised to LF: a removed WRATH gate is red.
+-- same family gate). Exact snippets, normalised to LF: Era gates ids, non-Era gates names.
 do
     local function has(rel, snippet)
         local src = read(rel):gsub("\r\n", "\n")
         return src:find(snippet, 1, true) ~= nil
     end
     local paladin_gate = "local function spell_query(spell_id)\n"
-        .. "    if st.family ~= \"TBC\" and st.family ~= \"WRATH\" then\n"
+        .. "    if st.family == \"ERA\" then\n"
         .. "        return spell_id"
     check(has("classes/paladin.lua", paladin_gate),
-        "paladin: spell_query gates TBC and WRATH separately")
+        "paladin: spell_query gates Era separately")
     check(has("classes/warrior.lua", paladin_gate),
-        "warrior: spell_query gates TBC and WRATH separately")
+        "warrior: spell_query gates Era separately")
     check(has("classes/rogue.lua",
-        "if st.family == \"TBC\" or st.family == \"WRATH\" then\n\t\treturn entry.name or entry.id"),
+        "if st.family == \"TBC\" or st.family == \"WRATH\" then\n\t\treturn entry.name or entry.id")
+        or has("classes/rogue.lua", "return api.get_spell_query(entry.name, entry.id)"),
         "rogue: rogue_query resolves the NAME on TBC and WRATH")
     check(has("classes/hunter.lua",
         "local function spell_token(spell_id)\n    if spell_id == nil then\n        return nil\n"
-        .. "    end\n    if st.family ~= \"TBC\" and st.family ~= \"WRATH\" then"),
-        "hunter: spell_token gates TBC and WRATH separately")
+        .. "    end\n    if st.family == \"ERA\" then"),
+        "hunter: spell_token gates Era separately")
     check(has("classes/hunter.lua",
         "local function queue_tokens(id_table)\n    local tokens, seen = {}, {}\n"
-        .. "    if st.family ~= \"TBC\" and st.family ~= \"WRATH\" then"),
+        .. "    if st.family == \"ERA\" then"),
         "hunter: queue_tokens follows the same rule")
     check(has("classes/hunter.lua",
         "local names, ids = {}, {}\n    for spell_id in pairs(id_table) do\n"
@@ -477,6 +480,10 @@ do
     check(has("classes/hunter.lua", "        else\n            ids[#ids + 1] = spell_id"),
         "hunter: queue_tokens keeps the approved id fallback for a cold name")
     check(has("hunter_ui.lua",
+        "if st.family ~= \"ERA\" then\n"
+        .. "        if type(api.get_spell_query) == \"function\" then\n"
+        .. "            return api.get_spell_query(name, spell_id) or spell_id, name")
+        or has("hunter_ui.lua",
         "if st.family == \"TBC\" or st.family == \"WRATH\" then\n"
         .. "        if type(api.get_spell_query) == \"function\" then\n"
         .. "            return api.get_spell_query(name, spell_id) or spell_id, name"),
@@ -484,6 +491,8 @@ do
     check(has("hunter_ui.lua", "    return spell_id, name"),
         "hunter_ui: Era range tokens are numeric ids")
     check(has("classes/shaman.lua",
+        "local function spell_query(id, name)\n\tif st.family == \"ERA\" then\n\t\treturn id")
+        or has("classes/shaman.lua",
         "local function spell_query(id, name)\n\tif st.family == \"TBC\" then\n\t\treturn name or id\n"
         .. "\telseif st.family == \"WRATH\" then\n\t\treturn name or id"),
         "shaman: spell_query resolves the NAME on TBC and WRATH")
@@ -491,6 +500,8 @@ do
         "local function resolve_family_spell(group)\n\tif st.family == \"TBC\" or st.family == \"WRATH\" then"),
         "shaman: the weave catalogue resolves the NAME on TBC and WRATH")
     check(has("classes/druid.lua",
+        "local function spell_query(id, name)\n    if st.family == \"ERA\" then\n        return id")
+        or has("classes/druid.lua",
         "local function spell_query(id, name)\n    if st.family == \"TBC\" then\n        return name or id\n"
         .. "    elseif st.family == \"WRATH\" then\n        return name or id"),
         "druid: spell_query resolves the NAME on TBC and WRATH")

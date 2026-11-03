@@ -204,7 +204,7 @@ local function resolve_spell_name(spell_id)
 end
 
 local function spell_query(spell_id)
-    if st.family ~= "TBC" and st.family ~= "WRATH" then
+    if st.family == "ERA" then
         return spell_id
     end
     if type(spell_id) == "string" then
@@ -223,8 +223,49 @@ end
 -- Wrath/Titanforge with the id fallback (operator-approved), the numeric id
 -- elsewhere; a cold name-family book probes the id instead of nil.
 local function is_spell_known_query(spell_id)
-    local probe = api.is_any_rank_known or api.is_spell_known
-    return probe(spell_query(spell_id)) == true
+    if spell_id == nil then
+        return false
+    end
+    local query = spell_query(spell_id)
+    local fallback_id = type(spell_id) == "number" and spell_id or nil
+    if type(api.is_spell_known_state) == "function" then
+        local known, state = api.is_spell_known_state(query, fallback_id)
+        if (known ~= true or state == "unknown") and fallback_id and fallback_id ~= query then
+            local fb_known, fb_state = api.is_spell_known_state(fallback_id)
+            if fb_known == true or fb_state == "known" then
+                return true
+            end
+            if fb_state == "not_known" then
+                return false
+            end
+        end
+        if state == "not_known" then
+            return false
+        end
+        if state == "known" or known == true then
+            return true
+        end
+        return false
+    end
+    if type(api.is_spell_known) == "function" then
+        local ok, known = pcall(api.is_spell_known, query, fallback_id)
+        if ok and known == true then
+            return true
+        end
+        if fallback_id and fallback_id ~= query then
+            local fb_ok, fb_known = pcall(api.is_spell_known, fallback_id)
+            if fb_ok and fb_known == true then
+                return true
+            end
+            if fb_ok and fb_known == false then
+                return false
+            end
+        end
+        if ok and known == false then
+            return false
+        end
+    end
+    return false
 end
 
 -- Aura-rank match: the numeric id everywhere (Era's only path; TBC's cold
@@ -3777,6 +3818,8 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
     -- slot swipes). Both halves of every pair are written every call.
     inputs.op_remaining, inputs.op_duration = get_guide_cooldown(overpower_id)
     inputs.execute_remaining, inputs.execute_duration = get_guide_cooldown(5308)
+    inputs.op_known = is_spell_known_query(overpower_id)
+    inputs.execute_known = is_spell_known_query(5308)
     slam_current_id = resolve_rank(slam_ids, slam_current_id)
     inputs.slam_remaining, inputs.slam_duration = get_guide_cooldown(slam_current_id)
     inputs.hs_remaining, inputs.hs_duration = get_guide_cooldown(hs_current_id)
@@ -3805,6 +3848,10 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
         inputs.ww_cost = rage_cost_of(costs)
         inputs.bt_remaining, inputs.bt_duration = get_guide_cooldown(bt_current_id)
         inputs.ww_remaining, inputs.ww_duration = get_guide_cooldown(ww_current_id)
+        inputs.bt_known = type(bt_current_id) == "number" or (bt_current_id == nil and is_spell_known_query(23881))
+        inputs.ww_known = type(ww_current_id) == "number" or (ww_current_id == nil and is_spell_known_query(1680))
+        inputs.bt_known = type(bt_current_id) == "number" or (bt_current_id == nil and is_spell_known_query(23881))
+        inputs.ww_known = type(ww_current_id) == "number" or (ww_current_id == nil and is_spell_known_query(1680))
         -- TBC fury rage management: Heroic Strike dumps only with rage to spare
         -- (40+: tbc-new fury APL gates HS 29707 on currentRage >= 40 outside
         -- Execute; DW arms gates 29707 on 40, 2H arms on 80 - the fury set
@@ -3839,6 +3886,8 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
         inputs.ww_cost = rage_cost_of(costs)
         inputs.bt_remaining, inputs.bt_duration = get_guide_cooldown(bt_current_id)
         inputs.ww_remaining, inputs.ww_duration = get_guide_cooldown(ww_current_id)
+        inputs.bt_known = type(bt_current_id) == "number" or (bt_current_id == nil and is_spell_known_query(23881))
+        inputs.ww_known = type(ww_current_id) == "number" or (ww_current_id == nil and is_spell_known_query(1680))
         -- Era fury rage management: Heroic Strike dumps only with rage to spare
         -- (40+) and 2-3 s until next BT/WW (2.5 s buffer), so Bloodthirst
         -- (30 rage) / Whirlwind (25 rage) are never starved; Execute spams
@@ -3870,6 +3919,7 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
             inputs.bt_duration = nil
             inputs.ww_remaining = nil
             inputs.ww_duration = nil
+            inputs.ms_known = is_spell_known_query(ms_current_id or 12294)
         else
             bt_current_id = resolve_rank(bt_ids, bt_current_id)
             ww_current_id = resolve_rank(ww_ids, ww_current_id)
@@ -3879,6 +3929,8 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
             inputs.ww_cost = rage_cost_of(costs)
             inputs.bt_remaining, inputs.bt_duration = get_guide_cooldown(bt_current_id)
             inputs.ww_remaining, inputs.ww_duration = get_guide_cooldown(ww_current_id)
+            inputs.bt_known = type(bt_current_id) == "number" or (bt_current_id == nil and is_spell_known_query(23881))
+            inputs.ww_known = type(ww_current_id) == "number" or (ww_current_id == nil and is_spell_known_query(1680))
         end
         -- Wrath rage management (both specs): Heroic Strike dumps only with rage
         -- to spare (50+, TBC-carried until in-client tuning). The reserve window
@@ -4013,11 +4065,13 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
     if inputs.wrath_arms then
         ms_current_id = resolve_rank(ms_ids, ms_current_id)
         inputs.ms_remaining, inputs.ms_duration = get_guide_cooldown(ms_current_id)
+        inputs.ms_known = type(ms_current_id) == "number" or (ms_current_id == nil and is_spell_known_query(12294))
         inputs.bladestorm_remaining, inputs.bladestorm_duration =
             get_guide_cooldown(bladestorm_id)
         inputs.bladestorm_known = is_spell_known_query(bladestorm_id) or nil
     else
         inputs.ms_remaining, inputs.ms_duration = nil, nil
+        inputs.ms_known = nil
         inputs.bladestorm_remaining, inputs.bladestorm_duration = nil, nil
         inputs.bladestorm_known = nil
     end

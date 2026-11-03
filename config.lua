@@ -213,36 +213,55 @@ end
 -- One-time class color migration: raid class color progress fill (2.1.4)
 --=========================================================================================
 ST.CLASS_COLOR_DEFAULTS_MIGRATION_FLAG = "class_color_defaults_214"
+ST.CLASS_COLOR_RANGED_MIGRATION_FLAG = "class_color_ranged_214"
 ST.OLD_GENERIC_BAR_COLOR_90 = { 93, 58, 207, 0.9 }
 ST.OLD_GENERIC_BAR_COLOR_85 = { 93, 58, 207, 0.85 }
 ST.OLD_DRUID_BAR_COLOR = { 18, 85, 201, 1.0 }
+ST.OLD_HUNTER_RANGED_BAR_COLOR = { 6, 143, 47, 0.9 }
 
 function ST.migrate_class_color_defaults(profile)
 	if type(profile) ~= "table" then
 		return 0
 	end
-	if rawget(profile, ST.CLASS_COLOR_DEFAULTS_MIGRATION_FLAG) == true then
-		return 0
-	end
 	local count = 0
-	for _, token in ipairs(APPEARANCE_CLASS_TOKENS) do
-		local class_db = rawget(profile, token)
-		if type(class_db) == "table" then
-			local mh = rawget(class_db, "mainhand")
-			if type(mh) == "table" and type(mh.bar_color_default) == "table" then
-				local c = mh.bar_color_default
-				if colors_equal(c, ST.OLD_GENERIC_BAR_COLOR_90)
-					or colors_equal(c, ST.OLD_GENERIC_BAR_COLOR_85)
-					or colors_equal(c, ST.OLD_DRUID_BAR_COLOR) then
+	if rawget(profile, ST.CLASS_COLOR_DEFAULTS_MIGRATION_FLAG) ~= true then
+		for _, token in ipairs(APPEARANCE_CLASS_TOKENS) do
+			local class_db = rawget(profile, token)
+			if type(class_db) == "table" then
+				local mh = rawget(class_db, "mainhand")
+				if type(mh) == "table" and type(mh.bar_color_default) == "table" then
+					local c = mh.bar_color_default
+					if colors_equal(c, ST.OLD_GENERIC_BAR_COLOR_90)
+						or colors_equal(c, ST.OLD_GENERIC_BAR_COLOR_85)
+						or colors_equal(c, ST.OLD_DRUID_BAR_COLOR) then
+						if st and st.api and type(st.api.get_class_color_table) == "function" then
+							mh.bar_color_default = st.api.get_class_color_table(token, 0.9)
+							count = count + 1
+						end
+					end
+				end
+			end
+		end
+		rawset(profile, ST.CLASS_COLOR_DEFAULTS_MIGRATION_FLAG, true)
+	end
+	if rawget(profile, ST.CLASS_COLOR_RANGED_MIGRATION_FLAG) ~= true then
+		local hunter_db = rawget(profile, "HUNTER")
+		if type(hunter_db) == "table" then
+			local ranged = rawget(hunter_db, "ranged")
+			if type(ranged) == "table" and type(ranged.bar_color_default) == "table" then
+				local c = ranged.bar_color_default
+				if colors_equal(c, ST.OLD_HUNTER_RANGED_BAR_COLOR)
+					or colors_equal(c, ST.OLD_GENERIC_BAR_COLOR_90)
+					or colors_equal(c, ST.OLD_GENERIC_BAR_COLOR_85) then
 					if st and st.api and type(st.api.get_class_color_table) == "function" then
-						mh.bar_color_default = st.api.get_class_color_table(token, 0.9)
+						ranged.bar_color_default = st.api.get_class_color_table("HUNTER", 0.9)
 						count = count + 1
 					end
 				end
 			end
 		end
+		rawset(profile, ST.CLASS_COLOR_RANGED_MIGRATION_FLAG, true)
 	end
-	rawset(profile, ST.CLASS_COLOR_DEFAULTS_MIGRATION_FLAG, true)
 	return count
 end
 

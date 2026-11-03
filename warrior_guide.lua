@@ -1546,6 +1546,7 @@ function st.warrior_guide.evaluate(inputs, out)
     end
 
     if action == nil and wrath_arms
+        and inputs.execute_known ~= false
         and (sd or (type(inputs.target_health_pct) == "number"
             and inputs.target_health_pct < execute_pct))
         and is_off_cooldown(inputs.execute_remaining) then
@@ -1602,7 +1603,7 @@ function st.warrior_guide.evaluate(inputs, out)
     local sod_dance = sod and st.warrior_guide.should_stance_dance_op(
         inputs.sod_stance_aura, inputs.stance_form, true)
 
-    if action == nil and (not sod or sod_dance)
+    if action == nil and inputs.op_known ~= false and (not sod or sod_dance)
         and ((type(inputs.overpower_remaining) == "number"
                 and inputs.overpower_remaining > 0)
             or (wrath_arms and inputs.tfb == true)
@@ -1616,7 +1617,7 @@ function st.warrior_guide.evaluate(inputs, out)
         -- stance withholds the prompt (an unknown stance never withholds).
         action = "op"
     elseif action == nil and not wrath_arms then
-        if not wrath_fury and ((type(inputs.target_health_pct) == "number"
+        if not wrath_fury and inputs.execute_known ~= false and ((type(inputs.target_health_pct) == "number"
                     and (inputs.target_health_pct < execute_pct
                         or (sod and sd)))
                 or inputs.victory_rush == true)
@@ -1659,7 +1660,7 @@ function st.warrior_guide.evaluate(inputs, out)
             -- 4. An on-next-attack ability is already queued: ride it.
             hold = true
             hold_text = "RIDE"
-        elseif st.warrior_guide.should_refresh_sunder(inputs.sunder_stacks,
+        elseif inputs.sunder_known ~= false and st.warrior_guide.should_refresh_sunder(inputs.sunder_stacks,
                 inputs.sunder_remaining) then
             -- S. Sunder upkeep (TBC + Forever APL groups): re-stack below 5,
             -- refresh inside the final 10 s. Yields to procs, Execute range
@@ -1667,7 +1668,7 @@ function st.warrior_guide.evaluate(inputs, out)
             -- (maintenance before rotation, like the arms Rend rule A). Nil
             -- on every other family (unknown hides).
             action = "sunder"
-        elseif st.warrior_guide.should_maintain_rend_outside_arms(
+        elseif inputs.rend_known ~= false and st.warrior_guide.should_maintain_rend_outside_arms(
                 inputs.rend_remaining, inputs.rend_upkeep_enabled) then
             -- R. Rend upkeep outside arms (SoD rune-gated; the Forever toggle
             -- is filed with the options lane, so the rule stays dormant on
@@ -1682,14 +1683,14 @@ function st.warrior_guide.evaluate(inputs, out)
             -- ride. nil when the family carries no stance row, and nil when the
             -- stance read is unknown (unknown hides).
             action = stance_action
-        elseif type(inputs.bt_remaining) == "number" and inputs.bt_remaining <= 0 then
+        elseif inputs.bt_known ~= false and type(inputs.bt_remaining) == "number" and inputs.bt_remaining <= 0 then
             -- 5. Bloodthirst: a core reader is present (TBC, Era, wrath fury or
             -- SoD) and ready. The known-reading requirement keeps families
             -- without the reader on the legacy path (nil never prompts). The
             -- GCD is intentionally not gated: the prompt leads the GCD and the
             -- player fires as it clears.
             action = "bt"
-        elseif type(inputs.ww_remaining) == "number" and inputs.ww_remaining <= 0
+        elseif inputs.ww_known ~= false and type(inputs.ww_remaining) == "number" and inputs.ww_remaining <= 0
             and (type(inputs.bt_remaining) ~= "number"
                 or inputs.bt_remaining ~= inputs.bt_remaining
                 or inputs.bt_remaining >= WW_DELAY) then
@@ -1711,6 +1712,7 @@ function st.warrior_guide.evaluate(inputs, out)
             hold = true
             hold_text = "RIDE"
         elseif wrath_fury
+            and inputs.execute_known ~= false
             and type(inputs.target_health_pct) == "number"
             and inputs.target_health_pct < execute_pct
             and is_off_cooldown(inputs.execute_remaining)
@@ -1736,7 +1738,7 @@ function st.warrior_guide.evaluate(inputs, out)
             -- H. Arms Bladestorm (Rend maintained, no SD pending and Overpower
             -- current by the order above).
             action = "bladestorm"
-        elseif wrath_arms and type(inputs.ms_remaining) == "number"
+        elseif wrath_arms and inputs.ms_known ~= false and type(inputs.ms_remaining) == "number"
             and inputs.ms_remaining <= 0 then
             -- I. Arms Mortal Strike filler (known reading required, like BT/WW).
             action = "ms"

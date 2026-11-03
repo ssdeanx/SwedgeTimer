@@ -1594,6 +1594,7 @@ do
     do
         local cd_tokens, range_tokens = {}, {}
         local tbc = build({ project = 5, GetSpellInfo = tbc_spell_lookup,
+            known_spells = { [34026] = true, ["Kill Command"] = true },
             GetSpellCooldown = function(spell)
                 cd_tokens[#cd_tokens + 1] = spell
                 return 0, 0, 0, 0
@@ -2669,29 +2670,28 @@ do
         -- Fixed 0.5 s window over a 2 s cycle on a 275 px bar: 0.25 * 275, never
         -- widened by the 100 ms latency.
         near(ui.cast_zone.width, 0.25 * 275, "the zone width is the fixed 0.5 s window fraction")
-        near(ui.cast_zone.color[1], 1,
-            "standing still with no stop stamp reads the safe white")
-        near(ui.cast_zone.color[2], 1, "the safe white's green channel")
-        near(ui.cast_zone.color[4], 0.55,
-            "the safe white carries more alpha than the unsafe red")
+        near(ui.cast_zone.color[1], 1, "the endzone is red")
+        near(ui.cast_zone.color[2], 0, "the endzone green channel is 0 (red)")
+        near(ui.cast_zone.color[4], 0.4, "the endzone alpha is 0.4")
         eq(ui.cast_zone_marker.shown, true, "the threshold marker shows with the zone")
         near(ui.cast_zone_marker.points[1].x, 275 - 0.25 * 275 - 1.5,
             "the marker sits on the window boundary at the end of the bar")
 
-        -- Still moving: unsafe red.
+        -- Still moving: remains red.
         sb.ST.is_moving = true
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
-        near(ui.cast_zone.color[1], 1, "still moving reads the unsafe red")
-        near(ui.cast_zone.color[2], 0, "the unsafe red's second channel")
-        -- Stopped after the window opened (open = -1.6 + 2 - 0.5 = -0.1): still unsafe.
+        near(ui.cast_zone.color[1], 1, "still moving stays red")
+        near(ui.cast_zone.color[2], 0, "the red's second channel stays 0")
+        -- Stopped after the window opened (open = -1.6 + 2 - 0.5 = -0.1): remains red.
         sb.ST.is_moving = false
         sb.ST.last_stopped_moving_at = 0.5
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
-        near(ui.cast_zone.color[1], 1, "a late stop reads the unsafe red")
-        -- Stopped at or before the open: safe again.
+        near(ui.cast_zone.color[1], 1, "a late stop stays red")
+        -- Stopped at or before the open: remains red.
         sb.ST.last_stopped_moving_at = -0.3
         sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
-        near(ui.cast_zone.color[2], 1, "an early stop reads the safe white")
+        near(ui.cast_zone.color[1], 1, "an early stop stays red")
+        near(ui.cast_zone.color[2], 0, "an early stop keeps green channel at 0 (red)")
 
         -- No live ranged cycle: the zone hides rather than guessing.
         sb.ST.ranged.start = nil

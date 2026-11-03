@@ -4,12 +4,23 @@
 
 ### Added
 
-- **Dynamic Leveling Progression for HUD & Next Actions:**
-  - Implemented dynamic spell knowledge gating across the Next Action Guide (`nextaction_ui.lua`) and Cooldown HUD (`hud.lua`), suppressing prompts, idle openers, and icon slots for unlearned abilities, fillers, and judgement cues.
+- **Dynamic Leveling Progression for HUD & Next Actions Across All Classes:**
+  - Implemented dynamic spell knowledge gating across the Next Action Guide and Cooldown HUD (`hud.lua`), suppressing prompts, idle openers, and icon slots for unlearned abilities, fillers, and judgement cues across all classes (Hunter, Paladin, Warrior, Rogue, Shaman, Druid).
   - Leveling gate is fail-visible: only a confirmed unlearned status hides an ability, while unqueryable or ambiguous states remain visible.
-  - Cooldown readers across all class modules (`classes/*.lua`) remain clean bridges to `api.GetSpellCooldown` returning `(remaining, duration)` or `(0, nil)`, leaving leveling visibility gating to the display frames (`hud.lua` and `nextaction_ui.lua`).
-  - Strict Name-vs-ID discipline preserved across all client families: Classic Era queries strictly by numeric spell IDs, while TBC and Wrath/Titanforge query by localized names with verified ID fallbacks.
+  - Universal Cross-Client Name-vs-ID Discipline: Classic Era (`st.family == "ERA"`) strictly queries by numeric spell IDs, while all other clients (TBC Anniversary, WotLK Titanforge, WoW Forever, and modern families) strictly query by localized names with verified numeric ID fallbacks.
+  - Lower Rank Recognition: Leveling characters knowing lower ranks of an ability have that ability recognized and allowed dynamically (via localized name on non-Era and numeric ID on Era) without requiring max-expansion DBC ranks.
   - Real-time progression without `/reload`: training a new spell rank at a class trainer or allocating talent points automatically unlocks both HUD icons and Next Action prompts on the very next frame tick.
+  - Smooth Rotation Fallbacks During Leveling:
+    - **Hunter**: When Kill Command is not learned (level < 66), the guide smoothly yields to Multi-Shot, Arcane Shot, and Serpent Sting without stalling or falling into the Auto Shot HOLD overlay.
+    - **Warrior**: Gated Overpower, Execute, Bloodthirst, Whirlwind, Mortal Strike, Sunder, and Rend on spellbook knowledge. Leveling warriors without high-level abilities smoothly fall back to Heroic Strike, Cleave, Rend, and Sunder without getting stuck.
+    - **Shaman**: Gated Stormstrike, Lava Lash, Earth Shock, Fire Nova, Strength of Earth, Mana Spring, Searing Totem, and Magma Totem on spellbook knowledge. When high-level abilities are unlearned, smoothly falls back to Earth Shock, Searing Totem, and Lightning Bolt weave.
+    - **Druid**: Gated Bear Mangle, Cat Rip, Cat Mangle, Ferocious Bite, and Shred on spellbook knowledge. In Bear form, pools rage when Mangle is unlearned. In Cat form, smoothly falls back to Claw as the core builder across TBC, Wrath, Forever, and Era whenever Shred or Mangle are unlearned.
+    - **Rogue**: Builder candidate chain dynamically falls back to Sinister Strike when high-level builders (Saber Slash, Mutilate, Hemorrhage) are unlearned. Rupture smoothly falls back to Eviscerate when unlearned, and Slice and Dice is gated on spellbook knowledge.
+    - **Paladin**: Crusader Strike, Divine Storm, Judgement, and FCFS fillers are gated on spellbook knowledge, smoothly falling back to available seals and judgements during leveling.
+- **Hunter Visual Enhancements & Cooldown HUD Text Recovery:**
+  - Ranged Bar Class Color: The hunter ranged bar progress fill now uses authentic hunter raid class color (`#ABD473`) instead of generic bar tints.
+  - Solid Red Auto Shot Endzone: Auto Shot cast endzone renders solid red (`COLOR_CAST_ENDZONE`) to clearly indicate unshootable / clip intervals without confusing shifting colors.
+  - Cooldown HUD Countdown Text Recovery: HUD countdown text now defaults to visible (`db.hud_show_text ~= false`) even when profile settings lack an explicit boolean, ensuring countdown numbers display on cooldown icons.
 - **WoW Forever (Camelot / 1.60.1) Native Swing & Range Integration:**
   - Integrated native `C_SwingTimer` API and `PLAYER_SWING` event monitoring for WoW Forever (`WOW_PROJECT_CAMELOT = 18`, interface `16001`), providing hardware-accurate swing pacing without classic combat log dependencies.
   - Added native combat-reach and target hitbox range checking via `C_SwingTimer.IsTargetWithinSwingRange` and `C_SwingTimer.EnableRangeCheck`.

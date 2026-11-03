@@ -1170,12 +1170,10 @@ function st.hunter_guide.evaluate(inputs, out)
         -- F4. Forever: the Multi-Shot (the APL's i=13, the filler behind the
         -- upkeep): known and off cooldown.
         action = "multi"
-    elseif st.hunter_guide.TBC_ARCANE_ENABLED == true and st.family == "TBC"
+    elseif (st.hunter_guide.TBC_ARCANE_ENABLED == true or inputs.steady_known ~= true) and st.family == "TBC"
         and inputs.arcane_known == true
         and is_off_cooldown(inputs.arcane_remaining_cd) then
-        -- 5c. TBC: Arcane Shot filler (instant, sim APL core). DORMANT: ships
-        -- false (no TBC arcane slot exists - base set full 6/6, wiring filed),
-        -- so no live prompt changes until the slot lands.
+        -- 5c. TBC: Arcane Shot filler (instant, sim APL core; active during leveling before Steady Shot).
         action = "arcane"
     elseif inputs.aimed_known == true and is_off_cooldown(inputs.aimed_remaining_cd)
         and aimed_is_clip_safe(inputs) then
@@ -1186,11 +1184,9 @@ function st.hunter_guide.evaluate(inputs, out)
         -- 6b. Era and TBC: Multi-Shot is due and the cast fits before the next
         --    shot (the synced-duration clip math alone decides under haste).
         action = "multi"
-    elseif is_era and not is_sod and utility_due(inputs, "serpent_known", "serpent_active") then
-        -- 6d. Era: the Serpent Sting upkeep (the ERA APL's i=4, behind the Multi
-        --    at i=3): the sting on the target is KNOWN down. The SoD never takes
-        --    this arm (its Serpent is a pre-pull row, and the Chimera rune's own
-        --    guard reads the same state).
+    elseif (is_era or is_forever or (st.family == "TBC" and inputs.steady_known ~= true))
+        and not is_sod and utility_due(inputs, "serpent_known", "serpent_active") then
+        -- 6d. Era, Forever and TBC leveling: the Serpent Sting upkeep.
         action = "serpent"
     elseif inputs.steady_known == true and is_off_cooldown(inputs.steady_remaining_cd)
         and cast_is_clip_safe(inputs) then

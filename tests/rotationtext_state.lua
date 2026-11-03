@@ -902,6 +902,8 @@ CST.active_class = "HUNTER"
         CST.player_class = "WARRIOR"
 CST.active_class = "WARRIOR"
         creset()
+        cknown[7384] = true
+        cknown[23881] = true
         eq(CST.WARRIOR.get_rotation_key(CST), "Bloodthirst",
             "warrior rotation: the TBC reader-ready default is Bloodthirst")
         CST.warrior_overpower_proc_until = cclock + 5
@@ -923,6 +925,8 @@ CST.active_class = "WARRIOR"
         CST.player_class = "DRUID"
 CST.active_class = "DRUID"
         creset()
+        cknown[6807] = true
+        cknown[1079] = true
         eq(CST.DRUID.get_rotation_key(CST), nil, "druid rotation: no form -> nil")
         CST.form_index = 1
         CST.maul_queued = true
@@ -947,6 +951,8 @@ CST.active_class = "DRUID"
         CST.player_class = "SHAMAN"
 CST.active_class = "SHAMAN"
         creset()
+        cknown[8050] = true
+        cknown[17364] = true
         eq(CST.SHAMAN.get_rotation_key(CST), "Flame Shock",
             "shaman rotation: a missing Flame Shock prompts Flame Shock")
         CST.weave_fs_duration, CST.weave_fs_expires = 12, cclock + 10

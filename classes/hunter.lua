@@ -28,7 +28,7 @@ local function spell_token(spell_id)
     if spell_id == nil then
         return nil
     end
-    if st.family ~= "TBC" and st.family ~= "WRATH" then
+    if st.family == "ERA" then
         return spell_id
     end
     local name = api.GetSpellInfo(spell_id)
@@ -36,6 +36,73 @@ local function spell_token(spell_id)
         return api.get_spell_query(name, spell_id) or spell_id
     end
     return name or spell_id
+end
+
+-- Dynamic spellbook knowledge check (leveling gate):
+-- Checks whether THIS player character has learned the spell in their spellbook.
+-- On Classic Era: numeric spell id only (no strings).
+-- On non-Era clients (TBC Anniversary, Titanforge, Forever, etc.): localized name first,
+-- with numeric id as the approved fallback. Fail-visible: an unknown/unanswered state
+-- allows the spell, while a confirmed not_known gate withholds the ability.
+local function is_hunter_spell_known(spell_id)
+    if spell_id == nil then
+        return false
+    end
+    local query, fallback_id
+    if st.family == "ERA" then
+        query = type(spell_id) == "number" and spell_id or nil
+        fallback_id = nil
+    else
+        local name = api.GetSpellInfo(spell_id)
+        if type(name) == "string" then
+            query = name
+            fallback_id = type(spell_id) == "number" and spell_id or nil
+        else
+            query = spell_id
+            fallback_id = nil
+        end
+    end
+    if query == nil and fallback_id == nil then
+        return false
+    end
+    if type(api.is_spell_known_state) == "function" then
+        local known, state = api.is_spell_known_state(query, fallback_id)
+        if (known ~= true or state == "unknown") and fallback_id and fallback_id ~= query then
+            local fb_known, fb_state = api.is_spell_known_state(fallback_id)
+            if fb_known == true or fb_state == "known" then
+                return true
+            end
+            if fb_state == "not_known" then
+                return false
+            end
+        end
+        if state == "not_known" then
+            return false
+        end
+        if state == "known" then
+            return true
+        end
+        return true
+    end
+    if type(api.is_spell_known) == "function" then
+        local ok, known = pcall(api.is_spell_known, query, fallback_id)
+        if ok and known == true then
+            return true
+        end
+        if fallback_id and fallback_id ~= query then
+            local fb_ok, fb_known = pcall(api.is_spell_known, fallback_id)
+            if fb_ok and fb_known == true then
+                return true
+            end
+            if fb_ok and fb_known == false then
+                return false
+            end
+        end
+        if ok and known == false then
+            return false
+        end
+    end
+    return true
 end
 
 -- Probe tokens for the on-next-attack queue reads: bare ids everywhere except TBC
@@ -46,7 +113,7 @@ end
 -- cache still probes, never a silently empty list).
 local function queue_tokens(id_table)
     local tokens, seen = {}, {}
-    if st.family ~= "TBC" and st.family ~= "WRATH" then
+    if st.family == "ERA" then
         for spell_id in pairs(id_table) do
             tokens[#tokens + 1] = spell_id
         end
@@ -2793,7 +2860,7 @@ function ST.HUNTER.resolve_guide_icons()
         -- Name families prefer the name (27019/27065 exist on TBC, so this
         -- probe does fire there); a cold name falls back to the id.
         local token = spell_token(id)
-        local known_probe = api.is_any_rank_known or api.is_spell_known
+        local known_probe = api.is_spell_known
         if token ~= nil and known_probe(token) then
             return id
         end
@@ -3296,10 +3363,10 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     -- already silences every client without the spell.
     local is_tbc = st.family == "TBC"
     local kc_id = kill_command_current_id
-    inputs.kc_known = is_tbc and kc_id ~= nil
+    inputs.kc_known = kc_id ~= nil and is_hunter_spell_known(kc_id)
     inputs.kc_remaining_cd = get_guide_cooldown(kc_id or guide_slot_kill_command.spell_id)
     local bw_id = bestial_wrath_current_id
-    inputs.bw_known = is_tbc and bw_id ~= nil
+    inputs.bw_known = bw_id ~= nil and is_hunter_spell_known(bw_id)
     inputs.bw_remaining_cd = get_guide_cooldown(bw_id or guide_slot_bestial_wrath.spell_id)
     -- Rapid Fire: the TBC blanket cooldown layer AND the ERA/SOD APL rows (the
     -- ERA APL's i=1 and the SOD APL's i=7). The knowledge gate carries the
@@ -3307,7 +3374,7 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     -- spell; the Forever client does not get the row (its APL asks for no
     -- Rapid Fire), so the gate stays off there.
     local rf_id = rapid_fire_current_id
-    inputs.rf_known = is_tbc and rf_id ~= nil
+    inputs.rf_known = rf_id ~= nil and is_hunter_spell_known(rf_id)
     inputs.rf_remaining_cd = get_guide_cooldown(rf_id or guide_slot_rapid_fire.spell_id)
     local multi_id = multi_current_id
     inputs.multi_known = (is_tbc or is_era_guide) and multi_id ~= nil
@@ -3343,16 +3410,16 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     -- flags are the resolve-time detectors (Wrath: Chimera learned = MM,
     -- Explosive learned = SV; SoD: the rune learned, knowledge-gated at
     -- post_init) - the gather itself spends no knowledge probe.
-    inputs.killshot_known = kill_shot_current_id ~= nil
+    inputs.killshot_known = kill_shot_current_id ~= nil and is_hunter_spell_known(kill_shot_current_id)
     inputs.killshot_remaining_cd = get_guide_cooldown(kill_shot_current_id)
     inputs.target_hp_frac = nil
-    inputs.chimera_known = chimera_current_id ~= nil
+    inputs.chimera_known = chimera_current_id ~= nil and is_hunter_spell_known(chimera_current_id)
     inputs.chimera_remaining_cd = get_guide_cooldown(chimera_current_id)
-    inputs.explosive_known = explosive_current_id ~= nil
+    inputs.explosive_known = explosive_current_id ~= nil and is_hunter_spell_known(explosive_current_id)
     inputs.explosive_remaining_cd = get_guide_cooldown(explosive_current_id)
-    inputs.wrath_aimed_known = aimed_wrath_current_id ~= nil
+    inputs.wrath_aimed_known = aimed_wrath_current_id ~= nil and is_hunter_spell_known(aimed_wrath_current_id)
     inputs.wrath_aimed_remaining_cd = get_guide_cooldown(aimed_wrath_current_id)
-    inputs.arcane_known = arcane_current_id ~= nil
+    inputs.arcane_known = arcane_current_id ~= nil and is_hunter_spell_known(arcane_current_id)
     inputs.arcane_remaining_cd = get_guide_cooldown(arcane_current_id)
     -- The execute read (Wrath Kill Shot only): the target's health fraction, or
     -- nil when the client cannot answer - the engine never guesses it. Read only
@@ -3709,11 +3776,13 @@ end
 -- of 1.51 s or less is the running GCD, never one of these abilities' cooldowns -
 -- the class's own get_guide_cooldown rule). A missing reading means ready.
 local function hud_ability_cooldown(self, slot, now)
-    local query = hud_slot_name(slot) or spell_token(slot.spell)
+    local name = hud_slot_name(slot)
+    local id = slot.spell
+    local query = name or id
     if query == nil then
         return 0, HUD_COOLDOWN_FALLBACK[slot.key] or 0
     end
-    local start_time, duration = api.GetSpellCooldown(query)
+    local start_time, duration = api.GetSpellCooldown(query, id)
     if start_time and duration and duration > 1.51 then
         local remaining = start_time + duration - now
         if remaining > 0 then

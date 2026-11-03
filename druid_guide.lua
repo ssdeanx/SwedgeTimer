@@ -1156,7 +1156,7 @@ function st.druid_guide.evaluate(inputs, out)
                 and rage >= cost and inputs.insufficient_rage ~= true
             if sufficient then
                 action = "maul"
-            elseif druid_client_has_mangle(inputs) == false then
+            elseif druid_client_has_mangle(inputs) == false or inputs.mangle_known == false then
                 -- 3e. A client with NO Mangle spell: pool rage instead of guessing
                 -- a spell the client cannot know (wait: nil, no hold). Runeless Era
                 -- (the module's Mangle ids 33983/33987 are TBC+) and the FOREVER
@@ -1184,25 +1184,29 @@ function st.druid_guide.evaluate(inputs, out)
                 -- carry the Faerie Fire debuff). The hold overlay carries the call.
                 hold = true
                 hold_text = "FAERIE FIRE"
-            elseif cp >= tbc_rip_min_cp(inputs) and rip_expired then
+            elseif cp >= tbc_rip_min_cp(inputs) and rip_expired and inputs.rip_known ~= false then
                 -- T1. rip_min_cp+ CP with Rip expired: Rip (expiry-only, never a
                 -- window; the threshold defaults to the frozen 4 until its option
                 -- ships - filed follow-up).
                 action = "rip"
-            elseif inputs.mangle_remaining == nil
+            elseif inputs.mangle_known ~= false and inputs.mangle_remaining == nil
                 and tbc_can_spend(inputs, tbc_mangle_cost(inputs)) then
                 -- T2. Mangle absent and affordable: 40 energy, or the live
                 -- cost (the 2pc-T6 35) when the gather proves one.
                 action = "mangle"
-            elseif cp >= 5 and tbc_target_is_short_lived(inputs) then
+            elseif cp >= 5 and (tbc_target_is_short_lived(inputs) or inputs.rip_known == false)
+                and inputs.bite_known ~= false then
                 -- T3. 5 CP on a short-lived target: the only TBC Bite.
                 action = "bite"
-            elseif cp >= 5 then
+            elseif cp >= 5 and inputs.rip_known ~= false then
                 -- T4. 5 CP on a long fight: always Rip, never Bite.
                 action = "rip"
-            elseif tbc_can_spend(inputs, st.druid_guide.SHRED_COST_TBC) then
+            elseif inputs.shred_known ~= false and tbc_can_spend(inputs, st.druid_guide.SHRED_COST_TBC) then
                 -- T5. Affordable at the TBC 42-energy cost: build with Shred.
                 action = "shred"
+            elseif inputs.shred_known == false and inputs.claw_known ~= false and tbc_can_spend(inputs, 40) then
+                -- T5b. Leveling fallback: build with Claw when Shred is unlearned and affordable.
+                action = "claw"
             end
             -- T6. Otherwise: wait (action nil, no hold); pool, do not guess.
             -- (The old T6 powershift call was removed with its constant: the
@@ -1299,11 +1303,13 @@ function st.druid_guide.evaluate(inputs, out)
                 -- (< 8 s) pools to the builder below, unknown defaults to the
                 -- long fight and Rips).
                 action = "rip"
-            else
+            elseif inputs.shred_known ~= false then
                 -- E2. Anything else: build with Shred, ungated (no verified Era
                 -- cost exists, so the builder is never withheld for energy; a
                 -- healthy Rip at 5 CP pools here, the sim's Shred fallthrough).
                 action = "shred"
+            elseif inputs.claw_known ~= false then
+                action = "claw"
             end
         elseif inputs.family == "WRATH" then
             -- WRATH cat chain; see the WRATH APPENDIX in the module header.
@@ -1351,25 +1357,26 @@ function st.druid_guide.evaluate(inputs, out)
             elseif inputs.clearcast == true then
                 -- W4. Omen of Clarity proc: a free Shred, ahead of the finishers.
                 action = "shred"
-            elseif cp >= 5 and (type(inputs.rip_remaining) ~= "number"
+            elseif cp >= 5 and inputs.rip_known ~= false and (type(inputs.rip_remaining) ~= "number"
                     or inputs.rip_remaining <= 0) then
                 -- W5. 5 CP with Rip expired: Rip, never clipped. No energy gate:
                 -- the guide shows the next action, the pooling shows on the
                 -- energy tick bar.
                 action = "rip"
-            elseif inputs.mangle_remaining == nil
+            elseif inputs.mangle_known ~= false and inputs.mangle_remaining == nil
                 and not wrath_wait_for_ff(inputs) then
                 -- W6. An absent Mangle prompts it - above Rake, whose ticks it
                 -- multiplies; a running one never refreshes. FF imminent
                 -- pools instead (the sim's waitForFf).
                 action = "mangle"
-            elseif (type(inputs.rake_remaining) ~= "number"
+            elseif inputs.rake_known ~= false and (type(inputs.rake_remaining) ~= "number"
                     or inputs.rake_remaining <= 0)
                 and not wrath_wait_for_ff(inputs) then
                 -- W7. Rake expired, never clipped. FF imminent pools instead
                 -- (the sim's waitForFf).
                 action = "rake"
             elseif cp >= 5
+                and inputs.bite_known ~= false
                 and type(inputs.rip_remaining) == "number"
                 and inputs.rip_remaining >= st.druid_guide.FB_RIP_MIN_SECONDS
                 and type(sr) == "number"
@@ -1382,11 +1389,12 @@ function st.druid_guide.evaluate(inputs, out)
                 -- rotation).
                 action = "bite"
             elseif not wrath_wait_for_ff(inputs) then
-                -- W9. Anything else: build with Shred (pooling shows on the
-                -- energy tick bar; the bearweave branch is not built). FF
-                -- imminent pools instead (nil action, no hold - the sim's
-                -- waitForFf).
-                action = "shred"
+                -- W9. Anything else: build with Shred, falling back to Claw if unlearned.
+                if inputs.shred_known ~= false then
+                    action = "shred"
+                elseif inputs.claw_known ~= false then
+                    action = "claw"
+                end
             end
         else
             -- FOREVER F1 (see the FOREVER APPENDIX in the module header), then
@@ -1446,8 +1454,12 @@ function st.druid_guide.evaluate(inputs, out)
                 elseif inputs.clearcast == true then
                     -- F2. Omen of Clarity proc: a free Shred, ahead of the
                     -- finishers (the APL ccShred).
-                    action = "shred"
-                elseif fcp >= 5 and (type(inputs.rip_remaining) ~= "number"
+                    if inputs.shred_known ~= false then
+                        action = "shred"
+                    elseif inputs.claw_known ~= false then
+                        action = "claw"
+                    end
+                elseif fcp >= 5 and inputs.rip_known ~= false and (type(inputs.rip_remaining) ~= "number"
                         or inputs.rip_remaining <= 0)
                     and not fight_is_young(inputs,
                         st.druid_guide.FIGHT_ELAPSED_FOREVER_SECONDS) then
@@ -1456,15 +1468,15 @@ function st.druid_guide.evaluate(inputs, out)
                     -- to the builder below; unknown defaults to the long fight
                     -- and Rips - the documented shape.
                     action = "rip"
-                elseif type(inputs.rake_remaining) ~= "number"
-                    or inputs.rake_remaining <= 0 then
+                elseif inputs.rake_known ~= false and (type(inputs.rake_remaining) ~= "number"
+                    or inputs.rake_remaining <= 0) then
                     -- F4. Rake expired (the APL rakeNow, expiry-only).
                     action = "rake"
-                elseif fcp >= 5 and fend then
+                elseif fcp >= 5 and fend and inputs.bite_known ~= false then
                     -- F6a. 5 CP Bite inside the execute window (the APL biteEnd:
                     -- never mid-fight, unlike the legacy rule 7).
                     action = "bite"
-                elseif fcp >= 3 and type(fttd) == "number"
+                elseif fcp >= 3 and inputs.bite_known ~= false and type(fttd) == "number"
                     and fttd < st.druid_guide.FOREVER_BITE_LOW_TTD_SECONDS then
                     -- F6b. 3+ CP dumped inside the last 3 s (the APL biteLow).
                     action = "bite"
@@ -1477,26 +1489,32 @@ function st.druid_guide.evaluate(inputs, out)
                     hold = true
                     hold_text = "FAERIE FIRE"
                 else
-                    -- F7. Anything else: build with Shred (the APL pooling
-                    -- horizons need Shred/Rip/Rake costs plus the tick phase -
-                    -- filed follow-up, so the builder pools here).
-                    action = "shred"
+                    -- F7. Anything else: build with Shred, falling back to Claw.
+                    if inputs.shred_known ~= false then
+                        action = "shred"
+                    elseif inputs.claw_known ~= false then
+                        action = "claw"
+                    end
                 end
-            elseif type(inputs.rip_remaining) ~= "number" or inputs.rip_remaining <= rip_refresh then
+            elseif inputs.rip_known ~= false and (type(inputs.rip_remaining) ~= "number" or inputs.rip_remaining <= rip_refresh) then
                 -- 4. Rip missing or inside its refresh window.
                 action = "rip"
-            elseif type(inputs.rake_remaining) ~= "number" or inputs.rake_remaining <= rake_refresh then
+            elseif inputs.rake_known ~= false and (type(inputs.rake_remaining) ~= "number" or inputs.rake_remaining <= rake_refresh) then
                 -- 5. Rake missing or inside its refresh window.
                 action = "rake"
-            elseif inputs.mangle_remaining == nil then
+            elseif inputs.mangle_known ~= false and inputs.mangle_remaining == nil then
                 -- 6. An absent Mangle prompts it; a running one never does.
                 action = "mangle"
-            elseif type(inputs.combo_points) == "number" and inputs.combo_points >= 5 then
+            elseif inputs.bite_known ~= false and type(inputs.combo_points) == "number" and inputs.combo_points >= 5 then
                 -- 7. Combo points capped: spend with Ferocious Bite.
                 action = "bite"
             else
-                -- 8. Anything else: build with Shred.
-                action = "shred"
+                -- 8. Anything else: build with Shred, falling back to Claw.
+                if inputs.shred_known ~= false then
+                    action = "shred"
+                elseif inputs.claw_known ~= false then
+                    action = "claw"
+                end
             end
         end
     elseif cat_form_wanted then
