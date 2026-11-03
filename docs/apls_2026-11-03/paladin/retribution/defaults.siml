@@ -1,0 +1,26 @@
+siml 1
+spec retribution_paladin
+use "builds/unsealed_wrath.siml"
+
+sim: iterations 25000
+
+simple:
+  aura retribution_aura
+  assigned_judgement judgement_of_the_crusader
+  pull_range 25
+
+encounter:
+  duration 180
+  duration_variation 5
+  execute_proportion_20 0.2
+  execute_proportion_35 0.35
+  targets(id=31146,
+      name="Raid Target",
+      level=63,
+      mob_type=mechanical,
+      stats(attack_power=320, block_value=54, armor=3731, health=1428900),
+      min_base_damage=2601,
+      damage_spread=0.5,
+      swing_speed=2,
+      parry_haste,
+      can_crush)

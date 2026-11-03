@@ -1,0 +1,21 @@
+{
+	"type": "TypeAPL",
+	"prepullActions": [
+		{"action":{"castSpell":{"spellId":{"spellId":13033}}},"doAtValue":{"math":{"op":"OpMul","lhs":{"math":{"op":"OpAdd","lhs":{"math":{"op":"OpAdd","lhs":{"spellCastTime":{"spellId":{"spellId":10181}}},"rhs":{"spellTravelTime":{"spellId":{"spellId":10181}}}}},"rhs":{"spellGcdHastedDuration":{"spellId":{"spellId":13033}}}}},"rhs":{"const":{"val":"-1"}}}}},
+		{"action":{"castSpell":{"spellId":{"spellId":10181}}},"doAtValue":{"math":{"op":"OpMul","lhs":{"math":{"op":"OpAdd","lhs":{"spellCastTime":{"spellId":{"spellId":10181}}},"rhs":{"spellTravelTime":{"spellId":{"spellId":10181}}}}},"rhs":{"const":{"val":"-1"}}}}},
+		{"action":{"castSpell":{"spellId":{"spellId":1953}}},"doAtValue":{"math":{"op":"OpMul","lhs":{"auraDuration":{"auraId":{"spellId":1953}}},"rhs":{"const":{"val":"-1"}}}}}
+	],
+	"priorityList": [
+		{"action":{"condition":{"cmp":{"op":"OpLe","lhs":{"currentManaPercent":{}},"rhs":{"const":{"val":"5%"}}}},"groupReference":{"groupName":"Mana Tools"}}},
+		{"action":{"condition":{"auraIsActive":{"auraId":{"spellId":400669},"includeReactionTime":true}},"autocastOtherCooldowns":{}}},
+		{"action":{"condition":{"cmp":{"op":"OpGe","lhs":{"spellTimeToReady":{"spellId":{"spellId":10161}}},"rhs":{"const":{"val":"7"}}}},"castSpell":{"spellId":{"spellId":12472}}}},
+		{"action":{"condition":{"cmp":{"op":"OpEq","lhs":{"auraNumStacks":{"sourceUnit":{"type":"CurrentTarget"},"auraId":{"spellId":12579},"includeReactionTime":true}},"rhs":{"const":{"val":"5"}}}},"castSpell":{"spellId":{"spellId":10161}}}},
+		{"action":{"condition":{"and":{"vals":[{"cmp":{"op":"OpEq","lhs":{"auraNumStacks":{"auraId":{"spellId":400669}}},"rhs":{"const":{"val":"1"}}}},{"spellIsCasting":{"spellId":{"spellId":10181}}}]}},"castSpell":{"spellId":{"spellId":1240047}}}},
+		{"action":{"condition":{"cmp":{"op":"OpLe","lhs":{"auraRemainingTime":{"auraId":{"spellId":1326891}}},"rhs":{"const":{"val":"3"}}}},"castSpell":{"spellId":{"spellId":13033}}}},
+		{"action":{"castSpell":{"spellId":{"spellId":10181}}}}
+	],
+	"groups": [
+		{"name":"Mana Tools","actions":[{"action":{"castSpell":{"spellId":{"spellId":1259705}}}},{"action":{"channelSpell":{"spellId":{"spellId":12051},"interruptIf":{"cmp":{"op":"OpGe","lhs":{"currentManaPercent":{}},"rhs":{"const":{"val":"99%"}}}}}}}]},
+		{"name":"AOE","actions":[{"action":{"castSpell":{"spellId":{"spellId":10161}}}},{"action":{"castSpell":{"spellId":{"spellId":12472}}}},{"action":{"condition":{"auraIsInactive":{"auraId":{"spellId":13033},"includeReactionTime":true}},"castSpell":{"spellId":{"spellId":13033}}}},{"action":{"castSpell":{"spellId":{"spellId":10187}}}}]}
+	]
+}

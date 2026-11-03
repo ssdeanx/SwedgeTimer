@@ -1,0 +1,31 @@
+siml 1
+spec hunter
+use "walk_in.apl.siml"
+
+var ${Use Aimed Shot} = true
+var ${Use Multi-Shot} = false
+var ${Use Arcane Shot} = true
+var ${Use Sniper Shot} = true
+var ${Use Summon Hawk} = false
+
+prepull:
+  -22s cast hunters_mark
+  -20s cast aspect_of_the_hawk
+  -19s move $pull_range
+  // Open with Sniper Shot, started one cast before the pull so it lands as the fight starts.
+  (spell(sniper_shot).cast_time * -1) cast sniper_shot if $use_sniper_shot
+
+priority:
+  autocast_other_cooldowns if current_time >= 5s
+  cast hunters_mark if not target.aura(hunters_mark).is_active
+  cast serpent_sting if not dot(serpent_sting).is_active
+  reset_sequence("HHA") if hawk_and_arcane and sequence("HHA").is_complete
+  sequence "HHA" [cast summon_hawk, cast summon_hawk, cast arcane_shot] if hawk_and_arcane
+  cast summon_hawk if $use_summon_hawk and not $use_arcane_shot
+  cast arcane_shot if $use_arcane_shot and not $use_summon_hawk
+  cast aimed_shot if $use_aimed_shot
+  cast multi_shot if $use_multi_shot
+  /// The least damage per second of casting, so it waits until none of the shots above is ready.
+  cast sniper_shot if $use_sniper_shot
+  /// Start of the fight: get to my spot without losing an Auto Shot.
+  group "Walk in" if self.unit_distance != $shoot_spot

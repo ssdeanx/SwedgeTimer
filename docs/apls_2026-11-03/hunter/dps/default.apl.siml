@@ -1,0 +1,52 @@
+siml 1
+spec hunter
+use "weave_common.apl.siml" with $wait_at_melee = max(input_delay, $time_to_weave)
+
+var ${Melee weave} = true
+var ${Time to weave} = 250ms
+var ${Use Aimed Shot} = false
+var ${Use Multi-Shot} = true
+var ${Use Arcane Shot} = true
+var ${Use Summon Hawk} = false
+var ${Rapid Fire at the pull} = false
+var ${Walk to my spot first} = true
+
+priority:
+  /// Rapid Fire at range: from the pull, or like the other cooldowns after the first 5 s.
+  cast rapid_fire if at_range and ($rapid_fire_at_the_pull or current_time >= 5s)
+  autocast_other_cooldowns if current_time >= 5s and at_range
+  cast hunters_mark if not target.aura(hunters_mark).is_active
+  cast raptor_strike
+  cast strider_kick
+  cast mongoose_bite
+  cast immolation_trap if in_melee
+  cast wing_clip if not spell(strider_kick).is_known or spell(strider_kick).time_to_ready > 1.5s
+  cast serpent_sting if not dot(serpent_sting).is_active
+  reset_sequence("HHA") if hawk_and_arcane and sequence("HHA").is_complete
+  sequence "HHA" [cast summon_hawk, cast summon_hawk, cast arcane_shot] if hawk_and_arcane
+  cast summon_hawk if $use_summon_hawk and not $use_arcane_shot
+  cast arcane_shot if $use_arcane_shot and not $use_summon_hawk
+  cast multi_shot if $use_multi_shot
+  cast aimed_shot
+      if $use_aimed_shot
+      and (spell(aimed_shot).cast_time + $time_to_melee <= auto_time_to_next(main_hand_auto) or not $melee_weave)
+  /// Start of the fight, before the first weave: get to my spot without losing an Auto Shot.
+  group "Walk in"
+      if $walk_to_my_spot_first
+      and self.unit_distance != $shoot_spot
+      and $not_weaving_yet
+  group "Weave" if $melee_weave
+
+group "Weave":
+  start_attack if in_melee
+  wait gcd_time_to_ready if gcd_time_to_ready > 0s and gcd_time_to_ready <= 400ms
+  wait kick_wait if kick_soon
+  wait min($wait_at_melee - auto_time_since_last(main_hand_auto), max(gcd_time_to_ready, input_delay))
+  wait min(auto_time_to_next(main_hand_auto) + input_delay, max(gcd_time_to_ready, input_delay))
+      if in_melee
+      and auto_time_since_last(main_hand_auto) > $time_to_range
+  move $melee_spot if walk_in_now
+  move $shoot_spot
+  wait min($time_to_walk_in, max(gcd_time_to_ready, input_delay))
+      if $time_to_walk_in > 0s
+      and $weave_fits

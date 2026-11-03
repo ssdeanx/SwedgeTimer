@@ -1,0 +1,26 @@
+siml 1
+spec protection_paladin
+
+prepull:
+  -20s cast righteous_fury
+  -18.5s cast retribution_aura
+  -1.5s cast seal_of_the_crusader
+
+priority:
+  autocast_other_cooldowns
+  cast judgement
+  cast swift_judgement
+      if spell(judgement).time_to_ready <= spell(judgement).full_cooldown - input_delay
+  cast seal_of_fury
+      if aura(seal_of_fury_20423_tag0).remaining_time < auto_time_to_next(main_hand_auto)
+      and aura(seal_of_fury_20423_tag0).is_inactive
+  # cast seal_of_righteousness
+      if aura(seal_of_righteousness_20293).remaining_time < auto_time_to_next(main_hand_auto)
+      and aura(seal_of_righteousness_20293).is_inactive
+  cast consecration
+  cast holy_shock_25903
+      if not talent_is_known(consecrated_ground)
+      or target.aura(consecration).is_active
+  cast holy_shield
+  cast holy_strike
+  cast exorcism

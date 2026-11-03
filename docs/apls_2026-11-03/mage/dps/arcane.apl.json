@@ -1,0 +1,19 @@
+{
+	"type": "TypeAPL",
+	"prepullActions": [
+		{"action":{"castSpell":{"spellId":{"spellId":1259705}}},"doAtValue":{"math":{"op":"OpMul","lhs":{"math":{"op":"OpAdd","lhs":{"spellCastTime":{"spellId":{"spellId":1326082}}},"rhs":{"spellCastTime":{"spellId":{"spellId":1259705}}}}},"rhs":{"const":{"val":"-1"}}}}},
+		{"action":{"castSpell":{"spellId":{"spellId":1326082}}},"doAtValue":{"math":{"op":"OpMul","lhs":{"spellCastTime":{"spellId":{"spellId":1326082}}},"rhs":{"const":{"val":"-1"}}}}}
+	],
+	"priorityList": [
+		{"action":{"condition":{"cmp":{"op":"OpLe","lhs":{"currentManaPercent":{}},"rhs":{"const":{"val":"10%"}}}},"groupReference":{"groupName":"Evocation"}}},
+		{"action":{"condition":{"or":{"vals":[{"auraIsActive":{"auraId":{"spellId":400589},"includeReactionTime":true}},{"spellIsReady":{"spellId":{"spellId":1326082}}}]}},"autocastOtherCooldowns":{}}},
+		{"action":{"condition":{"auraIsActive":{"auraId":{"spellId":400589},"includeReactionTime":true}},"castSpell":{"spellId":{"spellId":10212}}}},
+		{"action":{"condition":{"spellIsReady":{"spellId":{"spellId":1326082}}},"strictSequence":{"actions":[{"castSpell":{"spellId":{"spellId":12043}}},{"castSpell":{"spellId":{"spellId":1326082}}}]}}},
+		{"action":{"castSpell":{"spellId":{"spellId":1326082}}}},
+		{"action":{"castSpell":{"spellId":{"spellId":10199}}}},
+		{"action":{"castSpell":{"spellId":{"spellId":1239700}}}}
+	],
+	"groups": [
+		{"name":"Evocation","actions":[{"action":{"condition":{"and":{"vals":[{"not":{"val":{"auraIsActive":{"auraId":{"spellId":1270842}}}}},{"spellIsKnown":{"spellId":{"spellId":1259705}}}]}},"strictSequence":{"actions":[{"castSpell":{"spellId":{"spellId":1259705}}},{"channelSpell":{"spellId":{"spellId":12051},"interruptIf":{"cmp":{"op":"OpGe","lhs":{"currentManaPercent":{}},"rhs":{"const":{"val":"99%"}}}}}}]}}},{"action":{"condition":{"or":{"vals":[{"not":{"val":{"spellIsKnown":{"spellId":{"spellId":1259705}}}}},{"not":{"val":{"spellIsReady":{"spellId":{"spellId":1259705}}}}},{"auraIsActive":{"auraId":{"spellId":1270842}}}]}},"channelSpell":{"spellId":{"spellId":12051},"interruptIf":{"cmp":{"op":"OpGe","lhs":{"currentManaPercent":{}},"rhs":{"const":{"val":"99%"}}}}}}}]}
+	]
+}

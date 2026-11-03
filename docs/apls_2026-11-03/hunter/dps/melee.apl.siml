@@ -1,0 +1,36 @@
+siml 1
+spec hunter
+use "common.apl.siml"
+
+var ${Melee range} = 5.00
+var ${Use Summon Hawk} = true
+
+prepull:
+  -22s cast hunters_mark
+  -20s cast aspect_of_the_beast
+  -19s group "Move to starting range"
+
+priority:
+  autocast_other_cooldowns if current_time >= 5s
+  cast raptor_strike
+  cast hunters_mark if not target.aura(hunters_mark).is_active
+  /// Start of the fight: walk into melee, shooting on the way without losing an Auto Shot.
+  group "Walk in" if self.unit_distance > $melee_range
+  cast mongoose_bite
+  cast strider_kick
+  cast immolation_trap
+  cast summon_hawk if $use_summon_hawk
+  cast wing_clip
+
+group "Move to starting range":
+  move $pull_range
+
+group "Walk in":
+  /// Instants on the way in.
+  cast serpent_sting if not dot(serpent_sting).is_active
+  cast arcane_shot
+  cast multi_shot
+  /// Walk into melee, looking again every reaction time. Stop while my Auto Shot's windup is close or running, and react to each shot before walking on.
+  move $melee_range recheck if not shot_due_here
+  /// Standing for my Auto Shot.
+  wait input_delay

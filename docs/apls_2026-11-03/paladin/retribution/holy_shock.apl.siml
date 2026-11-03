@@ -1,0 +1,83 @@
+siml 1
+spec retribution_paladin
+
+var ${Has assigned judgement} = true
+var ${Use Seal of Righteousness} = true
+var ${Use Seal of Command} = true
+var ${Delay Major CDs} = 0s
+var ${Pull range} = 25
+var ${Melee range} = 5
+var ${Should swap} =
+    spell(item.manual_crowd_pummeler).is_known
+    and aura(haste).is_inactive(include_reaction_time=true)
+    and auto_time_since_last(main_hand_auto) <= 0.1s
+var ${Should swap from MCP} =
+    $should_swap
+    and active_item_swap_set(swap1)
+    and spell(item.manual_crowd_pummeler).time_to_ready > 40s
+var ${Should swap to MCP} =
+    $should_swap
+    and active_item_swap_set(main)
+    and spell(item.manual_crowd_pummeler).time_to_ready <= 32s
+    and remaining_time > 35s
+var ${Should refresh SoR} =
+    aura(seal_of_righteousness_20293).is_inactive
+    or aura(seal_of_righteousness_20293).remaining_time <= 10s and spell(consecration).time_to_ready >= spell(seal_of_righteousness).gcd_hasted_duration and spell(holy_shock).time_to_ready >= spell(seal_of_righteousness).gcd_hasted_duration and spell(holy_strike).time_to_ready >= spell(seal_of_righteousness).gcd_hasted_duration and (not target_is_mob_type(undead) and not target_is_mob_type(demon) or spell(exorcism).time_to_ready >= spell(seal_of_righteousness).gcd_hasted_duration)
+var ${Should refresh SoC} =
+    aura(seal_of_command_20920).is_inactive
+    or aura(seal_of_command_20920).remaining_time <= 10s and spell(consecration).time_to_ready >= spell(seal_of_command).gcd_hasted_duration and spell(holy_shock).time_to_ready >= spell(seal_of_command).gcd_hasted_duration and spell(holy_strike).time_to_ready >= spell(seal_of_command).gcd_hasted_duration and (not target_is_mob_type(undead) and not target_is_mob_type(demon) or spell(exorcism).time_to_ready >= spell(seal_of_command).gcd_hasted_duration)
+var ${Should refresh seal} =
+    $is_using_seal_of_righteousness and $should_refresh_sor
+    or $is_using_seal_of_command and $should_refresh_soc
+var ${Is using Seal of Righteousness} =
+    not talent_is_known(seal_of_command_rank1)
+    or $use_seal_of_righteousness
+    or not $use_seal_of_righteousness and not $use_seal_of_command
+var ${Is using Seal of Command} =
+    talent_is_known(seal_of_command_rank1)
+    and $use_seal_of_command
+    and not $use_seal_of_righteousness
+
+prepull:
+  -20s group "Activate assigned aura"
+  -30s item_swap(swap1) if spell(item.manual_crowd_pummeler).is_known
+  -20s move $pull_range
+  -1.5s group "Cast selected seal" if not $has_assigned_judgement
+  -1.5s group "Cast assigned judgement" if $has_assigned_judgement
+
+priority:
+  group "Move to melee"
+  autocast_other_cooldowns if current_time >= $delay_major_cds
+  group "MCP swap"
+  cast judgement
+  cast consecration
+  group "Cast selected seal" if $should_refresh_seal
+  cast holy_strike
+  cast divine_favor if spell(holy_shock).is_ready
+  cast holy_shock
+  cast hammer_of_wrath
+      if spell(hammer_of_wrath).cast_time == 0s
+      or auto_time_since_last(main_hand_auto) < 0.2s
+  cast exorcism
+
+group "Activate assigned aura":
+  cast retribution_aura
+
+group "Cast assigned judgement":
+  cast seal_of_the_crusader
+
+group "Cast selected seal":
+  cast seal_of_righteousness if $is_using_seal_of_righteousness
+  cast seal_of_command if $is_using_seal_of_command
+
+group "Move to melee":
+  sequence "move to melee" [move $melee_range, wait until spell(judgement).in_range, cast judgement, group "Cast selected seal", wait until spell(holy_strike).in_range]
+      if $has_assigned_judgement
+      and not sequence("move to melee").is_complete
+  sequence "move to melee 2" [move $melee_range, wait until spell(consecration).in_range, cast consecration, wait until spell(holy_strike).in_range]
+      if not $has_assigned_judgement
+      and not sequence("move to melee 2").is_complete
+
+group "MCP swap":
+  item_swap(main) if $should_swap_from_mcp
+  item_swap(swap1) if $should_swap_to_mcp

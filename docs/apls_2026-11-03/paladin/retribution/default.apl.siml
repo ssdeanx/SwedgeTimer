@@ -1,0 +1,88 @@
+siml 1
+spec retribution_paladin
+
+var ${Has assigned judgement} = true
+var ${Use Seal of Command} = true
+var ${Use Seal of Righteousness} = true
+var ${Delay Major CDs} = 0s
+var ${Pull range} = 25
+var ${Melee range} = 5
+var ${WF guard} =
+    auto_time_since_last(main_hand_auto) >= 0.1s
+    and auto_time_to_next(main_hand_auto) >= 0.1s
+var ${Should refresh SoC} =
+    ($use_seal_of_command or not $use_seal_of_righteousness or talent_is_known(unsealed_wrath))
+    and (aura(seal_of_command_20920).is_inactive or aura(seal_of_command_20920).is_active and aura(seal_of_command_20920).remaining_time <= auto_time_to_next(main_hand_auto))
+    and (not talent_is_known(unsealed_wrath) or aura(seal_of_command_20920).is_inactive(include_reaction_time=true) and aura(echo_of_righteousness).num_stacks(include_reaction_time=true) >= 1)
+    and $judge_realism_protection
+var ${Should refresh SoR} =
+    ($use_seal_of_righteousness or not talent_is_known(seal_of_command_rank1) or talent_is_known(unsealed_wrath))
+    and (not $use_seal_of_command or not talent_is_known(seal_of_command_rank1) or talent_is_known(unsealed_wrath))
+    and (aura(seal_of_righteousness_20293).is_inactive or aura(seal_of_righteousness_20293).is_active and aura(seal_of_righteousness_20293).remaining_time <= auto_time_to_next(main_hand_auto))
+    and (not talent_is_known(unsealed_wrath) or not talent_is_known(seal_of_command_rank1) or aura(seal_of_righteousness_20293).is_inactive(include_reaction_time=true) and aura(echo_of_command).num_stacks(include_reaction_time=true) == 3)
+    and $judge_realism_protection
+var ${Judge realism protection} =
+    spell(judgement).time_to_ready <= spell(judgement).full_cooldown - input_delay
+
+prepull:
+  -20s group "Activate assigned aura"
+  -20s move $pull_range
+  -3s group "Prep Seal of Command"
+  -1.5s group "Prep Seal of Righteousness"
+  -1.5s group "Cast assigned judgement"
+
+priority:
+  group "Move to melee" if not spell(holy_strike).in_range
+  cast judgement if $wf_guard
+  autocast_other_cooldowns if current_time >= $delay_major_cds
+  cast hammer_of_wrath
+      if spell(hammer_of_wrath).cast_time == 0s
+      or auto_time_since_last(main_hand_auto) < 0.2s
+  cast holy_strike if $wf_guard and not spell(judgement).is_ready and $judge_realism_protection
+  cast seal_of_command if $should_refresh_soc
+  cast seal_of_righteousness if $should_refresh_sor
+  group "Consecration"
+  group "Exorcism"
+
+group "Activate assigned aura":
+  cast retribution_aura
+
+group "Cast assigned judgement":
+  cast seal_of_the_crusader if $has_assigned_judgement
+
+group "Prep Seal of Command":
+  cast seal_of_command if not $has_assigned_judgement and $use_seal_of_command
+
+group "Prep Seal of Righteousness":
+  cast seal_of_righteousness
+      if not $has_assigned_judgement
+      and $use_seal_of_righteousness
+      and (not $use_seal_of_command or not talent_is_known(seal_of_command_rank1))
+
+group "Move to melee":
+  sequence "move1" [move $melee_range, wait until spell(judgement).in_range, cast judgement, wait input_delay, cast seal_of_command, wait until spell(holy_strike).in_range]
+      if $has_assigned_judgement
+      and talent_is_known(seal_of_command_rank1)
+      and ($use_seal_of_command or not $use_seal_of_righteousness or talent_is_known(unsealed_wrath))
+      and not sequence("move1").is_complete
+  sequence "move2" [move $melee_range, wait until spell(judgement).in_range, cast judgement, wait input_delay, cast seal_of_righteousness, wait until spell(holy_strike).in_range]
+      if $has_assigned_judgement
+      and (not talent_is_known(unsealed_wrath) or not talent_is_known(seal_of_command_rank1) or not $use_seal_of_command)
+      and not sequence("move2").is_complete
+  sequence "move3" [move $melee_range, wait until spell(judgement).in_range, cast judgement, wait until spell(holy_strike).in_range]
+      if not $has_assigned_judgement
+      and not sequence("move3").is_complete
+
+group "Exorcism":
+  cast exorcism
+      if auto_time_to_next(main_hand_auto) > 1.5s
+      and current_mana_percent >= 10%
+      and not spell(judgement).is_ready
+      and not spell(holy_strike).is_ready
+
+group "Consecration":
+  cast consecration
+      if auto_time_to_next(main_hand_auto) > 1.5s
+      and current_mana_percent >= 10%
+      and not spell(judgement).is_ready
+      and not spell(holy_strike).is_ready

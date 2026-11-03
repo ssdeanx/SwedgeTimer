@@ -1,0 +1,75 @@
+siml 1
+spec protection_paladin
+talents "050050002-05302102213301531-502"
+use "gear_sets/default.gear.siml"
+use "apls/default.apl.siml"
+
+settings:
+  race human
+  profession1 engineering
+  profession2 enchanting
+  reaction_time_ms 100
+  in_front_of_target
+  distance_from_target 5
+  healing_model(hps=2200,
+      cadence_seconds=0.4,
+      cadence_variation=1.2,
+      absorb_frac=0.02,
+      burst_window=6,
+      inspiration_uptime=0.25)
+  tanks player1
+
+consumables:
+  defensive_pot greater_stoneshield_potion
+  flask flask_of_supreme_power
+  food baked_salmon
+  conjured demonic_rune
+  explosive ez_thro_dynamite_ii
+  mh_imbue brilliant_wizard_oil
+  extra goblin_sapper_charge, juju_might, scroll_of_stamina_iv
+  elixir elixir_of_holy_power,
+      greater_arcane_elixir,
+      elixir_of_the_owl,
+      elixir_of_sages,
+      elixir_of_greater_fortitude,
+      greater_mageblood_elixir,
+      elixir_of_greater_defense,
+      elixir_of_ferocity,
+      elixir_of_the_mongoose
+
+buffs:
+  thorns, greater_blessing_of_kings
+  greater_blessing_of_might 1
+  greater_blessing_of_wisdom 1
+
+party_buffs: mana_spring_totem
+
+raid_buffs:
+  arcane_intellect, prayer_of_spirit, mark_of_the_wild, power_word_fortitude, shadow_protection
+  grace_of_air_totem 1
+  windfury_totem
+  battle_shout 1
+  leader_of_the_pack
+
+debuffs:
+  judgement_of_the_crusader, judgement_of_light, judgement_of_wisdom, curse_of_elements
+  curse_of_recklessness, faerie_fire, expose_armor, sunder_armor, gift_of_arthas
+  demoralizing_shout, insect_swarm
+
+sim: iterations 25000
+
+encounter:
+  duration 180
+  duration_variation 5
+  execute_proportion_20 0.2
+  execute_proportion_35 0.35
+  targets(id=31146,
+      name="Raid Target",
+      level=63,
+      mob_type=mechanical,
+      stats(attack_power=320, block_value=54, armor=3731, health=1428900),
+      min_base_damage=2601,
+      damage_spread=0.5,
+      swing_speed=2,
+      parry_haste,
+      can_crush)

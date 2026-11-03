@@ -1,0 +1,71 @@
+siml 1
+spec hunter
+talents "-00530501114-550200030050220151"
+use "gear_sets/p1.gear.siml"
+
+settings:
+  race orc
+  profession1 engineering
+  profession2 blacksmithing
+  reaction_time_ms 250
+  distance_from_target 12
+  quiver_bonus ancient_sinew_wrapped_lamina
+  ammo thorium_headed_arrow
+  pet_uptime 1
+  pet_attack_speed faster_attack_ii
+
+consumables:
+  flask flask_of_natural_aggression
+  food swiftstrike_steak
+  conjured demonic_rune
+  explosive ez_thro_dynamite_ii
+  mh_imbue elemental_sharpening_stone
+  extra goblin_sapper_charge,
+      scroll_of_strength_iv,
+      juju_might,
+      dragonbreath_chili,
+      ground_scorpok_assay
+  elixir elixir_of_the_mongoose, greater_mageblood_elixir
+  resource_pot major_mana_potion
+  offensive_pot major_frenzy_potion
+
+buffs:
+  greater_blessing_of_kings
+  greater_blessing_of_might 1
+  greater_blessing_of_wisdom 1
+
+raid_buffs:
+  arcane_intellect, prayer_of_spirit, mark_of_the_wild
+  strength_of_earth_totem 1
+  grace_of_air_totem 1
+  windfury_totem
+  battle_shout 1
+  leader_of_the_pack
+
+debuffs:
+  judgement_of_light, judgement_of_wisdom, curse_of_elements, curse_of_recklessness, faerie_fire
+  expose_armor, sunder_armor, gift_of_arthas, insect_swarm
+
+sim: iterations 25000
+
+simple:
+  time_to_weave 250
+  pull_range 25
+  use_multi, use_arcane
+  playstyle weave
+
+encounter:
+  duration 180
+  duration_variation 5
+  execute_proportion_20 0.2
+  execute_proportion_35 0.35
+  targets(id=31146,
+      name="Raid Target",
+      level=63,
+      mob_type=mechanical,
+      stats(attack_power=320, block_value=54, armor=3731, health=1428900),
+      min_base_damage=2601,
+      damage_spread=0.5,
+      swing_speed=2,
+      parry_haste,
+      can_crush)
