@@ -993,6 +993,7 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 	inputs.ttd = ST.ROGUE.get_time_to_die(self, now)
 
 	-- Rupture / Expose Armor: target debuffs.
+	local known_probe = api.is_any_rank_known or api.is_spell_known
 	local rupture_entry = resolve_named_spell("guide:rupture", GUIDE_SPELL_NAMES.rupture, now)
 	local rupture_found, rupture_remains = false, nil
 	if rupture_entry then
@@ -1000,6 +1001,7 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 			rupture_entry.id, rupture_entry.name, now)
 	end
 	inputs.rupture_remains = rupture_found and (rupture_remains or 0) or nil
+	inputs.rupture_known = rupture_entry and known_probe(rogue_query(rupture_entry), rupture_entry.name)
 
 	local ea_entry = resolve_named_spell("target:ea", "Expose Armor", now)
 	local ea_found, ea_remains = false, nil
@@ -1038,6 +1040,7 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 		snd_entry = resolve_named_spell("hud:snd", SLOT_SPELL_NAMES.snd, now)
 	end
 	inputs.snd_usable = (snd_entry ~= nil) and true or nil
+	inputs.snd_known = snd_entry and known_probe(rogue_query(snd_entry), snd_entry.name)
 	local snd_found, snd_remains = false, nil
 	if snd_entry then
 		snd_found, snd_remains = find_unit_aura("player", "HELPFUL",

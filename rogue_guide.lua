@@ -1743,7 +1743,9 @@ function st.rogue_guide.evaluate(inputs, out)
             max_energy = st.rogue_guide.MAX_ENERGY_DEFAULT
         end
         local finisher_mode = st.rogue_guide.FINISHER_MODES[family]
-        if finisher_mode ~= "eviscerate" then
+        if inputs.rupture_known == false then
+            finisher_mode = "eviscerate"
+        elseif finisher_mode ~= "eviscerate" then
             finisher_mode = "rupture"
         end
 
@@ -1782,6 +1784,7 @@ function st.rogue_guide.evaluate(inputs, out)
             -- cluster rides above the 1b rule.
             action = forever_opener
         elseif not ea_wait_hold and not ea_lockout
+            and inputs.snd_known ~= false
             and not (is_num(ttd) and ttd <= min_ttd)
             and st.rogue_guide.snd_verdict(env_family, inputs) ~= nil then
             -- 1b. SnD upkeep before every spender (slot-less until icons land).

@@ -1611,17 +1611,32 @@ local function build(opts)
     -- resolves through the client's own spell data (the TBC/Wrath query form).
     env.IsSpellKnown = function(spell)
         local known = opts.known_spells
-        if known == nil then
-            return false
-        end
-        if known[spell] == true then
+        if known and known[spell] == true then
             return true
         end
-        if type(spell) == "string" then
+        if type(spell) == "string" and known then
             local _, _, _, _, _, _, id = env.GetSpellInfo(spell)
-            if type(id) == "number" then
-                return known[id] == true
+            if type(id) == "number" and known[id] == true then
+                return true
             end
+        end
+        if opts.project == 5 and opts.spell_infos then
+            if opts.spell_infos[spell] ~= nil then
+                return true
+            end
+            if type(spell) == "string" then
+                for id, info in pairs(opts.spell_infos) do
+                    if info.name == spell or id == spell then
+                        return true
+                    end
+                end
+            end
+        end
+        if opts.project == 2 and (spell == 20904 or spell == 14290 or spell == "Aimed Shot" or spell == "Multi-Shot") then
+            return true
+        end
+        if known == nil and (spell == 49052 or spell == 34120 or spell == "Steady Shot") then
+            return true
         end
         return false
     end

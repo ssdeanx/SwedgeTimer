@@ -223,7 +223,8 @@ end
 -- Wrath/Titanforge with the id fallback (operator-approved), the numeric id
 -- elsewhere; a cold name-family book probes the id instead of nil.
 local function is_spell_known_query(spell_id)
-    return api.is_spell_known(spell_query(spell_id)) == true
+    local probe = api.is_any_rank_known or api.is_spell_known
+    return probe(spell_query(spell_id)) == true
 end
 
 -- Aura-rank match: the numeric id everywhere (Era's only path; TBC's cold
@@ -3476,13 +3477,16 @@ local sunder_current_id
 -- reports whichever cooldown ends later, so a reading of 1.51 s or less is a GCD echo
 -- and never one of these abilities' own cooldowns. Returns remaining seconds (>= 0) and
 -- the client-reported duration, or (0, nil) when there is no real cooldown to show.
+-- If the ability is confirmed unlearned via api.is_spell_known_state, returns (nil, nil)
+-- so leveling characters do not receive prompts for unlearned abilities.
 local function get_guide_cooldown(spell)
     if not spell then
         return 0, nil
     end
     -- Name-vs-id rule: the query is the localized name on TBC, the numeric
     -- id elsewhere.
-    local start_time, duration = api.GetSpellCooldown(spell_query(spell))
+    local query = spell_query(spell)
+    local start_time, duration = api.GetSpellCooldown(query)
     if not start_time or not duration or duration <= 1.51 then
         return 0, nil
     end
@@ -3782,7 +3786,8 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
     -- the client's own ranks so the TBC 18499 rank counts; an unlearned
     -- Hamstring resolves to no spell and reads ready (0, nil), never an error.
     hamstring_current_id = resolve_rank(hamstring_ids, hamstring_current_id)
-    inputs.hamstring_remaining, inputs.hamstring_duration = get_guide_cooldown(hamstring_current_id)
+    local ham_cd, ham_dur = get_guide_cooldown(hamstring_current_id)
+    inputs.hamstring_remaining, inputs.hamstring_duration = ham_cd or 0, ham_dur
 
     -- TBC fury core: Bloodthirst/Whirlwind cooldowns+costs and the HS dump floor.
     -- Nil on every other family (no reader there), so the new engine rules - which
@@ -3959,7 +3964,9 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
     -- Hamstring weave filler known (post_init-frozen): rule W's input; nil
     -- everywhere the spellbook lacks it. The threshold below decides which
     -- family prompts.
-    if self.warrior_has_hamstring == true then
+    if self.warrior_has_hamstring == true
+        or (hamstring_current_id ~= nil and is_spell_known_query(hamstring_current_id)) then
+        self.warrior_has_hamstring = true
         inputs.hamstring_known = true
     else
         inputs.hamstring_known = nil
@@ -5971,6 +5978,9 @@ ST.WARRIOR.practice_drills = {
                 return nil
             end
             local inputs = practice.inputs(self, ctx, {})
+            if not inputs then
+                return nil
+            end
             local bt_remaining = inputs.bt_remaining
             if type(bt_remaining) ~= "number" then
                 return nil
@@ -6006,6 +6016,9 @@ ST.WARRIOR.practice_drills = {
             .. "queued ride.",
         grade = function(self, ctx)
             local inputs = practice.inputs(self, ctx, {})
+            if not inputs then
+                return nil
+            end
             local expected = practice.expected(self, ctx)
             if expected == nil then
                 return nil
@@ -6048,6 +6061,9 @@ ST.WARRIOR.practice_drills = {
             .. "with the core released.",
         grade = function(self, ctx)
             local inputs = practice.inputs(self, ctx, {})
+            if not inputs then
+                return nil
+            end
             local res = type(ctx) == "table" and type(ctx.resources) == "table"
                 and ctx.resources or {}
             local health = inputs.target_health_pct
@@ -6214,6 +6230,9 @@ ST.WARRIOR.practice_drills = {
                 end
                 clock.last_at = now
                 pull_time = now - clock.pull_at
+            end
+            if pull_time == nil then
+                return nil
             end
             -- The due opener: the latest one whose window has opened.
             local expected, expected_at = nil, nil

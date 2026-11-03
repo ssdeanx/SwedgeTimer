@@ -5,14 +5,17 @@ local addon_name, st = ...
 -- No LSM/LWIN fetch here: defaults are plain media-key strings and positions; the
 -- only LSM/LWIN handles live in option_table_presets.lua / option_tables.lua and
 -- bars.lua, which resolve them at runtime.
+---@class ST: AceAddon
+---@field defaults table
+---@field APPEARANCE_DEFAULTS_MIGRATION_FLAG string
+---@field APPEARANCE_OLD_BACKGROUND_COLOR number[]
+---@field migrate_appearance_defaults fun(profile: table): number
+---@field CLASS_COLOR_DEFAULTS_MIGRATION_FLAG string
+---@field OLD_GENERIC_BAR_COLOR_90 number[]
+---@field OLD_GENERIC_BAR_COLOR_85 number[]
+---@field OLD_DRUID_BAR_COLOR number[]
+---@field migrate_class_color_defaults fun(profile: table): number
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
--- local print = st.utils.print_msg
-
----@class AceAddon
----@field defaults? table
-local _ST = ST
----@type AceAddon
-ST = _ST
 
 ------------------------------------------------------------------------------------
 -- Default settings for the addon.
@@ -32,6 +35,10 @@ ST.defaults = {
 		-- Enemy swing bar (enemy_swing.lua). Off by default; the top-level toggle arms
 		-- the hostile-target swing bar on the classic-line families (inert elsewhere).
 		enemy_swing_enabled = false,
+
+		-- Hide Blizzard's built-in swing timer (WoW Forever). Off by default (nil-safe);
+		-- when true, suppresses Blizzard_SwingTimer frames on WoW Forever / Camelot.
+		hide_blizzard_swing_timer = false,
 
 		-- Practice progression + stats (practice_progress.lua / practice_stats.lua).
 		-- The default shape of the saved blob: a fresh profile starts from a valid,
@@ -201,6 +208,44 @@ function ST.migrate_appearance_defaults(profile)
 	rawset(profile, ST.APPEARANCE_DEFAULTS_MIGRATION_FLAG, true)
 	return raised
 end
+
+--=========================================================================================
+-- One-time class color migration: raid class color progress fill (2.1.4)
+--=========================================================================================
+ST.CLASS_COLOR_DEFAULTS_MIGRATION_FLAG = "class_color_defaults_214"
+ST.OLD_GENERIC_BAR_COLOR_90 = { 93, 58, 207, 0.9 }
+ST.OLD_GENERIC_BAR_COLOR_85 = { 93, 58, 207, 0.85 }
+ST.OLD_DRUID_BAR_COLOR = { 18, 85, 201, 1.0 }
+
+function ST.migrate_class_color_defaults(profile)
+	if type(profile) ~= "table" then
+		return 0
+	end
+	if rawget(profile, ST.CLASS_COLOR_DEFAULTS_MIGRATION_FLAG) == true then
+		return 0
+	end
+	local count = 0
+	for _, token in ipairs(APPEARANCE_CLASS_TOKENS) do
+		local class_db = rawget(profile, token)
+		if type(class_db) == "table" then
+			local mh = rawget(class_db, "mainhand")
+			if type(mh) == "table" and type(mh.bar_color_default) == "table" then
+				local c = mh.bar_color_default
+				if colors_equal(c, ST.OLD_GENERIC_BAR_COLOR_90)
+					or colors_equal(c, ST.OLD_GENERIC_BAR_COLOR_85)
+					or colors_equal(c, ST.OLD_DRUID_BAR_COLOR) then
+					if st and st.api and type(st.api.get_class_color_table) == "function" then
+						mh.bar_color_default = st.api.get_class_color_table(token, 0.9)
+						count = count + 1
+					end
+				end
+			end
+		end
+	end
+	rawset(profile, ST.CLASS_COLOR_DEFAULTS_MIGRATION_FLAG, true)
+	return count
+end
+
 
 --=========================================================================================
 -- End, if debug verify module was read.

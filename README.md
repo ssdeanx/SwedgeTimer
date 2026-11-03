@@ -20,12 +20,15 @@ rotation label, design mode and options still work, the bars never move. They ar
 supported clients: there is no live swing engine, so the rotation scenario is refused there.
 
 Every character can show a **power bar** (mana, rage, energy or focus as the client reports it) in the
-slot directly under the melee stack: it follows the **offhand row** for a class that can use an offhand
-— even while that hand is idle — and the mainhand row otherwise, and it hides when no melee bar is on
-screen. The offhand bar always renders at the mainhand's width and height, and **Melee pair height** in
-the Positioning options sizes both melee bars together (clear it to return each hand to its own saved
-height). Hunters' thin mainhand/offhand bars are stacked under the ranged bar at its width by default;
-the stack has its own toggle and restores the saved hand positions when turned off.
+slot directly under the melee stack. All classes share this single universal power bar (`power_bar.lua`)
+without duplicate frames, while class-specific tick math (e.g. Rogue and Druid cat energy ticks) is
+handled seamlessly inside the respective class modules (`classes/*.lua`). The power bar follows the
+**offhand row** for a class that can use an offhand — even while that hand is idle — and the mainhand row
+otherwise, and it hides when no melee bar is on screen. The offhand bar always renders at the mainhand's
+width and height, and **Melee pair height** in the Positioning options sizes both melee bars together
+(clear it to return each hand to its own saved height). Hunters' thin mainhand/offhand bars are stacked
+under the ranged bar at its width by default; the stack has its own toggle and restores the saved hand
+positions when turned off.
 
 Offhand and ranged bars are activity-driven: they appear after a real offhand swing or a real ranged
 shot (or while Auto Shot is armed) — not merely because you are in combat — and hide again after about
@@ -39,10 +42,11 @@ it), and engine timestamps are converted onto that axis — a cycle is exactly o
 so the fill, the countdown and the queue tint cannot drift apart. Each hand's fill is painted from
 that hand's own cycle (a late layout pass can no longer leave the mainhand bar looking full), the
 Auto Shot zone and the cast bar share one colour language (white while a cast is safe, red while it
-is not, same alphas), every bar sits at 0.9 opacity with the same border, and each HUD icon draws a
-single cooldown number. Bars default to 275 px wide on every class; the next-action guide has its
-own frame at the upper right of the screen (127, -65) and stays locked until its own lock toggle is
-opened.
+is not, same alphas), every bar sits at 0.9 opacity with the same border, base progress fills automatically use each class's raid class color (with canonical Shaman blue on Classic Era), and each HUD icon draws a
+single cooldown number (with full suppression flags and isolated font strings so external cooldown
+addons like OmniCC/ElvUI never double-draw or collide with third-party text). Bars default to 275 px
+wide on every class; the next-action guide has its own frame at the upper right of the screen (127, -65)
+and stays locked until its own lock toggle is opened.
 
 ## Screenshots
 
@@ -112,15 +116,18 @@ there is no account, no telemetry and no export.
 
 ## HUD & designer
 
-Every class ships a cooldown HUD: ability slots with swipe, glow, and tint (queue states, procs, OOM), plus counters where they matter. Instead of configuring every element, pick a ready-made layout template per class in options — three curated templates for each of the six classes (18 in all, plus a Custom fallback), setting slots, sizes, and spacing in one click; any manual tweak drops back to Custom. `/st design` previews and arranges bars, HUD, rotation text and the practice elements live, with on-the-fly HUD template switching and style adjustment directly inside the Design Mode options menu. Template looks were researched from popular WeakAuras layouts (links only, nothing copied).
+Every class ships a cooldown HUD: ability slots with swipe, glow, and tint (queue states, procs, OOM), plus counters where they matter. Both the Cooldown HUD and Next Action Guide feature real-time leveling progression: unlearned abilities and talents are automatically omitted from display and rotation queues until trained at a class trainer or allocated in talent trees, reflowing seamlessly without requiring a `/reload`. Instead of configuring every element, pick a ready-made layout template per class in options — three curated templates for each of the six classes (18 in all, plus a Custom fallback), setting slots, sizes, and spacing in one click; any manual tweak drops back to Custom. `/st design` previews and arranges bars, HUD, rotation text and the practice elements live, with on-the-fly HUD template switching and style adjustment directly inside the Design Mode options menu. Template looks were researched from popular WeakAuras layouts (links only, nothing copied).
 
 ## Visuals & Themes
 
 - **One-Click Theme Presets:** Choose from curated aesthetic presets (Midnight Velvet, Clean Glassmorphic, Minimalist / ElvUI, and Classic Retro) under Bar Appearance options for instant modern styling.
+- **Raid Class Colors by Default:** Swing progress fills automatically adapt to your character's class color via the client's `RAID_CLASS_COLORS` API (with canonical Shaman blue enforced on Classic Era), with seamless profile migration from legacy defaults.
 - **Animated Leading Edge Spark:** A luminous spark highlights the advancing front of each swing bar, giving clear real-time timing clarity.
 - **Completion Flash Pulse:** A subtle visual feedback flash triggers as each swing or shot finishes, providing crisp confirmation.
 - **Zoomed / Borderless Icons:** Cooldown HUD icons can be cleanly cropped (`hud_zoom`) to remove the default 5% Blizzard border for an edge-to-edge square look.
+- **Third-Party Cooldown Isolation:** External cooldown text counters from OmniCC, ElvUI, and Tukui are cleanly suppressed on all SwedgeTimer cooldown frames to eliminate conflicting numbers and typography overlays.
 - **Opaque Bar Backdrop:** the swing-bar backdrop is fully opaque by default (alpha 1.0); a one-time migration raises an untouched old profile, while custom colours and theme presets are left as saved.
+- **WoW Forever Engine & Blizzard UI Suppression:** Full integration with WoW Forever (`1.60.1` / Camelot) via native `C_SwingTimer` and `PLAYER_SWING`, including combat reach range checking and optional suppression of Blizzard's built-in swing timer frames (`Blizzard_SwingTimer`).
 
 <span style="color:#FFA500">Retail bars are intentionally static; HUD, rotation label, design mode, and options still work there. The addon never invents a reading: an unknown value is reported as unknown, and a practice step that cannot be decided scores nothing rather than a wrong grade.</span>
 

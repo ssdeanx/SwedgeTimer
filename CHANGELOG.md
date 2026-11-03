@@ -1,8 +1,81 @@
 # Changelog
 
+## [2.1.4]
+
+### Added
+
+- **Dynamic Leveling Progression for HUD & Next Actions:**
+  - Implemented dynamic spell knowledge gating across the Next Action Guide (`nextaction_ui.lua`) and Cooldown HUD (`hud.lua`), suppressing prompts, idle openers, and icon slots for unlearned abilities, fillers, and judgement cues.
+  - Leveling gate is fail-visible: only a confirmed unlearned status hides an ability, while unqueryable or ambiguous states remain visible.
+  - Cooldown readers across all class modules (`classes/*.lua`) remain clean bridges to `api.GetSpellCooldown` returning `(remaining, duration)` or `(0, nil)`, leaving leveling visibility gating to the display frames (`hud.lua` and `nextaction_ui.lua`).
+  - Strict Name-vs-ID discipline preserved across all client families: Classic Era queries strictly by numeric spell IDs, while TBC and Wrath/Titanforge query by localized names with verified ID fallbacks.
+  - Real-time progression without `/reload`: training a new spell rank at a class trainer or allocating talent points automatically unlocks both HUD icons and Next Action prompts on the very next frame tick.
+- **WoW Forever (Camelot / 1.60.1) Native Swing & Range Integration:**
+  - Integrated native `C_SwingTimer` API and `PLAYER_SWING` event monitoring for WoW Forever (`WOW_PROJECT_CAMELOT = 18`, interface `16001`), providing hardware-accurate swing pacing without classic combat log dependencies.
+  - Added native combat-reach and target hitbox range checking via `C_SwingTimer.IsTargetWithinSwingRange` and `C_SwingTimer.EnableRangeCheck`.
+  - Added `hide_blizzard_swing_timer` toggle in General Behaviour settings to suppress redundant built-in `Blizzard_SwingTimer` frames and synchronize the `showSwingTimer` CVar.
+- **Raid Class Color API Integration:** Base swing progress fill colors for all classes now dynamically resolve
+  from the client's `RAID_CLASS_COLORS` API (via normalized `st.api.get_class_color` / `get_class_color_table`),
+  seamlessly leveraging `C_ClassColor.GetClassColor` where available.
+- **Classic Era Shaman Blue Guard:** Enforced canonical Shaman blue (`#0070DE` / `0, 0.44, 0.87`) on Classic Era
+  and Season of Discovery clients for both the mainhand swing bar and the Enhancement weave spark, preventing the
+  unpatched vanilla pink (`#F58CBA`) palette from displaying on Shamans.
+- **Class Color Profile Migration (`class_color_defaults_214`):** Safely migrates existing saved player profiles
+  carrying legacy generic purple (`{93, 58, 207}`) or druid blue (`{18, 85, 201}`) default bar colors to their
+  authentic class colors upon login, while strictly preserving custom player color configurations.
+- **Workspace Diagnostics Configuration:** Retained `C_UIFileAsset` in `.luarc.json` under `Lua.diagnostics.globals`
+  to support modern client UI file asset probing without false-positive IDE diagnostic warnings.
+
+### Changed
+
+- **Universal Power Bar Architecture & Class File Consolidation:**
+  - Unified all classes under the universal `power_bar.lua` bar frame, eliminating duplicate bar implementations.
+  - Eliminated orphaned root `druid_energy.lua` and its standalone test `tests/druid_energy_state.lua`.
+  - Consolidated Druid energy tick tracking, 2.0-second server cadence math, Cat Form deficit counters, form change
+    listeners, and debuff timing calculations directly into `classes/druid.lua` inside the `st.class_loaders["DRUID"]`
+    closure, establishing architectural parity with Rogue (`classes/rogue.lua`).
+  - Updated all 7 load-order TOC files (`SwedgeTimer.toc`, `SwedgeTimer_Vanilla.toc`, `SwedgeTimer_TBC.toc`,
+    `SwedgeTimer_Wrath.toc`, `SwedgeTimer_Mainline.toc`, `SwedgeTimer_Cata.toc`, `SwedgeTimer_Mists.toc`) to remove
+    references to `druid_energy.lua`, and cleaned up test runners across `tests/`.
+
+### Fixed
+
+- **Third-Party Cooldown & Addon HUD Isolation:**
+  - Completely suppressed OmniCC, ElvUI, Tukui, and native Blizzard action bar countdown numbers from colliding with
+    SwedgeTimer cooldown frames across HUD (`hud.lua`), next-action guide (`nextaction_ui.lua`), paladin tracking
+    (`classes/paladin.lua`), and practice trainer cooldown frames (`practice_ui.lua`).
+  - Applied isolation flags: `noCooldownCount = true`, `noOCC = true`, `hideText = true`, and conditional
+    `SetHideCountdownNumbers(true)` where supported by the client engine.
+  - Decoupled inherited global `FontObject` templates on cooldown text strings and power bar labels, preventing external
+    UI skinning addons from corrupting SwedgeTimer typography and text placement.
+- **Strict LSP Diagnostic Warnings & Type Safety (Zero Comment Suppressions):**
+  - Resolved all Language Server diagnostics through proper type contracts, function signatures, and defensive guards
+    without using `--` comment suppressions or disabling lint rules.
+  - `bars.lua:591` (`redundant-parameter`): Updated `ST.configure_bar_size_and_positions` docstring annotation in
+    `option_tables.lua` to accept optional `width_override?: number, height_override?: number` parameters matching
+    the runtime caller signature used by the hunter melee stack.
+  - `classes/paladin.lua:6100` (`param-type-mismatch`): Fixed `ST.PALADIN.practice_default_order` to pass valid table
+    references `(ST, {})` to `practice_default_mode(self, ctx)` instead of `nil, nil`, resolving table type requirements.
+  - `classes/warrior.lua:5974, 6029, 6053, 6057` (`need-check-nil`): Added explicit `if not inputs then return nil end`
+    guards after calling `practice.inputs(self, ctx, {})` in drills `warrior_ww_delay`, `warrior_sunder_upkeep`, and
+    `warrior_execute_burn`, preventing nil dereferencing on `bt_remaining`, `sunder_stacks`, `target_health_pct`, and
+    `execute_pct`.
+  - `classes/shaman.lua:4690` (`cast-local-type`): Refactored `ST.SHAMAN.practice_neutral_set` to cleanly return typed
+    family buckets and flat published tables without reassigning a table variable as boolean.
+  - `config.lua:119-213` (`inject-field`): Replaced ambiguous `AceAddon` type casting with `---@class ST: AceAddon` and typed migration flags (`APPEARANCE_DEFAULTS_MIGRATION_FLAG`, `APPEARANCE_OLD_BACKGROUND_COLOR`, `migrate_appearance_defaults`, `CLASS_COLOR_DEFAULTS_MIGRATION_FLAG`, `OLD_GENERIC_BAR_COLOR_90`, `OLD_GENERIC_BAR_COLOR_85`, `OLD_DRUID_BAR_COLOR`, `migrate_class_color_defaults`), eliminating language server field injection warnings on the addon root.
+  - `practice_progress.lua:1266` & `practice_stats.lua:504` (`cast-local-type`): Annotated `P.json_safe` and `S.json_safe` with `---@param value any` and `---@return any`, assigning `out[i] = false` directly rather than retyping the local `item` variable when preserving dense JSON arrays.
+  - `widgets.lua:221` (`inject-field`): Declared `---@class DropdownSoundPreviewWidget: AceGUIWidget` with `SetList` method signature, cleanly typing the wrapped AceGUI dropdown widget constructor.
+- **Enterprise-Grade Test Hardening (True Negative & Failure Assertions):**
+  - Refactored test suites to verify genuine failure conditions rather than passive execution.
+  - Merged Druid energy tick tests into `tests/druid_state.lua` with active negative assertions: out-of-bounds rejection,
+    NaN and nil parameter safety, clock skew / hitch clamping, and energy spike damping on instant resource gains.
+- **Linux Environment Line Ending Standardization:**
+  - Enforced Unix LF (`\n`) line terminators across all repository files, stripping unintended Windows CRLF returns.
+
 ## [2.1.3]
 
 ### Added
+
 - Hunter ranged-distance bar: a standalone horizontal bar in its own frame that reads exact yards from
   the client (`api.UnitDistance`): full at 5 yd or closer, empty at 35 yd for hunters (30 yd for other
   classes), with a yards label plus MELEE / IN RANGE / OUT. On by default for hunters, opt-in for every
@@ -14,7 +87,7 @@
   lane (SoB / Melee / CS / Consec / SoC / Judge for the paladin's twist sim), a ruler with `m:ss` labels
   and full-height second gridlines that scroll under the fixed playhead, chunky alternating lane rows, a
   close button, and a default position near the top of the screen, plus the current rotation band (label
-  + sequence icons) above the ruler. Cues use the practice panel's own action art, including the twist's
+  - sequence icons) above the ruler. Cues use the practice panel's own action art, including the twist's
   split Command/Blood icon. Practice opens BOTH frames — the moving timeline and the control panel — and
   the top timeline is the drill's timing surface. The old post-fight log does the same full-width job
   behind the panel's opt-in **Timeline** button.
@@ -52,6 +125,7 @@
   visible without an error being thrown.
 
 ### Changed
+
 - Offhand and ranged bars are activity-driven: they show after a real offhand swing or a real ranged
   shot (Auto Shot, Shoot, Throw, Shoot Wand), or while Auto Shot is armed, and hide again after about
   two cycles of that hand (clamped to 1.5-8 s). Being in combat with a target no longer shows them, and
@@ -92,6 +166,7 @@
   reads as the same widget as the ranged row above it.
 
 ### Fixed
+
 - Restored the HU-23 LibRangeCheck protected-call removal after the 2026-10-25 re-vendor: the library no
   longer reaches the client's protected `CheckInteractDistance`.
 - WoW Forever swing engine: a weapon swap restarts the cycle at the equipped speed instead of leaving a
@@ -126,6 +201,14 @@
 - HUD icons draw one cooldown number instead of two: the icon's cooldown frame suppresses the client's
   own countdown and is marked `noCooldownCount` (the inter-addon flag external countdown text reads), so
   the HUD's own text is the single source. The cooldown swipe itself is untouched.
+- Cross-addon cooldown text hardening: full suppression flags (`noCooldownCount`, `noOCC`, `hideText`,
+  and `showCooldownNumbers = false`) are now asserted on both the cooldown frames and their parent
+  containers across all modules (HUD icons, Next Action guide, Paladin tracking bars, Practice panels).
+  HUD cooldown frames also re-assert native countdown suppression (`SetHideCountdownNumbers(true)`)
+  before every `SetCooldown` invocation and upon cooldown clear, preventing external countdown addons
+  (OmniCC, ElvUI, Tukui) from hooking, styling, or misattributing cooldown timers between SwedgeTimer
+  and other addons. HUD and power bar FontStrings decouple from global font templates
+  (`SetFontObject(nil)`), ensuring text formatting stays private and does not leak across addons.
 - Swing timing now lives on ONE clock domain. The precise clock still drives the tick, but it re-anchors
   to `GetTime()` on every read instead of learning the offset once (a loading screen pauses `GetTime()`
   while the precise clock runs, so a frozen offset drifts by the loading time), and every swing-engine
@@ -135,6 +218,7 @@
   tint all read the same cycle.
 
 ### Hardening
+
 - Two code-grounded audits (core performance/reliability; feature/class) filed on the bench; no
   user-facing claim beyond the fixes above.
 - AceDB settings reads: the class table, the sound-channel lookups, the latency, GCD-marker and
@@ -151,6 +235,7 @@
 ## [2.1.2]
 
 ### Added
+
 - One-Click Modern Theme Presets: instant visual styling under Bar Appearance options:
   - Midnight Velvet (deep midnight blue/black bar with subtle outline)
   - Clean Glassmorphic (semi-translucent modern glass with refined border)
@@ -164,6 +249,7 @@
 - Zoomed / Borderless Icons: opt-in edge-to-edge icon display (`hud_zoom`) that cleanly trims the 5% Blizzard outer icon border.
 
 ### Changed
+
 - Refined default bar transparency to 0.85 across all hands, and 0.90 for Hunter ranged/melee bars.
 - Cooldown HUD frame is now selectable, highlighted, and freely draggable in Design Mode (`/st design`) without collapsing, with robust lock and relock state preservation.
 - Talent Specialization Selection: enforced mutual exclusivity between Spec 1 and Spec 2 (`enable_spec1` vs `enable_spec2`) so only one spec profile is active at a time (defaults to Spec 1 on, Spec 2 off).

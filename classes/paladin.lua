@@ -202,7 +202,8 @@ end
 -- Wrath/Titanforge with the id fallback (operator-approved), the numeric id
 -- elsewhere; a cold name-family book probes the id instead of nil.
 local function is_spell_known_query(spell_id)
-    return api.is_spell_known(spell_query(spell_id)) == true
+    local probe = api.is_any_rank_known or api.is_spell_known
+    return probe(spell_query(spell_id)) == true
 end
 
 --=========================================================================================
@@ -1867,7 +1868,12 @@ function ST.PALADIN.setup_seal_icons(self)
         if cooldown.SetHideCountdownNumbers then
             cooldown:SetHideCountdownNumbers(true)
         end
-        cooldown:Hide()
+        cooldown.noCooldownCount = true
+        cooldown.noOCC = true
+        cooldown.hideText = true
+        container.noCooldownCount = true
+        container.noOCC = true
+        container.hideText = true
         cooldown:Hide()
         slot.cooldown = cooldown
         -- The timer text needs its own frame above the cooldown swipe, exactly
@@ -2438,7 +2444,18 @@ local function get_guide_cooldown_remaining(self, spell, latch_key, duration_key
     local now = api.get_time()
     -- Name-vs-id rule: the query is the localized name on TBC, the numeric id
     -- elsewhere (filler names pass through untouched on both).
-    local start_time, duration = api.GetSpellCooldown(spell_query(spell))
+    local query = spell_query(spell)
+    local state_probe = api.is_any_rank_known_state or api.is_spell_known_state
+    if type(state_probe) == "function" then
+        local known, state, resolved = state_probe(query)
+        if state ~= "unknown" and not known then
+            return nil
+        end
+        if resolved ~= nil then
+            query = resolved
+        end
+    end
+    local start_time, duration = api.GetSpellCooldown(query)
     if not start_time or not duration or duration == 0 then
         return 0
     end
@@ -2869,6 +2886,12 @@ function ST.PALADIN.setup_jotc_bar(self)
     if cooldown.SetHideCountdownNumbers then
         cooldown:SetHideCountdownNumbers(true)
     end
+    cooldown.noCooldownCount = true
+    cooldown.noOCC = true
+    cooldown.hideText = true
+    container.noCooldownCount = true
+    container.noOCC = true
+    container.hideText = true
     cooldown:Hide()
     -- The timer text needs its own frame above the cooldown swipe (the seal
     -- icons' reason: a plain frame cannot out-draw a Cooldown otherwise).
@@ -3071,6 +3094,12 @@ function ST.PALADIN.setup_cd_icons(self)
         if cooldown.SetHideCountdownNumbers then
             cooldown:SetHideCountdownNumbers(true)
         end
+        cooldown.noCooldownCount = true
+        cooldown.noOCC = true
+        cooldown.hideText = true
+        icon_frame.noCooldownCount = true
+        icon_frame.noOCC = true
+        icon_frame.hideText = true
         cooldown:Hide()
         slot.cooldown = cooldown
         slot.visible = false
@@ -3394,12 +3423,13 @@ function ST.PALADIN.gather_guide_inputs(self, out)
         else
             inputs.cs_remaining = 999
         end
-        inputs.judge_remaining = na.JUDGEMENT_SPELL_ID
+        local judge_rem = na.JUDGEMENT_SPELL_ID
             and get_guide_cooldown_remaining(self, na.JUDGEMENT_SPELL_ID, nil,
-                "guide_judge_duration") or 0
+                "guide_judge_duration")
+        inputs.judge_remaining = judge_rem or 999
     else
         inputs.cs_remaining = 999
-        inputs.judge_remaining = 0
+        inputs.judge_remaining = 999
     end
     -- Read after both lookups so a length latched on this very tick is the one the
     -- guide draws. nil simply means "nothing observed yet": the display falls back to
@@ -4242,7 +4272,7 @@ function ST.PALADIN.get_hud_state(self, slot, now)
         end
     end
     local remaining, full = hud_ability_cooldown(self, slot, now)
-    local on_cd = remaining > 0
+    local on_cd = type(remaining) == "number" and remaining > 0
     if on_cd then
         s.remaining = remaining
         s.duration = full
@@ -5938,7 +5968,7 @@ end
 -- tree). The live gather's answer wins (practice_running_order): it is the only
 -- place that knows which SoD variant the client plays.
 function ST.PALADIN.practice_default_order()
-    return ST.PALADIN.practice_order_for_mode(ST.PALADIN.practice_default_mode(nil, nil))
+    return ST.PALADIN.practice_order_for_mode(ST.PALADIN.practice_default_mode(ST, {}))
 end
 
 -- Build the engine inputs from the practice context. Returns false when the

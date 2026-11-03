@@ -1830,6 +1830,12 @@ local function create_ability_icon(parent, key, ab)
     if icon.cooldown.SetHideCountdownNumbers then
         icon.cooldown:SetHideCountdownNumbers(true)
     end
+    icon.cooldown.noCooldownCount = true
+    icon.cooldown.noOCC = true
+    icon.cooldown.hideText = true
+    icon.noCooldownCount = true
+    icon.noOCC = true
+    icon.hideText = true
 
     icon.gcd_cooldown = CreateFrame("Cooldown", nil, icon, "CooldownFrameTemplate")
     icon.gcd_cooldown:SetAllPoints()
@@ -1837,6 +1843,9 @@ local function create_ability_icon(parent, key, ab)
     if icon.gcd_cooldown.SetHideCountdownNumbers then
         icon.gcd_cooldown:SetHideCountdownNumbers(true)
     end
+    icon.gcd_cooldown.noCooldownCount = true
+    icon.gcd_cooldown.noOCC = true
+    icon.gcd_cooldown.hideText = true
 
     icon.gcd_dim = icon:CreateTexture(nil, "OVERLAY")
     icon.gcd_dim:SetAllPoints()
@@ -4550,6 +4559,12 @@ local function create_proc_icon(key, texture)
     if frame.cooldown.SetHideCountdownNumbers then
         frame.cooldown:SetHideCountdownNumbers(true)
     end
+    frame.cooldown.noCooldownCount = true
+    frame.cooldown.noOCC = true
+    frame.cooldown.hideText = true
+    frame.noCooldownCount = true
+    frame.noOCC = true
+    frame.hideText = true
 
     frame.countdown = frame:CreateFontString(nil, "OVERLAY")
     frame.countdown:SetPoint("BOTTOM", frame, "BOTTOM", 0, -14)
@@ -4662,6 +4677,12 @@ function ui.attach_overlay(self, ability_key, parent_frame)
     if cd.SetHideCountdownNumbers then
         cd:SetHideCountdownNumbers(true)
     end
+    cd.noCooldownCount = true
+    cd.noOCC = true
+    cd.hideText = true
+    container.noCooldownCount = true
+    container.noOCC = true
+    container.hideText = true
 
     local dim = container:CreateTexture(nil, "OVERLAY")
     dim:SetAllPoints()
@@ -4674,6 +4695,9 @@ function ui.attach_overlay(self, ability_key, parent_frame)
     if gcd_cd.SetHideCountdownNumbers then
         gcd_cd:SetHideCountdownNumbers(true)
     end
+    gcd_cd.noCooldownCount = true
+    gcd_cd.noOCC = true
+    gcd_cd.hideText = true
 
     local flash = container:CreateTexture(nil, "OVERLAY")
     flash:SetAllPoints()

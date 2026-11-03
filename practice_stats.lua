@@ -488,6 +488,8 @@ end
 -- and string-keyed objects survive; anything else (functions, NaN, the infinities,
 -- mixed tables) is dropped. The export payload rides the addon's settings
 -- export/import path (spec §6 "Export"), so it must survive a JSON encoder.
+---@param value any
+---@return any
 function S.json_safe(value)
     local t = type(value)
     if t == "number" then
@@ -501,8 +503,11 @@ function S.json_safe(value)
     if length > 0 then
         for i = 1, length do
             local item = S.json_safe(value[i])
-            if item == nil then item = false end -- keep the array dense
-            out[i] = item
+            if item == nil then
+                out[i] = false -- keep the array dense
+            else
+                out[i] = item
+            end
         end
         return out
     end

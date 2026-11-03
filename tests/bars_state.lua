@@ -792,7 +792,6 @@ local function build(opts)
         "guard.lua",
         "twist.lua",
         "weave.lua",
-        "druid_energy.lua",
         "hunter_window.lua",
         "hunter_ui.lua",
         "main.lua",

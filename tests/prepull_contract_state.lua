@@ -196,7 +196,7 @@ local SOURCES = addon_sources()
 --=========================================================================================
 local SANDBOX_MODULES = {
     "compat.lua", "utils.lua", "weave.lua", "nextaction.lua", "twist.lua",
-    "druid_energy.lua", "hunter_window.lua", "hunter_guide.lua", "warrior_guide.lua",
+    "hunter_window.lua", "hunter_guide.lua", "warrior_guide.lua",
     "rogue_guide.lua", "shaman_guide.lua", "druid_guide.lua",
 }
 local CLASS_MODULES = { "HUNTER", "WARRIOR", "DRUID", "PALADIN", "ROGUE", "SHAMAN" }

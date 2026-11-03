@@ -488,18 +488,29 @@ local function create_icon(parent, slot, index, db)
     if f.cooldown.SetHideCountdownNumbers then
         f.cooldown:SetHideCountdownNumbers(true)
     end
-    -- External countdown addons (OmniCC and everything that follows its contract) draw
-    -- their own number on every cooldown frame unless this flag is set. The HUD draws its
-    -- own text, so without it the icon shows two numbers stacked on top of each other
-    -- (operator report 2026-10-28: "double cooldown text in hud icons").
+    -- External countdown addons (OmniCC, ElvUI, Tukui, etc.) draw their own numbers
+    -- on cooldown frames unless these flags are set on both the cooldown and parent.
     f.cooldown.noCooldownCount = true
+    f.cooldown.noOCC = true
+    f.cooldown.hideText = true
+    f.cooldown.showCooldownNumbers = false
+    f.noCooldownCount = true
+    f.noOCC = true
+    f.hideText = true
+    f.showCooldownNumbers = false
     f.cooldown:SetDrawEdge(false)
     f.cooldown:Hide()
 
     f.text_frame = CreateFrame("Frame", nil, f)
     f.text_frame:SetAllPoints()
     f.text_frame:SetFrameLevel(f.cooldown:GetFrameLevel() + 1)
+    f.text_frame.noCooldownCount = true
+    f.text_frame.noOCC = true
+    f.text_frame.hideText = true
     f.text = f.text_frame:CreateFontString(nil, "OVERLAY")
+    if f.text.SetFontObject then
+        pcall(f.text.SetFontObject, f.text, nil)
+    end
     -- SoD crash fix: a FontString with no font throws on SetText ("Font not
     -- set"). Set the real font BEFORE the first SetText; apply_settings
     -- re-applies the LSM/db font after the row builds (the single restyle path).
@@ -578,6 +589,7 @@ function HUD.create(self)
     for i = 1, #usable do
         local icon = create_icon(frame, usable[i], i, db_for_font)
         icon.show_key = "hud_show_" .. usable[i].key
+        icon.guard_site = "hud:" .. tostring(usable[i].key or "?")
         HUD.icons[#HUD.icons + 1] = icon
     end
     HUD.layout_cache = HUD.layout_cache or {}
@@ -825,6 +837,14 @@ function HUD.spell_known_allows(slot)
     local query = hud_known_query(slot)
     if query == nil then
         return true
+    end
+    local fallback_name = slot.spell_name or slot.title
+    if type(api.is_any_rank_known_state) == "function" then
+        local known, state = api.is_any_rank_known_state(query, fallback_name)
+        if state == "unknown" then
+            return true
+        end
+        return known == true
     end
     if type(api.is_spell_known_state) == "function" then
         local known, state = api.is_spell_known_state(query)
@@ -1141,18 +1161,30 @@ function HUD.paint(self, icon, s, now)
             or icon.cd_reverse ~= reverse then
             icon.cd_key = true
             icon.cd_start, icon.cd_duration, icon.cd_reverse = start, s.duration, reverse
-            icon.cooldown:SetReverse(reverse)
-            icon.cooldown:SetCooldown(start, s.duration)
-            -- Re-asserted with every new swipe: the client's own countdown number is
-            -- hidden for this frame, so the HUD's text is the only number drawn.
+            -- Re-asserted with every new swipe: ensure countdown suppression flags are set
+            -- before SetCooldown triggers external addon hooks or native engine numbers.
             if icon.cooldown.SetHideCountdownNumbers then
                 icon.cooldown:SetHideCountdownNumbers(true)
             end
+            icon.cooldown.noCooldownCount = true
+            icon.cooldown.noOCC = true
+            icon.cooldown.hideText = true
+            icon.noCooldownCount = true
+            icon.noOCC = true
+            icon.hideText = true
+            icon.cooldown:SetReverse(reverse)
+            icon.cooldown:SetCooldown(start, s.duration)
             icon.cooldown:Show()
         end
     elseif icon.cd_key then
         icon.cd_key = nil
         icon.cd_start, icon.cd_duration, icon.cd_reverse = nil, nil, nil
+        if icon.cooldown.SetHideCountdownNumbers then
+            icon.cooldown:SetHideCountdownNumbers(true)
+        end
+        icon.cooldown.noCooldownCount = true
+        icon.cooldown.noOCC = true
+        icon.cooldown.hideText = true
         icon.cooldown:SetCooldown(0, 0)
         icon.cooldown:Hide()
     end
@@ -1300,7 +1332,7 @@ function HUD.update_display(self)
                 if icon.slot.inv_slot then
                     s = HUD.trinket_state(self, icon.slot, now)
                 elseif HUD.class_module then
-                    local site = "hud:" .. tostring(icon.slot.key or "?")
+                    local site = icon.guard_site or ("hud:" .. tostring(icon.slot.key or "?"))
                     -- Isolated through the shared contract (guard.lua): a quarantined
                     -- site is not called at all, a throwing provider costs only its
                     -- own icon - the row still paints.

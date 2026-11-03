@@ -94,6 +94,17 @@ do
 			family = "RETAIL"
 		end
 	end
+
+	-- WoW Forever / Camelot probe: if C_SwingTimer is exposed or Camelot project matches,
+	-- this client is FOREVER, never Retail, Era, or Unknown.
+	if rawget(_G, "C_SwingTimer") ~= nil then
+		family = "FOREVER"
+	elseif (family == "RETAIL" or family == "UNKNOWN") then
+		local camelot_id = WOW_PROJECT_CAMELOT or 18
+		if project_id ~= nil and project_id == camelot_id then
+			family = "FOREVER"
+		end
+	end
 end
 
 st.family = family
@@ -1050,6 +1061,45 @@ function api.UnitDistance(unit)
 	return math.sqrt(squared)
 end
 
+-- Swing range check (native C_SwingTimer on WoW Forever) ---------------------------------
+-- C_SwingTimer.IsTargetWithinSwingRange(swingType) queries whether the current target
+-- is within auto-attack range for the given swing type (0 = MainHand, 1 = OffHand, 2 = Ranged).
+-- Returns true (in range), false (out of range), or nil when no check could be made
+-- (no target, target cannot be attacked, no weapon equipped for hand, or on clients without C_SwingTimer).
+function api.is_target_in_swing_range(hand)
+	local swing_timer_api = rawget(_G, "C_SwingTimer")
+	if not swing_timer_api or type(swing_timer_api.IsTargetWithinSwingRange) ~= "function" then
+		return nil
+	end
+	local swing_type = 0
+	if hand == "offhand" then
+		swing_type = 1
+	elseif hand == "ranged" then
+		swing_type = 2
+	end
+	local ok, in_range = pcall(swing_timer_api.IsTargetWithinSwingRange, swing_type)
+	if not ok or in_range == nil or is_secret(in_range) then
+		return nil
+	end
+	return in_range == true
+end
+
+-- Enable range check dispatch (C_SwingTimer.EnableRangeCheck on WoW Forever) --------------
+-- Calling EnableRangeCheck arms client-side range tracking for the given swing type.
+function api.enable_swing_range_check(hand, enable)
+	local swing_timer_api = rawget(_G, "C_SwingTimer")
+	if not swing_timer_api or type(swing_timer_api.EnableRangeCheck) ~= "function" then
+		return
+	end
+	local swing_type = 0
+	if hand == "offhand" then
+		swing_type = 1
+	elseif hand == "ranged" then
+		swing_type = 2
+	end
+	pcall(swing_timer_api.EnableRangeCheck, swing_type, enable == true)
+end
+
 -- Movement speed and motion (hunter melee-weave prog) ------------------------------------
 -- GetUnitSpeed(unit) answers the unit's current movement speed in yards per second as its
 -- first return (current, run, flight, swim on every family that exposes the global; the
@@ -1561,6 +1611,50 @@ local function client_spell_name(id)
 	return nil
 end
 
+-- Rank-aware spell knowledge -------------------------------------------------------------
+-- IsSpellKnown / C_SpellBook.IsSpellKnown checks only the exact numeric rank id passed.
+-- While leveling (or when a static slot descriptor carries a max/cross-expansion rank id),
+-- the player may know an earlier rank in their spellbook. GetSpellInfo / C_Spell.GetSpellInfo
+-- resolves a spell NAME only when the player knows the spell in their spellbook, returning
+-- the player's learned rank spellID as its 7th return (spell_known_name_id).
+--
+-- Returns: known (boolean), state ("known" | "not_known" | "unknown"), effective_query
+api.spell_name_cache = api.spell_name_cache or {}
+
+function api.is_any_rank_known_state(query, fallback_name)
+	local known, state = api.is_spell_known_state(query)
+	if known == true or state == "unknown" then
+		return known, state, query
+	end
+	if st.family ~= "ERA" and type(query) == "number" then
+		local name = api.spell_name_cache[query]
+		if name == nil then
+			name = client_spell_name(query)
+			if type(name) == "string" then
+				api.spell_name_cache[query] = name
+			end
+		end
+		if type(name) ~= "string" and type(fallback_name) == "string" then
+			name = fallback_name
+		end
+		if type(name) == "string" then
+			local learned_id = spell_known_name_id(name)
+			if type(learned_id) == "number" and learned_id ~= query then
+				local rk = api.is_spell_known_state(learned_id)
+				if rk == true then
+					return true, "known", learned_id
+				end
+			end
+		end
+	end
+	return false, "not_known", query
+end
+
+function api.is_any_rank_known(query, fallback_name)
+	local known = api.is_any_rank_known_state(query, fallback_name)
+	return known
+end
+
 -- One spell-data answer, reduced to what the walk needs:
 --   true  - the client answered with this spell's data
 --   false - the client answered "not found"
@@ -1702,3 +1796,78 @@ function api.get_spell_query(name, id)
 	-- UNKNOWN: ids, unchanged until that client is proven to take names.
 	return id
 end
+
+--------------------------------------------------------------------------------
+-- Raid class color resolution (cross-client + Era Shaman guard)
+--------------------------------------------------------------------------------
+-- Returns (r, g, b) as 0-1 numbers from the client's RAID_CLASS_COLORS /
+-- C_ClassColor API, with fallback to canonical class colors.
+--
+-- ERA SHAMAN RULE: On Classic Era (1.15), Blizzard left RAID_CLASS_COLORS["SHAMAN"]
+-- as pink ({ r = 0.96, g = 0.55, b = 0.73 }), identical to Paladin. On Classic
+-- Era (or if the returned shaman color is pink), Shaman returns canonical Shaman
+-- blue ({ 0.0, 0.44, 0.87 }).
+local CANONICAL_CLASS_COLORS = {
+	WARRIOR     = { r = 0.78, g = 0.61, b = 0.43 },
+	PALADIN     = { r = 0.96, g = 0.55, b = 0.73 },
+	HUNTER      = { r = 0.67, g = 0.83, b = 0.45 },
+	ROGUE       = { r = 1.00, g = 0.96, b = 0.41 },
+	PRIEST      = { r = 1.00, g = 1.00, b = 1.00 },
+	DEATHKNIGHT = { r = 0.77, g = 0.12, b = 0.23 },
+	SHAMAN      = { r = 0.00, g = 0.44, b = 0.87 },
+	MAGE        = { r = 0.41, g = 0.80, b = 0.94 },
+	WARLOCK     = { r = 0.58, g = 0.51, b = 0.79 },
+	MONK        = { r = 0.00, g = 1.00, b = 0.59 },
+	DRUID       = { r = 1.00, g = 0.49, b = 0.04 },
+	DEMONHUNTER = { r = 0.64, g = 0.19, b = 0.79 },
+	EVOKER      = { r = 0.20, g = 0.58, b = 0.50 },
+}
+
+function api.get_class_color(class_filename)
+	local class = class_filename
+	if not class and UnitClass then
+		local _, c = UnitClass("player")
+		class = c
+	end
+	if not class or type(class) ~= "string" then
+		return 0.36, 0.23, 0.81
+	end
+	class = string.upper(class)
+
+	-- Classic Era Shaman is pink in Blizzard's table; enforce Shaman blue.
+	if class == "SHAMAN" and st.family == "ERA" then
+		return 0.0, 0.44, 0.87
+	end
+
+	local colors = rawget(_G, "RAID_CLASS_COLORS")
+	local c = colors and colors[class]
+	if not c and C_ClassColor and C_ClassColor.GetClassColor then
+		c = C_ClassColor.GetClassColor(class)
+	end
+
+	if c and type(c.r) == "number" and type(c.g) == "number" and type(c.b) == "number" then
+		-- Guard against pink Shaman on any client where RAID_CLASS_COLORS carries the unpatched vanilla color
+		if class == "SHAMAN" and c.r > 0.9 and c.b > 0.7 then
+			return 0.0, 0.44, 0.87
+		end
+		return c.r, c.g, c.b
+	end
+
+	local fallback = CANONICAL_CLASS_COLORS[class]
+	if fallback then
+		return fallback.r, fallback.g, fallback.b
+	end
+	return 0.36, 0.23, 0.81
+end
+
+function api.get_class_color_table(class_filename, alpha)
+	local r, g, b = api.get_class_color(class_filename)
+	local a = (alpha ~= nil) and alpha or 0.9
+	return {
+		math.floor(r * 255 + 0.5),
+		math.floor(g * 255 + 0.5),
+		math.floor(b * 255 + 0.5),
+		a,
+	}
+end
+

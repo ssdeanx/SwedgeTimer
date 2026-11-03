@@ -602,6 +602,13 @@ eq(HUD.icon_should_show(ST, HUD.icons[5], true), true, "design mode shows the sl
 do
     local icon = HUD.icons[1]
     local cd = icon.cooldown
+    eq(cd.noCooldownCount, true, "the cooldown sets noCooldownCount")
+    eq(cd.noOCC, true, "the cooldown sets noOCC")
+    eq(cd.hideText, true, "the cooldown sets hideText")
+    eq(icon.noCooldownCount, true, "the icon sets noCooldownCount")
+    eq(icon.noOCC, true, "the icon sets noOCC")
+    eq(icon.hideText, true, "the icon sets hideText")
+    eq(cd.hide_numbers, true, "the cooldown hides native countdown numbers")
     clock = 100
     HUD.paint(ST, icon, { remaining = 5, duration = 6, text_remaining = 5, desaturate = true }, clock)
     eq(cd.cooldown_sets, 1, "a cooldown starts its swipe once")

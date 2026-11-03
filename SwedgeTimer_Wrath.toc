@@ -3,7 +3,7 @@
 ## Notes: General purpose swing timer addon for all WoW clients.
 ## IconTexture: SwedgeTimer_v2_transparent.tga
 ## Author: Swedge
-## Version: "2.1.3"
+## Version: "2.1.4"
 ## DefaultState: enabled
 ## OptDeps: Ace3, LibSharedMedia-3.0, LibStub
 ## SavedVariables: SwedgeTimerDB
@@ -41,7 +41,6 @@ widgets.lua
 twist.lua
 weave.lua
 weave_range.lua
-druid_energy.lua
 nextaction.lua
 warrior_guide.lua
 druid_guide.lua

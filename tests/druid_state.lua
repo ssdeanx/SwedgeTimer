@@ -468,11 +468,6 @@ local function build(opts)
         return real_item_probe(item_id)
     end
 
-    -- The pure druid maths module loads before the class module (as the TOCs order it).
-    local energy = assert(loadfile(ROOT .. "druid_energy.lua"))
-    setfenv(energy, env)
-    energy("SwedgeTimer", st)
-
     -- The pure decision engine (as the TOCs order it: before classes/druid.lua), so
     -- the practice surface pins below run the SHIPPED model and not a copy of it.
     local guide = assert(loadfile(ROOT .. "druid_guide.lua"))
@@ -4297,6 +4292,184 @@ do
     if ok then
         eq(s.hidden, true, "NILSWEEP D6b get_hud_state hides a nil slot")
     end
+end
+
+--=========================================================================================
+-- Druid Energy & Pure Math State Engine (Consolidated & Hardened with Failure Checks)
+--=========================================================================================
+do
+    local de = base.druid_energy
+    check(type(de) == "table", "classes/druid.lua loads and defines st.druid_energy")
+
+    -- 1) Constants integrity & bounds check
+    eq(de.ENERGY_TICK_SECONDS, 2.0, "the energy tick cycle is the reference's 2.0 s")
+    eq(de.ENERGY_GAIN_MIN, 19, "the natural-gain window starts at 19")
+    eq(de.ENERGY_GAIN_MAX, 22, "the natural-gain window ends at 22")
+    eq(de.DEBUFF_GLOW_SECONDS, 4, "the debuff glow window is the reference's final 4 s")
+    eq(de.ENERGY_TICK_GAIN, 20, "one natural tick grants the flat 20 energy")
+    eq(de.TTD_EMA_ALPHA, 0.25, "the TTD EMA weights the newest sample 0.25 (D4)")
+    eq(de.TTD_SAMPLE_SECONDS, 0.25, "the TTD sampler throttles to 0.25 s (D4)")
+    -- Failure / bounds assertions:
+    check(de.ENERGY_GAIN_MAX > de.ENERGY_GAIN_MIN, "FAILURE CHECK: gain max must exceed gain min")
+    check(de.ENERGY_TICK_SECONDS > 0, "FAILURE CHECK: energy tick cycle must be strictly positive")
+    check(de.TTD_EMA_ALPHA > 0 and de.TTD_EMA_ALPHA <= 1, "FAILURE CHECK: EMA alpha must be inside (0, 1]")
+
+    -- 2) get_energy_tick_fraction: elapsed-modulo-cycle maths & negative/boundary clamps
+    near(de.get_energy_tick_fraction(0, 0, 2), 0, "a fresh anchor starts at 0")
+    near(de.get_energy_tick_fraction(0, 0.5, 2), 0.25, "half a second is a quarter cycle")
+    near(de.get_energy_tick_fraction(0, 1, 2), 0.5, "one second is half the cycle")
+    near(de.get_energy_tick_fraction(0, 1.5, 2), 0.75, "1.5 s is three quarters")
+    near(de.get_energy_tick_fraction(0, 1.999, 2), 0.9995, "the fraction approaches 1 at the tick")
+    near(de.get_energy_tick_fraction(0, 2, 2), 0, "the fraction wraps at the cycle length")
+    near(de.get_energy_tick_fraction(0, 3, 2), 0.5, "a missed reset keeps cycling")
+    near(de.get_energy_tick_fraction(100, 101, 2), 0.5, "the fraction is anchor-relative")
+    -- Failure / negative checks:
+    near(de.get_energy_tick_fraction(100, 99, 2), 0, "an anchor in the future clamps to 0 (never negative)")
+    check(de.get_energy_tick_fraction(100, 99, 2) >= 0, "FAILURE CHECK: fraction must not be negative on clock skew")
+    near(de.get_energy_tick_fraction(nil, 5, 2), 0, "FAILURE CHECK: missing anchor actively fails to 0")
+    near(de.get_energy_tick_fraction(5, nil, 2), 0, "FAILURE CHECK: missing now actively fails to 0")
+    near(de.get_energy_tick_fraction("5", 5, 2), 0, "FAILURE CHECK: non-number anchor actively fails to 0")
+    near(de.get_energy_tick_fraction(0, 1, 0), 0.5, "zero cycle safely falls back to default 2.0 s (no division by zero)")
+    near(de.get_energy_tick_fraction(0, 1, -2), 0.5, "negative cycle safely falls back to default 2.0 s")
+    near(de.get_energy_tick_fraction(0, 1, nil), 0.5, "nil cycle safely falls back to default 2.0 s")
+
+    -- 3) is_natural_gain: inclusive 19-22 window & strict negative rejection
+    eq(de.is_natural_gain(19), true, "the lower bound of the window qualifies")
+    eq(de.is_natural_gain(20), true, "the common +20 tick qualifies")
+    eq(de.is_natural_gain(22), true, "the upper bound of the window qualifies")
+    eq(de.is_natural_gain(20.5), true, "a fractional reading inside the window qualifies")
+    -- Failure / invalid input rejections:
+    eq(de.is_natural_gain(18.999), false, "FAILURE CHECK: 18.999 strictly fails natural gain")
+    eq(de.is_natural_gain(22.001), false, "FAILURE CHECK: 22.001 strictly fails natural gain")
+    eq(de.is_natural_gain(0), false, "FAILURE CHECK: 0 delta strictly fails")
+    eq(de.is_natural_gain(-20), false, "FAILURE CHECK: energy spend strictly fails")
+    eq(de.is_natural_gain(nil), false, "FAILURE CHECK: nil delta strictly fails")
+    eq(de.is_natural_gain("20"), false, "FAILURE CHECK: string delta strictly fails")
+    eq(de.is_natural_gain(false), false, "FAILURE CHECK: boolean delta strictly fails")
+    eq(de.is_natural_gain(0 / 0), false, "FAILURE CHECK: NaN delta strictly fails")
+
+    -- 4) get_form_label: power-type mapping with unknown fallback
+    eq(de.get_form_label(3), "Cat", "energy power type labels Cat")
+    eq(de.get_form_label(1), "Bear", "rage power type labels Bear")
+    -- Failure / unknown type fallbacks:
+    eq(de.get_form_label(0), "Caster", "mana power type labels Caster")
+    eq(de.get_form_label(4), "Caster", "FAILURE CHECK: other power types fail to Caster")
+    eq(de.get_form_label(nil), "Caster", "FAILURE CHECK: nil power type fails to Caster")
+    eq(de.get_form_label("3"), "Caster", "FAILURE CHECK: string power type fails to Caster")
+
+    -- 5) get_debuff_remaining: remaining/total & fallback protection
+    do
+        local remaining, total = de.get_debuff_remaining(12, 108, 100, 12)
+        near(remaining, 8, "remaining counts down from expiration stamp")
+        near(total, 12, "total is the aura's own duration")
+
+        remaining, total = de.get_debuff_remaining(12, 100, 100, 12)
+        near(remaining, 0, "an expiring debuff floors at 0")
+        near(total, 12, "an expiring debuff keeps total")
+
+        -- Failure checks:
+        remaining, total = de.get_debuff_remaining(12, 90, 100, 12)
+        near(remaining, 0, "FAILURE CHECK: expired debuff strictly floors at 0 (never negative)")
+        check(remaining >= 0, "FAILURE CHECK: remaining must never be negative")
+        near(total, 12, "expired debuff keeps total")
+
+        remaining, total = de.get_debuff_remaining(nil, 105, 100, 12)
+        near(remaining, 5, "missing duration still counts down from expiration")
+        near(total, 12, "missing duration falls back to default 12")
+
+        remaining, total = de.get_debuff_remaining(0, 104, 100, 9)
+        near(remaining, 4, "zero duration still counts down")
+        near(total, 9, "zero duration falls back to default 9")
+
+        remaining, total = de.get_debuff_remaining(-5, 107, 100, 9)
+        near(remaining, 7, "negative duration still counts down")
+        near(total, 9, "negative duration falls back to default 9")
+
+        remaining, total = de.get_debuff_remaining(12, nil, 100, 12)
+        near(remaining, 12, "missing expiration stamp reads as full duration")
+        near(total, 12, "missing expiration keeps total")
+
+        remaining, total = de.get_debuff_remaining(nil, nil, 100, nil)
+        near(remaining, 0, "FAILURE CHECK: no duration and no fallback actively reads 0 remaining")
+        near(total, 0, "FAILURE CHECK: no duration and no fallback actively reads 0 total")
+    end
+
+    -- 6) should_debuff_glow: final-4-seconds boundary & rejection
+    eq(de.should_debuff_glow(4), true, "exactly 4 s left glows (inclusive boundary)")
+    eq(de.should_debuff_glow(3.99), true, "just inside window glows")
+    eq(de.should_debuff_glow(0.001), true, "just above expiry glows")
+    -- Failure / outside window checks:
+    eq(de.should_debuff_glow(4.001), false, "FAILURE CHECK: 4.001 s does not glow")
+    eq(de.should_debuff_glow(5), false, "FAILURE CHECK: 5 s does not glow")
+    eq(de.should_debuff_glow(0), false, "FAILURE CHECK: expired debuff (0 s) does not glow")
+    eq(de.should_debuff_glow(-1), false, "FAILURE CHECK: negative remainder does not glow")
+    eq(de.should_debuff_glow(nil), false, "FAILURE CHECK: nil remainder does not glow")
+    eq(de.should_debuff_glow("4"), false, "FAILURE CHECK: string remainder does not glow")
+    eq(de.should_debuff_glow(0 / 0), false, "FAILURE CHECK: NaN remainder does not glow")
+
+    -- 7) update_hp_velocity: D4 EMA smoothing & poisoned sample rejection
+    do
+        near(de.update_hp_velocity(nil, 900, 1000, 1, 0.25), 100, "first sample seeds from raw HP/s")
+        near(de.update_hp_velocity(100, 800, 1000, 1, 0.25), 125, "later sample smooths with 0.25 weight")
+        near(de.update_hp_velocity(100, 900, 900, 1, 0.25), 75, "zero velocity sample decays EMA")
+        -- Failure / spike damping check:
+        local smoothed = de.update_hp_velocity(10, 800, 900, 1, 0.25)
+        check(smoothed ~= 100, "FAILURE CHECK: raw +100 spike never lands raw in EMA")
+        near(smoothed, 0.25 * 100 + 0.75 * 10, "spike is damped by EMA weight")
+        -- Heals:
+        near(de.update_hp_velocity(50, 1000, 900, 1, 0.25), 37.5, "heal contributes 0 velocity (decays EMA, never negative)")
+        -- Invalid / poisoned sample rejections:
+        eq(de.update_hp_velocity(100, nil, 900, 1, 0.25), nil, "FAILURE CHECK: missing hp reads nil")
+        eq(de.update_hp_velocity(100, 800, nil, 1, 0.25), nil, "FAILURE CHECK: missing prev_hp reads nil")
+        eq(de.update_hp_velocity(100, 800, 900, 0, 0.25), nil, "FAILURE CHECK: zero dt reads nil (no div by zero)")
+        eq(de.update_hp_velocity(100, 800, 900, -1, 0.25), nil, "FAILURE CHECK: negative dt reads nil")
+        eq(de.update_hp_velocity(100, 800, 900, nil, 0.25), nil, "FAILURE CHECK: missing dt reads nil")
+        eq(de.update_hp_velocity(100, 0 / 0, 900, 1, 0.25), nil, "FAILURE CHECK: NaN hp reads nil")
+        eq(de.update_hp_velocity(100, 800, 0 / 0, 1, 0.25), nil, "FAILURE CHECK: NaN prev_hp reads nil")
+        -- Poisoned EMA recovery:
+        near(de.update_hp_velocity(0 / 0, 800, 900, 1, 0.25), 100, "FAILURE CHECK: NaN EMA re-seeds cleanly")
+    end
+
+    -- 8) get_time_to_die: hp / velocity & non-finite / invalid crossings
+    near(de.get_time_to_die(1000, 100), 10, "1000 hp at 100 HP/s dies in 10 s")
+    near(de.get_time_to_die(0, 100), 0, "0 hp reads 0 s")
+    -- Failure / non-finite checks:
+    eq(de.get_time_to_die(1000, 0), nil, "FAILURE CHECK: 0 velocity has no finite crossing (reads nil)")
+    eq(de.get_time_to_die(1000, -5), nil, "FAILURE CHECK: negative velocity (healing) has no crossing (reads nil)")
+    eq(de.get_time_to_die(nil, 100), nil, "FAILURE CHECK: nil hp reads nil")
+    eq(de.get_time_to_die(1000, nil), nil, "FAILURE CHECK: nil velocity reads nil")
+    eq(de.get_time_to_die(0 / 0, 100), nil, "FAILURE CHECK: NaN hp reads nil")
+    eq(de.get_time_to_die(1000, 0 / 0), nil, "FAILURE CHECK: NaN velocity reads nil")
+
+    -- 9) get_time_to_energy_cost: D5 deficit countdown & boundary math
+    near(de.get_time_to_energy_cost(0, 0.5, 42, 42, 2, 20), 0, "energy at cost is affordable now")
+    near(de.get_time_to_energy_cost(0, 0.5, 50, 42, 2, 20), 0, "energy above cost is affordable now")
+    near(de.get_time_to_energy_cost(0, 0.5, 30, 42, 2, 20), 1.5, "1 tick deficit waits for next tick boundary")
+    near(de.get_time_to_energy_cost(0, 0, 30, 42, 2, 20), 2.0, "fresh anchor waits full cycle")
+    near(de.get_time_to_energy_cost(0, 0.5, 20, 42, 2, 20), 3.5, "2 ticks deficit adds 1 full cycle")
+    near(de.get_time_to_energy_cost(0, 0.5, 20, 42, 2, 20), 3.5, "22 short is ceil to 2 ticks")
+    near(de.get_time_to_energy_cost(0, 0.5, 22.001, 42, 2, 20), 1.5, "21.999 short is 1 tick")
+    -- Failure checks:
+    near(de.get_time_to_energy_cost(10, 5, 30, 42, 2, 20), 2.0, "FAILURE CHECK: future anchor clamps to fresh cycle (never negative)")
+    eq(de.get_time_to_energy_cost(0, 0.5, nil, 42, 2, 20), nil, "FAILURE CHECK: missing energy reads nil")
+    eq(de.get_time_to_energy_cost(0, 0.5, 30, nil, 2, 20), nil, "FAILURE CHECK: missing cost reads nil")
+    eq(de.get_time_to_energy_cost(nil, 0.5, 30, 42, 2, 20), nil, "FAILURE CHECK: missing anchor reads nil")
+    eq(de.get_time_to_energy_cost(0, nil, 30, 42, 2, 20), nil, "FAILURE CHECK: missing clock reads nil")
+    eq(de.get_time_to_energy_cost("0", 0.5, 30, 42, 2, 20), nil, "FAILURE CHECK: non-number anchor reads nil")
+    eq(de.get_time_to_energy_cost(0, 0.5, 0 / 0, 42, 2, 20), nil, "FAILURE CHECK: NaN energy reads nil")
+
+    -- 10) get_gcd_tick_fraction: GCD tick overlay & clamp
+    near(de.get_gcd_tick_fraction(0, 0.5, 1.5, 2), 1.0, "GCD past tick clamps to column top (1.0)")
+    near(de.get_gcd_tick_fraction(0, 0.5, 0.5, 2), 0.5, "GCD ending inside cycle sits at fraction")
+    -- Failure checks:
+    check(de.get_gcd_tick_fraction(0, 0.5, 5.0, 2) <= 1.0, "FAILURE CHECK: fraction must not exceed 1.0")
+    eq(de.get_gcd_tick_fraction(0, 0.5, 0, 2), nil, "FAILURE CHECK: 0 GCD reads nil")
+    eq(de.get_gcd_tick_fraction(0, 0.5, -1, 2), nil, "FAILURE CHECK: negative GCD reads nil")
+    eq(de.get_gcd_tick_fraction(0, 0.5, nil, 2), nil, "FAILURE CHECK: nil GCD reads nil")
+    eq(de.get_gcd_tick_fraction(nil, 0.5, 1.0, 2), nil, "FAILURE CHECK: nil anchor reads nil")
+    eq(de.get_gcd_tick_fraction(0, nil, 1.0, 2), nil, "FAILURE CHECK: nil clock reads nil")
+    eq(de.get_gcd_tick_fraction(0 / 0, 0.5, 1.0, 2), nil, "FAILURE CHECK: NaN anchor reads nil")
+    eq(de.get_gcd_tick_fraction(0, 0.5, 0 / 0, 2), nil, "FAILURE CHECK: NaN GCD reads nil")
 end
 
 if failures == 0 then

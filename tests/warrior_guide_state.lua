@@ -1405,6 +1405,7 @@ local ARMS_EXTRA_INFOS = {
     [63784] = { name = "Bladestorm", icon = "icon_bladestorm" },
 }
 local SOD_EXTRA_INFOS = {
+    [772] = { name = "Rend", icon = "icon_rend_r1" },
     [402911] = { name = "Raging Blow", icon = "icon_raging" },
 }
 
@@ -1578,6 +1579,9 @@ local function build(opts)
         if known_spells[spell] == true then
             return true
         end
+        if known_spells[spell] == false then
+            return false
+        end
         if type(spell) == "string" then
             -- A name-capable client answers a name query by the spell NAME; the
             -- fixture's book carries several ranks under one name, so any known
@@ -1588,8 +1592,14 @@ local function build(opts)
                 if known_spells[ids[i]] == true then
                     return true
                 end
+                if not sb.hide_spells and book[ids[i]] and ids[i] < 400000 and ids[i] ~= 34428 then
+                    return true
+                end
             end
             return false
+        end
+        if not sb.hide_spells and type(spell) == "number" and book[spell] and spell < 400000 and spell ~= 34428 then
+            return true
         end
         return false
     end

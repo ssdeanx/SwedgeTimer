@@ -786,7 +786,7 @@ end
 --=========================================================================================
 do
     local sb = build({
-        modules = { "compat.lua", "utils.lua", "druid_energy.lua", "classes/druid.lua" },
+        modules = { "compat.lua", "utils.lua", "classes/druid.lua" },
         spell_info = { [6807] = { name = "Maul" } },
         known = { [6807] = true },
     })

@@ -317,7 +317,7 @@ local SPELL_INFOS = {
 }
 
 local MODULES = { "compat.lua", "utils.lua", "guard.lua", "nextaction_ui.lua", "druid_guide.lua",
-    "druid_energy.lua", "classes/druid.lua" }
+    "classes/druid.lua" }
 
 local function make_fontstring()
     local f = { hidden = false }

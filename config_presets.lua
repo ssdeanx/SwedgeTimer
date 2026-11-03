@@ -21,7 +21,26 @@ local addon_name, st = ...
 ---@field WARRIOR table
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 
-
+-- Default progress-fill colour per class (using the raid class color API)
+local function get_default_class_color(class_filename, alpha)
+    if st and st.api and type(st.api.get_class_color_table) == "function" then
+        return st.api.get_class_color_table(class_filename, alpha)
+    end
+    -- Fallback for test sandboxes where compat.lua was not loaded
+    local c = {
+        WARRIOR     = { 199, 156, 110, alpha or 0.9 },
+        PALADIN     = { 245, 140, 186, alpha or 0.9 },
+        HUNTER      = { 171, 212, 115, alpha or 0.9 },
+        ROGUE       = { 255, 245, 105, alpha or 0.9 },
+        PRIEST      = { 255, 255, 255, alpha or 0.9 },
+        DEATHKNIGHT = { 196, 31, 59, alpha or 0.9 },
+        SHAMAN      = { 0, 112, 222, alpha or 0.9 },
+        MAGE        = { 105, 204, 240, alpha or 0.9 },
+        WARLOCK     = { 148, 130, 201, alpha or 0.9 },
+        DRUID       = { 255, 125, 10, alpha or 0.9 },
+    }
+    return c[class_filename] or { 93, 58, 207, alpha or 0.9 }
+end
 
 -- This table is used for any per-class settings that should apply globally.
 ST.class_defaults = {
@@ -333,6 +352,7 @@ ST.DEATHKNIGHT.defaults = {
     ['**'] = ST.bar_defaults,
 	mainhand = {
         enable_deadzone = true,
+        bar_color_default = get_default_class_color("DEATHKNIGHT", 0.9),
         gcd1a_marker_mode = "phys",
         gcd1b_marker_mode = "spell",
     },
@@ -460,7 +480,7 @@ ST.DRUID.defaults = {
     ['**'] = ST.bar_defaults,
     mainhand = {
         enable_deadzone = true,
-        bar_color_default = {18, 85, 201, 1.0},
+        bar_color_default = get_default_class_color("DRUID", 0.9),
         gcd1a_marker_mode = "form",
         gcd1b_marker_mode = "form",
     },
@@ -631,7 +651,7 @@ ST.HUNTER.defaults = {
     mainhand = {
         require_in_range = false,
         show_condition = "either",
-        bar_color_default = {93, 58, 207, 0.9},
+        bar_color_default = get_default_class_color("HUNTER", 0.9),
         bar_height = 14,
         show_gcd_underlay = false,
         gcd1a_marker_enabled = false,
@@ -712,6 +732,7 @@ ST.MAGE.defaults = {
     ['**'] = ST.bar_defaults,
     mainhand = {
         enabled = false,
+        bar_color_default = get_default_class_color("MAGE", 0.9),
         y = -142,
         gcd1a_marker_mode = "spell",
         gcd1b_marker_mode = "spell",
@@ -890,9 +911,7 @@ ST.PALADIN.defaults = {
     -- Bar options
     ['**'] = ST.bar_defaults,
 	mainhand = {
-
-        -- bar_color_default = {150, 18, 97, 0.9},
-
+        bar_color_default = get_default_class_color("PALADIN", 0.9),
         enable_deadzone = true,
         gcd1a_marker_mode = "phys",
         gcd1b_marker_mode = "spell",
@@ -966,6 +985,7 @@ ST.PRIEST.defaults = {
     ['**'] = ST.bar_defaults,
     mainhand = {
         enabled = false,
+        bar_color_default = get_default_class_color("PRIEST", 0.9),
         y = -142,
         gcd1a_marker_mode = "spell",
         gcd1b_marker_mode = "spell",
@@ -1103,6 +1123,7 @@ ST.ROGUE.defaults = {
     ['**'] = ST.bar_defaults,
 	mainhand = {
         enable_deadzone = true,
+        bar_color_default = get_default_class_color("ROGUE", 0.9),
     },
 	offhand = {
         y = -142,
@@ -1279,6 +1300,7 @@ ST.SHAMAN.defaults = {
     ['**'] = ST.bar_defaults,
 	mainhand = {
         enable_deadzone = true,
+        bar_color_default = get_default_class_color("SHAMAN", 0.9),
         gcd1a_marker_mode = "phys",
         gcd1b_marker_mode = "spell",
     },
@@ -1353,6 +1375,7 @@ ST.WARLOCK.defaults = {
     mainhand = {
         y = -142,
         enabled = false,
+        bar_color_default = get_default_class_color("WARLOCK", 0.9),
         gcd1a_marker_mode = "spell",
         gcd1b_marker_mode = "spell",
 
@@ -1492,6 +1515,7 @@ ST.WARRIOR.defaults = {
     ['**'] = ST.bar_defaults,
 	mainhand = {
         enable_deadzone = true,
+        bar_color_default = get_default_class_color("WARRIOR", 0.9),
     },
 	offhand = {
         y = -142,

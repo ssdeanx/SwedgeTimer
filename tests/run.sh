@@ -62,7 +62,6 @@ run "lua5.1 tests/rogue_state.lua" lua5.1 tests/rogue_state.lua
 run "lua5.1 tests/class_activation_state.lua" lua5.1 tests/class_activation_state.lua
 run "lua5.1 tests/rogue_guide_state.lua" lua5.1 tests/rogue_guide_state.lua
 run "lua5.1 tests/hunter_window_state.lua" lua5.1 tests/hunter_window_state.lua
-run "lua5.1 tests/druid_energy_state.lua" lua5.1 tests/druid_energy_state.lua
 run "lua5.1 tests/druid_state.lua" lua5.1 tests/druid_state.lua
 run "lua5.1 tests/nextaction_state.lua" lua5.1 tests/nextaction_state.lua
 run "lua5.1 tests/paladin_state.lua" lua5.1 tests/paladin_state.lua

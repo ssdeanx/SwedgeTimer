@@ -241,7 +241,16 @@ local function build(opts)
     end
     env.GetSpellBaseCooldown = function() return 0 end
     env.IsSpellKnown = function(spell) return sb.known ~= nil and sb.known[spell] == true end
-    sb.known = opts.known
+    sb.known = opts.known or (function()
+        local known = { [35395] = true, ["Crusader Strike"] = true, [1001] = true, [1002] = true, [1003] = true, [1004] = true, [1005] = true, [1006] = true }
+        for id, info in pairs(SPELL_INFOS) do
+            known[id] = true
+            if type(info) == "table" and type(info.name) == "string" then
+                known[info.name] = true
+            end
+        end
+        return known
+    end)()
     env.UnitPower = function() return sb.mana[1] end
     env.UnitPowerMax = function() return sb.mana[2] end
     env.UnitExists = function() return false end
@@ -786,7 +795,17 @@ pST.sob_expires = nil
 pST.sob_duration = nil
 pST.guide_melee_count = 0
 pST.guide_waiting_judgement = false
-pal.known = { [35395] = true, ["Crusader Strike"] = true }
+pal.known = {
+    [35395] = true, ["Crusader Strike"] = true,
+    [20271] = true, ["Judgement"] = true,
+    [26573] = true, ["Consecration"] = true,
+    [879] = true, ["Exorcism"] = true,
+    [24275] = true, ["Hammer of Wrath"] = true,
+    [20375] = true, ["Seal of Command"] = true,
+    [31892] = true, ["Seal of Blood"] = true,
+    [20930] = true, ["Holy Shock"] = true,
+    [407624] = true, ["Aura Mastery"] = true,
+}
 pal.cooldowns["Crusader Strike"] = { 1.0, 4.0 }   -- CS: 4 s running, 4 s long
 pal.cooldowns["Judgement"] = { 0.0, 8.0 }   -- Judgement: 8 s running, 8 s long
 
@@ -1401,7 +1420,7 @@ pST.PALADIN.guide.gather = real_gather
 --=========================================================================================
 -- 6) Rogue provider: gather -> evaluate -> frame parity over the real shared frame
 --=========================================================================================
-local ROGUE_MODULES = { "compat.lua", "utils.lua", "guard.lua", "druid_energy.lua", "nextaction.lua",
+local ROGUE_MODULES = { "compat.lua", "utils.lua", "guard.lua", "nextaction.lua",
     "nextaction_ui.lua", "rogue_guide.lua", "classes/rogue.lua" }
 -- Cold Blood fixture (test-owned id, never shipped): the wired F3/V-G5 slot
 -- resolves through the client's own spell data like every other slot.

@@ -200,6 +200,12 @@ local function create_wa_icon(parent, name_suffix, width, height, spell_id, opts
         if icon.cooldown.SetHideCountdownNumbers then
             icon.cooldown:SetHideCountdownNumbers(true)
         end
+        icon.cooldown.noCooldownCount = true
+        icon.cooldown.noOCC = true
+        icon.cooldown.hideText = true
+        icon.noCooldownCount = true
+        icon.noOCC = true
+        icon.hideText = true
         icon.cooldown_set = false
     end
 
@@ -549,6 +555,46 @@ local function update_texts(self, provider, inputs)
     end
 end
 
+--=========================================================================================
+-- Leveling / known spell gate: a slot for an unlearned ability draws nothing (fail-visible:
+-- only a confirmed "not_known" suppresses the slot, so a client that cannot answer keeps
+-- the icon). The check is dynamic: training a rank from a trainer or spending a talent
+-- immediately allows the slot on the next tick without requiring a reload.
+--=========================================================================================
+local function slot_known_allows(slot)
+    if slot == nil then
+        return true
+    end
+    local query = slot.spell_id or slot.spell
+    if query == nil then
+        return true
+    end
+    local fallback_name = slot.spell_name or slot.title
+    if type(api.is_any_rank_known_state) == "function" then
+        local known, state = api.is_any_rank_known_state(query, fallback_name)
+        if state == "unknown" then
+            return true
+        end
+        return known == true
+    end
+    if type(api.is_spell_known_state) == "function" then
+        local known, state = api.is_spell_known_state(query)
+        if state == "unknown" then
+            return true
+        end
+        return known == true
+    end
+    if type(api.is_spell_known) == "function" then
+        local ok, known = pcall(api.is_spell_known, query)
+        if not ok then
+            return true
+        end
+        return known == true
+    end
+    return true
+end
+ui.slot_known_allows = slot_known_allows
+
 -- Active guidance: map the provider output onto the widgets (archive 896-926, minus
 -- the design-mode preview branches). out.action / out.filler_slot / out.judge_slot are
 -- the provider's slot keys; each one maps to that slot's icon. out.inputs_unknown
@@ -564,16 +610,20 @@ local function display_active(self, provider, inputs, out)
     end
 
     local unknown = out.inputs_unknown == true
-    local action_index = not unknown and out.action and ui.slot_index[out.action]
-    if action_index then
+    local action_index = (not unknown and out.action) and ui.slot_index[out.action] or nil
+    local action_allowed = false
+    if action_index and slot_known_allows(icons[action_index].slot) then
+        action_allowed = true
         targets[action_index] = 1
     end
 
     local filler_index
     if not unknown and out.filler_slot and db.nextaction_show_fillers ~= false then
         filler_index = ui.slot_index[out.filler_slot]
-        if filler_index then
+        if filler_index and slot_known_allows(icons[filler_index].slot) then
             targets[filler_index] = 1
+        else
+            filler_index = nil
         end
     end
 
@@ -581,7 +631,8 @@ local function display_active(self, provider, inputs, out)
     -- which would otherwise render through the filler icon) while it shows.
     if not unknown and out.judge_slot and db.nextaction_show_judgement ~= false then
         local judge_index = ui.slot_index[out.judge_slot]
-        if judge_index and not (filler_index and targets[filler_index] > 0) then
+        if judge_index and not (filler_index and targets[filler_index] > 0)
+            and slot_known_allows(icons[judge_index].slot) then
             targets[judge_index] = 1
         end
     end
@@ -683,7 +734,8 @@ local function display_active(self, provider, inputs, out)
     -- M6: unknown inputs render the guide's one explicit "no advice" state: the
     -- rotation text goes away (its key would be thresholded off a defaulted speed)
     -- and the caption becomes "…". The latch keeps SetText off the per-frame path.
-    if unknown then
+    -- Similarly, if the chosen action is unlearned, suppress the rotation text.
+    if unknown or (action_index and not action_allowed) then
         frame.rotation_text:Hide()
         if frame.label_unknown ~= true then
             frame.label_unknown = true
@@ -697,14 +749,18 @@ end
 
 -- Idle: no active guidance (reachable only with the "always" visibility key). The
 -- archive shows the seal opener dimmed (the paladin slot declares idle_alpha 0.5),
--- with no swipes or glow.
+-- with no swipes or glow. Unlearned slots draw nothing (leveling).
 local function display_idle(self, provider, inputs)
     local frame = ui.frame
     local icons = ui.icons
     local targets = ui.targets
     for i = 1, #icons do
         local sf = icons[i]
-        targets[i] = sf.slot.idle_alpha or 0
+        if slot_known_allows(sf.slot) then
+            targets[i] = sf.slot.idle_alpha or 0
+        else
+            targets[i] = 0
+        end
         set_fade_target(sf.fade, targets[i])
     end
     -- Prepull seal cue (the live pre-combat render: the engine only ticks in
@@ -720,7 +776,7 @@ local function display_idle(self, provider, inputs)
         and inputs.seal == "none"
     if prepull then
         local soc_index = ui.slot_index["soc"]
-        if soc_index then
+        if soc_index and slot_known_allows(icons[soc_index].slot) then
             targets[soc_index] = 1
             set_fade_target(icons[soc_index].fade, 1)
         end

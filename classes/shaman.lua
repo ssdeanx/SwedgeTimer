@@ -2843,7 +2843,7 @@ ST.SHAMAN.guide_inputs = {}
 -- client-reported duration, or (0, nil) when there is no real cooldown to show.
 local function get_guide_cooldown(spell)
 	if not spell then
-		return 0, nil
+		return nil, nil
 	end
 	local start_time, duration = api.GetSpellCooldown(spell)
 	if not start_time or not duration or duration <= 1.51 then
@@ -2864,7 +2864,8 @@ end
 -- Name-vs-id: TBC probes the NAME, every other family probes the id.
 local function get_guide_cooldown_known(spell_id, spell_name)
 	local query = spell_query(spell_id, spell_name)
-	if not api.is_spell_known(query) then
+	local known_probe = api.is_any_rank_known or api.is_spell_known
+	if not known_probe(query, spell_name) then
 		return nil, nil
 	end
 	return get_guide_cooldown(query)
@@ -2882,7 +2883,7 @@ function ST.SHAMAN.is_shock_ready()
 		weave_flameshock_query = api.GetSpellInfo(spell_query(WEAVE_FLAME_SHOCK_BASE_SPELL_ID, WEAVE_FLAME_SHOCK_NAME)) or false
 	end
 	local remaining = get_guide_cooldown(weave_flameshock_query or spell_query(WEAVE_FLAME_SHOCK_BASE_SPELL_ID, WEAVE_FLAME_SHOCK_NAME))
-	return remaining <= 0
+	return type(remaining) == "number" and remaining <= 0
 end
 
 -- Slot descriptors: the rank-1 id ships as the fallback; resolve_guide_icons re-points
@@ -3533,7 +3534,8 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	-- resolved id (the shipped id is the Forever sim's and never resolves on the
 	-- classic-line clients); an unknown id answers false, so the feed stays
 	-- silent rather than prompting on a guess.
-	if not api.is_spell_known(spell_query(guide_slot_searing.spell_id, WEAVE_SEARING_TOTEM_NAME)) then
+	local known_probe = api.is_any_rank_known or api.is_spell_known
+	if not known_probe(spell_query(guide_slot_searing.spell_id, WEAVE_SEARING_TOTEM_NAME), WEAVE_SEARING_TOTEM_NAME) then
 		inputs.searing_down = nil
 	end
 
@@ -3566,7 +3568,7 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	if ls_guide and ls_guide.get_lightningshield_family_gate
 		and ls_guide.get_lightningshield_family_gate(st.family, self.weave_mw_observed == true)
 		and self.weave_shield_scanned == true
-		and api.is_spell_known(spell_query(guide_slot_lightningshield.spell_id, "Lightning Shield")) then
+		and known_probe(spell_query(guide_slot_lightningshield.spell_id, "Lightning Shield"), "Lightning Shield") then
 		local secret_probe = api.auras_may_be_secret
 		if type(secret_probe) ~= "function" or secret_probe() ~= true then
 			inputs.lightningshield_due = (self.weave_shield_type == nil)
@@ -3591,9 +3593,9 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	inputs.goatotem_remaining = nil
 	if st.family == "ERA" and self.weave_mw_observed ~= true then
 		local wf_known =
-			api.is_spell_known(spell_query(WEAVE_WF_TOTEM_SPELL_ID, WEAVE_WF_TOTEM_NAME))
+			known_probe(spell_query(WEAVE_WF_TOTEM_SPELL_ID, WEAVE_WF_TOTEM_NAME), WEAVE_WF_TOTEM_NAME)
 		local goa_known =
-			api.is_spell_known(spell_query(WEAVE_GOA_TOTEM_SPELL_ID, WEAVE_GOA_TOTEM_NAME))
+			known_probe(spell_query(WEAVE_GOA_TOTEM_SPELL_ID, WEAVE_GOA_TOTEM_NAME), WEAVE_GOA_TOTEM_NAME)
 		local have, totem_name, _, _, _, _, spell_id =
 			api.GetTotemInfo(WEAVE_TOTEM_SLOTS.AIR)
 		if have ~= nil then
@@ -4683,18 +4685,17 @@ function ST.SHAMAN.practice_neutral_set()
 	if type(published) ~= "table" then
 		return nil
 	end
-	local source = published
 	for _, value in pairs(published) do
 		if type(value) == "table" then
 			-- a family-scoped publish: the running family's own bucket
-			source = published[st.family]
-			break
+			local family_bucket = published[st.family]
+			if type(family_bucket) == "table" then
+				return family_bucket
+			end
+			return nil
 		end
 	end
-	if type(source) ~= "table" then
-		return nil
-	end
-	return source
+	return published
 end
 
 -- The running family's ROTATION actions (the set the offer gate reads): the class's

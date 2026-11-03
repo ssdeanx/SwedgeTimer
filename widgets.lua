@@ -207,6 +207,10 @@ do
     AceGUI:RegisterWidgetType(widgetType, Constructor, widgetVersion)
 end
 
+---@class DropdownSoundPreviewWidget: AceGUIWidget
+---@field SetList fun(self: any, list: any, order?: any, itemType?: any)
+---@field pullout any
+
 -- A dropdown for the addon's sound settings: every list entry previews its sound on
 -- hover. List keys must be keys of the class module's sound map.
 do
@@ -214,7 +218,7 @@ do
     local widgetVersion = 1
 
     local function Constructor()
-        local widget = AceGUI:Create("Dropdown")
+        local widget = AceGUI:Create("Dropdown") --[[@as DropdownSoundPreviewWidget]]
 
         -- Hook every list item's hover after the list is (re)built.
         local orig_SetList = widget.SetList

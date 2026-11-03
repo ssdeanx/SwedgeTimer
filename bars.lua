@@ -1280,7 +1280,13 @@ function ST:onupdate_common(hand, elapsed)
     -- costs its own visuals, not the bar.
     local class = self[self.player_class]
     if class and class.on_bar_update then
-        st.guard.run(self, "class:" .. tostring(self.player_class) .. ":on_bar_update",
+        local site = self.class_bar_hook_site
+        if not site or self.class_bar_hook_class ~= self.player_class then
+            self.class_bar_hook_class = self.player_class
+            site = "class:" .. tostring(self.player_class) .. ":on_bar_update"
+            self.class_bar_hook_site = site
+        end
+        st.guard.run(self, site,
             class.on_bar_update, self, hand)
     end
 
@@ -1599,7 +1605,10 @@ function ST:set_bar_texts(hand)
         if frame.left_text then frame.left_text:Hide() end
         if frame.right_text then frame.right_text:Hide() end
         if frame.center_text then
-            frame.center_text:SetText("engine offline")
+            if frame.center_text._st_last_text ~= "engine offline" then
+                frame.center_text._st_last_text = "engine offline"
+                frame.center_text:SetText("engine offline")
+            end
             frame.center_text:Show()
         end
         return
@@ -1611,28 +1620,46 @@ function ST:set_bar_texts(hand)
     local speed = hand_tab.speed
     local ends_at = hand_tab.ends_at
     local timer = type(ends_at) == "number" and max(0, ends_at - t) or nil
-    local lookup = {
-        attack_speed = type(speed) == "number"
-            and format("%.1f", st.utils.simple_round(speed, 0.1)) or "",
-        swing_timer = type(timer) == "number"
-            and format("%.1f", st.utils.simple_round(timer, 0.1)) or "",
-    }
+
+    local rounded_speed = type(speed) == "number" and st.utils.simple_round(speed, 0.1) or nil
+    if hand_tab._last_rounded_speed ~= rounded_speed or hand_tab._last_speed_str == nil then
+        hand_tab._last_rounded_speed = rounded_speed
+        hand_tab._last_speed_str = type(rounded_speed) == "number" and format("%.1f", rounded_speed) or ""
+    end
+
+    local rounded_timer = type(timer) == "number" and st.utils.simple_round(timer, 0.1) or nil
+    if hand_tab._last_rounded_timer ~= rounded_timer or hand_tab._last_timer_str == nil then
+        hand_tab._last_rounded_timer = rounded_timer
+        hand_tab._last_timer_str = type(rounded_timer) == "number" and format("%.1f", rounded_timer) or ""
+    end
+
+    local lookup = self.bar_text_lookup
+    if not lookup then
+        lookup = {}
+        self.bar_text_lookup = lookup
+    end
+    lookup.attack_speed = hand_tab._last_speed_str
+    lookup.swing_timer = hand_tab._last_timer_str
+    lookup.range_finder = nil
 
     if self:needs_range_string(hand) then
-        local min_range = self.target_min_range or ""
-        min_range = tostring(min_range)
-        local max_range = self.target_max_range or ""
-        max_range = tostring(max_range)
-
-        if self.target_min_range == nil and self.target_max_range == nil then
-            lookup.range_finder = ""
-        elseif self.target_min_range == nil then
-            lookup.range_finder = format("N/A - %s", max_range)
-        elseif self.target_max_range == nil then
-            lookup.range_finder = format("%s - N/A", min_range)
-        else
-            lookup.range_finder = format("%s - %s", min_range, max_range)
+        local raw_min = self.target_min_range
+        local raw_max = self.target_max_range
+        if hand_tab._last_min_range ~= raw_min or hand_tab._last_max_range ~= raw_max
+            or hand_tab._last_range_str == nil then
+            hand_tab._last_min_range = raw_min
+            hand_tab._last_max_range = raw_max
+            if raw_min == nil and raw_max == nil then
+                hand_tab._last_range_str = ""
+            elseif raw_min == nil then
+                hand_tab._last_range_str = format("N/A - %s", tostring(raw_max))
+            elseif raw_max == nil then
+                hand_tab._last_range_str = format("%s - N/A", tostring(raw_min))
+            else
+                hand_tab._last_range_str = format("%s - %s", tostring(raw_min), tostring(raw_max))
+            end
         end
+        lookup.range_finder = hand_tab._last_range_str
     end
 
     if frame.left_text then
@@ -1641,7 +1668,10 @@ function ST:set_bar_texts(hand)
                 frame.left_text:Hide()
             else
                 local text = lookup[db.left_text_key]
-                frame.left_text:SetText(text)
+                if frame.left_text._st_last_text ~= text then
+                    frame.left_text._st_last_text = text
+                    frame.left_text:SetText(text)
+                end
                 frame.left_text:Show()
             end
         else
@@ -1655,7 +1685,10 @@ function ST:set_bar_texts(hand)
                 frame.center_text:Hide()
             else
                 local text = lookup[db.center_text_key]
-                frame.center_text:SetText(text)
+                if frame.center_text._st_last_text ~= text then
+                    frame.center_text._st_last_text = text
+                    frame.center_text:SetText(text)
+                end
                 frame.center_text:Show()
             end
         else
@@ -1669,7 +1702,10 @@ function ST:set_bar_texts(hand)
                 frame.right_text:Hide()
             else
                 local text = lookup[db.right_text_key]
-                frame.right_text:SetText(text)
+                if frame.right_text._st_last_text ~= text then
+                    frame.right_text._st_last_text = text
+                    frame.right_text:SetText(text)
+                end
                 frame.right_text:Show()
             end
         else

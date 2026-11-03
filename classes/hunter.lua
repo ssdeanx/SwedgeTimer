@@ -1992,10 +1992,7 @@ function ST.HUNTER.note_trap_cast(self, spell_id)
     if type(self) ~= "table" then
         return
     end
-    local key = ST.HUNTER.TRAP_SPELLS[spell_id]
-    if key == nil then
-        key = trap_key_for_name(spell_id)
-    end
+    local key = ST.HUNTER.TRAP_SPELLS[spell_id] or trap_key_for_name(spell_id)
     if key == nil then
         return
     end
@@ -2796,7 +2793,8 @@ function ST.HUNTER.resolve_guide_icons()
         -- Name families prefer the name (27019/27065 exist on TBC, so this
         -- probe does fire there); a cold name falls back to the id.
         local token = spell_token(id)
-        if token ~= nil and api.is_spell_known(token) then
+        local known_probe = api.is_any_rank_known or api.is_spell_known
+        if token ~= nil and known_probe(token) then
             return id
         end
         return nil
@@ -2937,6 +2935,10 @@ function ST.HUNTER.resolve_guide_icons()
         -- it - its rotation never asks for the Raptor Strike.
         ST.HUNTER.apply_neutral_build_pick()
     end
+end
+
+function ST.HUNTER.on_talents_changed()
+    ST.HUNTER.resolve_guide_icons()
 end
 
 -- The retry driver: a client that could not answer the rank tables when the guide icons
@@ -3293,23 +3295,23 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     -- beyond TBC. Steady Shot keeps no family gate at all: the known-rank gate above
     -- already silences every client without the spell.
     local is_tbc = st.family == "TBC"
-    inputs.kc_known = is_tbc and kill_command_current_id ~= nil
-    inputs.kc_remaining_cd = get_guide_cooldown(
-        kill_command_current_id or guide_slot_kill_command.spell_id)
-    inputs.bw_known = is_tbc and bestial_wrath_current_id ~= nil
-    inputs.bw_remaining_cd = get_guide_cooldown(
-        bestial_wrath_current_id or guide_slot_bestial_wrath.spell_id)
+    local kc_id = kill_command_current_id
+    inputs.kc_known = is_tbc and kc_id ~= nil
+    inputs.kc_remaining_cd = get_guide_cooldown(kc_id or guide_slot_kill_command.spell_id)
+    local bw_id = bestial_wrath_current_id
+    inputs.bw_known = is_tbc and bw_id ~= nil
+    inputs.bw_remaining_cd = get_guide_cooldown(bw_id or guide_slot_bestial_wrath.spell_id)
     -- Rapid Fire: the TBC blanket cooldown layer AND the ERA/SOD APL rows (the
     -- ERA APL's i=1 and the SOD APL's i=7). The knowledge gate carries the
     -- family: the TBC client, the Era client and the SoD client all know the
     -- spell; the Forever client does not get the row (its APL asks for no
     -- Rapid Fire), so the gate stays off there.
-    inputs.rf_known = (is_tbc or is_era_guide) and rapid_fire_current_id ~= nil
-    inputs.rf_remaining_cd = get_guide_cooldown(
-        rapid_fire_current_id or guide_slot_rapid_fire.spell_id)
-    inputs.multi_known = (is_tbc or is_era_guide) and multi_current_id ~= nil
-    inputs.multi_remaining_cd = get_guide_cooldown(
-        multi_current_id or guide_slot_multi.spell_id)
+    local rf_id = rapid_fire_current_id
+    inputs.rf_known = is_tbc and rf_id ~= nil
+    inputs.rf_remaining_cd = get_guide_cooldown(rf_id or guide_slot_rapid_fire.spell_id)
+    local multi_id = multi_current_id
+    inputs.multi_known = (is_tbc or is_era_guide) and multi_id ~= nil
+    inputs.multi_remaining_cd = get_guide_cooldown(multi_id or guide_slot_multi.spell_id)
 
     -- Era Aimed Shot: the primary filler (3 s cast, 6 s cooldown). Every aimed_*
     -- input is written on every call; off-Era clients gather nil/false without any
@@ -3317,17 +3319,16 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     -- (the warrior's bt/ww split). The cast time comes from the client's spell data
     -- with the per-client fallback (ERA 3.0 s), cached once the spell cache answers.
     if is_era_guide then
+        local aimed_id = aimed_current_id or guide_slot_aimed.spell_id
         if aimed_cast_time == nil then
-            local cast_ms = select(4, api.GetSpellInfo(
-                aimed_current_id or guide_slot_aimed.spell_id))
+            local cast_ms = select(4, api.GetSpellInfo(aimed_id))
             if type(cast_ms) == "number" and cast_ms > 0 then
                 aimed_cast_time = cast_ms / 1000
             end
         end
         inputs.aimed_cast_seconds = aimed_cast_time or ST.HUNTER.cast_time_fallback("aimed")
-        inputs.aimed_known = aimed_current_id ~= nil
-        inputs.aimed_remaining_cd = get_guide_cooldown(
-            aimed_current_id or guide_slot_aimed.spell_id)
+        inputs.aimed_known = aimed_id ~= nil
+        inputs.aimed_remaining_cd = get_guide_cooldown(aimed_id)
     else
         inputs.aimed_cast_seconds = nil
         inputs.aimed_known = false

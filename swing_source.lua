@@ -65,7 +65,7 @@ local function is_event_valid(event_name)
 	return st.family == "FOREVER"
 end
 
-swing_source.available = st.family == "FOREVER" and is_event_valid("PLAYER_SWING")
+swing_source.available = (st.family == "FOREVER" or rawget(_G, "C_SwingTimer") ~= nil) and is_event_valid("PLAYER_SWING")
 
 --------------------------------------------------------------------------------
 -- Clock

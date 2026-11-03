@@ -543,7 +543,10 @@ function pb.init(ST)
     frame.fill:SetHeight(pb.DEFAULT_HEIGHT - (pb.BAR_PADDING * 2))
     frame.fill:SetWidth(1)
     frame.fill:SetColorTexture(pb.COLOR_MANA[1], pb.COLOR_MANA[2], pb.COLOR_MANA[3], pb.COLOR_MANA[4])
-    frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    frame.text = frame:CreateFontString(nil, "OVERLAY")
+    if frame.text.SetFontObject then
+        pcall(frame.text.SetFontObject, frame.text, nil)
+    end
     -- A FontString with no font throws on the first SetText. The shared chain is a
     -- no-op on a template that already carries one and repairs a client that does not.
     if st.utils and type(st.utils.apply_font) == "function" then

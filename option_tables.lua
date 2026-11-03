@@ -17,7 +17,7 @@ local addon_name, st = ...
 ---@field set_deadzone_width fun(self: ST, hand: any)
 ---@field set_gcd_marker_positions fun(self: ST, hand: any)
 ---@field configure_texts fun(self: ST, hand: any)
----@field configure_bar_size_and_positions fun(self: ST, hand: any)
+---@field configure_bar_size_and_positions fun(self: ST, hand: any, width_override?: number, height_override?: number)
 ---@field configure_bar_appearances fun(self: ST, hand: any)
 ---@field configure_bar_outline fun(self: ST, hand: any)
 ---@field configure_gcd_markers fun(self: ST, hand: any)
@@ -104,6 +104,14 @@ end
 ST.opts_funcs.global.setter = function(_, info, value)
     local db = ST:get_profile_table()
     db[info[#info]] = value
+end
+-- Setter for Blizzard default swing timer suppression option.
+ST.opts_funcs.global.blizzard_swing_timer_setter = function(_, info, value)
+    local db = ST:get_profile_table()
+    db[info[#info]] = value
+    if ST and type(ST.apply_blizzard_swing_timer_visibility) == "function" then
+        ST:apply_blizzard_swing_timer_visibility()
+    end
 end
 -- Setter for latency options.
 ST.opts_funcs.global.latency_setter = function(_, info, value)
@@ -387,6 +395,19 @@ function ST:generate_top_level_options_table()
                     "Applies at the next login or reload; off by default.",
                 get = "getter",
                 set = "setter",
+            },
+            -- Hide Blizzard's built-in swing timer (WoW Forever). Off by default;
+            -- when true, suppresses Blizzard_SwingTimer frames on WoW Forever / Camelot.
+            hide_blizzard_swing_timer = {
+                type = "toggle",
+                order = 1.4,
+                name = "Hide default swing timer",
+                desc = "Suppress Blizzard's built-in swing timer bars (WoW Forever) to prevent duplicate bars. Off by default.",
+                hidden = function()
+                    return not (st.family == "FOREVER" or rawget(_G, "C_SwingTimer") ~= nil)
+                end,
+                get = "getter",
+                set = "blizzard_swing_timer_setter",
             },
         },
     }
@@ -7772,6 +7793,9 @@ function ST:set_opts()
         local read_ok, profile = pcall(self.get_profile_table, self)
         if read_ok then
             pcall(self.migrate_appearance_defaults, profile)
+            if type(self.migrate_class_color_defaults) == "function" then
+                pcall(self.migrate_class_color_defaults, profile)
+            end
         end
     end
 

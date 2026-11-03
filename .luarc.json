@@ -197,7 +197,10 @@
         "type",
         "unpack",
         "xpcall",
-        "debug"
+        "debug",
+        "C_UIFileAsset",
+        "os",
+        "io"
     ],
     "Lua.runtime.builtin": {
         "basic": "disable",

@@ -1416,6 +1416,60 @@ do
         "clock: a sub-frame precise reading is kept inside the renew window")
 end
 
+do
+    -- Raid class color resolution and Classic Era Shaman pink guard
+    local _, era_st = build_profile({
+        project = 1, -- Classic Era (11509)
+        globals = {
+            RAID_CLASS_COLORS = {
+                SHAMAN = { r = 0.96, g = 0.55, b = 0.73 }, -- Blizzard pink in Era
+                WARRIOR = { r = 0.78, g = 0.61, b = 0.43 },
+                ROGUE = { r = 1.00, g = 0.96, b = 0.41 },
+                PALADIN = { r = 0.96, g = 0.55, b = 0.73 },
+                DRUID = { r = 1.00, g = 0.49, b = 0.04 },
+            },
+        },
+    })
+    local r, g, b = era_st.api.get_class_color("SHAMAN")
+    check(r == 0.0 and g == 0.44 and b == 0.87,
+        "class color: Era Shaman uses Shaman blue (not pink)")
+    local t = era_st.api.get_class_color_table("SHAMAN", 0.9)
+    check(t[1] == 0 and t[2] == 112 and t[3] == 222 and t[4] == 0.9,
+        "class color: Era Shaman table is { 0, 112, 222, 0.9 }")
+
+    local wr, wg, wb = era_st.api.get_class_color("WARRIOR")
+    check(wr == 0.78 and wg == 0.61 and wb == 0.43,
+        "class color: Warrior uses RAID_CLASS_COLORS")
+    local wt = era_st.api.get_class_color_table("WARRIOR", 0.9)
+    check(wt[1] == 199 and wt[2] == 156 and wt[3] == 110 and wt[4] == 0.9,
+        "class color: Warrior table is { 199, 156, 110, 0.9 }")
+
+    local _, tbc_st = build_profile({
+        project = 2, -- TBC Anniversary
+        globals = {
+            RAID_CLASS_COLORS = {
+                SHAMAN = { r = 0.0, g = 0.44, b = 0.87 },
+            },
+        },
+    })
+    local sr, sg, sb_c = tbc_st.api.get_class_color("SHAMAN")
+    check(sr == 0.0 and sg == 0.44 and sb_c == 0.87,
+        "class color: TBC Shaman uses Shaman blue")
+
+    -- Fallback when RAID_CLASS_COLORS is missing
+    local _, bare_st = build_profile({
+        project = 3,
+        globals = {},
+    })
+    local dr, dg, db_c = bare_st.api.get_class_color("DRUID")
+    check(dr == 1.00 and dg == 0.49 and db_c == 0.04,
+        "class color: Druid uses canonical fallback when globals missing")
+    local dt = bare_st.api.get_class_color_table("DRUID", 0.9)
+    check(dt[1] == 255 and dt[2] == 125 and dt[3] == 10 and dt[4] == 0.9,
+        "class color: Druid table is { 255, 125, 10, 0.9 }")
+end
+
+
 print("")
 print(string.format("%d checks, %d failures", checks, failures))
 if failures > 0 then

@@ -1250,6 +1250,8 @@ end
 -- A JSON-safe copy of a value: only finite numbers, strings, booleans, dense arrays
 -- and string-keyed objects survive; anything else is dropped. The export payload
 -- rides the addon's settings export/import path (spec §6 "Export").
+---@param value any
+---@return any
 function P.json_safe(value)
     local t = type(value)
     if t == "number" then
@@ -1263,8 +1265,11 @@ function P.json_safe(value)
     if length > 0 then
         for i = 1, length do
             local item = P.json_safe(value[i])
-            if item == nil then item = false end
-            out[i] = item
+            if item == nil then
+                out[i] = false
+            else
+                out[i] = item
+            end
         end
         return out
     end

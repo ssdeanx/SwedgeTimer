@@ -359,7 +359,7 @@ local function build()
     compat("SwedgeTimer", st)
 
     local MODULES = {
-        "utils.lua", "guard.lua", "twist.lua", "weave.lua", "druid_energy.lua",
+        "utils.lua", "guard.lua", "twist.lua", "weave.lua",
         "hunter_window.lua", "hunter_ui.lua", "main.lua", "bars.lua", "ldb.lua",
         "config_presets.lua", "config.lua",
         "classes/druid.lua", "classes/hunter.lua", "classes/paladin.lua",

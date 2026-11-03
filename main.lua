@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.1.3"
+local version = "2.1.4"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -259,6 +259,10 @@ function ST:get_hand_table(hand)
 end
 
 function ST:get_in_range(hand)
+	local native_in_range = api and api.is_target_in_swing_range and api.is_target_in_swing_range(hand)
+	if native_in_range ~= nil then
+		return native_in_range
+	end
 	if hand == "ranged" then return self.in_ranged_range else return self.in_melee_range end
 end
 
@@ -697,6 +701,9 @@ function ST:OnInitialize()
 	-----------------------------------------------------------
 	self:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
 	self:RegisterEvent("CHARACTER_POINTS_CHANGED")
+	if not (C_EventUtils and C_EventUtils.IsEventValid) or C_EventUtils.IsEventValid("SPELLS_CHANGED") then
+		self:RegisterEvent("SPELLS_CHANGED")
+	end
 	self:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
 	self:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 	self:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -891,6 +898,8 @@ function ST:init_libs()
 	if st.diag then
 		st.diag.report(self)
 	end
+
+	self:apply_blizzard_swing_timer_visibility()
 end
 
 -- HU-22 lazy-bars build point (init / equip; the options layer reuses this
@@ -1091,7 +1100,10 @@ function ST:start_aura_poll()
 	end
 	self.aura_poll_running = true
 	self.aura_poll_interval = AURA_POLL_INTERVAL
-	C_Timer.After(AURA_POLL_INTERVAL, function() self:aura_poll_tick() end)
+	if not self.aura_poll_fn then
+		self.aura_poll_fn = function() self:aura_poll_tick() end
+	end
+	C_Timer.After(AURA_POLL_INTERVAL, self.aura_poll_fn)
 end
 
 function ST:aura_poll_tick()
@@ -1104,7 +1116,10 @@ function ST:aura_poll_tick()
 	if self.interfaces_are_initialised then
 		self:class_on_aura_change()
 	end
-	C_Timer.After(AURA_POLL_INTERVAL, function() self:aura_poll_tick() end)
+	if not self.aura_poll_fn then
+		self.aura_poll_fn = function() self:aura_poll_tick() end
+	end
+	C_Timer.After(AURA_POLL_INTERVAL, self.aura_poll_fn)
 end
 
 --=========================================================================================
@@ -1681,9 +1696,11 @@ function ST:CURRENT_SPELL_CAST_CHANGED(_event, is_cancelled)
 end
 
 function ST:PLAYER_ENTERING_WORLD(_event, _is_initial_login, _is_reloading_ui)
-	-- No work of its own: the init arc is driven by the library callbacks
+	-- No work of its own on classic: the init arc is driven by the library callbacks
 	-- (init_libs), and the modules that need the world-enter signal (hud.lua,
 	-- enemy_swing.lua, swing_source.lua) register it on their own frames.
+	-- On WoW Forever / Camelot, apply user preference for Blizzard swing timer visibility.
+	self:apply_blizzard_swing_timer_visibility()
 end
 
 function ST:PLAYER_EQUIPMENT_CHANGED(_event, slot, _has_current)
@@ -1694,6 +1711,7 @@ function ST:PLAYER_EQUIPMENT_CHANGED(_event, slot, _has_current)
 	end
 	if slot == 16 or slot == 17 or slot == 18 then
 		self:check_weapons()
+		self:ensure_swing_range_checks()
 		for hand in self:iter_hands() do
 			-- HU-22 equip build point: a newly equipped (and enabled) hand
 			-- builds its frames and tick now; the attack-speed recolour below
@@ -2560,6 +2578,17 @@ function ST:CHARACTER_POINTS_CHANGED(event)
 	end
 end
 
+function ST:SPELLS_CHANGED(event)
+	if not self.interfaces_are_initialised then
+		return
+	end
+	self.last_talent_event = event
+	local class = self[self.player_class]
+	if type(class) == "table" and class.on_talents_changed then
+		class.on_talents_changed(self)
+	end
+end
+
 function ST:get_talent_information()
 	self:get_druid_talent_info()
 	self:get_warrior_talent_info()
@@ -2729,6 +2758,18 @@ function ST:update_range_state()
 	self.target_max_range = math.ceil(yards)
 end
 
+function ST:ensure_swing_range_checks()
+	if api and type(api.enable_swing_range_check) == "function" then
+		api.enable_swing_range_check("mainhand", true)
+		if self:has_hand("offhand") then
+			api.enable_swing_range_check("offhand", true)
+		end
+		if self:has_hand("ranged") then
+			api.enable_swing_range_check("ranged", true)
+		end
+	end
+end
+
 function ST:init_range_finders()
 	self.rangefinder_interval = 0.05
 	self.target_distance = nil
@@ -2736,6 +2777,7 @@ function ST:init_range_finders()
 	self.in_ranged_range = false
 	self.target_min_range = nil
 	self.target_max_range = nil
+	self:ensure_swing_range_checks()
 	self:rf_update()
 end
 
@@ -2751,11 +2793,12 @@ function ST:rf_update()
 		-- Range checking was disabled by the poll dead-man: stop the retry loop.
 		return
 	end
+	if not self.rf_tick_fn then
+		self.rf_tick_fn = function() self:rf_update() end
+	end
 	-- api.UnitDistance already pcalls the client call; this outer pcall also covers
 	-- the state writes, so a future edit here cannot kill the polling loop silently.
-	local ok, err = pcall(function()
-		self:update_range_state()
-	end)
+	local ok, err = pcall(self.update_range_state, self)
 	if not ok then
 		self.rf_failure_count = (self.rf_failure_count or 0) + 1
 		self.rf_last_error = tostring(err)
@@ -2769,7 +2812,7 @@ function ST:rf_update()
 			delay = RF_MAX_RETRY_DELAY
 		end
 		self.rf_retry_delay = delay
-		C_Timer.After(delay, function() self:rf_update() end)
+		C_Timer.After(delay, self.rf_tick_fn)
 		return
 	end
 	self.rf_failure_count = 0
@@ -2779,7 +2822,7 @@ function ST:rf_update()
 	self:arm_ranged_shot_reset_guard_tick()
 	self:set_bar_visibilities()
 	self:handle_oor()
-	C_Timer.After(self.rangefinder_interval, function() self:rf_update() end)
+	C_Timer.After(self.rangefinder_interval, self.rf_tick_fn)
 end
 
 ------------------------------------------------------------------------------------
@@ -2815,6 +2858,45 @@ function ST:handle_oor_hand(hand)
 	else
 		frame:SetAlpha(1.0)
 	end
+end
+
+function ST:apply_blizzard_swing_timer_visibility()
+	if not (st.family == "FOREVER" or rawget(_G, "C_SwingTimer") ~= nil) then
+		return
+	end
+	local db = self.db and self.db.profile
+	if type(db) ~= "table" then
+		return
+	end
+	if db.hide_blizzard_swing_timer then
+		if type(SetCVar) == "function" then
+			pcall(SetCVar, "showSwingTimer", "0")
+		end
+		local frames = self.blizzard_swing_frames
+		if not frames then
+			frames = { "SwingTimerMainHandFrame", "SwingTimerOffHandFrame", "SwingTimerRangedFrame", "SwingTimerManagerFrame" }
+			self.blizzard_swing_frames = frames
+		end
+		for i = 1, #frames do
+			local f = rawget(_G, frames[i])
+			if f and type(f.Hide) == "function" then
+				pcall(f.Hide, f)
+			end
+		end
+		self.blizzard_swing_timer_hidden = true
+	elseif self.blizzard_swing_timer_hidden then
+		if type(SetCVar) == "function" then
+			pcall(SetCVar, "showSwingTimer", "1")
+		end
+		local mgr = rawget(_G, "SwingTimerManagerFrame")
+		if mgr and type(mgr.Show) == "function" then
+			pcall(mgr.Show, mgr)
+		end
+		self.blizzard_swing_timer_hidden = false
+	end
+	-- Blizzard_SwingTimer's showSwingTimer CVar callback disables C_SwingTimer.EnableRangeCheck
+	-- when showSwingTimer is "0"; re-assert range checks for SwedgeTimer's active hands.
+	self:ensure_swing_range_checks()
 end
 
 ------------------------------------------------------------------------------------
