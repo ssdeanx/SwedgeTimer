@@ -1,0 +1,947 @@
+--=========================================================================================
+-- WoW Forever (Camelot 1.60.1 / Interface 16001) Rotation Engine & Spec Guides
+-- Pure decision model: maps class + spec + inputs -> action, spell_name, hold, hold_text
+-- Completely isolated from Era / TBC / Wrath legacy logic.
+-- Name-first resolution with fallback rank IDs; smooth leveling progression before talents.
+--=========================================================================================
+local addon_name, st = ...
+st = st or {}
+st.forever_guide = st.forever_guide or {}
+local FG = st.forever_guide
+
+-- Helper: check if a cooldown is ready (<= 0 or nil)
+local function is_ready(cd)
+    return cd == nil or (type(cd) == "number" and cd <= 0)
+end
+
+-- Helper: check if a spell is known (strictly boolean true from exact name or legacy flag)
+local function is_known(inputs, name, flag)
+    if type(inputs) ~= "table" then return false end
+    if name and inputs[name] == true then return true end
+    if flag and inputs[flag] == true then return true end
+    return false
+end
+
+--=========================================================================================
+-- Tracked Spell Metadata Dictionary (Name-First with Multi-Rank ID Tables)
+--=========================================================================================
+FG.SPELLS = {
+    -- Hunter
+    SERPENT_STING   = { name = "Serpent Sting",    id = 1978,    ids = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295 } },
+    RAPTOR_STRIKE   = { name = "Raptor Strike",    id = 2973,    ids = { 2973, 14260, 14261, 14262, 14263, 14264, 14265, 14266 } },
+    STRIDER_KICK    = { name = "Strider Kick",     id = 1317257, ids = { 1317257 } },
+    MONGOOSE_BITE   = { name = "Mongoose Bite",    id = 1495,    ids = { 1495, 14269, 14270, 14271 } },
+    HUNTERS_MARK    = { name = "Hunter's Mark",    id = 1130,    ids = { 1130, 14323, 14324, 14325 } },
+    ARCANE_SHOT     = { name = "Arcane Shot",      id = 3044,    ids = { 3044, 14281, 14282, 14283, 14284, 14285, 14286, 14287 } },
+    MULTI_SHOT      = { name = "Multi-Shot",       id = 2643,    ids = { 2643, 14288, 14289, 14290, 25294 } },
+    WING_CLIP       = { name = "Wing Clip",        id = 2974,    ids = { 2974, 14267, 14268 } },
+    IMMOLATION_TRAP = { name = "Immolation Trap",  id = 13795,   ids = { 13795, 14302, 14303, 14304, 14305 } },
+    AIMED_SHOT      = { name = "Aimed Shot",       id = 19434,   ids = { 19434, 20900, 20901, 20902, 20903, 20904 } },
+    SNIPER_SHOT     = { name = "Sniper Shot",      id = 14266,   ids = { 14266 } },
+    SUMMON_HAWK     = { name = "Summon Hawk",      id = 1293241, ids = { 1293241, 1293525, 1293526, 1293527 } },
+    ASPECT_HAWK     = { name = "Aspect of the Hawk", id = 13165, ids = { 13165, 14318, 14319, 14320, 14321, 14322, 25296 } },
+
+    -- Warrior
+    HEROIC_STRIKE   = { name = "Heroic Strike",    id = 78,      ids = { 78, 284, 285, 1608, 11564, 11565, 11566, 11567, 25286 } },
+    REND            = { name = "Rend",             id = 772,     ids = { 772, 6546, 6547, 6548, 11572, 11573, 11574 } },
+    OVERPOWER       = { name = "Overpower",        id = 7384,    ids = { 7384, 7887, 11584, 11585 } },
+    BLOODTHRILL     = { name = "Bloodthrill",      id = 1282733, ids = { 1282733 } },
+    MORTAL_STRIKE   = { name = "Mortal Strike",    id = 12294,   ids = { 12294, 21551, 21552, 21553, 25248 } },
+    BLOODTHIRST     = { name = "Bloodthirst",      id = 23881,   ids = { 23881, 23892, 23893, 23894, 25251 } },
+    WHIRLWIND       = { name = "Whirlwind",        id = 1680,    ids = { 1680 } },
+    EXECUTE         = { name = "Execute",          id = 5308,    ids = { 5308, 20658, 20660, 20661, 20662 } },
+    SLAM            = { name = "Slam",             id = 1464,    ids = { 1464, 8820, 11604, 11605 } },
+    SUNDER_ARMOR    = { name = "Sunder Armor",     id = 7386,    ids = { 7386, 7405, 8380, 11596, 11597 } },
+    THUNDER_CLAP    = { name = "Thunder Clap",     id = 6343,    ids = { 6343, 8198, 8204, 8205, 11580, 11581 } },
+    DEMO_SHOUT      = { name = "Demoralizing Shout", id = 1160,  ids = { 1160, 6190, 11549, 11550, 11551, 25202 } },
+    REVENGE         = { name = "Revenge",          id = 6572,    ids = { 6572, 6574, 7379, 11600, 11601, 25288 } },
+    SHIELD_SLAM     = { name = "Shield Slam",      id = 23922,   ids = { 23922, 23923, 23924, 23925, 25258 } },
+    SHIELD_BLOCK    = { name = "Shield Block",     id = 2565,    ids = { 2565 } },
+    SHIELD_WALL     = { name = "Shield Wall",      id = 871,     ids = { 871 } },
+    LAST_STAND      = { name = "Last Stand",       id = 12975,   ids = { 12975 } },
+    HAMSTRING       = { name = "Hamstring",        id = 1715,    ids = { 1715, 7372, 7373 } },
+    CLEAVE          = { name = "Cleave",           id = 845,     ids = { 845, 7369, 11608, 11609, 20569 } },
+    BATTLE_SHOUT    = { name = "Battle Shout",     id = 6673,    ids = { 6673, 5242, 6192, 11549, 11550, 11551, 25289 } },
+
+    -- Paladin
+    HOLY_STRIKE     = { name = "Holy Strike",      id = 679,     ids = { 679, 678, 1866, 680, 2495, 5569, 10332, 10333 } },
+    JUDGEMENT       = { name = "Judgement",        id = 20271,   ids = { 20271 } },
+    SEAL_RIGHTEOUSNESS = { name = "Seal of Righteousness", id = 21084, ids = { 21084, 20287, 20288, 20289, 20290, 20291, 20292, 20293 } },
+    SEAL_COMMAND    = { name = "Seal of Command",  id = 20375,   ids = { 20375, 20915, 20918, 20919, 20920 } },
+    SEAL_CRUSADER   = { name = "Seal of the Crusader", id = 20162, ids = { 20162, 20305, 20306, 20307, 20308, 21183 } },
+    CONSECRATION    = { name = "Consecration",     id = 26573,   ids = { 26573, 20142, 20922, 20923, 20924 } },
+    EXORCISM        = { name = "Exorcism",         id = 879,     ids = { 879, 5614, 5615, 10312, 10313, 10314 } },
+    HAMMER_OF_WRATH = { name = "Hammer of Wrath",  id = 24275,   ids = { 24275, 24274, 24239 } },
+    HOLY_SHOCK      = { name = "Holy Shock",       id = 20473,   ids = { 20473, 20929, 20930 } },
+    DIVINE_FAVOR    = { name = "Divine Favor",     id = 20216,   ids = { 20216 } },
+    HOLY_SHIELD     = { name = "Holy Shield",      id = 20925,   ids = { 20925, 20927, 20928 } },
+    RIGHTEOUS_FURY  = { name = "Righteous Fury",   id = 25780,   ids = { 25780 } },
+    SEAL_FURY       = { name = "Seal of Fury",      id = 20423,   ids = { 20423 } },
+
+    -- Rogue
+    SINISTER_STRIKE = { name = "Sinister Strike",  id = 1752,    ids = { 1752, 1757, 1758, 1759, 1760, 8621, 11293, 11294 } },
+    EVISCERATE      = { name = "Eviscerate",       id = 2098,    ids = { 2098, 6760, 6761, 6762, 8623, 8624, 11299, 11300, 31016 } },
+    SLICE_AND_DICE  = { name = "Slice and Dice",   id = 5171,    ids = { 5171, 6774 } },
+    RUPTURE         = { name = "Rupture",          id = 1943,    ids = { 1943, 8639, 8640, 8640, 11273, 11274, 11275 } },
+    MUTILATE        = { name = "Mutilate",         id = 1241584, ids = { 1241584 } },
+    HEMORRHAGE      = { name = "Hemorrhage",       id = 16511,   ids = { 16511, 17347, 17348 } },
+    BACKSTAB        = { name = "Backstab",         id = 53,      ids = { 53, 2589, 2590, 2591, 8721, 11279, 11280, 11281 } },
+    RIPOSTE         = { name = "Riposte",          id = 14251,   ids = { 14251 } },
+    ENVENOM         = { name = "Envenom",          id = 1310703, ids = { 1310703 } },
+    EXPOSE_ARMOR    = { name = "Expose Armor",     id = 8647,    ids = { 8647, 8649, 8650, 11197, 11198 } },
+
+    -- Druid
+    MAUL            = { name = "Maul",             id = 6807,    ids = { 6807, 6808, 6809, 6810, 9880, 9881 } },
+    SWIPE           = { name = "Swipe",            id = 779,     ids = { 779, 780, 769, 9754, 9908 } },
+    DEMO_ROAR       = { name = "Demoralizing Roar", id = 99,     ids = { 99, 1735, 9490, 9747, 9898 } },
+    ENRAGE          = { name = "Enrage",           id = 5229,    ids = { 5229 } },
+    FAERIE_FIRE_FERAL = { name = "Faerie Fire (Feral)", id = 16857, ids = { 16857, 17390, 17391, 17392 } },
+    CLAW            = { name = "Claw",             id = 1082,    ids = { 1082, 3029, 9823, 9827 } },
+    SHRED           = { name = "Shred",            id = 5221,    ids = { 5221, 8992, 9829, 9830 } },
+    RIP             = { name = "Rip",              id = 1079,    ids = { 1079, 9492, 9493, 9752, 9894, 9896 } },
+    FEROCIOUS_BITE  = { name = "Ferocious Bite",   id = 22568,   ids = { 22568, 22827, 22828, 22829 } },
+    LACERATE        = { name = "Lacerate",         id = 1235827, ids = { 1235827 } },
+    PRIMAL_BITE     = { name = "Primal Bite",      id = 1238070, ids = { 1238070 } },
+    BARKSKIN        = { name = "Barkskin",         id = 22812,   ids = { 22812 } },
+    FRENZIED_REGEN  = { name = "Frenzied Regeneration", id = 22842, ids = { 22842 } },
+    RAKE            = { name = "Rake",             id = 1822,    ids = { 1822, 1823, 1824, 9904 } },
+    RAVAGE          = { name = "Ravage",           id = 6785,    ids = { 6785, 6787, 9866, 9867 } },
+    TIGERS_FURY     = { name = "Tiger's Fury",     id = 5217,    ids = { 5217, 6793, 9845, 9846 } },
+
+    -- Shaman
+    FLAME_SHOCK     = { name = "Flame Shock",      id = 8042,    ids = { 8042, 8044, 8045, 8046, 10447, 10448 } },
+    STORMSTRIKE     = { name = "Stormstrike",      id = 17364,   ids = { 17364 } },
+    EARTH_SHOCK     = { name = "Earth Shock",      id = 8042,    ids = { 8042, 8044, 8045, 8046, 10412, 10413, 10414 } },
+    FIRE_NOVA       = { name = "Fire Nova",        id = 408345,  ids = { 408345, 1535, 8498, 8499, 11314, 11315 } },
+    LIGHTNING_BOLT  = { name = "Lightning Bolt",   id = 403,     ids = { 403, 529, 548, 915, 943, 6041, 10391, 10392, 15208 } },
+    LIGHTNING_SHIELD = { name = "Lightning Shield", id = 324,    ids = { 324, 325, 905, 945, 8134, 10431, 10432 } },
+    WATER_SHIELD    = { name = "Water Shield",     id = 408510,  ids = { 408510 } },
+    SEARING_TOTEM   = { name = "Searing Totem",    id = 3599,    ids = { 3599, 6363, 6364, 6365, 10437, 10438, 10587 } },
+    STRENGTH_OF_EARTH = { name = "Strength of Earth Totem", id = 8075, ids = { 8075, 8160, 8161, 10442, 25361 } },
+}
+
+-- Registry by Class for /st diag in-game auditing
+FG.SPELLS_BY_CLASS = {
+    HUNTER = {
+        FG.SPELLS.SERPENT_STING, FG.SPELLS.RAPTOR_STRIKE, FG.SPELLS.STRIDER_KICK,
+        FG.SPELLS.MONGOOSE_BITE, FG.SPELLS.HUNTERS_MARK, FG.SPELLS.ARCANE_SHOT,
+        FG.SPELLS.MULTI_SHOT, FG.SPELLS.WING_CLIP, FG.SPELLS.IMMOLATION_TRAP,
+        FG.SPELLS.AIMED_SHOT, FG.SPELLS.SNIPER_SHOT, FG.SPELLS.SUMMON_HAWK,
+        FG.SPELLS.ASPECT_HAWK,
+    },
+    WARRIOR = {
+        FG.SPELLS.HEROIC_STRIKE, FG.SPELLS.REND, FG.SPELLS.OVERPOWER,
+        FG.SPELLS.BLOODTHRILL, FG.SPELLS.MORTAL_STRIKE, FG.SPELLS.BLOODTHIRST,
+        FG.SPELLS.WHIRLWIND, FG.SPELLS.EXECUTE, FG.SPELLS.SLAM,
+        FG.SPELLS.SUNDER_ARMOR, FG.SPELLS.THUNDER_CLAP, FG.SPELLS.DEMO_SHOUT,
+        FG.SPELLS.REVENGE, FG.SPELLS.SHIELD_SLAM, FG.SPELLS.SHIELD_BLOCK,
+        FG.SPELLS.SHIELD_WALL, FG.SPELLS.LAST_STAND, FG.SPELLS.HAMSTRING, FG.SPELLS.CLEAVE,
+        FG.SPELLS.BATTLE_SHOUT,
+    },
+    PALADIN = {
+        FG.SPELLS.HOLY_STRIKE, FG.SPELLS.JUDGEMENT, FG.SPELLS.SEAL_RIGHTEOUSNESS,
+        FG.SPELLS.SEAL_COMMAND, FG.SPELLS.SEAL_CRUSADER, FG.SPELLS.SEAL_FURY,
+        FG.SPELLS.CONSECRATION, FG.SPELLS.EXORCISM, FG.SPELLS.HAMMER_OF_WRATH,
+        FG.SPELLS.HOLY_SHOCK, FG.SPELLS.DIVINE_FAVOR, FG.SPELLS.HOLY_SHIELD,
+        FG.SPELLS.RIGHTEOUS_FURY,
+    },
+    ROGUE = {
+        FG.SPELLS.SINISTER_STRIKE, FG.SPELLS.EVISCERATE, FG.SPELLS.SLICE_AND_DICE,
+        FG.SPELLS.RUPTURE, FG.SPELLS.MUTILATE, FG.SPELLS.HEMORRHAGE,
+        FG.SPELLS.BACKSTAB, FG.SPELLS.RIPOSTE, FG.SPELLS.ENVENOM, FG.SPELLS.EXPOSE_ARMOR,
+    },
+    DRUID = {
+        FG.SPELLS.MAUL, FG.SPELLS.SWIPE, FG.SPELLS.DEMO_ROAR, FG.SPELLS.ENRAGE,
+        FG.SPELLS.FAERIE_FIRE_FERAL, FG.SPELLS.CLAW, FG.SPELLS.SHRED,
+        FG.SPELLS.RIP, FG.SPELLS.FEROCIOUS_BITE, FG.SPELLS.LACERATE,
+        FG.SPELLS.PRIMAL_BITE, FG.SPELLS.BARKSKIN, FG.SPELLS.FRENZIED_REGEN,
+        FG.SPELLS.RAKE, FG.SPELLS.RAVAGE, FG.SPELLS.TIGERS_FURY,
+    },
+    SHAMAN = {
+        FG.SPELLS.FLAME_SHOCK, FG.SPELLS.STORMSTRIKE, FG.SPELLS.EARTH_SHOCK,
+        FG.SPELLS.FIRE_NOVA, FG.SPELLS.LIGHTNING_BOLT, FG.SPELLS.LIGHTNING_SHIELD,
+        FG.SPELLS.WATER_SHIELD, FG.SPELLS.SEARING_TOTEM, FG.SPELLS.STRENGTH_OF_EARTH,
+    },
+}
+
+--=========================================================================================
+-- Spec Resolvers (detects active spec for each class on WoW Forever)
+-- Leveling characters without talents smoothly resolve to "general" baseline
+--=========================================================================================
+function FG.resolve_warrior_spec(inputs)
+    if inputs.is_shield_equipped == true or is_known(inputs, "Shield Slam", "shield_slam_known") or inputs.prot == true then
+        return "prot"
+    elseif is_known(inputs, "Mortal Strike", "ms_known") then
+        return "arms"
+    elseif is_known(inputs, "Bloodthirst", "bt_known") then
+        return "fury"
+    else
+        return "general"
+    end
+end
+
+function FG.resolve_paladin_spec(inputs)
+    if inputs.is_shield_equipped == true or is_known(inputs, "Holy Shield", "holy_shield_known") then
+        return "prot"
+    elseif is_known(inputs, "Holy Shock", "holy_shock_known") then
+        return "shockadin"
+    elseif is_known(inputs, "Seal of Command", "soc_known") then
+        return "ret"
+    else
+        return "general"
+    end
+end
+
+function FG.resolve_hunter_spec(inputs)
+    if is_known(inputs, "Strider Kick", "strider_kick_known") or inputs.melee_spec == true then
+        return "melee"
+    else
+        return "ranged"
+    end
+end
+
+function FG.resolve_rogue_spec(inputs)
+    if is_known(inputs, "Mutilate", "mutilate_known") then
+        return "mutilate"
+    elseif is_known(inputs, "Hemorrhage", "hemo_known") then
+        return "hemo"
+    elseif inputs.mh_is_dagger == true then
+        return "combat_bs"
+    else
+        return "combat_ss"
+    end
+end
+
+function FG.resolve_druid_spec(inputs)
+    if inputs.form == "bear" or inputs.shapeshift_form == 1 then
+        return "bear"
+    elseif inputs.form == "cat" or inputs.shapeshift_form == 3 then
+        return "cat"
+    else
+        return "caster"
+    end
+end
+
+function FG.resolve_shaman_spec(inputs)
+    if is_known(inputs, "Stormstrike", "stormstrike_known") or is_known(inputs, "Maelstrom Weapon", "mw_known") then
+        return "enhancement"
+    else
+        return "general"
+    end
+end
+
+--=========================================================================================
+-- 1. WARRIOR (Protection, Arms, Fury, General Leveling)
+-- Based on wowsims/forever warrior APLs: arms.apl.json, fury.apl.json, protection/default.apl.json
+--=========================================================================================
+function FG.evaluate_warrior(spec, inputs, out)
+    inputs = inputs or {}
+    out = out or {}
+    spec = spec or FG.resolve_warrior_spec(inputs)
+    local rage = type(inputs.rage) == "number" and inputs.rage or 0
+    local hp_pct = type(inputs.target_health_pct) == "number" and inputs.target_health_pct or 100
+    local is_execute = hp_pct < (inputs.execute_pct or 20) or inputs.victory_rush == true
+
+    out.rotation_key = spec
+
+    if spec == "prot" then
+        -- PROTECTION WARRIOR (Tank) - wowsims/forever warrior protection/default.apl.json
+        local player_hp = type(inputs.player_health_pct) == "number" and inputs.player_health_pct or 100
+        if is_known(inputs, "Shield Wall", "shield_wall_known") and player_hp <= 35 and is_ready(inputs.shield_wall_remaining) then
+            out.action = "shield_wall"
+            out.spell_name = "Shield Wall"
+        elseif is_known(inputs, "Last Stand", "last_stand_known") and player_hp <= 40 and is_ready(inputs.last_stand_remaining) then
+            out.action = "last_stand"
+            out.spell_name = "Last Stand"
+        elseif is_known(inputs, "Shield Block", "shield_block_known") and (inputs.shield_block_active ~= true) and is_ready(inputs.shield_block_remaining) and rage >= 10 then
+            out.action = "shield_block"
+            out.spell_name = "Shield Block"
+        elseif is_known(inputs, "Shield Slam", "shield_slam_known") and is_ready(inputs.shield_slam_remaining) and rage >= 20 then
+            out.action = "shield_slam"
+            out.spell_name = "Shield Slam"
+        elseif is_known(inputs, "Bloodthirst", "bt_known") and is_ready(inputs.bt_remaining) and rage >= 30 then
+            out.action = "bt"
+            out.spell_name = "Bloodthirst"
+        elseif is_known(inputs, "Mortal Strike", "ms_known") and is_ready(inputs.ms_remaining) and rage >= 30 then
+            out.action = "ms"
+            out.spell_name = "Mortal Strike"
+        elseif is_known(inputs, "Revenge", "revenge_known") and inputs.revenge_usable == true and is_ready(inputs.revenge_remaining) and rage >= 5 then
+            out.action = "revenge"
+            out.spell_name = "Revenge"
+        elseif is_known(inputs, "Sunder Armor", "sunder_known") and (type(inputs.sunder_stacks) ~= "number" or inputs.sunder_stacks < 5 or (type(inputs.sunder_remaining) == "number" and inputs.sunder_remaining <= 10)) and rage >= 15 then
+            out.action = "sunder"
+            out.spell_name = "Sunder Armor"
+        elseif is_known(inputs, "Thunder Clap", "tc_known") and (inputs.tc_active ~= true) and is_ready(inputs.tc_remaining) and (inputs.target_count and inputs.target_count > 1) and rage >= 20 then
+            out.action = "thunder_clap"
+            out.spell_name = "Thunder Clap"
+        elseif is_known(inputs, "Demoralizing Shout", "demo_known") and (inputs.demo_active ~= true) and is_ready(inputs.demo_remaining) and rage >= 10 then
+            out.action = "demo_shout"
+            out.spell_name = "Demoralizing Shout"
+        elseif is_known(inputs, "Rend", "rend_known") and inputs.rend_active ~= true and rage >= 10 then
+            out.action = "rend"
+            out.spell_name = "Rend"
+        elseif inputs.hs_queued == true or inputs.cleave_queued == true then
+            out.hold = true
+            out.hold_text = "RIDE"
+        elseif rage >= (inputs.hs_rage_floor or 40) or (inputs.shield_slam_known ~= true and inputs.sunder_known ~= true and rage >= (inputs.hs_cost or 15)) then
+            out.action = (inputs.target_count and inputs.target_count > 1 and is_known(inputs, "Cleave", "cleave_known")) and "cleave" or "hs"
+            out.spell_name = out.action == "cleave" and "Cleave" or "Heroic Strike"
+        else
+            out.hold = true
+            out.hold_text = "HOLD"
+        end
+        return out
+    end
+
+    if spec == "arms" then
+        -- ARMS WARRIOR
+        local op_proc = (type(inputs.overpower_remaining) == "number" and inputs.overpower_remaining > 0) or inputs.bloodthrill_active == true
+        if is_known(inputs, "Overpower", "op_known") and op_proc and is_ready(inputs.op_remaining) and rage >= 5 then
+            out.action = "op"
+            out.spell_name = "Overpower"
+        elseif is_known(inputs, "Mortal Strike", "ms_known") and is_ready(inputs.ms_remaining) and rage >= 30 then
+            out.action = "ms"
+            out.spell_name = "Mortal Strike"
+        elseif is_known(inputs, "Whirlwind", "ww_known") and is_ready(inputs.ww_remaining) and rage >= 25 then
+            out.action = "ww"
+            out.spell_name = "Whirlwind"
+        elseif is_known(inputs, "Slam", "slam_known") and is_ready(inputs.slam_remaining) and rage >= 15 then
+            out.action = "slam"
+            out.spell_name = "Slam"
+        elseif is_known(inputs, "Rend", "rend_known") and inputs.rend_active ~= true and not is_execute and rage >= 10 then
+            out.action = "rend"
+            out.spell_name = "Rend"
+        elseif is_known(inputs, "Execute", "execute_known") and is_execute and is_ready(inputs.execute_remaining) and rage >= 15 then
+            out.action = "execute"
+            out.spell_name = "Execute"
+        elseif inputs.hs_queued == true or inputs.cleave_queued == true then
+            out.hold = true
+            out.hold_text = "RIDE"
+        elseif is_known(inputs, "Cleave", "cleave_known") and inputs.target_count and inputs.target_count > 1 and rage >= 40 then
+            out.action = "cleave"
+            out.spell_name = "Cleave"
+        elseif is_known(inputs, "Heroic Strike", "hs_known") and not is_execute and rage >= (inputs.hs_rage_floor or 90) then
+            out.action = "hs"
+            out.spell_name = "Heroic Strike"
+        elseif is_known(inputs, "Hamstring", "hamstring_known") and rage >= 80 then
+            out.action = "hamstring"
+            out.spell_name = "Hamstring"
+        elseif is_known(inputs, "Sunder Armor", "sunder_known") and (type(inputs.sunder_stacks) ~= "number" or inputs.sunder_stacks < 5) and rage >= 15 then
+            out.action = "sunder"
+            out.spell_name = "Sunder Armor"
+        elseif rage < 15 then
+            out.hold = true
+            out.hold_text = "HOLD"
+        end
+        return out
+    end
+
+    if spec == "fury" then
+        -- FURY WARRIOR
+        local op_proc = (type(inputs.overpower_remaining) == "number" and inputs.overpower_remaining > 0) or inputs.bloodthrill_active == true
+        if is_known(inputs, "Overpower", "op_known") and op_proc and is_ready(inputs.op_remaining) and rage >= 5 then
+            out.action = "op"
+            out.spell_name = "Overpower"
+        elseif is_known(inputs, "Execute", "execute_known") and is_execute and is_ready(inputs.execute_remaining) and rage >= 15 then
+            out.action = "execute"
+            out.spell_name = "Execute"
+        elseif is_known(inputs, "Bloodthirst", "bt_known") and is_ready(inputs.bt_remaining) and rage >= 30 then
+            out.action = "bt"
+            out.spell_name = "Bloodthirst"
+        elseif is_known(inputs, "Whirlwind", "ww_known") and is_ready(inputs.ww_remaining) and rage >= 25 then
+            out.action = "ww"
+            out.spell_name = "Whirlwind"
+        elseif inputs.hs_queued == true or inputs.cleave_queued == true then
+            out.hold = true
+            out.hold_text = "RIDE"
+        elseif is_known(inputs, "Cleave", "cleave_known") and inputs.target_count and inputs.target_count > 1 and rage >= 25 then
+            out.action = "cleave"
+            out.spell_name = "Cleave"
+        elseif is_known(inputs, "Heroic Strike", "hs_known") and ((not is_execute and rage >= (inputs.hs_rage_floor or 40)) or rage >= 60) then
+            out.action = "hs"
+            out.spell_name = "Heroic Strike"
+        elseif is_known(inputs, "Rend", "rend_known") and inputs.rend_active ~= true and not is_execute and rage >= 10 and inputs.rend_upkeep_enabled == true then
+            out.action = "rend"
+            out.spell_name = "Rend"
+        elseif is_known(inputs, "Hamstring", "hamstring_known") and rage >= 80 then
+            out.action = "hamstring"
+            out.spell_name = "Hamstring"
+        elseif is_known(inputs, "Sunder Armor", "sunder_known") and (type(inputs.sunder_stacks) ~= "number" or inputs.sunder_stacks < 5) and rage >= 15 then
+            out.action = "sunder"
+            out.spell_name = "Sunder Armor"
+        elseif rage < 15 then
+            out.hold = true
+            out.hold_text = "HOLD"
+        end
+        return out
+    end
+
+    -- GENERAL LEVELING WARRIOR (Levels 1 - 39 without MS / BT)
+    local op_proc = (type(inputs.overpower_remaining) == "number" and inputs.overpower_remaining > 0) or inputs.bloodthrill_active == true
+    if is_known(inputs, "Overpower", "op_known") and op_proc and is_ready(inputs.op_remaining) and rage >= 5 then
+        out.action = "op"
+        out.spell_name = "Overpower"
+    elseif is_known(inputs, "Execute", "execute_known") and is_execute and is_ready(inputs.execute_remaining) and rage >= 15 then
+        out.action = "execute"
+        out.spell_name = "Execute"
+    elseif is_known(inputs, "Rend", "rend_known") and inputs.rend_active ~= true and not is_execute and rage >= 10 then
+        out.action = "rend"
+        out.spell_name = "Rend"
+    elseif is_known(inputs, "Sunder Armor", "sunder_known") and (type(inputs.sunder_stacks) ~= "number" or inputs.sunder_stacks < 5) and rage >= 15 then
+        out.action = "sunder"
+        out.spell_name = "Sunder Armor"
+    elseif inputs.hs_queued == true or inputs.cleave_queued == true then
+        out.hold = true
+        out.hold_text = "RIDE"
+    elseif is_known(inputs, "Heroic Strike", "hs_known") and rage >= (inputs.hs_rage_floor or 30) then
+        out.action = "hs"
+        out.spell_name = "Heroic Strike"
+    else
+        out.hold = true
+        out.hold_text = "HOLD"
+    end
+    return out
+end
+
+--=========================================================================================
+-- 2. PALADIN (Protection, Retribution, Holy Shock, General Leveling)
+-- Based on wowsims/forever paladin APLs: retribution/default.apl.siml, holy_shock.apl.siml, protection/default.apl.siml
+--=========================================================================================
+function FG.evaluate_paladin(spec, inputs, out)
+    inputs = inputs or {}
+    out = out or {}
+    spec = spec or FG.resolve_paladin_spec(inputs)
+    local mana_pct = type(inputs.mana_pct) == "number" and inputs.mana_pct or 100
+    local target_hp = type(inputs.target_health_pct) == "number" and inputs.target_health_pct or 100
+
+    out.rotation_key = spec
+
+    if spec == "prot" then
+        -- PROTECTION PALADIN (Tank) - wowsims/forever protection/default.apl.siml
+        -- 1. Righteous Fury upkeep
+        -- 2. Judgement
+        -- 3. Seal of Fury (or SoR fallback) upkeep
+        -- 4. Consecration
+        -- 5. Holy Shock (if known)
+        -- 6. Holy Shield
+        -- 7. Holy Strike
+        -- 8. Hammer of Wrath (execute)
+        -- 9. Exorcism
+        if inputs.has_rf ~= true and inputs.has_righteous_fury ~= true and is_known(inputs, "Righteous Fury", "rf_known") then
+            out.action = "rf"
+            out.spell_name = "Righteous Fury"
+        elseif is_known(inputs, "Judgement", "judge_known") and is_ready(inputs.judge_remaining) then
+            out.action = "judge"
+            out.spell_name = "Judgement"
+            out.judge_call = true
+        elseif (inputs.seal_inactive == true or inputs.seal_active ~= true) and (is_known(inputs, "Seal of Fury", "sof_known") or is_known(inputs, "Seal of Righteousness", "seal_known") or inputs.seal_fury_known) then
+            out.action = (is_known(inputs, "Seal of Fury", "sof_known") or inputs.seal_fury_known) and "sof" or "sor"
+            out.spell_name = out.action == "sof" and "Seal of Fury" or "Seal of Righteousness"
+        elseif is_known(inputs, "Consecration", "cons_known") and is_ready(inputs.cons_remaining) and mana_pct >= 10 then
+            out.action = "consecration"
+            out.spell_name = "Consecration"
+        elseif is_known(inputs, "Holy Shock", "holy_shock_known") and is_ready(inputs.holy_shock_remaining) and mana_pct >= 10 then
+            out.action = "holy_shock"
+            out.spell_name = "Holy Shock"
+        elseif is_known(inputs, "Holy Shield", "holy_shield_known") and is_ready(inputs.holy_shield_remaining) and mana_pct >= 10 then
+            out.action = "holy_shield"
+            out.spell_name = "Holy Shield"
+        elseif is_known(inputs, "Holy Strike", "holy_strike_known") and is_ready(inputs.holy_strike_remaining) then
+            out.action = "holy_strike"
+            out.spell_name = "Holy Strike"
+        elseif is_known(inputs, "Hammer of Wrath", "how_known") and target_hp < 20 and is_ready(inputs.how_remaining) then
+            out.action = "how"
+            out.spell_name = "Hammer of Wrath"
+        elseif is_known(inputs, "Exorcism", "exo_known") and is_ready(inputs.exo_remaining) and mana_pct >= 20 then
+            out.action = "exorcism"
+            out.spell_name = "Exorcism"
+        else
+            out.hold = true
+            out.hold_text = "WAIT"
+        end
+        return out
+    end
+
+    if spec == "shockadin" then
+        -- HOLY SHOCK (Shockadin DPS) - wowsims/forever retribution/holy_shock.apl.siml
+        -- 1. Judgement
+        -- 2. Consecration
+        -- 3. Seal of Righteousness / Command refresh
+        -- 4. Holy Strike
+        -- 5. Divine Favor (when Holy Shock ready)
+        -- 6. Holy Shock
+        -- 7. Hammer of Wrath (execute)
+        -- 8. Exorcism
+        if is_known(inputs, "Judgement", "judge_known") and is_ready(inputs.judge_remaining) then
+            out.action = "judge"
+            out.spell_name = "Judgement"
+            out.judge_call = true
+        elseif is_known(inputs, "Consecration", "cons_known") and is_ready(inputs.cons_remaining) and mana_pct >= 15 then
+            out.action = "consecration"
+            out.spell_name = "Consecration"
+        elseif (inputs.seal_inactive == true or inputs.seal_active ~= true) and is_known(inputs, "Seal of Righteousness", "seal_known") then
+            out.action = is_known(inputs, "Seal of Command", "soc_known") and "soc" or "sor"
+            out.spell_name = out.action == "soc" and "Seal of Command" or "Seal of Righteousness"
+        elseif is_known(inputs, "Holy Strike", "holy_strike_known") and is_ready(inputs.holy_strike_remaining) then
+            out.action = "holy_strike"
+            out.spell_name = "Holy Strike"
+        elseif is_known(inputs, "Divine Favor", "divine_favor_known") and is_ready(inputs.divine_favor_remaining) and is_ready(inputs.holy_shock_remaining) then
+            out.action = "divine_favor"
+            out.spell_name = "Divine Favor"
+        elseif is_known(inputs, "Holy Shock", "holy_shock_known") and is_ready(inputs.holy_shock_remaining) and mana_pct >= 10 then
+            out.action = "holy_shock"
+            out.spell_name = "Holy Shock"
+        elseif is_known(inputs, "Hammer of Wrath", "how_known") and target_hp < 20 and is_ready(inputs.how_remaining) then
+            out.action = "how"
+            out.spell_name = "Hammer of Wrath"
+        elseif is_known(inputs, "Exorcism", "exo_known") and is_ready(inputs.exo_remaining) and mana_pct >= 15 then
+            out.action = "exorcism"
+            out.spell_name = "Exorcism"
+        else
+            out.hold = true
+            out.hold_text = "WAIT"
+        end
+        return out
+    end
+
+    if spec == "ret" then
+        -- RETRIBUTION PALADIN - wowsims/forever retribution/default.apl.siml
+        -- 1. Judgement (cast judgement if $wf_guard)
+        -- 2. Hammer of Wrath (instant or execute < 20%)
+        -- 3. Holy Strike (weaves when Judgement is on CD)
+        -- 4. Seal of Command / Righteousness refresh
+        -- 5. Consecration (mana >= 10%, Judgement & Holy Strike on CD)
+        -- 6. Exorcism (mana >= 10%, Judgement & Holy Strike on CD)
+        -- 7. Holy Strike fallback
+        local how_instant = inputs.how_cast_seconds == 0 or (inputs.auto_age_seconds and inputs.auto_age_seconds < 0.2)
+        if is_known(inputs, "Judgement", "judge_known") and is_ready(inputs.judge_remaining) then
+            out.action = "judge"
+            out.spell_name = "Judgement"
+            out.judge_call = true
+        elseif is_known(inputs, "Hammer of Wrath", "how_known") and (how_instant or target_hp < 20) and is_ready(inputs.how_remaining) then
+            out.action = "how"
+            out.spell_name = "Hammer of Wrath"
+        elseif is_known(inputs, "Holy Strike", "holy_strike_known") and is_ready(inputs.holy_strike_remaining) and not is_ready(inputs.judge_remaining) then
+            out.action = "holy_strike"
+            out.spell_name = "Holy Strike"
+        elseif (inputs.seal_inactive == true or inputs.seal_active ~= true) and (is_known(inputs, "Seal of Command", "soc_known") or is_known(inputs, "Seal of Righteousness", "seal_known")) then
+            out.action = is_known(inputs, "Seal of Command", "soc_known") and "soc" or "sor"
+            out.spell_name = out.action == "soc" and "Seal of Command" or "Seal of Righteousness"
+        elseif is_known(inputs, "Consecration", "cons_known") and is_ready(inputs.cons_remaining) and mana_pct >= (inputs.mana_consecration_threshold or 10) and not is_ready(inputs.judge_remaining) and not is_ready(inputs.holy_strike_remaining) then
+            out.action = "consecration"
+            out.spell_name = "Consecration"
+        elseif is_known(inputs, "Exorcism", "exo_known") and is_ready(inputs.exo_remaining) and mana_pct >= (inputs.mana_exorcism_threshold or 10) and not is_ready(inputs.judge_remaining) and not is_ready(inputs.holy_strike_remaining) then
+            out.action = "exorcism"
+            out.spell_name = "Exorcism"
+        elseif is_known(inputs, "Holy Strike", "holy_strike_known") and is_ready(inputs.holy_strike_remaining) then
+            out.action = "holy_strike"
+            out.spell_name = "Holy Strike"
+        else
+            out.action = is_known(inputs, "Seal of Command", "soc_known") and "soc" or "sor"
+            out.spell_name = out.action == "soc" and "Seal of Command" or "Seal of Righteousness"
+        end
+        return out
+    end
+
+    -- GENERAL LEVELING PALADIN (Baseline progression before Command / Shock)
+    -- Levels 1-39: Seal upkeep -> Judgement -> Holy Strike -> HoW -> Consecration -> Exorcism
+    if (inputs.seal_inactive == true or inputs.seal_active ~= true) and is_known(inputs, "Seal of Righteousness", "seal_known") then
+        out.action = "sor"
+        out.spell_name = "Seal of Righteousness"
+    elseif is_known(inputs, "Judgement", "judge_known") and is_ready(inputs.judge_remaining) then
+        out.action = "judge"
+        out.spell_name = "Judgement"
+        out.judge_call = true
+    elseif is_known(inputs, "Holy Strike", "holy_strike_known") and is_ready(inputs.holy_strike_remaining) then
+        out.action = "holy_strike"
+        out.spell_name = "Holy Strike"
+    elseif is_known(inputs, "Hammer of Wrath", "how_known") and target_hp < 20 and is_ready(inputs.how_remaining) then
+        out.action = "how"
+        out.spell_name = "Hammer of Wrath"
+    elseif is_known(inputs, "Consecration", "cons_known") and is_ready(inputs.cons_remaining) and mana_pct >= 25 then
+        out.action = "consecration"
+        out.spell_name = "Consecration"
+    elseif is_known(inputs, "Exorcism", "exo_known") and is_ready(inputs.exo_remaining) and mana_pct >= 20 then
+        out.action = "exorcism"
+        out.spell_name = "Exorcism"
+    else
+        out.action = "sor"
+        out.spell_name = "Seal of Righteousness"
+    end
+    return out
+end
+
+--=========================================================================================
+-- 3. HUNTER (Melee Hunter, Ranged Hunter / Weave)
+-- Based on wowsims/forever hunter APLs: melee.apl.siml, default.apl.siml, clean_weave.apl.siml
+--=========================================================================================
+function FG.evaluate_hunter(spec, inputs, out)
+    inputs = inputs or {}
+    out = out or {}
+    spec = spec or FG.resolve_hunter_spec(inputs)
+    local mana_pct = type(inputs.mana_fraction) == "number" and (inputs.mana_fraction * 100) or 100
+
+    out.rotation_key = spec
+
+    if spec == "melee" then
+        -- MELEE HUNTER SPEC (Survival talent Strider Kick 1317257 or melee toggle)
+        -- Based on wowsims/forever hunter/dps/melee.apl.siml
+        if is_known(inputs, "Raptor Strike", "raptor_strike_known") and is_ready(inputs.raptor_strike_remaining_cd) then
+            out.action = "raptor_strike"
+            out.spell_name = "Raptor Strike"
+        elseif is_known(inputs, "Hunter's Mark", "hunters_mark_known") and inputs.hunters_mark_active ~= true then
+            out.action = "hunters_mark"
+            out.spell_name = "Hunter's Mark"
+        elseif is_known(inputs, "Mongoose Bite", "mongoose_bite_known") and inputs.mongoose_bite_usable == true and is_ready(inputs.mongoose_bite_remaining_cd) then
+            out.action = "mongoose_bite"
+            out.spell_name = "Mongoose Bite"
+        elseif is_known(inputs, "Strider Kick", "strider_kick_known") and is_ready(inputs.strider_kick_remaining_cd) then
+            out.action = "strider_kick"
+            out.spell_name = "Strider Kick"
+        elseif is_known(inputs, "Immolation Trap", "immolation_trap_known") and is_ready(inputs.immolation_trap_remaining_cd) then
+            out.action = "immolation_trap"
+            out.spell_name = "Immolation Trap"
+        elseif is_known(inputs, "Summon Hawk", "summon_hawk_known") and is_ready(inputs.summon_hawk_remaining_cd) and (type(inputs.hawk_active_count) ~= "number" or inputs.hawk_active_count < 2) then
+            out.action = "hawk"
+            out.spell_name = "Summon Hawk"
+        elseif is_known(inputs, "Wing Clip", "wing_clip_known") and (inputs.strider_kick_known ~= true or (type(inputs.strider_kick_remaining_cd) == "number" and inputs.strider_kick_remaining_cd > 1.5)) and is_ready(inputs.wing_clip_remaining_cd) then
+            out.action = "wing_clip"
+            out.spell_name = "Wing Clip"
+        elseif is_known(inputs, "Aspect of the Hawk", "hawk_known") and is_ready(inputs.hawk_remaining_cd) and (type(inputs.hawk_active_count) ~= "number" or inputs.hawk_active_count < 3) then
+            out.action = "hawk"
+            out.spell_name = "Aspect of the Hawk"
+        end
+        return out
+    end
+
+    -- RANGED / WEAVE HUNTER (Default Leveling & Ranged)
+    -- Based on wowsims/forever hunter/dps/clean_weave.apl.siml, default.apl.siml, turret.apl.siml
+    local in_melee = inputs.weave_band == "melee" or (inputs.unit_distance and inputs.unit_distance <= 5)
+    if in_melee then
+        if is_known(inputs, "Raptor Strike", "raptor_strike_known") and is_ready(inputs.raptor_strike_remaining_cd) then
+            out.action = "raptor_strike"
+            out.spell_name = "Raptor Strike"
+        elseif is_known(inputs, "Strider Kick", "strider_kick_known") and is_ready(inputs.strider_kick_remaining_cd) then
+            out.action = "strider_kick"
+            out.spell_name = "Strider Kick"
+        elseif is_known(inputs, "Mongoose Bite", "mongoose_bite_known") and inputs.mongoose_bite_usable == true and is_ready(inputs.mongoose_bite_remaining_cd) then
+            out.action = "mongoose_bite"
+            out.spell_name = "Mongoose Bite"
+        elseif is_known(inputs, "Immolation Trap", "immolation_trap_known") and is_ready(inputs.immolation_trap_remaining_cd) then
+            out.action = "immolation_trap"
+            out.spell_name = "Immolation Trap"
+        elseif is_known(inputs, "Wing Clip", "wing_clip_known") and is_ready(inputs.wing_clip_remaining_cd) then
+            out.action = "wing_clip"
+            out.spell_name = "Wing Clip"
+        end
+        if out.action then return out end
+    end
+
+    -- Ranged Priority
+    if is_known(inputs, "Hunter's Mark", "hunters_mark_known") and inputs.hunters_mark_active ~= true then
+        out.action = "hunters_mark"
+        out.spell_name = "Hunter's Mark"
+    elseif is_known(inputs, "Serpent Sting", "serpent_known") and inputs.serpent_active ~= true and mana_pct >= 20 then
+        out.action = "serpent"
+        out.spell_name = "Serpent Sting"
+    elseif is_known(inputs, "Arcane Shot", "arcane_known") and is_ready(inputs.arcane_remaining_cd) then
+        out.action = "arcane"
+        out.spell_name = "Arcane Shot"
+    elseif is_known(inputs, "Multi-Shot", "multi_known") and is_ready(inputs.multi_remaining_cd) then
+        out.action = "multi"
+        out.spell_name = "Multi-Shot"
+    elseif is_known(inputs, "Aimed Shot", "aimed_known") and is_ready(inputs.aimed_remaining_cd) then
+        out.action = "aimed"
+        out.spell_name = "Aimed Shot"
+    elseif is_known(inputs, "Sniper Shot", "sniper_known") and is_ready(inputs.sniper_remaining_cd) then
+        out.action = "sniper"
+        out.spell_name = "Sniper Shot"
+    elseif is_known(inputs, "Summon Hawk", "summon_hawk_known") and is_ready(inputs.summon_hawk_remaining_cd) and (type(inputs.hawk_active_count) ~= "number" or inputs.hawk_active_count < 2) then
+        out.action = "hawk"
+        out.spell_name = "Summon Hawk"
+    elseif is_known(inputs, "Aspect of the Hawk", "hawk_known") and is_ready(inputs.hawk_remaining_cd) and (type(inputs.hawk_active_count) ~= "number" or inputs.hawk_active_count < 3) then
+        out.action = "hawk"
+        out.spell_name = "Aspect of the Hawk"
+    end
+    return out
+end
+
+--=========================================================================================
+-- 4. ROGUE (Combat SS, Combat BS, Mutilate, Subtlety Hemo)
+-- Based on wowsims/forever rogue APL: default.apl.json, presets.ts
+--=========================================================================================
+function FG.evaluate_rogue(spec, inputs, out)
+    inputs = inputs or {}
+    out = out or {}
+    spec = spec or FG.resolve_rogue_spec(inputs)
+    local cp = type(inputs.combo_points) == "number" and inputs.combo_points or 0
+    local energy = type(inputs.energy) == "number" and inputs.energy or 0
+    local snd_rem = type(inputs.snd_remaining) == "number" and inputs.snd_remaining or 0
+
+    out.rotation_key = spec
+
+    -- Defensive Riposte proc on parry/defensive state
+    if is_known(inputs, "Riposte", "riposte_known") and inputs.riposte_usable == true and energy >= 10 then
+        out.action = "riposte"
+        out.spell_name = "Riposte"
+        out.hold = true
+        out.hold_text = "RIPOSTE"
+        return out
+    end
+
+    -- Finishers at 4-5 CP, or 1-2 CP if SnD is missing entirely
+    if snd_rem <= 0 and cp >= 1 and is_known(inputs, "Slice and Dice", "snd_known") then
+        out.action = "snd"
+        out.spell_name = "Slice and Dice"
+        return out
+    end
+
+    if cp >= 4 or (cp >= 3 and snd_rem <= 2) then
+        if is_known(inputs, "Expose Armor", "ea_known") and inputs.use_ea == true and inputs.ea_active ~= true then
+            out.action = "ea"
+            out.spell_name = "Expose Armor"
+        elseif is_known(inputs, "Slice and Dice", "snd_known") and snd_rem <= 3 then
+            out.action = "snd"
+            out.spell_name = "Slice and Dice"
+        elseif is_known(inputs, "Envenom", "envenom_known") and inputs.envenom_usable == true then
+            out.action = "envenom"
+            out.spell_name = "Envenom"
+        elseif is_known(inputs, "Rupture", "rupture_known") and inputs.rupture_active ~= true and (inputs.ttd == nil or inputs.ttd >= 8) then
+            out.action = "rupture"
+            out.spell_name = "Rupture"
+        elseif is_known(inputs, "Eviscerate", "eviscerate_known") then
+            out.action = "eviscerate"
+            out.spell_name = "Eviscerate"
+        end
+        if out.action then return out end
+    end
+
+    -- Builders
+    if spec == "mutilate" and is_known(inputs, "Mutilate", "mutilate_known") then
+        if energy >= (inputs.mutilate_cost or 60) then
+            out.action = "mutilate"
+            out.spell_name = "Mutilate"
+        else
+            out.hold = true
+            out.hold_text = "POOL"
+        end
+    elseif (spec == "combat_bs" or spec == "sub_bs") and is_known(inputs, "Backstab", "backstab_known") then
+        if energy >= (inputs.backstab_cost or 60) then
+            out.action = "backstab"
+            out.spell_name = "Backstab"
+        else
+            out.hold = true
+            out.hold_text = "POOL"
+        end
+    elseif spec == "hemo" and is_known(inputs, "Hemorrhage", "hemo_known") then
+        if energy >= (inputs.hemo_cost or 35) then
+            out.action = "hemo"
+            out.spell_name = "Hemorrhage"
+        else
+            out.hold = true
+            out.hold_text = "POOL"
+        end
+    else
+        -- Default: Sinister Strike (General Leveling builder)
+        if is_known(inputs, "Sinister Strike", "ss_known") then
+            if energy >= (inputs.ss_cost or 45) then
+                out.action = "ss"
+                out.spell_name = "Sinister Strike"
+            else
+                out.hold = true
+                out.hold_text = "POOL"
+            end
+        end
+    end
+    return out
+end
+
+--=========================================================================================
+-- 5. DRUID (Feral Bear, Feral Cat, Caster Baseline)
+-- Based on wowsims/forever druid APLs: feralcat/adaptive.apl.json, feralbear/adaptive.apl.json
+--=========================================================================================
+function FG.evaluate_druid(spec, inputs, out)
+    inputs = inputs or {}
+    out = out or {}
+    spec = spec or FG.resolve_druid_spec(inputs)
+
+    out.rotation_key = spec
+
+    if spec == "bear" then
+        -- FERAL BEAR TANK - wowsims/forever feralbear/adaptive.apl.json
+        local rage = type(inputs.rage) == "number" and inputs.rage or 0
+        local hp_pct = type(inputs.player_health_pct) == "number" and inputs.player_health_pct or 100
+
+        if is_known(inputs, "Barkskin", "barkskin_known") and hp_pct <= 40 and is_ready(inputs.barkskin_remaining) then
+            out.action = "barkskin"
+            out.spell_name = "Barkskin"
+        elseif is_known(inputs, "Frenzied Regeneration", "frenzied_regen_known") and hp_pct <= 35 and is_ready(inputs.frenzied_regen_remaining) and rage >= 10 then
+            out.action = "frenzied_regen"
+            out.spell_name = "Frenzied Regeneration"
+        elseif is_known(inputs, "Enrage", "enrage_known") and is_ready(inputs.enrage_remaining) and rage < 20 then
+            out.action = "enrage"
+            out.spell_name = "Enrage"
+        elseif is_known(inputs, "Faerie Fire (Feral)", "faerie_fire_known") and inputs.faerie_fire_active ~= true then
+            out.action = "faerie_fire"
+            out.spell_name = "Faerie Fire (Feral)"
+        elseif is_known(inputs, "Demoralizing Roar", "demo_roar_known") and inputs.demo_roar_active ~= true and rage >= 10 then
+            out.action = "demoralizing_roar"
+            out.spell_name = "Demoralizing Roar"
+        elseif is_known(inputs, "Primal Bite", "primal_bite_known") and is_ready(inputs.primal_bite_remaining) and rage >= 25 then
+            out.action = "primal_bite"
+            out.spell_name = "Primal Bite"
+        elseif is_known(inputs, "Lacerate", "lacerate_known") and (type(inputs.lacerate_stacks) ~= "number" or inputs.lacerate_stacks < 5 or (type(inputs.lacerate_remaining) == "number" and inputs.lacerate_remaining <= 4)) and rage >= 15 then
+            out.action = "lacerate"
+            out.spell_name = "Lacerate"
+        elseif is_known(inputs, "Swipe", "swipe_known") and inputs.target_count and inputs.target_count > 1 and rage >= 20 then
+            out.action = "swipe"
+            out.spell_name = "Swipe"
+        elseif is_known(inputs, "Maul", "maul_known") and (rage >= (inputs.maul_cost or 15) or rage >= 40) then
+            out.action = "maul"
+            out.spell_name = "Maul"
+        else
+            out.hold = true
+            out.hold_text = "POOL"
+        end
+        return out
+    end
+
+    if spec == "cat" then
+        -- FERAL CAT DPS - wowsims/forever feralcat/adaptive.apl.json
+        local energy = type(inputs.energy) == "number" and inputs.energy or 0
+        local cp = type(inputs.combo_points) == "number" and inputs.combo_points or 0
+
+        if inputs.prowl_active == true and is_known(inputs, "Ravage", "ravage_known") and energy >= 60 then
+            out.action = "ravage"
+            out.spell_name = "Ravage"
+            return out
+        end
+
+        if is_known(inputs, "Faerie Fire (Feral)", "faerie_fire_known") and inputs.faerie_fire_active ~= true then
+            out.action = "faerie_fire"
+            out.spell_name = "Faerie Fire (Feral)"
+            return out
+        end
+
+        -- Clearcasting proc: Shred immediately
+        if inputs.clearcasting_active == true and is_known(inputs, "Shred", "shred_known") and inputs.behind_target ~= false then
+            out.action = "shred"
+            out.spell_name = "Shred"
+            return out
+        end
+
+        -- Finishers at 5 Combo Points
+        if cp >= 5 then
+            if is_known(inputs, "Rip", "rip_known") and inputs.rip_active ~= true and (inputs.ttd == nil or inputs.ttd >= 8) and energy >= 30 then
+                out.action = "rip"
+                out.spell_name = "Rip"
+            elseif is_known(inputs, "Ferocious Bite", "fb_known") and energy >= 35 then
+                out.action = "ferocious_bite"
+                out.spell_name = "Ferocious Bite"
+            else
+                out.hold = true
+                out.hold_text = "POOL"
+            end
+            return out
+        end
+
+        -- Bleed Upkeep: Rake
+        if is_known(inputs, "Rake", "rake_known") and inputs.rake_active ~= true and (inputs.ttd == nil or inputs.ttd >= 6) and energy >= 35 then
+            out.action = "rake"
+            out.spell_name = "Rake"
+            return out
+        end
+
+        -- Builders
+        if is_known(inputs, "Shred", "shred_known") and inputs.behind_target ~= false then
+            if energy >= (inputs.shred_cost or 60) then
+                out.action = "shred"
+                out.spell_name = "Shred"
+            else
+                out.hold = true
+                out.hold_text = "POOL"
+            end
+        elseif is_known(inputs, "Claw", "claw_known") then
+            if energy >= (inputs.claw_cost or 45) then
+                out.action = "claw"
+                out.spell_name = "Claw"
+            else
+                out.hold = true
+                out.hold_text = "POOL"
+            end
+        end
+        return out
+    end
+
+    -- CASTER / BASELINE DRUID
+    return out
+end
+
+--=========================================================================================
+-- 6. SHAMAN (Enhancement, General Leveling)
+-- Based on wowsims/forever shaman APL: enhancement/testing.build.json
+--=========================================================================================
+function FG.evaluate_shaman(spec, inputs, out)
+    inputs = inputs or {}
+    out = out or {}
+    spec = spec or FG.resolve_shaman_spec(inputs)
+    local mw_stacks = type(inputs.mw_stacks) == "number" and inputs.mw_stacks or 0
+    local mana_pct = type(inputs.mana_fraction) == "number" and (inputs.mana_fraction * 100) or 100
+
+    out.rotation_key = spec
+
+    -- Enhancement Priority (from wowsims/forever testing.build.json)
+    -- Flame Shock -> Stormstrike -> Lightning Bolt (MW5) -> Earth Shock -> Fire Nova
+    if is_known(inputs, "Flame Shock", "flameshock_known") and inputs.flameshock_active ~= true and is_ready(inputs.shock_remaining) then
+        out.action = "flameshock"
+        out.spell_name = "Flame Shock"
+    elseif is_known(inputs, "Stormstrike", "stormstrike_known") and is_ready(inputs.stormstrike_remaining) then
+        out.action = "stormstrike"
+        out.spell_name = "Stormstrike"
+    elseif is_known(inputs, "Lightning Bolt", "mw_known") and mw_stacks >= 5 then
+        out.action = "weave"
+        out.spell_name = "Lightning Bolt"
+    elseif is_known(inputs, "Earth Shock", "earthshock_known") and is_ready(inputs.shock_remaining) then
+        out.action = "earthshock"
+        out.spell_name = "Earth Shock"
+    elseif is_known(inputs, "Fire Nova", "firenova_known") and is_ready(inputs.firenova_remaining) and (inputs.clearcasting_active == true or mana_pct > 10) then
+        out.action = "firenova"
+        out.spell_name = "Fire Nova"
+    elseif is_known(inputs, "Strength of Earth Totem", "soe_known") and inputs.soe_active ~= true then
+        out.action = "strength_of_earth"
+        out.spell_name = "Strength of Earth Totem"
+    elseif is_known(inputs, "Searing Totem", "searing_known") and inputs.searing_active ~= true then
+        out.action = "searing"
+        out.spell_name = "Searing Totem"
+    elseif is_known(inputs, "Water Shield", "watershield_known") and inputs.watershield_active ~= true then
+        out.action = "watershield"
+        out.spell_name = "Water Shield"
+    elseif is_known(inputs, "Lightning Shield", "lightningshield_known") and inputs.lightningshield_active ~= true then
+        out.action = "lightningshield"
+        out.spell_name = "Lightning Shield"
+    else
+        out.hold = true
+        out.hold_text = "WAIT"
+    end
+    return out
+end
+
+--=========================================================================================
+-- Master Evaluator
+--=========================================================================================
+function FG.evaluate(class, spec, inputs, out)
+    if class == "WARRIOR" then
+        return FG.evaluate_warrior(spec, inputs, out)
+    elseif class == "PALADIN" then
+        return FG.evaluate_paladin(spec, inputs, out)
+    elseif class == "HUNTER" then
+        return FG.evaluate_hunter(spec, inputs, out)
+    elseif class == "ROGUE" then
+        return FG.evaluate_rogue(spec, inputs, out)
+    elseif class == "DRUID" then
+        return FG.evaluate_druid(spec, inputs, out)
+    elseif class == "SHAMAN" then
+        return FG.evaluate_shaman(spec, inputs, out)
+    end
+    return out
+end

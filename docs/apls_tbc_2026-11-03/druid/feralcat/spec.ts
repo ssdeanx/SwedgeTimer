@@ -1,0 +1,195 @@
+import * as OtherInputs from '@features/settings/model/other_inputs';
+import { APLAction, APLListItem, APLRotation, APLRotation_Type as APLRotationType } from '@generated/proto/apl';
+import { Cooldowns, Debuffs, Drums, IndividualBuffs, ItemSlot, PartyBuffs, PseudoStat, RaidBuffs, Spec, Stat, TristateEffect } from '@generated/proto/common';
+import { FeralCatDruid_Rotation as DruidRotation } from '@generated/proto/druid';
+import * as Mechanics from '@sim/constants/mechanics';
+import { PlayerClasses } from '@sim/player/classes';
+import { Player } from '@sim/player/player';
+import { Stats, UnitStat } from '@sim/proto/stats';
+import { defaultExposeWeaknessSettings, defaultRaidBuffMajorDamageCooldowns } from '@sim/proto/utils';
+import { defineSpec } from '@sim/spec_config';
+
+import * as FeralInputs from './inputs';
+import * as Presets from './presets';
+
+export default defineSpec<Spec.SpecFeralCatDruid>({
+	spec: Spec.SpecFeralCatDruid,
+
+	className: 'feral-druid-sim-ui',
+	cssScheme: PlayerClasses.getCssScheme(PlayerClasses.Druid),
+	// List any known bugs / issues here and they'll be shown on the site.
+	knownIssues: [],
+	warnings: [],
+
+	// Extra stats shown in consumables picker (beyond epStats).
+	consumableStats: [Stat.StatMeleeHasteRating, Stat.StatMana, Stat.StatSpirit, Stat.StatMP5],
+
+	// All stats for which EP should be calculated.
+	epStats: [
+		Stat.StatStrength,
+		Stat.StatAgility,
+		Stat.StatAttackPower,
+		Stat.StatFeralAttackPower,
+		Stat.StatPhysicalDamage,
+		Stat.StatMeleeHitRating,
+		Stat.StatExpertiseRating,
+		Stat.StatMeleeCritRating,
+		Stat.StatMeleeHasteRating,
+		Stat.StatArmorPenetration,
+	],
+	gemStats: [Stat.StatAgility, Stat.StatStrength],
+	epPseudoStats: [],
+	// Reference stat against which to calculate EP. I think all classes use either spell power or attack power.
+	epReferenceStat: Stat.StatAgility,
+	// Which stats to display in the Character Stats section, at the bottom of the left-hand sidebar.
+	displayStats: UnitStat.createDisplayStatArray(
+		[
+			Stat.StatHealth,
+			Stat.StatStrength,
+			Stat.StatAgility,
+			Stat.StatStamina,
+			Stat.StatIntellect,
+			Stat.StatSpirit,
+			Stat.StatAttackPower,
+			Stat.StatMana,
+			Stat.StatExpertiseRating,
+			Stat.StatArmorPenetration,
+			Stat.StatArcaneResistance,
+			Stat.StatFireResistance,
+			Stat.StatFrostResistance,
+			Stat.StatNatureResistance,
+			Stat.StatShadowResistance,
+		],
+		[PseudoStat.PseudoStatMeleeHitPercent, PseudoStat.PseudoStatMeleeCritPercent, PseudoStat.PseudoStatMeleeHastePercent],
+	),
+
+	defaults: {
+		// Default equipped gear.
+		gear: Presets.P3_6P_GEARSET.gear,
+		// Default EP weights for sorting gear in the gear picker.
+		epWeights: Presets.P1_EP_PRESET.epWeights,
+		statCaps: (() => {
+			return new Stats()
+				.withPseudoStat(PseudoStat.PseudoStatMeleeHitPercent, 9)
+				.withStat(Stat.StatExpertiseRating, 6.5 * 4 * Mechanics.EXPERTISE_PER_QUARTER_PERCENT_REDUCTION);
+		})(),
+		other: Presets.OtherDefaults,
+		// Default consumes settings.
+		consumables: Presets.DefaultConsumables,
+		// Default rotation settings.
+		rotationType: APLRotationType.TypeAuto,
+		// Default talents.
+		talents: Presets.StandardTalents.data,
+		// Default spec-specific settings.
+		specOptions: Presets.DefaultOptions,
+		// Default raid/party buffs settings.
+		raidBuffs: RaidBuffs.create({
+			...defaultRaidBuffMajorDamageCooldowns(),
+			arcaneBrilliance: true,
+			divineSpirit: TristateEffect.TristateEffectImproved,
+			giftOfTheWild: TristateEffect.TristateEffectImproved,
+			powerWordFortitude: TristateEffect.TristateEffectImproved,
+			shadowProtection: true,
+		}),
+		partyBuffs: PartyBuffs.create({
+			drums: Drums.LesserDrumsOfBattle,
+			ferociousInspiration: 2,
+			battleShout: TristateEffect.TristateEffectImproved,
+			graceOfAirTotem: TristateEffect.TristateEffectImproved,
+			windfuryTotem: TristateEffect.TristateEffectImproved,
+			manaSpringTotem: TristateEffect.TristateEffectRegular,
+			strengthOfEarthTotem: TristateEffect.TristateEffectImproved,
+			totemTwisting: true,
+		}),
+		individualBuffs: IndividualBuffs.create({
+			blessingOfKings: true,
+			blessingOfMight: TristateEffect.TristateEffectImproved,
+			unleashedRage: true,
+		}),
+		debuffs: Debuffs.create({
+			...defaultExposeWeaknessSettings(),
+			bloodFrenzy: true,
+			exposeArmor: TristateEffect.TristateEffectImproved,
+			huntersMark: TristateEffect.TristateEffectImproved,
+			improvedSealOfTheCrusader: TristateEffect.TristateEffectImproved,
+			judgementOfWisdom: true,
+			misery: true,
+			curseOfRecklessness: true,
+			faerieFire: TristateEffect.TristateEffectImproved,
+			sunderArmor: true,
+			giftOfArthas: true,
+		}),
+	},
+
+	// IconInputs to include in the 'Player' section on the settings tab.
+	playerIconInputs: [],
+	// Inputs to include in the 'Rotation' section on the settings tab.
+	rotationInputs: FeralInputs.FeralDruidRotationConfig,
+	// Buff and Debuff inputs to include/exclude, overriding the EP-based defaults.
+	includeBuffDebuffInputs: [Stat.StatMP5, Stat.StatIntellect, Stat.StatStamina],
+	excludeBuffDebuffInputs: [Stat.StatParryRating],
+	// Inputs to include in the 'Other' section on the settings tab.
+	otherInputs: {
+		inputs: [
+			OtherInputs.TotemTwisting,
+			OtherInputs.InputDelay,
+			OtherInputs.DistanceFromTarget,
+			OtherInputs.TankAssignment,
+			OtherInputs.InFrontOfTarget,
+			FeralInputs.CannotShredTarget,
+		],
+	},
+	itemSwapSlots: [ItemSlot.ItemSlotMainHand, ItemSlot.ItemSlotOffHand, ItemSlot.ItemSlotTrinket1, ItemSlot.ItemSlotTrinket2],
+	encounterPicker: {
+		// Whether to include 'Execute Duration (%)' in the 'Encounter' section of the settings tab.
+		showExecuteProportion: true,
+	},
+
+	presets: {
+		epWeights: [Presets.P1_EP_PRESET],
+		// Preset talents that the user can quickly select.
+		talents: [Presets.StandardTalents, Presets.MonocatTalents],
+		rotations: [Presets.SIMPLE, Presets.APL],
+		// Preset gear configurations that the user can quickly select.
+		gear: [
+			Presets.PRE_RAID_GEARSET,
+			Presets.P1_REALISTIC_6P_GEARSET,
+			Presets.P1_REALISTIC_9P_GEARSET,
+			Presets.P1_BIS_6P_GEARSET,
+			Presets.P1_BIS_9P_GEARSET,
+			Presets.P1_ALT_6P_GEARSET,
+			Presets.P1_ALT_9P_GEARSET,
+			Presets.P2_6P_GEARSET,
+			Presets.P2_9P_GEARSET,
+			Presets.P2_ALT_6P_GEARSET,
+			Presets.P2_ALT_9P_GEARSET,
+			Presets.P3_6P_GEARSET,
+			Presets.P3_9P_GEARSET,
+			Presets.P4_6P_GEARSET,
+			Presets.P4_9P_GEARSET,
+			Presets.P5_GEARSET,
+		],
+		itemSwaps: [],
+		builds: [],
+	},
+
+	autoRotation: (_player: Player<Spec.SpecFeralCatDruid>): APLRotation => {
+		return Presets.APL.rotation.rotation!;
+	},
+
+	simpleRotation: (_player: Player<Spec.SpecFeralCatDruid>, simple: DruidRotation, _cooldowns: Cooldowns): APLRotation => {
+		// All cooldowns (potions, sappers, runes) are fired by the Go rotation
+		// during power shifts (ClearForm → fire MCDs → CatForm), not through the APL.
+		const doRotation = APLAction.fromJsonString(
+			`{"catOptimalRotationAction":{"finishingMove":${simple.finishingMove},"biteweave":${simple.biteweave},"ripweave":${simple.ripweave},"ripMinComboPoints":${simple.ripMinComboPoints},"biteMinComboPoints":${simple.biteMinComboPoints},"mangleTrick":${simple.mangleTrick},"rakeTrick":${simple.rakeTrick},"maintainFaerieFire":${simple.maintainFaerieFire}}}`,
+		);
+
+		return APLRotation.create({
+			priorityList: [APLListItem.create({ action: doRotation })],
+		});
+	},
+
+	hiddenMCDs: [],
+
+	reforge: {},
+});

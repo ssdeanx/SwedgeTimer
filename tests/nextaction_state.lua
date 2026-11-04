@@ -1073,6 +1073,14 @@ nohow_fw.how_remaining = nil
 r = fresh(nohow_fw)
 eq(r.filler_kind, "exorcism", "forever: unknown HoW cooldown never cues HoW (generic filler stands)")
 
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, forever = true, exo_known = false, cons_known = true })
+eq(r.filler_kind, "consecration", "forever(level 20): unlearned Exorcism smoothly falls back to Consecration")
+
+r = ev({ seal = "soc", swing_remaining = 0.0, cs_remaining = 6, melee_count = 3,
+    mana_pct = 50, forever = true, exo_known = false, cons_known = false })
+eq(r.filler_kind, nil, "forever(level 1-19): unlearned Exorcism & Consecration yields nil filler cleanly")
+
 r = ev({ seal = "soc", swing_remaining = 0.3, cs_remaining = 6, forever = true })
 eq(r.action, "twist", "forever: in-twist + soc still twists now")
 near(r.prediction_hold, 0, "forever: the 0.4 s landmarks stand (window UNCONFIRMED)")
@@ -1503,7 +1511,7 @@ end
 eq(type(na.FCFS_ORDERS), "table", "FCFS_ORDERS table exists")
 local fcfs_order_count = 0
 for _ in pairs(na.FCFS_ORDERS) do fcfs_order_count = fcfs_order_count + 1 end
-eq(fcfs_order_count, 5, "FCFS_ORDERS carries the five orders")
+eq(fcfs_order_count, 7, "FCFS_ORDERS carries the seven orders")
 -- The Wrath order carries the WotLK APL's UTILITY BAND at the front (the APL
 -- layer, bench/paladin_apl_utility_build_2026-10-20.md §2): Hand of
 -- Reckoning (the APL's i=1) and Hammer of Wrath (i=2) ride above the damage
@@ -1530,9 +1538,16 @@ eq(na.FCFS_ORDERS.sod_shock[3], "hs", "FCFS_ORDERS.sod_shock puts Holy Shock thi
 eq(na.FCFS_ORDERS.sod_shock[4], "cs", "FCFS_ORDERS.sod_shock ends with Crusader Strike")
 eq(na.FCFS_ORDERS.sod_wrath[1], "ds", "FCFS_ORDERS.sod_wrath starts with Divine Storm")
 eq(na.FCFS_ORDERS.sod_wrath[5], "cons", "FCFS_ORDERS.sod_wrath ends with Consecration")
+eq(na.FCFS_ORDERS.prot_forever[1], "rf", "FCFS_ORDERS.prot_forever starts with Righteous Fury")
+eq(na.FCFS_ORDERS.prot_forever[2], "seal", "FCFS_ORDERS.prot_forever puts seal maintenance second")
+eq(na.FCFS_ORDERS.prot_forever[3], "judge", "FCFS_ORDERS.prot_forever puts Judgement third")
+eq(na.FCFS_ORDERS.prot_forever[4], "cons", "FCFS_ORDERS.prot_forever puts Consecration fourth")
+eq(na.FCFS_ORDERS.prot_forever[6], "holy_shield", "FCFS_ORDERS.prot_forever puts Holy Shield sixth")
+eq(na.FCFS_ORDERS.prot_forever[7], "holy_strike", "FCFS_ORDERS.prot_forever puts Holy Strike seventh")
 -- fcfs_order: the accessor for one mode (nil for an unknown mode).
 eq(na.fcfs_order("sod"), na.FCFS_ORDERS.sod, "fcfs_order returns the table")
 eq(na.fcfs_order("sod_stack"), na.FCFS_ORDERS.sod_stack, "fcfs_order returns the stack table")
+eq(na.fcfs_order("prot_forever"), na.FCFS_ORDERS.prot_forever, "fcfs_order returns prot_forever table")
 eq(na.fcfs_order("nope"), nil, "fcfs_order: an unknown mode answers nil")
 eq(na.fcfs_order(nil), nil, "fcfs_order: no mode answers nil")
 eq(na.fcfs_order(42), nil, "fcfs_order: a non-string answers nil")
@@ -1540,6 +1555,122 @@ eq(na.fcfs_order(42), nil, "fcfs_order: a non-string answers nil")
 -- caller cannot drift from the engine by reading a copy).
 local fev_mode = na.FCFS_ORDERS.sod
 eq(fev_mode, na.FCFS_ORDERS["sod"], "FCFS_ORDERS.sod is one shared table")
+
+-- Prot Forever FCFS tests (level-gated decision engine) ----------------------
+do
+    -- 1. Righteous Fury missing: prompts rf
+    local r1 = na.evaluate_fcfs({
+        fcfs_mode = "prot_forever",
+        righteous_fury_known = true,
+        has_righteous_fury = false,
+    }, {})
+    eq(r1.action, "rf", "prot_forever: missing Righteous Fury prompts rf")
+
+    -- 2. Seal inactive: prompts sor (or sof if known)
+    local r2 = na.evaluate_fcfs({
+        fcfs_mode = "prot_forever",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        seal_inactive = true,
+        seal_fury_known = false,
+    }, {})
+    eq(r2.action, "sor", "prot_forever: inactive seal prompts sor")
+
+    local r2b = na.evaluate_fcfs({
+        fcfs_mode = "prot_forever",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        seal_inactive = true,
+        seal_fury_known = true,
+    }, {})
+    eq(r2b.action, "sof", "prot_forever: inactive seal prompts sof when Seal of Fury known")
+
+    -- 3. Judgement ready: prompts judge and cues judge
+    local r3 = na.evaluate_fcfs({
+        fcfs_mode = "prot_forever",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        seal_inactive = false,
+        judge_remaining = 0,
+    }, {})
+    eq(r3.action, "judge", "prot_forever: judge ready prompts judge")
+    eq(r3.judge_call, true, "prot_forever: judge ready sets judge_call")
+
+    -- 4. Consecration ready (Judge on cooldown)
+    local r4 = na.evaluate_fcfs({
+        fcfs_mode = "prot_forever",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        seal_inactive = false,
+        judge_remaining = 6,
+        cons_remaining = 0,
+        mana_pct = 80,
+    }, {})
+    eq(r4.action, "consecration", "prot_forever: cons ready prompts consecration")
+
+    -- 5. Holy Shield ready (Shield equipped, Judge/Cons on CD)
+    local r5 = na.evaluate_fcfs({
+        fcfs_mode = "prot_forever",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        seal_inactive = false,
+        judge_remaining = 6,
+        cons_remaining = 6,
+        has_shield = true,
+        holy_shield_known = true,
+        holy_shield_remaining = 0,
+    }, {})
+    eq(r5.action, "holy_shield", "prot_forever: Holy Shield ready prompts holy_shield")
+
+    -- 6. Holy Strike ready
+    local r6 = na.evaluate_fcfs({
+        fcfs_mode = "prot_forever",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        seal_inactive = false,
+        judge_remaining = 6,
+        cons_remaining = 6,
+        has_shield = true,
+        holy_shield_known = true,
+        holy_shield_remaining = 5,
+        holy_strike_known = true,
+        holy_strike_remaining = 0,
+    }, {})
+    eq(r6.action, "holy_strike", "prot_forever: Holy Strike ready prompts holy_strike")
+
+    -- 7. Level Gated: Level 5 player (only has Judgement, no Holy Shield/Holy Strike/Cons/RF)
+    local r7_ready = na.evaluate_fcfs({
+        fcfs_mode = "prot_forever",
+        righteous_fury_known = false,
+        has_righteous_fury = false,
+        seal_inactive = false,
+        judge_remaining = 0,
+        cons_remaining = nil,
+        has_shield = true,
+        holy_shield_known = false,
+        holy_shield_remaining = nil,
+        holy_strike_known = false,
+        holy_strike_remaining = nil,
+        exo_remaining = nil,
+    }, {})
+    eq(r7_ready.action, "judge", "prot_forever(level 5): unlearned spells skipped smoothly, judge prompts")
+
+    local r7_cd = na.evaluate_fcfs({
+        fcfs_mode = "prot_forever",
+        righteous_fury_known = false,
+        has_righteous_fury = false,
+        seal_inactive = false,
+        judge_remaining = 4,
+        cons_remaining = nil,
+        has_shield = true,
+        holy_shield_known = false,
+        holy_shield_remaining = nil,
+        holy_strike_known = false,
+        holy_strike_remaining = nil,
+        exo_remaining = nil,
+    }, {})
+    eq(r7_cd.hold, true, "prot_forever(level 5): judge on cooldown holds cleanly without error")
+end
 
 --=========================================================================================
 -- The display half's FontStrings (nextaction_ui.lua): every one carries a font

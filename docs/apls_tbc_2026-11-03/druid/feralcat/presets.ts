@@ -1,0 +1,125 @@
+import * as PresetUtils from '@app/preset_utils';
+import { ConsumesSpec, Profession, Race, Spec, Stat } from '@generated/proto/common';
+import {
+	FeralCatDruid_Options as FeralDruidOptions,
+	FeralCatDruid_Rotation as FeralCatDruidRotation,
+	FeralCatDruid_Rotation_FinishingMove as FinishingMove,
+} from '@generated/proto/druid';
+import { SavedTalents } from '@generated/proto/ui';
+import { Phase } from '@sim/constants/other';
+import { Stats } from '@sim/proto/stats';
+
+import DefaultApl from './apls/default.apl.json';
+import P1_Alt_6P_Gear from './gear_sets/p1_alt_6p.gear.json';
+import P1_Alt_9P_Gear from './gear_sets/p1_alt_9p.gear.json';
+import P1_BiS_6P_Gear from './gear_sets/p1_bis_6p.gear.json';
+import P1_BiS_9P_Gear from './gear_sets/p1_bis_9p.gear.json';
+import P1_Realistic_6P_Gear from './gear_sets/p1_realistic_6p.gear.json';
+import P1_Realistic_9P_Gear from './gear_sets/p1_realistic_9p.gear.json';
+import P2_6P_Gear from './gear_sets/p2_6p.gear.json';
+import P2_9P_Gear from './gear_sets/p2_9p.gear.json';
+import P2_Alt_6P_Gear from './gear_sets/p2_alt_6p.gear.json';
+import P2_Alt_9P_Gear from './gear_sets/p2_alt_9p.gear.json';
+import P3_6P_Gear from './gear_sets/p3_6p.gear.json';
+import P3_9P_Gear from './gear_sets/p3_9p.gear.json';
+import P4_6P_Gear from './gear_sets/p4_6p.gear.json';
+import P4_9P_Gear from './gear_sets/p4_9p.gear.json';
+import P5Gear from './gear_sets/p5.gear.json';
+import PreRaidGear from './gear_sets/pre_raid.gear.json';
+
+// Default talents. Uses the wowhead calculator format, make the talents on
+// https://wowhead.com/tbc/talent-calc and copy the numbers in the url.
+export const StandardTalents = {
+	name: 'Standard',
+	data: SavedTalents.create({
+		talentsString: '-503032132322105301251-05503301',
+	}),
+};
+
+export const MonocatTalents = {
+	name: 'Monocat',
+	data: SavedTalents.create({
+		talentsString: '-553002132322105301051-05503301',
+	}),
+};
+
+// Phase 1
+export const PRE_RAID_GEARSET = PresetUtils.makePresetGear('Pre-Raid', PreRaidGear, { phase: Phase.Phase1 });
+export const P1_REALISTIC_6P_GEARSET = PresetUtils.makePresetGear('Realistic 6%', P1_Realistic_6P_Gear, { phase: Phase.Phase1 });
+export const P1_REALISTIC_9P_GEARSET = PresetUtils.makePresetGear('Realistic 9%', P1_Realistic_9P_Gear, { phase: Phase.Phase1 });
+export const P1_BIS_6P_GEARSET = PresetUtils.makePresetGear('BiS 6%', P1_BiS_6P_Gear, { phase: Phase.Phase1 });
+export const P1_BIS_9P_GEARSET = PresetUtils.makePresetGear('BiS 9%', P1_BiS_9P_Gear, { phase: Phase.Phase1 });
+export const P1_ALT_6P_GEARSET = PresetUtils.makePresetGear('Alt 6%', P1_Alt_6P_Gear, { phase: Phase.Phase1 });
+export const P1_ALT_9P_GEARSET = PresetUtils.makePresetGear('Alt 9%', P1_Alt_9P_Gear, { phase: Phase.Phase1 });
+
+// Phase 2
+export const P2_6P_GEARSET = PresetUtils.makePresetGear('BiS 6%', P2_6P_Gear, { phase: Phase.Phase2 });
+export const P2_ALT_6P_GEARSET = PresetUtils.makePresetGear('Alt 6%', P2_Alt_6P_Gear, { phase: Phase.Phase2 });
+export const P2_9P_GEARSET = PresetUtils.makePresetGear('BiS 9%', P2_9P_Gear, { phase: Phase.Phase2 });
+export const P2_ALT_9P_GEARSET = PresetUtils.makePresetGear('Alt 9%', P2_Alt_9P_Gear, { phase: Phase.Phase2 });
+
+// Phase 3
+export const P3_6P_GEARSET = PresetUtils.makePresetGear('BiS 6%', P3_6P_Gear, { phase: Phase.Phase3 });
+export const P3_9P_GEARSET = PresetUtils.makePresetGear('BiS 9%', P3_9P_Gear, { phase: Phase.Phase3 });
+
+// Phase 4
+export const P4_6P_GEARSET = PresetUtils.makePresetGear('BiS 6%', P4_6P_Gear, { phase: Phase.Phase4 });
+export const P4_9P_GEARSET = PresetUtils.makePresetGear('BiS 9%', P4_9P_Gear, { phase: Phase.Phase4 });
+
+// Phase 5
+export const P5_GEARSET = PresetUtils.makePresetGear('BiS', P5Gear, { phase: Phase.Phase5 });
+
+export const DefaultOptions = FeralDruidOptions.create({});
+
+export const DefaultConsumables = ConsumesSpec.create({
+	potId: 22838, // Haste Potion
+	battleElixirId: 22831, // Elixir of Major Agility
+	guardianElixirId: 32067, // Elixir of Draenic Wisdom
+	foodId: 27664, // Grilled Mudfish (+20 Agility)
+	mhImbueId: 34340, // Adamantite Weightstone
+	conjuredId: 12662, // Demonic Rune
+	superSapper: true,
+	goblinSapper: true,
+	scrollAgi: true,
+	scrollStr: true,
+});
+
+export const OtherDefaults = {
+	distanceFromTarget: 0,
+	profession1: Profession.Engineering,
+	profession2: Profession.Enchanting,
+	race: Race.RaceNightElf,
+	reactionTime: 250,
+};
+
+export const P1_EP_PRESET = PresetUtils.makePresetEpWeights(
+	'P1',
+	Stats.fromMap(
+		{
+			[Stat.StatAgility]: 1.16,
+			[Stat.StatStrength]: 0.78,
+			[Stat.StatAttackPower]: 0.35,
+			[Stat.StatFeralAttackPower]: 0.35,
+			[Stat.StatMeleeHitRating]: 1.02,
+			[Stat.StatExpertiseRating]: 1.02,
+			[Stat.StatMeleeCritRating]: 0.77,
+			[Stat.StatMeleeHasteRating]: 0.41,
+			[Stat.StatArmorPenetration]: 0.16,
+			[Stat.StatPhysicalDamage]: 3.13,
+		},
+		{},
+	),
+);
+
+export const DefaultRotation = FeralCatDruidRotation.create({
+	finishingMove: FinishingMove.Rip,
+	biteweave: true,
+	ripMinComboPoints: 5,
+	biteMinComboPoints: 5,
+	mangleTrick: true,
+	maintainFaerieFire: true,
+});
+
+export const SIMPLE = PresetUtils.makePresetSimpleRotation('Simple', Spec.SpecFeralCatDruid, DefaultRotation);
+
+export const APL = PresetUtils.makePresetAPLRotation('APL', DefaultApl);

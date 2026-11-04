@@ -2872,6 +2872,7 @@ function ST.DRUID.gather_guide_inputs(self, out)
     inputs.rake_refresh = db.guide_rake_refresh or 4
 
     -- Dynamic spellbook knowledge checks (leveling gates, fail-visible):
+    inputs.maul_known = is_druid_spell_known(6807, MAUL_NAME)
     inputs.mangle_known = is_druid_spell_known(33878, MANGLE_NAME)
     inputs.rip_known = is_druid_spell_known(1079, RIP_NAME)
     inputs.rake_known = is_druid_spell_known(1822, RAKE_NAME)
@@ -2893,6 +2894,9 @@ ST.DRUID.guide = {
     -- Pure: the frozen druid rule matrix (st.druid_guide in druid_guide.lua); guarded
     -- so a flavor without that module stays inert rather than erroring.
     evaluate = function(inputs, out)
+        if st.family == "FOREVER" and st.forever_guide and st.forever_guide.evaluate then
+            return st.forever_guide.evaluate("DRUID", nil, inputs, out)
+        end
         if st.druid_guide and st.druid_guide.evaluate then
             return st.druid_guide.evaluate(inputs, out)
         end

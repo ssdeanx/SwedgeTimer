@@ -1003,6 +1003,37 @@ local function is_sod_client()
         or is_spell_known_query(consumed_by_rage_id)
 end
 
+ST.WARRIOR.shield_slam_ids = get_tab({ 23922, 23923, 23924, 23925, 25258, 30356, 47487, 47488 })
+
+function ST.WARRIOR.is_shield_slam_known()
+    local ids = ST.WARRIOR.shield_slam_ids
+    if type(ids) == "table" then
+        for id in pairs(ids) do
+            if is_spell_known_query(id) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function ST.WARRIOR.is_prot_spec(self)
+    local db = self and self:get_class_table() or {}
+    local spec = db.warrior_spec or "auto"
+    if spec == "protection" then
+        return true
+    elseif spec == "arms" or spec == "fury" then
+        return false
+    end
+    if api.is_shield_equipped and api.is_shield_equipped() == true then
+        return true
+    end
+    if ST.WARRIOR.is_shield_slam_known() then
+        return true
+    end
+    return false
+end
+
 -- Rank resolution retry throttle: a client that cannot answer right now (a cold spell
 -- book, a restricted read) is asked again after the backoff instead of on every bar frame
 -- (the rogue lane's retry-able latch shape, classes/rogue.lua ROGUE_SPELL_RETRY).
@@ -3621,6 +3652,34 @@ local guide_slots_forever = { guide_slot_op, guide_slot_execute, guide_slot_slam
     WARRIOR_UTILITY.slots.death_wish_era, WARRIOR_UTILITY.slots.recklessness, WARRIOR_UTILITY.slots.sweeping_strikes,
     WARRIOR_UTILITY.slots.bloodrage, WARRIOR_UTILITY.slots.battle_shout_era, WARRIOR_UTILITY.slots.battle_stance }
 
+ST.WARRIOR.shield_slam_ids = get_tab({ 23922, 23923, 23924, 23925, 25258, 30356, 47487, 47488 })
+ST.WARRIOR.revenge_ids = get_tab({ 6572, 6574, 7379, 11600, 11601, 25288, 30357, 47497, 47498 })
+
+ST.WARRIOR.guide_slot_shield_block = { key = "shield_block", spell_id = 2565, cooldown_key = "shield_block",
+    name_suffix = "IconShieldBlock", swipe_duration = 5 }
+ST.WARRIOR.guide_slot_shield_slam = { key = "shield_slam", spell_id = 23922, cooldown_key = "shield_slam",
+    name_suffix = "IconShieldSlam", swipe_duration = 6 }
+ST.WARRIOR.guide_slot_revenge = { key = "revenge", spell_id = 6572, cooldown_key = "revenge",
+    name_suffix = "IconRevenge", swipe_duration = 5 }
+ST.WARRIOR.guide_slot_tc = { key = "thunder_clap", spell_id = 6343, cooldown_key = "thunder_clap",
+    name_suffix = "IconThunderClap", swipe_duration = 6 }
+ST.WARRIOR.guide_slot_demo = { key = "demo_shout", spell_id = 1160, cooldown_key = "demo_shout",
+    name_suffix = "IconDemoShout" }
+
+ST.WARRIOR.guide_slots_prot = {
+    ST.WARRIOR.guide_slot_shield_block,
+    ST.WARRIOR.guide_slot_shield_slam,
+    ST.WARRIOR.guide_slot_revenge,
+    guide_slot_sunder,
+    ST.WARRIOR.guide_slot_tc,
+    ST.WARRIOR.guide_slot_demo,
+    guide_slot_hs,
+    guide_slot_cleave,
+    guide_slot_rend,
+    WARRIOR_UTILITY.slots.bloodrage,
+    WARRIOR_UTILITY.slots.defensive_stance,
+}
+
 -- Resolve the guide icons to the client's current ranks; called once from post_init,
 -- before the shared frame builds its icons. A rank that does not resolve keeps the
 -- rank-1 fallback above.
@@ -3660,6 +3719,14 @@ function ST.WARRIOR.resolve_guide_icons()
     end
     if sunder_current_id then
         guide_slot_sunder.spell_id = sunder_current_id
+    end
+    ST.WARRIOR.shield_slam_current_id = resolve_rank(ST.WARRIOR.shield_slam_ids, ST.WARRIOR.shield_slam_current_id)
+    if ST.WARRIOR.shield_slam_current_id and ST.WARRIOR.guide_slot_shield_slam then
+        ST.WARRIOR.guide_slot_shield_slam.spell_id = ST.WARRIOR.shield_slam_current_id
+    end
+    ST.WARRIOR.revenge_current_id = resolve_rank(ST.WARRIOR.revenge_ids, ST.WARRIOR.revenge_current_id)
+    if ST.WARRIOR.revenge_current_id and ST.WARRIOR.guide_slot_revenge then
+        ST.WARRIOR.guide_slot_revenge.spell_id = ST.WARRIOR.revenge_current_id
     end
 end
 
@@ -4208,7 +4275,199 @@ function ST.WARRIOR.gather_guide_inputs(self, out)
     else
         inputs.sod_rend_rune_known = nil
     end
+
+    local is_prot = self and self.warrior_is_prot == true
+    if is_prot then
+        inputs.prot = true
+        inputs.has_shield = api.is_shield_equipped and api.is_shield_equipped() == true
+        inputs.shield_block_known = is_spell_known_query(shield_block_id)
+        if inputs.shield_block_known then
+            inputs.shield_block_remaining, inputs.shield_block_duration = get_guide_cooldown(shield_block_id)
+        else
+            inputs.shield_block_remaining, inputs.shield_block_duration = nil, nil
+        end
+
+        ST.WARRIOR.shield_slam_current_id = resolve_rank(ST.WARRIOR.shield_slam_ids, ST.WARRIOR.shield_slam_current_id)
+        local cur_ss = ST.WARRIOR.shield_slam_current_id or 23922
+        inputs.shield_slam_known = type(ST.WARRIOR.shield_slam_current_id) == "number" or (ST.WARRIOR.shield_slam_current_id == nil and is_spell_known_query(23922))
+        if inputs.shield_slam_known then
+            inputs.shield_slam_remaining, inputs.shield_slam_duration = get_guide_cooldown(cur_ss)
+            inputs.shield_slam_cost = rage_cost_of(api.GetSpellPowerCost(spell_query(cur_ss))) or 20
+        else
+            inputs.shield_slam_remaining, inputs.shield_slam_duration = nil, nil
+        end
+
+        ST.WARRIOR.revenge_current_id = resolve_rank(ST.WARRIOR.revenge_ids, ST.WARRIOR.revenge_current_id)
+        local cur_rev = ST.WARRIOR.revenge_current_id or 6572
+        inputs.revenge_known = type(ST.WARRIOR.revenge_current_id) == "number" or (ST.WARRIOR.revenge_current_id == nil and is_spell_known_query(6572))
+        if inputs.revenge_known then
+            inputs.revenge_remaining, inputs.revenge_duration = get_guide_cooldown(cur_rev)
+            inputs.revenge_cost = rage_cost_of(api.GetSpellPowerCost(spell_query(cur_rev))) or 5
+            local q = spell_query(cur_rev)
+            local u, ins = api.IsSpellUsable(q)
+            inputs.revenge_usable = (u == true or ins == true)
+        else
+            inputs.revenge_remaining, inputs.revenge_duration = nil, nil
+            inputs.revenge_usable = false
+        end
+
+        sunder_current_id = resolve_rank(sunder_armor_ids, sunder_current_id)
+        inputs.sunder_known = type(sunder_current_id) == "number" or (sunder_current_id == nil and is_spell_known_query(7386))
+        inputs.sunder_stacks, inputs.sunder_remaining, inputs.sunder_duration = get_sunder_upkeep_window(now)
+        inputs.sunder_cost = rage_cost_of(api.GetSpellPowerCost(spell_query(sunder_current_id or 7386))) or 15
+
+        inputs.thunder_clap_known = is_spell_known_query(6343)
+        if inputs.thunder_clap_known then
+            inputs.thunder_clap_remaining, inputs.thunder_clap_duration = get_guide_cooldown(6343)
+            inputs.thunder_clap_cost = rage_cost_of(api.GetSpellPowerCost(spell_query(6343))) or 20
+            inputs.thunder_clap_debuff_remaining = (self.warrior_tc_expires and self.warrior_tc_expires > now) and (self.warrior_tc_expires - now) or nil
+        end
+
+        inputs.demo_shout_known = is_spell_known_query(1160)
+        if inputs.demo_shout_known then
+            inputs.demo_shout_cost = rage_cost_of(api.GetSpellPowerCost(spell_query(1160))) or 10
+            inputs.demo_shout_debuff_remaining = (self.warrior_demo_expires and self.warrior_demo_expires > now) and (self.warrior_demo_expires - now) or nil
+        end
+
+        inputs.rend_known = is_spell_known_query(772)
+        if inputs.rend_known then
+            inputs.rend_remaining, inputs.rend_duration = get_rend_debuff_window(now)
+            inputs.rend_cost = rage_cost_of(api.GetSpellPowerCost(spell_query(772))) or 10
+        end
+
+        inputs.has_shield_block_buff = (self.warrior_shield_block_expires and self.warrior_shield_block_expires > now)
+        local cur_hp = api.UnitHealth("player")
+        local max_hp = api.UnitHealthMax("player")
+        if type(cur_hp) == "number" and type(max_hp) == "number" and max_hp > 0 then
+            inputs.player_health_pct = (cur_hp / max_hp) * 100
+        end
+    end
     return inputs
+end
+
+local function is_off_cooldown(remaining)
+    return type(remaining) ~= "number" or remaining <= 0
+end
+
+function ST.WARRIOR.evaluate_prot(inputs, out)
+    inputs = inputs or {}
+    if type(out) ~= "table" then
+        out = {}
+    end
+    local action = nil
+    local hold = false
+    local hold_text = nil
+
+    -- 0. Queued attack rides
+    if inputs.hs_queued == true or inputs.cleave_queued == true then
+        out.action = nil
+        out.hold = true
+        out.hold_text = "RIDE"
+        out.filler_slot = nil
+        out.judge_slot = nil
+        out.rotation_key = "prot"
+        out.waiting_judgement = false
+        return out
+    end
+
+    -- 1. Emergency Defensive Cooldowns
+    if type(inputs.player_health_pct) == "number" then
+        if inputs.player_health_pct <= 35 and inputs.shield_wall_known == true
+            and is_off_cooldown(inputs.shield_wall_remaining) then
+            action = "shield_wall"
+        elseif inputs.player_health_pct <= 40 and inputs.last_stand_known == true
+            and is_off_cooldown(inputs.last_stand_remaining) then
+            action = "last_stand"
+        end
+    end
+
+    -- 2. Shield Block: rage >= 40 or shield block buff missing
+    if action == nil and inputs.shield_block_known ~= false
+        and is_off_cooldown(inputs.shield_block_remaining)
+        and inputs.has_shield == true
+        and (type(inputs.rage) == "number" and inputs.rage >= 10) then
+        if (inputs.rage >= 40) or (inputs.has_shield_block_buff ~= true) then
+            action = "shield_block"
+        end
+    end
+
+    -- 3. Shield Slam: top priority single-target strike (Level 40 talent)
+    if action == nil and inputs.shield_slam_known == true
+        and is_off_cooldown(inputs.shield_slam_remaining)
+        and inputs.has_shield == true
+        and (type(inputs.rage) == "number" and inputs.rage >= (inputs.shield_slam_cost or 20)) then
+        action = "shield_slam"
+    end
+
+    -- 4. Revenge: procs after block/dodge/parry, high threat, very cheap (5 rage)
+    if action == nil and inputs.revenge_known ~= false
+        and inputs.revenge_usable == true
+        and is_off_cooldown(inputs.revenge_remaining)
+        and (type(inputs.rage) == "number" and inputs.rage >= (inputs.revenge_cost or 5)) then
+        action = "revenge"
+    end
+
+    -- 5. Sunder Armor: build initial 5 stacks
+    if action == nil and inputs.sunder_known ~= false
+        and (type(inputs.sunder_stacks) ~= "number" or inputs.sunder_stacks < 5)
+        and (type(inputs.rage) == "number" and inputs.rage >= (inputs.sunder_cost or 15)) then
+        action = "sunder"
+    end
+
+    -- 6. Thunder Clap: multi-target (> 1) OR debuff expiring (<= 6s or missing)
+    if action == nil and inputs.thunder_clap_known ~= false
+        and is_off_cooldown(inputs.thunder_clap_remaining)
+        and (type(inputs.rage) == "number" and inputs.rage >= (inputs.thunder_clap_cost or 20)) then
+        local tc_rem = inputs.thunder_clap_debuff_remaining
+        if (type(inputs.target_count) == "number" and inputs.target_count > 1)
+            or (type(tc_rem) ~= "number" or tc_rem <= 6) then
+            action = "thunder_clap"
+        end
+    end
+
+    -- 7. Demoralizing Shout: debuff expiring (<= 6s or missing)
+    if action == nil and inputs.demo_shout_known ~= false
+        and (type(inputs.rage) == "number" and inputs.rage >= (inputs.demo_shout_cost or 10)) then
+        local demo_rem = inputs.demo_shout_debuff_remaining
+        if type(demo_rem) ~= "number" or demo_rem <= 6 then
+            action = "demo_shout"
+        end
+    end
+
+    -- 8. Sunder Armor: refresh if expiring (<= 10s)
+    if action == nil and inputs.sunder_known ~= false
+        and (type(inputs.sunder_remaining) == "number" and inputs.sunder_remaining <= 10)
+        and (type(inputs.rage) == "number" and inputs.rage >= (inputs.sunder_cost or 15)) then
+        action = "sunder"
+    end
+
+    -- 9. Rend: if not active on target
+    if action == nil and inputs.rend_known == true
+        and (type(inputs.rend_remaining) ~= "number" or inputs.rend_remaining <= 0)
+        and (type(inputs.rage) == "number" and inputs.rage >= (inputs.rend_cost or 10)) then
+        action = "rend"
+    end
+
+    -- 10. Heroic Strike / Cleave: on-next-attack rage dump
+    if action == nil and type(inputs.rage) == "number" then
+        local floor = inputs.hs_rage_floor or 40
+        if inputs.rage >= floor or (inputs.shield_slam_known ~= true and inputs.sunder_known ~= true and inputs.rage >= (inputs.hs_cost or 15)) then
+            if type(inputs.target_count) == "number" and inputs.target_count > 1 and inputs.cleave_known ~= false then
+                action = "cleave"
+            elseif inputs.hs_known ~= false then
+                action = "hs"
+            end
+        end
+    end
+
+    out.action = action
+    out.hold = hold
+    out.hold_text = hold_text
+    out.filler_slot = nil
+    out.judge_slot = nil
+    out.rotation_key = "prot"
+    out.waiting_judgement = false
+    return out
 end
 
 ST.WARRIOR.guide = {
@@ -4230,6 +4489,12 @@ ST.WARRIOR.guide = {
     -- before it reaches the frame, so the label and the guide can never
     -- disagree (this same wrapper feeds get_rotation_key).
     evaluate = function(inputs, out)
+        if is_forever_guide and st.forever_guide and st.forever_guide.evaluate then
+            return st.forever_guide.evaluate("WARRIOR", nil, inputs, out)
+        end
+        if inputs and inputs.prot == true then
+            return ST.WARRIOR.evaluate_prot(inputs, out)
+        end
         if st.warrior_guide and st.warrior_guide.evaluate then
             st.warrior_guide.evaluate(inputs, out)
             return ST.WARRIOR.gate_composite_action(inputs, out)
@@ -4397,6 +4662,25 @@ local hud_slot_raging = { key = "raging_blow", title = "Raging Blow", kind = "sp
 local hud_slot_trinket1 = { key = "trinket1", title = "Trinket 1", kind = "trinket", inv_slot = 13 }
 local hud_slot_trinket2 = { key = "trinket2", title = "Trinket 2", kind = "trinket", inv_slot = 14 }
 
+ST.WARRIOR.hud_slot_shield_block = { key = "shield_block", title = "Shield Block", kind = "spell", spell = 2565 }
+ST.WARRIOR.hud_slot_shield_slam = { key = "shield_slam", title = "Shield Slam", kind = "spell", spell = 23922 }
+ST.WARRIOR.hud_slot_revenge = { key = "revenge", title = "Revenge", kind = "spell", spell = 6572 }
+ST.WARRIOR.hud_slot_tc = { key = "thunder_clap", title = "Thunder Clap", kind = "spell", spell = 6343 }
+ST.WARRIOR.hud_slot_demo = { key = "demo_shout", title = "Demoralizing Shout", kind = "spell", spell = 1160 }
+
+ST.WARRIOR.hud_slots_prot = {
+    ST.WARRIOR.hud_slot_shield_block,
+    ST.WARRIOR.hud_slot_shield_slam,
+    ST.WARRIOR.hud_slot_revenge,
+    hud_slot_sunder,
+    ST.WARRIOR.hud_slot_tc,
+    ST.WARRIOR.hud_slot_demo,
+    hud_slot_hs,
+    hud_slot_cleave,
+    hud_slot_trinket1,
+    hud_slot_trinket2,
+}
+
 if is_tbc_guide then
     -- The TBC row mirrors the TBC guide set (op, execute, slam, hs, bt, ww +
     -- the Sunder upkeep slot - the W-21 mirror). The sunder slot is one of the
@@ -4420,9 +4704,14 @@ end
 -- above serve pre-post_init readers. TBC, Era-base and Wrath-fury keep their
 -- load-time sets here (re-assigned identically, with the new slots).
 function ST.WARRIOR.resolve_guide_slots(self)
-    local arms = self and self.warrior_is_arms == true
-    local sod_branch = self and self.warrior_is_sod == true
-    if is_wrath_guide and arms then
+    local prot = ST.WARRIOR.is_prot_spec(self)
+    self.warrior_is_prot = prot
+    local arms = not prot and self and self.warrior_is_arms == true
+    local sod_branch = not prot and self and self.warrior_is_sod == true
+    if prot then
+        ST.WARRIOR.guide.slots = ST.WARRIOR.guide_slots_prot
+        ST.WARRIOR.HUD_SLOTS = ST.WARRIOR.hud_slots_prot
+    elseif is_wrath_guide and arms then
         ST.WARRIOR.guide.slots = guide_slots_wrath_arms
         ST.WARRIOR.HUD_SLOTS = { hud_slot_op, hud_slot_execute, hud_slot_rend,
             hud_slot_ms, hud_slot_bladestorm, hud_slot_hs,
@@ -4504,6 +4793,11 @@ ST.WARRIOR.HUD_COOLDOWN_FALLBACK = {
     ms = 6,
     bladestorm = 90,
     raging_blow = 8,
+    shield_block = 5,
+    shield_slam = 6,
+    revenge = 5,
+    thunder_clap = 6,
+    demo_shout = 0,
 }
 
 -- Slots that never borrow the GCD swipe (the paladin's judgement/wings rule in

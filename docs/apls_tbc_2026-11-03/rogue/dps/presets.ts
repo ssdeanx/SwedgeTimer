@@ -1,0 +1,72 @@
+import * as PresetUtils from '@app/preset_utils';
+import { ConsumesSpec, PseudoStat, Stat } from '@generated/proto/common';
+import { Rogue_Options as RogueOptions } from '@generated/proto/rogue';
+import { SavedTalents } from '@generated/proto/ui';
+import { Stats } from '@sim/proto/stats';
+
+import SinisterAPL from './apls/swords.apl.json';
+import P1SwordsGear from './gear_sets/p1.gear.json';
+import P2SwordsGear from './gear_sets/p2.gear.json';
+import P3SwordsGear from './gear_sets/p3.gear.json';
+import PreraidSwordsGear from './gear_sets/preraid.gear.json';
+
+// Preset options for this spec.
+// Eventually we will import these values for the raid sim too, so its good to
+// keep them in a separate file.
+
+export const SINSITER_APL = PresetUtils.makePresetAPLRotation('Rogue (Check Variables for Backstab/Shiv)', SinisterAPL);
+
+export const P1_SWORDS_GEAR = PresetUtils.makePresetGear('P1 Swords', P1SwordsGear);
+export const P2_SWORDS_GEAR = PresetUtils.makePresetGear('P2 Swords', P2SwordsGear);
+export const P3_SWORDS_GEAR = PresetUtils.makePresetGear('P3 Swords', P3SwordsGear);
+export const PREARAID_SWORDS_GEAR = PresetUtils.makePresetGear('Preraid Swords', PreraidSwordsGear);
+
+// Preset options for EP weights
+export const P1_EP_PRESET = PresetUtils.makePresetEpWeights(
+	'Combat Swords',
+	Stats.fromMap(
+		{
+			[Stat.StatStrength]: 1.1,
+			[Stat.StatAgility]: 2.17,
+			[Stat.StatStamina]: 0.01,
+			[Stat.StatAttackPower]: 1.0,
+			[Stat.StatMeleeHitRating]: 3.06,
+			[Stat.StatMeleeCritRating]: 1.7,
+			[Stat.StatMeleeHasteRating]: 2.19,
+			[Stat.StatArmorPenetration]: 0.3,
+			[Stat.StatExpertiseRating]: 3.47,
+			[Stat.StatPhysicalDamage]: 8.47,
+		},
+		{
+			[PseudoStat.PseudoStatMainHandDps]: 9.34,
+			[PseudoStat.PseudoStatOffHandDps]: 3.4,
+		},
+	),
+);
+
+// Default talents. Uses the wowhead calculator format, make the talents on
+// https://wowhead.com/wotlk/talent-calc and copy the numbers in the url.
+
+export const Talents = {
+	name: 'Combat Swords',
+	data: SavedTalents.create({
+		talentsString: '0053201252-023305200005015002321151',
+	}),
+};
+
+export const DefaultOptions = RogueOptions.create({
+	classOptions: {},
+});
+
+export const DefaultConsumables = ConsumesSpec.create({
+	battleElixirId: 22831,
+	guardianElixirId: 32062,
+	foodId: 33872,
+	potId: 22838,
+	conjuredId: 7676,
+	ohImbueId: 27186,
+});
+
+export const OtherDefaults = {
+	distanceFromTarget: 5,
+};

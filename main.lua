@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.1.4"
+local version = "2.1.5"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -3236,6 +3236,26 @@ function ST:print_runtime_diag()
 		local ok, text = pcall(st.swing_source.diagnostic_text)
 		if ok and type(text) == "string" then
 			self:Print(text)
+		end
+	end
+	if st.forever_guide and type(st.forever_guide.SPELLS_BY_CLASS) == "table" then
+		local class_spells = st.forever_guide.SPELLS_BY_CLASS[self.player_class]
+		if type(class_spells) == "table" then
+			local missing_count = 0
+			for i = 1, #class_spells do
+				local entry = class_spells[i]
+				local ok_info, name = pcall(api.GetSpellInfo, entry.name or entry.id)
+				if not ok_info or type(name) ~= "string" then
+					local ok_id, name_by_id = pcall(api.GetSpellInfo, entry.id)
+					if not ok_id or type(name_by_id) ~= "string" then
+						missing_count = missing_count + 1
+						self:Print("diag MISSING spell: '" .. tostring(entry.name) .. "' (id=" .. tostring(entry.id) .. ") -> UNRESOLVED")
+					end
+				end
+			end
+			if missing_count == 0 then
+				self:Print("diag spells: all " .. tostring(#class_spells) .. " tracked abilities for " .. tostring(self.player_class) .. " resolved cleanly")
+			end
 		end
 	end
 end

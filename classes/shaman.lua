@@ -3747,6 +3747,9 @@ ST.SHAMAN.guide = {
 	-- Pure: the frozen shaman rule matrix (st.shaman_guide in shaman_guide.lua);
 	-- guarded so a flavor without that module stays inert rather than erroring.
 	evaluate = function(inputs, out)
+		if st.family == "FOREVER" and st.forever_guide and st.forever_guide.evaluate then
+			return st.forever_guide.evaluate("SHAMAN", nil, inputs, out)
+		end
 		if st.shaman_guide and st.shaman_guide.evaluate then
 			return st.shaman_guide.evaluate(inputs, out)
 		end

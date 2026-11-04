@@ -2399,14 +2399,27 @@ end
 
 function ST.class_opts_funcs.PALADIN(self)
     local opts_group = {
-        -- class_header = {
-        --     type = "header",
-        --     order = 1.0,
-        --     name = "Paladin Configuration",
-        -- },
+        spec_header = {
+            type = "header",
+            order = 1.0,
+            name = "Specialization",
+        },
+        paladin_spec = {
+            type = "select",
+            order = 1.01,
+            name = "Active Specialization",
+            desc = "Choose which specialization rotation to run. Auto dynamically detects based on equipped shield and talents.",
+            values = {
+                auto = "Auto (Shield / Talents)",
+                retribution = "Retribution",
+                protection = "Protection",
+            },
+            get = "getter",
+            set = "setter",
+        },
         seal_header = {
             type = "header",
-            order = 1.01,
+            order = 1.02,
             name = "Seal Context Colors",
         },
         seal_desc = {
@@ -3906,6 +3919,25 @@ end
 
 function ST.class_opts_funcs.WARRIOR(self)
     local opts_group = {
+        spec_header = {
+            type = "header",
+            order = 0.7,
+            name = "Specialization",
+        },
+        warrior_spec = {
+            type = "select",
+            order = 0.71,
+            name = "Active Specialization",
+            desc = "Choose which specialization rotation to run. Auto dynamically detects based on equipped shield and talents.",
+            values = {
+                auto = "Auto (Shield / Talents)",
+                protection = "Protection",
+                arms = "Arms",
+                fury = "Fury",
+            },
+            get = "getter",
+            set = "setter",
+        },
         tank_vid_header = {
             type = "header",
             order = 0.8,

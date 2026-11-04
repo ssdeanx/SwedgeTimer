@@ -1742,16 +1742,19 @@ function st.rogue_guide.evaluate(inputs, out)
         if not is_num(max_energy) then
             max_energy = st.rogue_guide.MAX_ENERGY_DEFAULT
         end
-        local finisher_mode = st.rogue_guide.FINISHER_MODES[family]
-        if inputs.rupture_known == false then
-            finisher_mode = "eviscerate"
-        elseif finisher_mode ~= "eviscerate" then
-            finisher_mode = "rupture"
-        end
-
         local energy = inputs.energy_now
         local cp = inputs.cp
         local ttd = inputs.ttd
+
+        local finisher_mode = st.rogue_guide.FINISHER_MODES[family]
+        if inputs.rupture_known == false then
+            finisher_mode = "eviscerate"
+            if not is_num(ttd) then
+                ttd = (min_ttd or 8) + 1
+            end
+        elseif finisher_mode ~= "eviscerate" then
+            finisher_mode = "rupture"
+        end
 
         -- H6: the TBC wait/release (rule 1a) and the Forever finisher lockout.
         local ea_wait = st.rogue_guide.ea_wait_verdict(family, inputs, band, ea_window)

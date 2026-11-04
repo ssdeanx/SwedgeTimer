@@ -198,6 +198,7 @@ st.nextaction.display_names = {
     ["2/5_blood"] = "2/5 Blood",
     ["2/5_command"] = "2/5 Command",
     ["2007"] = "2007",
+    ["prot"] = "Protection",
 }
 
 -- UnitCreatureType returns localized strings; these are the Undead/Demon names in all
@@ -750,35 +751,21 @@ function st.nextaction.evaluate(inputs, out)
             and inputs.how_cast_seconds <= 0
         local how_recent_auto = forever_mode and auto_age ~= nil
             and auto_age <= st.nextaction.FOREVER_HOW_AUTO_WINDOW
+        local exo_eligible = inputs.exo_known ~= false
+            and (forever_mode
+                or (creature_type and st.nextaction.exorcism_target_types[creature_type]))
+        local cons_eligible = inputs.cons_known ~= false
+            and (era_mode or forever_mode or inputs.target_count == nil or inputs.target_count > 1)
+
         if (era_mode or forever_mode) and how_ready
             and (how_instant or how_recent_auto
                 or (type(target_hp) == "number"
                     and target_hp < ERA_HOW_HEALTH_PCT)) then
             candidate = "how"
-        elseif forever_mode
-            or (creature_type
-                and st.nextaction.exorcism_target_types[creature_type]) then
-            -- Forever treats Exorcism as a generic filler (the sim gates it
-            -- on swing timing + mana, with no creature-type gate); the mana
-            -- threshold below still applies, so the safe direction holds
-            -- (withholds, never over-prompts).
-            if mana_pct > (inputs.mana_exorcism_threshold or 30) then
-                candidate = "exorcism"
-            end
-        else
-            -- TBC single-target has no Consecration: it is an AoE filler and
-            -- fires only with a real multi-target signal (target_count > 1).
-            -- Unknown (nil) keeps the archived suggestion so old callers are
-            -- unaffected; the live provider reports single-target until a
-            -- target counter exists. Exorcism above is untouched (valid ST
-            -- filler vs Undead/Demon). Era lifts the gate: Consecration is a
-            -- mana-permitting single-target filler on Era. Forever lifts it
-            -- too: the beta Ret ST lists Consecration (UNCONFIRMED tuning).
-            local ntargets = inputs.target_count
-            if (era_mode or forever_mode or ntargets == nil or ntargets > 1)
-                and mana_pct > (inputs.mana_consecration_threshold or 35) then
-                candidate = "consecration"
-            end
+        elseif exo_eligible and mana_pct > (inputs.mana_exorcism_threshold or 30) then
+            candidate = "exorcism"
+        elseif cons_eligible and mana_pct > (inputs.mana_consecration_threshold or 35) then
+            candidate = "consecration"
         end
         if candidate then
             local remaining = inputs.filler_remaining
@@ -998,8 +985,10 @@ local FCFS_ORDER_SOD = { "exo", "cs", "ds", "judge", "cons", "how" }
 local FCFS_ORDER_SOD_STACK = { "ds", "cs", "exo", "hw", "cons", "judge" }
 local FCFS_ORDER_SOD_SHOCK = { "exo", "am", "hs", "cs" }
 local FCFS_ORDER_SOD_WRATH = { "ds", "cs", "exo", "judge", "cons" }
+local FCFS_ORDER_PROT_FOREVER = { "rf", "seal", "judge", "cons", "hs", "holy_shield", "holy_strike", "exo" }
+local FCFS_ORDER_PROT = { "rf", "seal", "judge", "cons", "hs", "holy_shield", "exo" }
 
--- The five priority tables, published so no caller has to copy them (the
+-- The priority tables, published so no caller has to copy them (the
 -- practice rotation table and the priority-order drill read them instead of
 -- duplicating the order; a copy would drift from the engine on the next
 -- order change). READ-ONLY: the tables are module-level and shared, so a
@@ -1011,6 +1000,8 @@ st.nextaction.FCFS_ORDERS = {
     sod_stack = FCFS_ORDER_SOD_STACK,
     sod_shock = FCFS_ORDER_SOD_SHOCK,
     sod_wrath = FCFS_ORDER_SOD_WRATH,
+    prot_forever = FCFS_ORDER_PROT_FOREVER,
+    prot = FCFS_ORDER_PROT,
 }
 
 function st.nextaction.fcfs_order(mode)
@@ -1030,7 +1021,16 @@ end
 -- New SoD-variant branches (sod_stack / sod_shock / sod_wrath) only fire on
 -- those modes; "wrath" and "sod" (Exodin) run bit-identically below.
 local function fcfs_eligible(mode, key, inputs)
-    if key == "cs" then
+    if key == "rf" then
+        -- Righteous Fury: must be known and buff missing from player
+        if inputs.righteous_fury_known ~= true then
+            return false
+        end
+        return inputs.has_righteous_fury ~= true
+    elseif key == "seal" then
+        -- Prot Paladin seal maintenance (Seal of Fury or Seal of Righteousness)
+        return inputs.seal_expiring == true or inputs.seal_inactive == true
+    elseif key == "cs" then
         return inputs.cs_known ~= false and fcfs_known(inputs.cs_remaining)
     elseif key == "judge" then
         if not fcfs_known(inputs.judge_remaining) then
@@ -1119,7 +1119,10 @@ local function fcfs_eligible(mode, key, inputs)
             -- DPS loss and are never prompted.
             return inputs.has_aow == true
         end
-        -- SoD Exodin: Exorcism is the core button vs every target, no AoW gate.
+        if mode == "prot" and inputs.creature_type ~= nil then
+            return st.nextaction.exorcism_target_types[inputs.creature_type] == true
+        end
+        -- SoD Exodin and Prot Forever: Exorcism is allowed vs every target, no AoW gate.
         return true
     elseif key == "hw" then
         -- Wrath Holy Wrath: Undead/Demon only ("if eligible"), own cooldown.
@@ -1189,13 +1192,16 @@ local function fcfs_eligible(mode, key, inputs)
         -- HS at 3 stacks; APL-cited, in-client UNCONFIRMED). Shock mode only;
         -- unknown stacks/cooldown withholds (unknown-hides). No mana gate
         -- named in the APL (UNCONFIRMED); readiness via the HS cooldown.
-        if mode ~= "sod_shock" then
-            return false
-        end
+        -- In Protection mode: woven when known and off cooldown.
         if not fcfs_known(inputs.hs_remaining) then
             return false
         end
-        return inputs.holy_power_stacks == 3
+        if mode == "sod_shock" then
+            return inputs.holy_power_stacks == 3
+        elseif mode == "prot_forever" or mode == "prot" then
+            return inputs.hs_known == true
+        end
+        return false
     elseif key == "am" then
         -- Shockadin Aura Mastery (bench §4: 407624 legs rune, Sanctified
         -- holy-multiplier, Libram-of-Sanctity-gated 1214298; AM + HS at
@@ -1213,6 +1219,16 @@ local function fcfs_eligible(mode, key, inputs)
             return false
         end
         return inputs.holy_power_stacks == 3
+    elseif key == "holy_shield" then
+        if not fcfs_known(inputs.holy_shield_remaining) then
+            return false
+        end
+        return inputs.has_shield == true and inputs.holy_shield_known == true
+    elseif key == "holy_strike" then
+        if not fcfs_known(inputs.holy_strike_remaining) then
+            return false
+        end
+        return inputs.holy_strike_known == true
     end
     return false
 end
@@ -1220,7 +1236,15 @@ end
 -- Pure: the remaining time of one priority key for the readiness test. Every
 -- caller gates on fcfs_eligible first, so this only ever returns a number.
 local function fcfs_remaining(key, inputs)
-    if key == "cs" then
+    if key == "rf" then
+        return 0
+    elseif key == "seal" then
+        return 0
+    elseif key == "holy_shield" then
+        return inputs.holy_shield_remaining
+    elseif key == "holy_strike" then
+        return inputs.holy_strike_remaining
+    elseif key == "cs" then
         return inputs.cs_remaining
     elseif key == "judge" then
         return inputs.judge_remaining
@@ -1268,6 +1292,10 @@ function st.nextaction.evaluate_fcfs(inputs, out)
             order = FCFS_ORDER_SOD_SHOCK
         elseif mode == "sod_wrath" then
             order = FCFS_ORDER_SOD_WRATH
+        elseif mode == "prot_forever" then
+            order = FCFS_ORDER_PROT_FOREVER
+        elseif mode == "prot" then
+            order = FCFS_ORDER_PROT
         end
     end
 
@@ -1409,18 +1437,38 @@ function st.nextaction.evaluate_fcfs(inputs, out)
             action = "how_wrath"
         elseif winner == "judge" then
             judge_call = true
+            if mode == "prot_forever" or mode == "prot" then
+                action = "judge"
+            end
         elseif winner == "ds" then
             action = "sob"
         elseif winner == "cons" then
+            if mode == "prot_forever" or mode == "prot" then
+                action = "consecration"
+            end
             filler_kind = "consecration"
         elseif winner == "exo" then
+            if mode == "prot_forever" or mode == "prot" then
+                action = "exorcism"
+            end
             filler_kind = "exorcism"
         elseif winner == "hw" or winner == "how" then
             filler_kind = "how"
         elseif winner == "hs" then
+            if mode == "prot_forever" or mode == "prot" then
+                action = "holy_shock"
+            end
             filler_kind = "holy_shock"
         elseif winner == "am" then
             filler_kind = "aura_mastery"
+        elseif winner == "holy_shield" then
+            action = "holy_shield"
+        elseif winner == "holy_strike" then
+            action = "holy_strike"
+        elseif winner == "rf" then
+            action = "rf"
+        elseif winner == "seal" then
+            action = inputs.seal_fury_known and "sof" or "sor"
         end
     end
 

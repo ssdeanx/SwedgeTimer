@@ -1,9 +1,46 @@
 # Changelog
 
-## [2.1.4]
+## [2.1.5]
 
 ### Added
 
+- **WoW Forever (Camelot 1.60.1 / Interface 16001) Official APL Priority Rotations:**
+  - Implemented complete, enterprise-grade Action Priority Lists across all 6 melee classes and specs, calibrated strictly against official simulation priority models (`docs/apls_2026-11-03/`):
+    - **Paladin**:
+      - **Retribution (`retribution/default.apl.siml`)**: Immediate Judgement on cooldown, Hammer of Wrath execute (<20% HP), Holy Strike (`679`) weaving during empty globals between Judgements, Seal of Command / Seal of Righteousness maintenance, and Consecration / Exorcism mana-managed fillers.
+      - **Holy Shock (`retribution/holy_shock.apl.siml`)**: High-priority Holy Shock burst paired with Divine Favor buff tracking.
+      - **Protection Tank (`protection/default.apl.siml`)**: Righteous Fury stance upkeep, Seal of Fury (`20423`) high-threat seal maintenance, Holy Shield (`20925`) active mitigation, Judgement on cooldown, Consecration high-threat ground AoE, Holy Strike weaving, and Hammer of Wrath execute.
+      - **Leveling Fallback**: Smooth Level 1–20 progression using Seal of Righteousness, Judgement, and baseline Holy Strike learned at level 6.
+    - **Warrior**:
+      - **Arms (`dps/arms.apl.json`)**: Bloodthrill (`1282733`) Overpower procs & dodge triggers (only 5 rage), Mortal Strike priority, Whirlwind, Slam cast-weaving on swing window, Rend upkeep, Execute burn (<20% HP), and Cleave & Heroic Strike dumping (>60 rage).
+      - **Fury (`dps/fury.apl.json`)**: Bloodthrill Overpower weaving within the 5–73 rage window, Whirlwind, Bloodthirst, Execute burn, and Cleave & Heroic Strike dumping.
+      - **Protection Tank (`protection/default.apl.json`)**: Emergency defensives (Shield Wall <= 35% HP, Last Stand <= 40% HP), Shield Block (<40 rage or missing buff), Shield Slam, Revenge reactive procs via `api.IsSpellUsable`, Sunder Armor 5-stack upkeep and refresh (<=10s), Thunder Clap debuff, Demoralizing Shout debuff, Rend, and on-next-attack Heroic Strike / Cleave rage dumps.
+      - **Leveling Fallback**: Clean fallback to Battle Shout, Rend, Sunder Armor, and Heroic Strike for low-level warriors.
+    - **Hunter**:
+      - **Melee Survival (`dps/melee.apl.siml`)**: Strictly gated on the `Strider Kick` talent (`1317257`) or user toggle (never auto-assumed by proximity). Raptor Strike queue, Hunter's Mark upkeep, Mongoose Bite reactive procs, Strider Kick on cooldown, Immolation Trap on cooldown, Summon Hawk (`1293241`), and Wing Clip filler.
+      - **Ranged Weave & Turret (`dps/clean_weave.apl.siml`, `dps/turret.apl.siml`)**: 4.0s Sniper Shot (`14266`) opener/cooldown, Aimed Shot (`19434`), Multi-Shot, Arcane Shot, Serpent Sting upkeep, Summon Hawk, Hunter's Mark, and Auto Shot shot-weaving endzone clip protection.
+      - **Leveling Fallback**: Low-level hunters cleanly prioritize Serpent Sting, Arcane Shot, Hunter's Mark, and Raptor Strike without stalling.
+    - **Rogue**:
+      - **Spec-Aware Builders (`dps/default.apl.json` & `dps/presets.ts`)**: Mutilate (`1241584`) 2-dagger builder, Combat Daggers Backstab (`53`), Subtlety Hemorrhage (`16511`), and Combat Swords/Maces Sinister Strike (`1752`).
+      - **Finishers & Upkeeps**: Slice and Dice (`6774`) attack speed priority, Envenom (`1310703`) Deadly Poison stack consumption, Rupture (`1943`) bleed upkeep based on Target Time-to-Die (TTD >= 10s), and Eviscerate (`2098`) direct damage finisher.
+      - **Utility & Defense**: Riposte (`14251`) reactive parry procs with HOLD overlay prompts, and Expose Armor (`8647`) armor reduction upkeep when designated.
+      - **Leveling Fallback**: Sinister Strike, Slice and Dice, and Eviscerate fallback when advanced talents/poisons are unlearned.
+    - **Druid**:
+      - **Feral Bear Tank (`feralbear/adaptive.apl.json`)**: Emergency defensives (Barkskin `22812` <= 40% HP, Frenzied Regeneration `22842` <= 30% HP), Enrage rage generation, Faerie Fire (Feral), Demoralizing Roar, Primal Bite (`1238070`) on cooldown, Lacerate (`1235827`) 5-stack maintenance, Swipe AoE filler, and Maul queue (>50 rage).
+      - **Feral Cat DPS (`feralcat/adaptive.apl.json`)**: Stealth Ravage (`6785`) opener, Faerie Fire (Feral), Omen of Clarity Clearcasting free Shred priority, 5-combo point Rip (`1079`) bleed upkeep, Ferocious Bite (`22568`) finisher, Tiger's Fury (`5217`) damage buff, Rake (`1822`) bleed upkeep, Shred (`5221`) behind target, and Claw (`1082`) fallback builder.
+      - **Leveling Fallback**: Bear Maul & Swipe fallback; Cat Claw & Ferocious Bite fallback.
+    - **Shaman**:
+      - **2H Enhancement DPS (`enhancement/testing.build.json` & `enhancement/presets.ts`)**: Strictly verified 2-Handed weapon rotation (item slot 15 empty: no Dual Wield, no Lava Lash on WoW Forever).
+      - **Rotation Priority**: Flame Shock (`8052`) DOT upkeep, Stormstrike (`17364`) nature vulnerability, instant Lightning Bolt (`403`) at 5 stacks of Maelstrom Weapon (`408505`), Earth Shock (`8042`) burst, Fire Nova (`408345`) AoE burst, Totem upkeep (Strength of Earth, Grace of Air / Windfury, Mana Spring, Searing Totem), and Water Shield (`408510`) / Lightning Shield maintenance.
+      - **Leveling Fallback**: Rockbiter/Windfury weapon buff upkeep, Searing Totem, Lightning Bolt weave, Earth Shock, and Flame Shock.
+- **Offline Test Suite Expansion (`tests/forever_guide_state.lua`)**:
+  - Expanded unit test assertions from 65 to 132 comprehensive checks, asserting every class, spec, defensive threshold, execute phase, and leveling fallback across all 6 classes under offline simulation.
+- **Specialization & Tanking Support (Melee Specs across WoW Forever, TBC, Wrath, Era):**
+  - **Protection Paladin:** Added dedicated Protection Paladin FCFS decision engine (`FCFS_ORDER_PROT_FOREVER` & `FCFS_ORDER_PROT`) and HUD layout with auto shield detection (`api.is_shield_equipped()`). Prioritizes Shield Slam, Holy Shield upkeep, Righteous Fury upkeep, Judgement, Consecration, and Holy Wrath. Dynamic `resolve_guide_slots` preserves Retribution contract defaults while swapping into Protection slots at post-init.
+  - **Protection Warrior:** Added dedicated Protection Warrior decision engine (`evaluate_prot`) with auto shield detection and spec selection (`auto`, `protection`, `arms`, `fury`). Prioritizes emergency cooldowns (Shield Wall <= 35% HP, Last Stand <= 40% HP), Shield Block (< 40 rage or missing), Shield Slam, Revenge (reactive block/dodge/parry proc via `api.IsSpellUsable`), Sunder Armor upkeep (stacking initial 5 and refreshing <= 10s), Thunder Clap debuff, Demoralizing Shout debuff, Rend, and on-next-attack Heroic Strike / Cleave rage dumps.
+  - **Druid Feral Bear & Cat Leveling:** Added Maul spellbook knowledge gate (`inputs.maul_known`) to Bear Form decision logic. In Bear Form, prevents unlearned Maul from being recommended to low-level druids, seamlessly pooling rage or falling back. In Cat Form, smoothly falls back to Claw as the core builder and Ferocious Bite as the leveling finisher when Shred or Rip are unlearned.
+  - **Rogue Defensive State & Leveling:** Added Riposte parry proc detection (`api.IsSpellUsable` on Defensive State 5302) with reactive HOLD overlay prompt (`RIPOSTE`). Fixed leveling finisher stall where leveling rogues with unlearned Rupture and unknown target TTD were previously blocked on "POOL" at 5 combo points; now smoothly falls back to Eviscerate without stalling.
+  - **Shaman Enhancement Leveling:** Audited low-level progression gates for Enhancement Shamans from level 1 to 60. Cleanly falls back to Earth Shock, Lightning Bolt weave, Lightning Shield, and Searing Totem when higher-level abilities (Flame Shock, Stormstrike, Lava Lash, Maelstrom Weapon) are unlearned.
 - **Dynamic Leveling Progression for HUD & Next Actions Across All Classes:**
   - Implemented dynamic spell knowledge gating across the Next Action Guide and Cooldown HUD (`hud.lua`), suppressing prompts, idle openers, and icon slots for unlearned abilities, fillers, and judgement cues across all classes (Hunter, Paladin, Warrior, Rogue, Shaman, Druid).
   - Leveling gate is fail-visible: only a confirmed unlearned status hides an ability, while unqueryable or ambiguous states remain visible.
@@ -16,7 +53,11 @@
     - **Shaman**: Gated Stormstrike, Lava Lash, Earth Shock, Fire Nova, Strength of Earth, Mana Spring, Searing Totem, and Magma Totem on spellbook knowledge. When high-level abilities are unlearned, smoothly falls back to Earth Shock, Searing Totem, and Lightning Bolt weave.
     - **Druid**: Gated Bear Mangle, Cat Rip, Cat Mangle, Ferocious Bite, and Shred on spellbook knowledge. In Bear form, pools rage when Mangle is unlearned. In Cat form, smoothly falls back to Claw as the core builder across TBC, Wrath, Forever, and Era whenever Shred or Mangle are unlearned.
     - **Rogue**: Builder candidate chain dynamically falls back to Sinister Strike when high-level builders (Saber Slash, Mutilate, Hemorrhage) are unlearned. Rupture smoothly falls back to Eviscerate when unlearned, and Slice and Dice is gated on spellbook knowledge.
-    - **Paladin**: Crusader Strike, Divine Storm, Judgement, and FCFS fillers are gated on spellbook knowledge, smoothly falling back to available seals and judgements during leveling.
+    - **Paladin**: Crusader Strike, Divine Storm, Judgement, Exorcism, and Consecration are gated on spellbook knowledge. On WoW Forever, Retribution paladins without Exorcism (learned at level 24) smoothly fall back to Consecration (learned at level 20) and seal management without stalling or requesting unlearned spells. Both Retribution and Protection paladins dynamically adapt during leveling.
+
+## [2.1.4]
+
+### Added
 - **Hunter Visual Enhancements & Cooldown HUD Text Recovery:**
   - Ranged Bar Class Color: The hunter ranged bar progress fill now uses authentic hunter raid class color (`#ABD473`) instead of generic bar tints.
   - Solid Red Auto Shot Endzone: Auto Shot cast endzone renders solid red (`COLOR_CAST_ENDZONE`) to clearly indicate unshootable / clip intervals without confusing shifting colors.

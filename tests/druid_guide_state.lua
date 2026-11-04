@@ -191,6 +191,10 @@ do
     eq(out.hold_text, nil, "rule 3: the Mangle fallback carries no hold text")
     eq(evaluate({ form_index = 1, maul_queued = false }).action, "maul",
         "rule 2: the bear branch is reachable with a plain numeric baseline")
+    eq(evaluate({ form_index = 1, maul_queued = false, maul_known = false, family = "FOREVER" }).action, nil,
+        "rule 2: unlearned Maul on Forever falls through without guessing")
+    eq(evaluate({ form_index = 1, maul_queued = false, maul_known = false, family = "ERA" }).action, nil,
+        "rule 2: unlearned Maul on Era falls through without guessing")
 end
 
 -- Rules 4-8: the cat chain and its boundaries.

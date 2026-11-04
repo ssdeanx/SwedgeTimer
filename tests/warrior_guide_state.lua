@@ -3697,6 +3697,153 @@ do
         "name-vs-id wiring: knowledge probes go through the family query")
 end
 
+--=========================================================================================
+-- Protection Warrior: decision tree & leveling fallback tests
+--=========================================================================================
+do
+    local b = build()
+    local ST = b.ST
+    ST.WARRIOR.post_init(ST)
+
+    local out = {}
+    -- 1) Queued attack rides
+    ST.WARRIOR.guide.evaluate({ prot = true, hs_queued = true, rage = 50 }, out)
+    eq(out.action, nil, "prot warrior: queued attack shows no action")
+    eq(out.hold, true, "prot warrior: queued attack holds")
+    eq(out.hold_text, "RIDE", "prot warrior: queued attack rides")
+
+    -- 2) High rage Shield Block
+    out = {}
+    ST.WARRIOR.guide.evaluate({
+        prot = true,
+        has_shield = true,
+        shield_block_known = true,
+        shield_block_remaining = 0,
+        rage = 45,
+    }, out)
+    eq(out.action, "shield_block", "prot warrior: high rage shield block prompts")
+
+    -- 3) Shield Slam priority
+    out = {}
+    ST.WARRIOR.guide.evaluate({
+        prot = true,
+        has_shield = true,
+        shield_block_known = true,
+        shield_block_remaining = 4,
+        has_shield_block_buff = true,
+        shield_slam_known = true,
+        shield_slam_remaining = 0,
+        rage = 30,
+    }, out)
+    eq(out.action, "shield_slam", "prot warrior: shield slam prompts when block is on cd")
+
+    -- 4) Revenge priority over sunder
+    out = {}
+    ST.WARRIOR.guide.evaluate({
+        prot = true,
+        has_shield = true,
+        shield_block_remaining = 4,
+        has_shield_block_buff = true,
+        shield_slam_remaining = 4,
+        revenge_known = true,
+        revenge_usable = true,
+        revenge_remaining = 0,
+        sunder_known = true,
+        sunder_stacks = 0,
+        rage = 15,
+    }, out)
+    eq(out.action, "revenge", "prot warrior: usable revenge prompts over sunder")
+
+    -- 5) Sunder initial stack to 5
+    out = {}
+    ST.WARRIOR.guide.evaluate({
+        prot = true,
+        has_shield = true,
+        shield_block_remaining = 4,
+        has_shield_block_buff = true,
+        shield_slam_remaining = 4,
+        revenge_remaining = 4,
+        sunder_known = true,
+        sunder_stacks = 2,
+        rage = 20,
+    }, out)
+    eq(out.action, "sunder", "prot warrior: sunder stacks to 5")
+
+    -- 6) Thunder Clap AoE
+    out = {}
+    ST.WARRIOR.guide.evaluate({
+        prot = true,
+        has_shield = true,
+        shield_block_remaining = 4,
+        has_shield_block_buff = true,
+        shield_slam_remaining = 4,
+        revenge_remaining = 4,
+        sunder_known = true,
+        sunder_stacks = 5,
+        sunder_remaining = 25,
+        thunder_clap_known = true,
+        thunder_clap_remaining = 0,
+        target_count = 3,
+        rage = 25,
+    }, out)
+    eq(out.action, "thunder_clap", "prot warrior: multi-target prompts thunder clap")
+
+    -- 7) Demo Shout upkeep
+    out = {}
+    ST.WARRIOR.guide.evaluate({
+        prot = true,
+        has_shield = true,
+        shield_block_remaining = 4,
+        has_shield_block_buff = true,
+        shield_slam_remaining = 4,
+        revenge_remaining = 4,
+        sunder_known = true,
+        sunder_stacks = 5,
+        sunder_remaining = 25,
+        thunder_clap_debuff_remaining = 20,
+        demo_shout_known = true,
+        demo_shout_debuff_remaining = 2,
+        rage = 15,
+    }, out)
+    eq(out.action, "demo_shout", "prot warrior: expiring demo shout prompts refresh")
+
+    -- 8) Excess rage dump (Heroic Strike)
+    out = {}
+    ST.WARRIOR.guide.evaluate({
+        prot = true,
+        has_shield = true,
+        shield_block_remaining = 4,
+        has_shield_block_buff = true,
+        shield_slam_remaining = 4,
+        revenge_remaining = 4,
+        sunder_known = true,
+        sunder_stacks = 5,
+        sunder_remaining = 25,
+        thunder_clap_debuff_remaining = 20,
+        demo_shout_debuff_remaining = 20,
+        hs_known = true,
+        rage = 60,
+    }, out)
+    eq(out.action, "hs", "prot warrior: excess rage dumps to Heroic Strike")
+
+    -- 9) Level 1 Leveling Gate: only Heroic Strike known
+    out = {}
+    ST.WARRIOR.guide.evaluate({
+        prot = true,
+        has_shield = true,
+        shield_block_known = false,
+        shield_slam_known = false,
+        revenge_known = false,
+        sunder_known = false,
+        thunder_clap_known = false,
+        demo_shout_known = false,
+        rend_known = false,
+        hs_known = true,
+        rage = 20,
+    }, out)
+    eq(out.action, "hs", "prot warrior level 1: falls back cleanly to Heroic Strike")
+end
+
 if failures == 0 then
     print("PASS  warrior_guide_state.lua (" .. tostring(checks) .. " checks)")
 else

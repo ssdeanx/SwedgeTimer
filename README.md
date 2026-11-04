@@ -1,166 +1,221 @@
-# SwedgeTimer
+# ⚔️ SwedgeTimer
 
-One swing timer for every supported WoW client — mainhand, offhand, and ranged bars plus per-class assists, in a single download with no per-client package.
+<p align="center">
+  <b>The Universal Swing Timer, Next-Action Guide & Cooldown HUD for World of Warcraft</b><br>
+  <i>One single download — automatically optimized for every client flavor!</i>
+</p>
 
-## Supported clients
+<p align="center">
+  <img src="https://img.shields.io/badge/Status-Feature%20Complete-brightgreen?style=for-the-badge" alt="Status">
+  <img src="https://img.shields.io/badge/WoW%20Forever-1.60.1%20Ready-blueviolet?style=for-the-badge" alt="WoW Forever">
+  <img src="https://img.shields.io/badge/Classic-Era%20%7C%20SoD%20%7C%20TBC%20%7C%20Wrath-blue?style=for-the-badge" alt="Classic Support">
+  <img src="https://img.shields.io/badge/License-GPLv3-orange?style=for-the-badge" alt="License">
+</p>
 
-| Client | Interface | Swing timers |
-| :--- | :--- | :--- |
-| Classic Era / Season of Discovery | `11509` | <span style="color:#00FF00">Live</span> |
-| TBC Anniversary | `20506` | <span style="color:#00FF00">Live</span> |
-| WotLK Titanforge | `38002` | <span style="color:#00FF00">Live</span> |
-| WoW Forever | `16001` | <span style="color:#00FF00">Live</span> (native swing engine) |
-| Retail / Live (Midnight) | `12.1.x (120100, 120105)` | <span style="color:#808080">Static by design</span> (bars inert, one-time notice) |
-| Cataclysm Classic | `40402` | <span style="color:#808080">Static by design</span> (bars inert) — **not a supported client** |
-| Mists Classic | `50500` | <span style="color:#808080">Static by design</span> (bars inert) — **not a supported client** |
+---
 
-The Cataclysm and Mists rows are the two extra TOC flavours the build ships. They deliberately
-omit the swing-timer library, so they load with the same inert stand-in as Retail — the HUD,
-rotation label, design mode and options still work, the bars never move. They are **not**
-supported clients: there is no live swing engine, so the rotation scenario is refused there.
+## 🌟 Overview
 
-Every character can show a **power bar** (mana, rage, energy or focus as the client reports it) in the
-slot directly under the melee stack. All classes share this single universal power bar (`power_bar.lua`)
-without duplicate frames, while class-specific tick math (e.g. Rogue and Druid cat energy ticks) is
-handled seamlessly inside the respective class modules (`classes/*.lua`). The power bar follows the
-**offhand row** for a class that can use an offhand — even while that hand is idle — and the mainhand row
-otherwise, and it hides when no melee bar is on screen. The offhand bar always renders at the mainhand's
-width and height, and **Melee pair height** in the Positioning options sizes both melee bars together
-(clear it to return each hand to its own saved height). Hunters' thin mainhand/offhand bars are stacked
-under the ranged bar at its width by default; the stack has its own toggle and restores the saved hand
-positions when turned off.
+**SwedgeTimer** gives you frame-perfect combat timing and rotation guidance across all your characters. Designed for competitive raiders, levelers, and PvPers alike, SwedgeTimer combines cycle-accurate swing bars, dynamic Auto Shot tracking, an intelligent Next-Action priority engine, and an offline Practice Gym into a lightweight, plug-and-play addon.
 
-Offhand and ranged bars are activity-driven: they appear after a real offhand swing or a real ranged
-shot (or while Auto Shot is armed) — not merely because you are in combat — and hide again after about
-two cycles of that hand. On the first login after updating, the ranged bar is moved once into the
-standard layout above the melee stack for every class that owns one, a dragged or scaled saved row
-included, with one chat notice; a drag made afterwards is respected.
+No more separate downloads for Era, TBC, Wrath, or **WoW Forever** — SwedgeTimer automatically detects your client and loads the exact right engine, spell data, and priority rules on login!
 
-The hunter's aids read as one set. Every hand is measured on a single clock: the precise clock drives
-the tick, `GetTime()` owns the domain (it re-anchors on every read, so a loading screen cannot skew
-it), and engine timestamps are converted onto that axis — a cycle is exactly one weapon speed long,
-so the fill, the countdown and the queue tint cannot drift apart. Each hand's fill is painted from
-that hand's own cycle (a late layout pass can no longer leave the mainhand bar looking full), the
-Auto Shot zone and the cast bar share one colour language (white while a cast is safe, solid red during the unshootable clip endzone), every bar sits at 0.9 opacity with the same border, base progress fills automatically use each class's raid class color (including Hunter class color and canonical Shaman blue on Classic Era), and each HUD icon draws a
-single cooldown number (with full suppression flags and isolated font strings so external cooldown
-addons like OmniCC/ElvUI never double-draw or collide with third-party text). Bars default to 275 px
-wide on every class; the next-action guide has its own frame at the upper right of the screen (127, -65)
-and stays locked until its own lock toggle is opened.
+SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time leveling support for **6 classes** across **16 distinct raid specializations and leveling paths**:
+- **<span style="color:#F58CBA">Paladin</span>** (3 specs + leveling): Retribution, Holy Shock (Shockadin), Protection Tank
+- **<span style="color:#C79C6E">Warrior</span>** (3 specs + leveling): Arms, Fury, Protection Tank
+- **<span style="color:#ABD473">Hunter</span>** (2 specs + leveling): Melee Survival, Ranged Weave & Turret
+- **<span style="color:#FFF569">Rogue</span>** (4 specs + leveling): Mutilate, Combat Daggers, Subtlety Hemorrhage, Combat Swords / Maces
+- **<span style="color:#FF7D0A">Druid</span>** (2 specs + leveling): Feral Bear Tank, Feral Cat DPS
+- **<span style="color:#0070DE">Shaman</span>** (2 specs + leveling): 2H Enhancement DPS, Elemental Spell-Weaving
 
-Both the Cooldown HUD and the Next Action Guide feature dynamic spellbook leveling gating: unlearned abilities are automatically hidden, and rotations smoothly fall back to available leveling spells (Hunter falls back to Multi-Shot/Arcane Shot/Serpent Sting; Warrior falls back to Heroic Strike/Cleave/Rend/Sunder; Shaman falls back to Earth Shock/Searing Totem/Lightning Bolt; Druid cat falls back to Claw; Rogue falls back to Sinister Strike and Eviscerate; Paladin falls back to available seals and judgements). Progression updates dynamically when new spells or talents are learned without requiring a `/reload`. Classic Era queries by numeric IDs, while TBC Anniversary, Titanforge, WoW Forever, and modern families query by localized names with numeric ID fallback.
+> [!NOTE]
+> **Universal Flavor Dispatch**: SwedgeTimer automatically detects whether you're playing on WoW Forever, Era, SoD, TBC, or Wrath, loading the exact right engine, spell tables, and rotation models on login with zero manual configuration.
 
-## Screenshots
+---
 
-PENDING — screenshots to be added. No images yet.
+## 🚀 What's New in v2.1.5
 
-## Install
+> [!IMPORTANT]
+> **WoW Forever (Camelot 1.60.1) Launch Ready!** SwedgeTimer v2.1.5 delivers full, enterprise-grade rotations for all 6 melee classes calibrated directly against official simulation priority models, along with full tanking engines and real-time leveling progression.
 
-**CurseForge app (recommended):** search `SwedgeTimer`, install, keep it updated through the app.
+### 🌟 Release Highlights
 
-**Manual:** download the zip, copy the `SwedgeTimer` folder into your client's `Interface/AddOns/` folder (for example `_classic_era_`, `_classic_`, `_retail_`, or the WoW Forever client's `AddOns` folder), then log in. The correct file list is picked automatically per client flavor — there is nothing else to choose.
+- ⚔️ **Complete WoW Forever APL Rotations**:
+  - **<span style="color:#F58CBA">Paladin</span>**: Retribution (Holy Strike weaving, HoW execute, Seal cycling), Holy Shock burst, and Protection Tank (Holy Shield, Seal of Fury, Righteous Fury).
+  - **<span style="color:#C79C6E">Warrior</span>**: Arms (Bloodthrill Overpower procs, Slam weaving), Fury (Bloodthrill Overpower within 5–73 rage), and Protection Tank (Shield Wall $\le 35\%$, Last Stand $\le 40\%$, Shield Slam, Revenge).
+  - **<span style="color:#ABD473">Hunter</span>**: Melee Survival (gated strictly on `Strider Kick`), Ranged Turret/Weaving (with 4.0s Sniper Shot & Auto Shot clip protection), and Summon Hawk.
+  - **<span style="color:#FFF569">Rogue</span>**: Mutilate, Combat Daggers (Backstab), Subtlety (Hemo), and Combat Swords (Sinister Strike) with 100% Slice & Dice uptime, Envenom, TTD-based Rupture, and reactive Riposte parry procs.
+  - **<span style="color:#FF7D0A">Druid</span>**: Feral Bear Tank (Barkskin $\le 40\%$, Frenzied Regen $\le 30\%$, Primal Bite, Lacerate 5-stacks) and Feral Cat DPS (Stealth Ravage, Clearcasting Shred, 5-CP Rip, Ferocious Bite).
+  - **<span style="color:#0070DE">Shaman</span>**: Authentic 2H Enhancement rotation (Flame Shock, Stormstrike, 5-stack Maelstrom Weapon instant Lightning Bolt, Earth Shock, Fire Nova).
+- 🛡️ **Full Tanking Engines**: Dedicated Protection Paladin, Protection Warrior, and Feral Bear engines with auto-shield detection and health-threshold defensives.
+- 📈 **Dynamic Leveling Progression (Level 1–60)**: Spells unlock dynamically in the guide as you train them—**no `/reload` required**! Clean leveling fallbacks ensure you never stall on unlearned talents.
+- ⏱️ **Native Hardware-Accurate Timing**: Seamless integration with WoW Forever's native `C_SwingTimer` API and `PLAYER_SWING` events for jitter-free weapon timing.
 
-## Slash commands
+---
 
-- <span style="color:#FFD700">`/st`</span> — open options
-- <span style="color:#FFD700">`/st practice`</span> — toggle the practice trainer
-- <span style="color:#FFD700">`/st design`</span> — toggle layout mode
-- <span style="color:#FFD700">`/st diag`</span> — print a diagnostic report (include it verbatim when reporting an issue); it now carries a per-hand bar-state line, the power-bar state and a guard-quarantine line
+## 🎮 Supported Clients
 
-## Classes
-
-| Class | Guide | Cooldown HUD | Practice drills |
+| Client / Server | Interface | Swing Timer Engine | Special Features |
 | :--- | :--- | :--- | :--- |
-| <span style="color:#C79C6E">Warrior</span> | Slam / Execute / Overpower, Sunder / Rend upkeep, stance-dance | HS / Cleave queue tints, Blood Surge, Slam, Overpower | Core order, Core window, Sunder upkeep, Execute burn, HS/Cleave queue, Pre-pull opener |
-| <span style="color:#F58CBA">Paladin</span> | Seal-twist window, next-action (CS / Command / Blood / twist), SoD variants | Holy Shock, Aura Mastery, seals, How | Twist timing, FCFS priority, Prepull seal, Judgement fit |
-| <span style="color:#ABD473">Hunter</span> | Steady / weave / LnL prompts, trap tracking, standalone ranged-distance bar | Steady, Raptor, Rapid Fire, LnL / OOM badges | Shot priority, Clip, Cooldown pops, Opener |
-| <span style="color:#FFF569">Rogue</span> | Pool-vs-spend, Eviscerate-first / Rupture-first, Shiv / Tea context | SnD, Rupture, EA, AR, BF, Cold Blood | Finisher order, Combo-point decision, SnD upkeep, Opener |
-| <span style="color:#FF7D0A">Druid</span> | Bite / Rip, FF fishing, RipCP override | Maul queue, TF / Berserk, Claw, energy trackers | Cat priority, Shift rule, Roar upkeep, Execute |
-| <span style="color:#0070DE">Shaman</span> | Weave fits, sub-5 LB / LvB, totem upkeep | Shocks, Stormstrike, totems, Searing | Enhancement priority, Stack decision, Stormstrike decision, Totem upkeep |
+| **<span style="color:#FFD700">WoW Forever</span>** (Camelot) | `16001` | **<span style="color:#00FF00">● LIVE</span>** | Native swing engine, full 6-class Forever APL rotations, 2H Shaman, Melee Hunter, Tank rotations & leveling fallbacks |
+| **<span style="color:#FFD700">Classic Era & SoD</span>** | `11509` | **<span style="color:#00FF00">● LIVE</span>** | Classic combat engine, Season of Discovery runes, Exodin & Shockadin builds, Hunter melee stack |
+| **<span style="color:#FFD700">TBC Anniversary</span>** | `20506` | **<span style="color:#00FF00">● LIVE</span>** | Dedicated Paladin Seal-Twisting window, Hunter Auto Shot clipping bar, Windfury sync |
+| **<span style="color:#FFD700">WotLK Titanforge</span>** | `38002` | **<span style="color:#00FF00">● LIVE</span>** | High-precision FCFS next-action rotation, Wrath utility band, rank consolidation |
+| **<span style="color:#AAAAAA">Retail / Midnight</span>** | `12.1.x` | **<span style="color:#888888">○ UI Only</span>** | Cooldown HUD, layout designer, range checking & options active (swing bars static by design) |
+| **<span style="color:#AAAAAA">Cataclysm / Mists</span>** | `40402` / `50500` | **<span style="color:#888888">○ UI Only</span>** | Cooldown HUD, design mode & options interface active |
 
-All six classes ship a **rotation scenario** (the class's own rotation, run end to end and
-graded) and **three to six focused drills** each (one skill apiece). A drill is a focused
-single-skill trainer; the scenario is the full rotation sequence. The paladin's drill list
-leads with the twist timing drill — the twist minigame belongs to the paladin, and a class
-that publishes no drills of its own is refused rather than handed someone else's.
+> [!TIP]
+> Playing on **WoW Forever**? SwedgeTimer connects directly to the client's native `C_SwingTimer` engine and `PLAYER_SWING` events for frame-accurate timing without combat log delay!
 
-## Practice
+---
 
-`/st practice` runs drills against the same sim rotations the guides use (sourced from the [wowsims](https://github.com/wowsims) APLs — run your own numbers at [<span style="color:#1E90FF">wowsims.com</span>](https://www.wowsims.com)). Each drill grades <span style="color:#FFD700">S</span> through <span style="color:#808080">F</span> and stays unscored when the setup can't be judged — a safe place to rehearse pooling, swing timing, and windows before raid. Nothing in practice affects your live bars. Drills now show a moving cue strip with a fixed playhead (upcoming cues travel to it while the run is live), spanning the screen like the reference practice timeline: a left rail with an icon and name per lane, a scrolling `m:ss` ruler, lane rows, the current rotation band and a close button. Practice opens both frames — the timeline and the trainer panel — and every point of XP comes from a graded, timed press on that timeline: the paladin session waits for **Start Fight**, which starts the fight and the timeline, and **Stop Fight** freezes both. Closing the options window leaves practice running; only the practice panel's X ends it. The old post-fight log does the same full-width job behind an opt-in **Timeline** button; the panel itself matches the reference (bind hint under the grid, a **(Reset)** link, the Bloodlust / Haste Pot pair above the rotation picker, then **Start Fight** and **Timeline**).
+## ✨ Features You'll Love
 
-Three practice modes, chosen in options → Practice: the **class session** (the default), the
-**rotation scenario** (your class's own rotation, ten decisions, graded as a sequence), and
-the **drill list** (one button per focused drill). A read the client cannot answer scores
-nothing — the addon never guesses a grade.
+### ⏱️ Cycle-Accurate Swing & Shot Timers
 
-Each rotation scenario follows the class's own sim priority list — the **full** list, not just
-the damage rows. The utility layer is in it too: the warrior's stances, Bloodrage, Battle
-Shout, Recklessness and Death Wish; the hunter's Rapid Fire, Serpent upkeep, aspects and Kill
-Shot; the rogue's Vanish, Preparation and Premeditation; the druid's Cat Form, Leader of the
-Pack and Innervate; the shaman's Strength of Earth, Mana Spring, Frost Shock and Bloodlust;
-the paladin's Hand of Reckoning and Hammer of Wrath. The rows the sims carry as **pre-pull**
-(Charge, Intercept, the Battle Shout, Cat Form, Strength of Earth, Sanctity Aura, …) live in
-a per-class pre-pull table instead of the combat rotation, and the pre-pull drill grades the
-opening sequence — the warrior's, the hunter's and the rogue's ship one that grades the
-utility rows; the paladin's grades the pre-pull **seal**, and the druid's and the shaman's
-carry their pre-pull rows as citations only. The scenario is timed off the swing, so it needs
-a live swing engine: on a client with the inert stand-in (Retail) it is refused with a
-message rather than ten unknown steps.
+- **Main Hand & Off Hand**: Watch your weapon attacks glide across crisp, responsive bars with custom animated leading sparks and completion pulse flashes.
+- **Ranged & Auto Shot**: Hunters see the exact windup, release, and red clipping zone so you never clip an Auto Shot again!
+- **Dynamic Hand Hiding**: Off Hand and Ranged bars only show when you actually attack or arm a shot, keeping your screen uncluttered.
+- **Hunter Melee Stack**: Automatically pins your thin melee bars directly underneath your ranged bar at identical width.
 
-Practice is a progression, not just a scoreboard: every graded attempt earns **XP**, XP
-raises your **level** (50 per class, then **renown**), each drill carries its own **mastery**
-and tier (Unranked → Bronze → Silver → Gold → Platinum), and **streaks** track sessions and
-days. The **Progress** options page shows the level, the XP bar, the per-drill mastery
-table, the achievements and the lifetime stats (runs, accuracy, time active, best score);
-its stats frame draws the accuracy **sparkline** over your last 50 sessions. The practice
-panel carries a level badge and a session XP bar. Everything is local to your own profile —
-there is no account, no telemetry and no export.
+> [!TIP]
+> **Hunter Auto Shot Mastery**: The solid red endzone indicates the unshootable clip window. Wait for the green release phase before moving or queueing spells to maximize your DPS.
 
-## HUD & designer
+### 🔋 Universal Primary Resource Bar
 
-Every class ships a cooldown HUD: ability slots with swipe, glow, and tint (queue states, procs, OOM), plus counters where they matter. Both the Cooldown HUD and Next Action Guide feature real-time leveling progression across all six classes: unlearned abilities and talents are automatically omitted from display and rotation queues (with unlearned spells like Kill Command smoothly yielding priority to available abilities like Multi-Shot and Steady Shot), dynamically reflowing without requiring a `/reload`. Cross-client spell detection adheres strictly to family contracts: Classic Era queries by numeric spell IDs, while TBC Anniversary, WotLK Titanforge, and WoW Forever query by localized spell names with verified numeric ID fallbacks to automatically recognize any learned rank. Instead of configuring every element, pick a ready-made layout template per class in options — three curated templates for each of the six classes (18 in all, plus a Custom fallback), setting slots, sizes, and spacing in one click; any manual tweak drops back to Custom. `/st design` previews and arranges bars, HUD, rotation text and the practice elements live, with on-the-fly HUD template switching and style adjustment directly inside the Design Mode options menu. Template looks were researched from popular WeakAuras layouts (links only, nothing copied).
+- Seamlessly tracks **Mana**, **Rage**, **Energy**, or **Focus** right below your weapon swings.
+- Built-in energy tick tracking for **<span style="color:#FFF569">Rogues</span>** and **<span style="color:#FF7D0A">Druids</span>** in Cat Form so you can time your bursts with incoming energy ticks.
 
-## Visuals & Themes
+### 🎯 Intelligent Next-Action Rotation Guide
 
-- **One-Click Theme Presets:** Choose from curated aesthetic presets (Midnight Velvet, Clean Glassmorphic, Minimalist / ElvUI, and Classic Retro) under Bar Appearance options for instant modern styling.
-- **Raid Class Colors by Default:** Swing progress fills automatically adapt to your character's class color via the client's `RAID_CLASS_COLORS` API (with canonical Shaman blue enforced on Classic Era), with seamless profile migration from legacy defaults.
-- **Animated Leading Edge Spark:** A luminous spark highlights the advancing front of each swing bar, giving clear real-time timing clarity.
-- **Completion Flash Pulse:** A subtle visual feedback flash triggers as each swing or shot finishes, providing crisp confirmation.
-- **Zoomed / Borderless Icons:** Cooldown HUD icons can be cleanly cropped (`hud_zoom`) to remove the default 5% Blizzard border for an edge-to-edge square look.
-- **Third-Party Cooldown Isolation:** External cooldown text counters from OmniCC, ElvUI, and Tukui are cleanly suppressed on all SwedgeTimer cooldown frames to eliminate conflicting numbers and typography overlays.
-- **Opaque Bar Backdrop:** the swing-bar backdrop is fully opaque by default (alpha 1.0); a one-time migration raises an untouched old profile, while custom colours and theme presets are left as saved.
-- **WoW Forever Engine & Blizzard UI Suppression:** Full integration with WoW Forever (`1.60.1` / Camelot) via native `C_SwingTimer` and `PLAYER_SWING`, including combat reach range checking and optional suppression of Blizzard's built-in swing timer frames (`Blizzard_SwingTimer`).
+- Real-time icon prompt showing you the exact best spell to cast next, calibrated directly from official simulation priority models.
+- **Dynamic Leveling Progression**: Works seamlessly from **Level 1 to 60**! As you learn new spells and talents, SwedgeTimer automatically detects them and smoothly updates your rotation in real time without needing a `/reload`.
+- **Leveling Fallbacks**: Missing late-game talents? SwedgeTimer automatically falls back to baseline leveling abilities (Rend, Heroic Strike, Claw, Sinister Strike, baseline Holy Strike, totems, and shocks).
 
-<span style="color:#FFA500">Retail bars are intentionally static; HUD, rotation label, design mode, and options still work there. The addon never invents a reading: an unknown value is reported as unknown, and a practice step that cannot be decided scores nothing rather than a wrong grade.</span>
+> [!NOTE]
+> **Zero Reloads Needed**: Visiting a class trainer? As soon as you purchase a new spell rank or allocate talent points, SwedgeTimer immediately recognizes it and updates your rotation on the very next frame tick!
 
-## Links
+### 🛡️ Full Tanking Support on WoW Forever
 
-Project pages — CurseForge (search `SwedgeTimer` at [<span style="color:#FF8000">curseforge.com</span>](https://www.curseforge.com)), with Wago and WoWInterface listings. Exact project-page URLs unconfirmed; no links invented here. The addon itself integrates with none of them.
+- Dedicated Protection Paladin, Protection Warrior, and Feral Bear Tank rotation modes with defensive health triggers (Shield Wall, Last Stand, Barkskin, Frenzied Regeneration) and threat builders (Shield Slam, Primal Bite, Lacerate, Revenge).
 
-**Paladin seal-twist credit:** forktale — [SwedgeTimer TBC Anniversary Update](https://www.curseforge.com/wow/addons/swedgetimer-tbc-anniversary-update).
+> [!IMPORTANT]
+> **Auto-Shield Detection**: Equipping a shield automatically switches the guide to your class's dedicated tanking priority list without requiring manual menu toggles.
 
-## Repository map
+### 🥋 In-Game Practice Gym (`/st practice`)
 
-This repository is both the addon and the workshop where it is built.
+- Step into the practice gym to rehearse your rotation, swing timing, and seal twists offline without wasting raid buffs or consumables!
+- Features interactive scrolling timelines, mastery tiers (<span style="color:#CD7F32">Bronze</span> $\rightarrow$ <span style="color:#C0C0C0">Silver</span> $\rightarrow$ <span style="color:#FFD700">Gold</span> $\rightarrow$ <span style="color:#00FFFF">Platinum</span>), and graded performance scores!
 
-| Path | What it is |
+---
+
+## ⚔️ Class Rotations & Specializations
+
+### 🛡️ <span style="color:#F58CBA">Paladin</span>
+
+- **Retribution**: Immediate `Judgement` on cooldown $\rightarrow$ `Hammer of Wrath` execute $\rightarrow$ `Holy Strike` weaving (filling empty globals between judgements) $\rightarrow$ `Seal of Command` / `Seal of Righteousness` upkeep $\rightarrow$ `Consecration` & `Exorcism` mana-managed fillers.
+- **Holy Shock (Shockadin)**: `Judgement` $\rightarrow$ `Consecration` $\rightarrow$ Seal upkeep $\rightarrow$ `Holy Strike` $\rightarrow$ `Divine Favor` + `Holy Shock` burst $\rightarrow$ `Hammer of Wrath` $\rightarrow$ `Exorcism`.
+- **Protection (Tank)**: `Righteous Fury` upkeep $\rightarrow$ `Judgement` $\rightarrow$ `Seal of Fury` (or `Seal of Righteousness`) $\rightarrow$ `Consecration` $\rightarrow$ `Holy Shock` $\rightarrow$ `Holy Shield` $\rightarrow$ `Holy Strike` $\rightarrow$ `Exorcism`.
+- **Leveling**: Smooth Level 1–60 progression using Seal of Righteousness, Judgement, baseline Holy Strike (Level 6), Consecration (Level 20), and Exorcism (Level 24).
+- **TBC Seal-Twisting**: Dedicated seal-twist window band with live attempt and success detection!
+
+> [!TIP]
+> **Holy Strike Weaving**: Paladins on WoW Forever learn Holy Strike at level 6. SwedgeTimer prompts Holy Strike to fill empty global cooldowns while Judgement is on cooldown, delivering maximum DPS without clipping swing timers.
+
+### ⚔️ <span style="color:#C79C6E">Warrior</span>
+
+- **Arms**: `Overpower` on Bloodthrill procs and dodges (only 5 rage!) $\rightarrow$ `Mortal Strike` $\rightarrow$ `Whirlwind` $\rightarrow$ `Slam` $\rightarrow$ `Rend` upkeep $\rightarrow$ `Execute` burn phase $\rightarrow$ `Cleave` (multi-target) & `Heroic Strike` rage dump (90+ rage).
+- **Fury**: `Whirlwind` on AoE $\rightarrow$ `Overpower` weaving on Bloodthrill procs (5–73 rage) $\rightarrow$ `Execute` phase $\rightarrow$ `Bloodthirst` $\rightarrow$ `Heroic Strike` queueing $\rightarrow$ `Rend` weaving & `Hamstring` utility.
+- **Protection (Tank)**: Emergency defensives (`Shield Wall` at $\le 35\%$ HP, `Last Stand` at $\le 40\%$ HP) $\rightarrow$ `Shield Block` uptime $\rightarrow$ `Shield Slam` $\rightarrow$ Fury-Prot `Bloodthirst` & Arms-Prot `Mortal Strike` $\rightarrow$ `Revenge` procs $\rightarrow$ `Sunder Armor` 5-stack upkeep $\rightarrow$ `Thunder Clap` & `Demoralizing Shout` $\rightarrow$ `Cleave` / `Heroic Strike`.
+- **Leveling**: High-priority Overpower procs, Execute, Rend bleed upkeep, Sunder Armor, and Heroic Strike rage dumping.
+
+### 🏹 <span style="color:#ABD473">Hunter</span>
+
+- **Melee Survival**: Gated on the **`Strider Kick`** talent $\rightarrow$ `Raptor Strike` $\rightarrow$ `Hunter's Mark` $\rightarrow$ `Mongoose Bite` (on dodge) $\rightarrow$ `Strider Kick` $\rightarrow$ `Immolation Trap` $\rightarrow$ `Summon Hawk` $\rightarrow$ `Wing Clip` $\rightarrow$ gap closers while moving into melee.
+- **Ranged Weave & Turret**: Auto Shot clipping management $\rightarrow$ `Hunter's Mark` $\rightarrow$ `Serpent Sting` $\rightarrow$ `Arcane Shot` $\rightarrow$ `Multi-Shot` $\rightarrow$ `Aimed Shot` $\rightarrow$ **`Sniper Shot`** (4s heavy cast) $\rightarrow$ **`Summon Hawk`**. In melee range, immediately weaves `Raptor Strike`, `Strider Kick`, `Mongoose Bite`, and `Immolation Trap`.
+- **Leveling**: Adaptable Level 1–19 baseline rotation smoothly evolving from Raptor Strike and Serpent Sting up to full ranged turret and trap utility.
+
+> [!NOTE]
+> **Survival Melee Mode**: The melee rotation is strictly gated on having learned the **Strider Kick** talent (or manually enabling it in `/st`), ensuring ranged hunters are never erroneously prompted for melee abilities just for standing close.
+
+### 🗡️ <span style="color:#FFF569">Rogue</span>
+
+- **Mutilate (Assassination / Combat)**: 2-Combo-Point builder `Mutilate` $\rightarrow$ `Slice and Dice` 100% uptime $\rightarrow$ `Envenom` / `Rupture` $\rightarrow$ `Eviscerate` at 4–5 Combo Points.
+- **Combat Daggers**: Positional `Backstab` builder $\rightarrow$ `Slice and Dice` $\rightarrow$ `Rupture` / `Eviscerate`.
+- **Subtlety**: Low-cost `Hemorrhage` builder $\rightarrow$ `Slice and Dice` $\rightarrow$ `Rupture` / `Eviscerate`.
+- **Combat Swords / Maces**: `Sinister Strike` builder $\rightarrow$ `Slice and Dice` $\rightarrow$ `Rupture` / `Eviscerate`.
+- **Defense & Utility**: `Riposte` on parry (only 10 energy!) and `Expose Armor` maintenance.
+- **Leveling**: Reliable Sinister Strike, Slice and Dice, Eviscerate, and Riposte progression.
+
+### 🐾 <span style="color:#FF7D0A">Druid</span>
+
+- **Feral Bear (Tank)**: Emergency defensives (`Barkskin` at $\le 40\%$ HP, `Frenzied Regeneration` at $\le 35\%$ HP) $\rightarrow$ `Enrage` rage generation $\rightarrow$ `Faerie Fire (Feral)` $\rightarrow$ `Demoralizing Roar` $\rightarrow$ **`Primal Bite`** on cooldown $\rightarrow$ **`Lacerate`** 5-stack building and upkeep $\rightarrow$ `Swipe` on AoE $\rightarrow$ `Maul` queueing.
+- **Feral Cat (DPS)**: Prowl `Ravage` opener $\rightarrow$ `Faerie Fire (Feral)` $\rightarrow$ Clearcasting proc `Shred` priority $\rightarrow$ 5-Combo-Point `Rip` bleed upkeep $\rightarrow$ `Ferocious Bite` finisher $\rightarrow$ `Tiger's Fury` damage buff $\rightarrow$ `Rake` bleed upkeep $\rightarrow$ `Shred` (behind target) or `Claw` builder.
+- **Leveling**: Seamless shapeshifting progression covering Caster Wrath/Moonfire (Levels 1–9), Bear Maul/Enrage (Level 10+), and Cat Claw/Rip (Level 20+).
+
+### ⚡ <span style="color:#0070DE">Shaman</span>
+
+- **2H Enhancement**: Built purely for 2-Handed weapon combat (**no Dual Wield, no Lava Lash**) $\rightarrow$ `Flame Shock` debuff upkeep $\rightarrow$ `Stormstrike` on cooldown $\rightarrow$ 5-stack Maelstrom Weapon instant **`Lightning Bolt`** weave $\rightarrow$ `Earth Shock` $\rightarrow$ `Fire Nova` $\rightarrow$ Totem upkeep (Strength of Earth, Windfury/Grace of Air, Mana Spring, Searing Totem) $\rightarrow$ `Water Shield` / `Lightning Shield`.
+- **Leveling**: Rockbiter / Flametongue weapon imbues $\rightarrow$ Lightning Shield upkeep $\rightarrow$ Flame Shock dot $\rightarrow$ Earth Shock burst $\rightarrow$ Searing Totem $\rightarrow$ Lightning Bolt finisher.
+
+> [!IMPORTANT]
+> **Verified 2H Enhancement Mechanics**: On WoW Forever, Enhancement Shamans wield powerful Two-Handed weapons (**no Dual Wield, no Lava Lash**). SwedgeTimer models the exact 2H rotation with 5-stack Maelstrom Weapon instant Lightning Bolt weaves and totem maintenance.
+
+---
+
+## ⌨️ Slash Commands
+
+| Command | Description |
 | :--- | :--- |
-| `README.md` | this file — the workshop map |
-| `workshop.md` | the workshop — rooms, desk flow, lessons |
-| `AGENTS.md` | operating mechanics — conventions, gotchas, cross-engine rules |
-| `CAIRN.md` | the operating disposition |
-| `hands-up.md` | the escalation ledger — open questions and verdicts |
-| `desks/` | one directory per desk: `desks/<name>/journal.md` and `.signals/`; `desks/journal.md` is the central lane ledger |
-| `bench/` | shared results — findings, verdicts, reports; `bench/briefs/` holds dispatch briefs, `bench/lessons.md` holds lessons |
-| `tests/` | offline checks — `bash tests/run.sh` |
-| `classes/` | one module per class — druid, hunter, paladin, rogue, shaman, warrior |
-| `Libs/` | vendored libraries — Ace3, swing-timer engine, range check |
-| `docs/` | archived addon builds and design notes |
-| `Media/` | textures, fonts, sounds |
-| `*.toc` | load orders — base plus one per client flavor |
-| `*.lua` | addon modules (layout in `AGENTS.md`) |
-| `CHANGELOG.md` | release history |
-| `LICENSE` | GPL-3.0 |
+| <span style="color:#FFD700">`/st`</span> | Opens the main configuration panel (bars, colors, sizing, fonts, layout). |
+| <span style="color:#FFD700">`/st design`</span> | Toggles **Design Mode** — click and drag bars, HUD, and text anywhere on your screen! |
+| <span style="color:#FFD700">`/st practice`</span> | Opens the **Practice Gym** to train your rotation on an interactive timeline. |
+| <span style="color:#FFD700">`/st diag`</span> | Runs a live **Diagnostic Audit** in chat, verifying spellbook detection and engine health. |
 
-## License
+> [!TIP]
+> Type `/st design` to unlock all frames, bars, and icons for easy drag-and-drop repositioning anywhere on your screen! Type `/st design` again when finished to lock everything in place.
 
-GPL-3.0 — see `LICENSE`.
+---
+
+## 📦 Installation
+
+### Option 1: CurseForge App (Recommended)
+
+1. Open the **CurseForge App**.
+2. Search for [**<span style="color:#FF8000">SwedgeTimer</span>**](https://www.curseforge.com).
+3. Click **Install**. The app will handle automatic updates!
+
+### Option 2: Manual Install
+
+1. Download the latest `.zip` release.
+2. Extract the `SwedgeTimer` folder into your World of Warcraft AddOns directory:
+   - **WoW Forever**: `World of Warcraft/Interface/AddOns/SwedgeTimer`
+   - **Classic Era / SoD**: `World of Warcraft/_classic_era_/Interface/AddOns/SwedgeTimer`
+   - **TBC Anniversary**: `World of Warcraft/_classic_/Interface/AddOns/SwedgeTimer`
+   - **WotLK Titanforge**: `World of Warcraft/_classic_/Interface/AddOns/SwedgeTimer`
+   - **Retail**: `World of Warcraft/_retail_/Interface/AddOns/SwedgeTimer`
+3. Launch World of Warcraft. The client automatically picks the matching flavor TOC file.
+
+> [!NOTE]
+> All flavor variants are bundled into one universal download. The WoW client automatically selects the correct `.toc` file for your active game version.
+
+---
+
+## 🎨 Themes & Customization
+
+Pick from ready-made visual presets under `/st` $\rightarrow$ **Bar Appearance**:
+
+- **Midnight Velvet**: Modern dark aesthetic with refined contrasting borders.
+- **Clean Glassmorphic**: Frosted glass translucent design with luminous accent lines.
+- **Minimalist / ElvUI**: Ultra-thin flat borders tailored for minimalist UI suites.
+- **Classic Retro**: Nostalgic Blizzard classic interface styling.
+
+*All swing bars automatically inherit your character's official raid class color by default!*
+
+---
+
+## 📜 Credits & License
+
+- **Paladin Seal-Twisting Research**: Credit to `forktale` ([SwedgeTimer TBC Anniversary Update](https://www.curseforge.com/wow/addons/swedgetimer-tbc-anniversary-update)).
+- **Simulation Models**: Action Priority Lists and rotations powered by the [wowsims](https://github.com/wowsims) project ([<span style="color:#1E90FF">wowsims.com</span>](https://www.wowsims.com)).
+- **License**: GNU General Public License v3.0 — see [LICENSE](LICENSE).

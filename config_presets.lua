@@ -902,6 +902,10 @@ ST.PALADIN.defaults = {
     -- default-visible change) and the player turns it on in the panel.
     hud_show_hor = false,
     hud_show_how_wrath = false,
+    hud_show_holy_shield = false,
+    hud_show_holy_strike = false,
+    -- Paladin Specialization (auto = detect from shield/talents, retribution, protection)
+    paladin_spec = "auto",
     -- Layout template selection (bench/hud_templates_2026-10-19.md §7): nil =
     -- Custom (current behavior, zero default-visible change). The curated sets
     -- live in ST.PALADIN.HUD_TEMPLATES below; the options select applies one on
@@ -1394,6 +1398,7 @@ ST.WARLOCK.defaults = {
 ------------------------------------------------------------------------------------
 ST.WARRIOR.defaults = {
     -- Class-level options
+    warrior_spec = "auto",
     enable_hs_color = true,
     hs_color = {130, 7, 9, 1.0},
     enable_cleave_color = true,

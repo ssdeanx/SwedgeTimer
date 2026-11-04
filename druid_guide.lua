@@ -1154,7 +1154,7 @@ function st.druid_guide.evaluate(inputs, out)
             local cost = inputs.maul_cost
             local sufficient = type(rage) == "number" and type(cost) == "number"
                 and rage >= cost and inputs.insufficient_rage ~= true
-            if sufficient then
+            if sufficient and inputs.maul_known ~= false then
                 action = "maul"
             elseif druid_client_has_mangle(inputs) == false or inputs.mangle_known == false then
                 -- 3e. A client with NO Mangle spell: pool rage instead of guessing

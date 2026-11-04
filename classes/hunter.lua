@@ -3596,6 +3596,9 @@ ST.HUNTER.guide = {
     -- Pure: the frozen hunter rule matrix (st.hunter_guide in hunter_guide.lua); guarded
     -- so a flavor without that module stays inert rather than erroring.
     evaluate = function(inputs, out)
+        if is_forever_guide and st.forever_guide and st.forever_guide.evaluate then
+            return st.forever_guide.evaluate("HUNTER", nil, inputs, out)
+        end
         if st.hunter_guide and st.hunter_guide.evaluate then
             return st.hunter_guide.evaluate(inputs, out)
         end

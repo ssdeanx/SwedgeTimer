@@ -1012,6 +1012,10 @@ do
         "rule 5: TBC 5CP with Rupture healthy -> Eviscerate")
     eq(evaluate({ family = "TBC", cp = 5, ttd = NONE, rupture_remains = NONE }).action, nil,
         "rule 5 with unknown TTD guesses no finisher (falls to Tea/pool)")
+    eq(evaluate({ family = "TBC", cp = 5, ttd = NONE, rupture_known = false }).action, "eviscerate",
+        "rule 5 leveling fallback: unknown TTD with Rupture unlearned falls back to Eviscerate")
+    eq(evaluate({ family = "FOREVER", cp = 5, ttd = NONE, rupture_known = false }).action, "eviscerate",
+        "rule 5 leveling fallback: Forever with unknown TTD and Rupture unlearned falls back to Eviscerate")
     eq(evaluate({ family = "TBC", cp = 4, ttd = 60, rupture_remains = NONE }).action, nil,
         "4 CP is below the TBC line (falls to Tea/pool)")
     eq(evaluate({ family = "BOGUS", cp = 5 }).action, "eviscerate",

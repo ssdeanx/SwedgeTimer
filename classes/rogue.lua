@@ -913,7 +913,9 @@ ST.ROGUE.guide = {
 			ST.ROGUE.guide_raw = raw
 		end
 		local engine = st.rogue_guide
-		if engine and engine.evaluate then
+		if st.family == "FOREVER" and st.forever_guide and st.forever_guide.evaluate then
+			st.forever_guide.evaluate("ROGUE", nil, inputs, raw)
+		elseif engine and engine.evaluate then
 			engine.evaluate(inputs, raw)
 		else
 			raw.action = nil
@@ -937,6 +939,11 @@ ST.ROGUE.guide = {
 			out.hold = raw.action ~= nil or raw.hold == true
 			out.hold_text = raw.hold_text
 			out.riding = raw.action ~= nil and true or nil
+			if inputs and inputs.riposte_usable == true and type(inputs.energy_now) == "number"
+				and inputs.energy_now >= 10 then
+				out.hold = true
+				out.hold_text = "RIPOSTE"
+			end
 		end
 		out.inputs_unknown = unknown
 		return out
@@ -1001,7 +1008,7 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 			rupture_entry.id, rupture_entry.name, now)
 	end
 	inputs.rupture_remains = rupture_found and (rupture_remains or 0) or nil
-	inputs.rupture_known = rupture_entry and known_probe(rogue_query(rupture_entry), rupture_entry.name)
+	inputs.rupture_known = (rupture_entry and known_probe(rogue_query(rupture_entry), rupture_entry.name)) or false
 
 	local ea_entry = resolve_named_spell("target:ea", "Expose Armor", now)
 	local ea_found, ea_remains = false, nil
@@ -1157,6 +1164,17 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 			and count ~= 0
 			and tea_cd == nil
 			and true or nil
+	end
+
+	-- Riposte check (combat / leveling / defensive state):
+	local riposte_entry = resolve_named_spell("guide:riposte", "Riposte", now)
+	inputs.riposte_usable = nil
+	if riposte_entry then
+		local rip_query = rogue_query(riposte_entry)
+		if api.is_spell_known(rip_query) == true and api.IsSpellUsable(rip_query) == true
+			and spell_cooldown(self, rip_query, now) == nil then
+			inputs.riposte_usable = true
+		end
 	end
 
 	-- The APL utility layer's reads (bench/rotation_gap_vs_apl_2026-10-20.md §3 -

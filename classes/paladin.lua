@@ -420,6 +420,7 @@ function ST.PALADIN.post_init(self)
     -- the pure st.nextaction engine module; guarded so a flavor without the guide
     -- files stays inert. The FCFS slot textures resolve first (above), so the
     -- frame builds its icons from the final ids.
+    ST.PALADIN.resolve_guide_slots(self)
     ST.PALADIN.resolve_guide_icons()
     if st.nextaction_ui then
         st.nextaction_ui.init(self)
@@ -534,6 +535,11 @@ function ST.PALADIN.parse_seals(self)
     self.has_soj = false
     self.has_sob = false
     self.has_sotc = false
+    self.has_rf = false
+    self.has_sof = false
+    self.sof_expires = nil
+    self.has_holy_shield = false
+    self.holy_shield_expires = nil
     -- Seal expiry timestamps in seconds (next-action guide seal input). Reset so a
     -- dropped seal cannot leave a stale value behind. sor_* backs the
     -- twist-seal swipe on Era (Righteousness there; see is_era_family above).
@@ -636,6 +642,19 @@ function ST.PALADIN.parse_seals(self)
             end
             if aura_matches(sotc_ids, seal_name_boxes.sotc, spell_id, name) then
                 self.has_sotc = true
+            end
+
+            -- Protection Paladin auras (Righteous Fury, Seal of Fury on Forever, Holy Shield)
+            if spell_id == 25780 or name == "Righteous Fury" then
+                self.has_rf = true
+            end
+            if spell_id == 20423 or name == "Seal of Fury" then
+                self.has_sof = true
+                self.sof_expires = expiration_time
+            end
+            if spell_id == 20925 or spell_id == 20927 or spell_id == 20928 or name == "Holy Shield" then
+                self.has_holy_shield = true
+                self.holy_shield_expires = expiration_time
             end
 
             -- Forever Echo maintenance (the discipline above): the NAME is the
@@ -3264,6 +3283,25 @@ end
 -- whose book lacks both keep the shipped ids bit-identically. Runs once from
 -- post_init, before the guide frame builds its icons. Defined after the DS/HW
 -- resolvers above (lexical locals) and before the guide table below.
+function ST.PALADIN.resolve_guide_slots(self)
+    local db = self and self:get_class_table() or {}
+    local spec = db.paladin_spec or "auto"
+    local is_prot = spec == "protection"
+    if spec == "auto" then
+        local has_shield = api.is_shield_equipped and api.is_shield_equipped() == true
+        if has_shield then
+            is_prot = true
+        end
+    end
+    if is_prot and ST.PALADIN.guide_slots_prot then
+        ST.PALADIN.guide.slots = ST.PALADIN.guide_slots_prot
+        ST.PALADIN.HUD_SLOTS = ST.PALADIN.HUD_SLOTS_PROT
+    else
+        ST.PALADIN.guide.slots = ST.PALADIN.guide_slots_ret
+        ST.PALADIN.HUD_SLOTS = ST.PALADIN.HUD_SLOTS_RET
+    end
+end
+
 function ST.PALADIN.resolve_guide_icons()
     local now = api.get_time()
     local ds_id = (is_wrath_family or is_era_family) and resolve_ds_spell_id(now) or nil
@@ -3515,8 +3553,11 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     inputs.mana_exorcism_threshold = _mana_exo
     local consecration_remaining
     local exorcism_remaining
+    local cons_known = false
+    local exo_known = false
     if na then
         if na.CONSECRATION_SPELL_ID and is_spell_known_query(na.CONSECRATION_SPELL_ID) then
+            cons_known = true
             if filler_name_consecration == nil then
                 filler_name_consecration = api.GetSpellInfo(na.CONSECRATION_SPELL_ID)
             end
@@ -3525,6 +3566,7 @@ function ST.PALADIN.gather_guide_inputs(self, out)
             end
         end
         if na.EXORCISM_SPELL_ID and is_spell_known_query(na.EXORCISM_SPELL_ID) then
+            exo_known = true
             if filler_name_exorcism == nil then
                 filler_name_exorcism = api.GetSpellInfo(na.EXORCISM_SPELL_ID)
             end
@@ -3533,8 +3575,16 @@ function ST.PALADIN.gather_guide_inputs(self, out)
             end
         end
     end
+    inputs.cons_known = cons_known
+    inputs.exo_known = exo_known
     inputs.filler_remaining = nil
-    if na and inputs.creature_type and na.exorcism_target_types
+    if is_forever_family then
+        if exo_known and inputs.mana_pct > inputs.mana_exorcism_threshold then
+            inputs.filler_remaining = exorcism_remaining
+        elseif cons_known and inputs.mana_pct > inputs.mana_consecration_threshold then
+            inputs.filler_remaining = consecration_remaining
+        end
+    elseif na and inputs.creature_type and na.exorcism_target_types
         and na.exorcism_target_types[inputs.creature_type] then
         if inputs.mana_pct > inputs.mana_exorcism_threshold then
             inputs.filler_remaining = exorcism_remaining
@@ -3576,7 +3626,7 @@ function ST.PALADIN.gather_guide_inputs(self, out)
         inputs.hor_remaining = nil
         inputs.how_wrath_remaining = nil
     end
-    local fcfs_family = is_wrath_family or is_era_family
+    local fcfs_family = is_wrath_family or is_era_family or is_forever_family
     inputs.cons_remaining = fcfs_family and consecration_remaining or nil
     inputs.exo_remaining = fcfs_family and exorcism_remaining or nil
     inputs.has_aow = self.has_aow == true
@@ -3649,7 +3699,61 @@ function ST.PALADIN.gather_guide_inputs(self, out)
             sod_mode = "sod_stack"
         end
     end
-    inputs.fcfs_mode = is_wrath_family and "wrath" or sod_mode
+
+    -- Protection Paladin inputs
+    local has_shield = api.is_shield_equipped and api.is_shield_equipped() == true
+    inputs.has_shield = has_shield
+
+    local rf_known = is_spell_known_query(25780)
+    inputs.righteous_fury_known = rf_known
+    inputs.has_righteous_fury = self.has_rf == true
+
+    local holy_shield_known = is_spell_known_query(20925)
+    inputs.holy_shield_known = holy_shield_known
+    if holy_shield_known then
+        inputs.holy_shield_remaining = get_guide_cooldown_remaining(self, 20925,
+            "guide_holy_shield_expires", "guide_holy_shield_duration")
+    else
+        inputs.holy_shield_remaining = nil
+    end
+
+    if self.holy_strike_known then
+        inputs.holy_strike_remaining = get_guide_cooldown_remaining(self, 10333,
+            "guide_holy_strike_expires", "guide_holy_strike_duration")
+    else
+        inputs.holy_strike_remaining = nil
+    end
+
+    local sof_known = is_spell_known_query(20423)
+    inputs.seal_fury_known = sof_known
+    if sof_known then
+        inputs.seal_inactive = self.has_sof ~= true
+        inputs.seal_expiring = self.has_sof == true and self.sof_expires ~= nil
+            and (self.sof_expires - now) < (inputs.swing_remaining or 1.5)
+    else
+        inputs.seal_inactive = self.has_sor ~= true
+        inputs.seal_expiring = self.has_sor == true and self.sor_expires ~= nil
+            and (self.sor_expires - now) < (inputs.swing_remaining or 1.5)
+    end
+
+    -- Spec resolution: Protection vs Retribution
+    local db_spec = (type(db) == "table") and rawget(db, "paladin_spec") or "auto"
+    local is_prot = false
+    if db_spec == "protection" then
+        is_prot = true
+    elseif db_spec == "retribution" then
+        is_prot = false
+    else -- auto
+        if has_shield and (holy_shield_known or self.has_rf or is_forever_family) then
+            is_prot = true
+        end
+    end
+
+    if is_prot then
+        inputs.fcfs_mode = is_forever_family and "prot_forever" or "prot"
+    else
+        inputs.fcfs_mode = is_wrath_family and "wrath" or sod_mode
+    end
     -- The rotation order the running client plays, published for the practice
     -- surface (ST.PALADIN.practice_rotation_for): the live gather is the only
     -- place that knows which SoD variant the client plays, so the practice
@@ -3804,15 +3908,36 @@ ST.PALADIN.guide = {
             ST.PALADIN.guide_raw = raw
         end
         local na = st.nextaction
-        -- FCFS families (Wrath, SoD runes) run the priority-winner engine; every
-        -- other family keeps the archived twist tree bit-identically (scripted and
-        -- old callers pass no fcfs_mode, which reads as nil here).
-        if na and na.evaluate_fcfs and inputs.fcfs_mode ~= nil then
+        if is_forever_family and st.forever_guide and st.forever_guide.evaluate then
+            st.forever_guide.evaluate("PALADIN", nil, inputs, raw)
+        elseif na and na.evaluate_fcfs and inputs.fcfs_mode ~= nil then
             na.evaluate_fcfs(inputs, raw)
         elseif na and na.evaluate then
             na.evaluate(inputs, raw)
         end
-        out.action = raw.riding and "sob" or raw.action
+        if raw.action == "rf" then
+            out.action = "rf"
+        elseif raw.action == "holy_shield" then
+            out.action = "holy_shield"
+        elseif raw.action == "holy_strike" then
+            out.action = "holy_strike"
+        elseif raw.action == "sor" then
+            out.action = "sor"
+        elseif raw.action == "sof" then
+            out.action = "sof"
+        elseif raw.action == "how" then
+            out.action = "how"
+        elseif raw.action == "consecration" then
+            out.action = "consecration"
+        elseif raw.action == "exorcism" then
+            out.action = "exorcism"
+        elseif raw.action == "holy_shock" then
+            out.action = "holy_shock"
+        elseif raw.action == "judge" then
+            out.action = "judge"
+        else
+            out.action = raw.riding and "sob" or raw.action
+        end
         out.hold = raw.hold
         out.hold_text = raw.riding and "RIDE" or "HOLD"
         out.filler_slot = raw.filler_kind
@@ -3820,15 +3945,10 @@ ST.PALADIN.guide = {
         -- M6: the engine threads the provider's inputs_unknown; copy it into the
         -- display table so the frame can render "…" instead of an action.
         out.inputs_unknown = raw.inputs_unknown == true or inputs.inputs_unknown == true
-        -- Era and Forever show no rotation pattern: the keys name CS-cycle
-        -- cadences that do not exist without Crusader Strike. (The filler_kind
-        -- "how" passes through untouched to the HoW slot above; "holy_shock"
-        -- and "aura_mastery" ride the same generic mapping to the shockadin
-        -- slots.)
         out.rotation_key = nil
-        -- FCFS has no rotation pattern (nothing to paint); the twist cadences
-        -- stay TBC-only, Era and Forever stay patternless as before.
-        if not inputs.era and not inputs.forever and inputs.fcfs_mode == nil
+        if inputs.fcfs_mode == "prot_forever" or inputs.fcfs_mode == "prot" then
+            out.rotation_key = "prot"
+        elseif not inputs.era and not inputs.forever and inputs.fcfs_mode == nil
             and na and na.calculate_rotation then
             out.rotation_key = na.calculate_rotation(inputs.speed, inputs.G)
         end
@@ -3873,6 +3993,33 @@ ST.PALADIN.guide = {
     rotation_names = st.nextaction and st.nextaction.display_names or nil,
 
     labels = { next_action = "Next action:", hold = "HOLD", ride = "RIDE" },
+}
+
+ST.PALADIN.guide_slots_ret = ST.PALADIN.guide.slots
+ST.PALADIN.guide_slots_prot = {
+    { key = "holy_shield", spell_id = 20925, spell_name = "Holy Shield", cooldown_key = "holy_shield",
+        name_suffix = "IconHolyShield", level = 40, swipe_duration = 10 },
+    { key = "holy_strike", spell_id = 10333, spell_name = "Holy Strike", cooldown_key = "holy_strike",
+        name_suffix = "IconHolyStrike", level = 2 },
+    { key = "judge", spell_id = 20271, cooldown_key = "judge",
+        name_suffix = "IconJudgement", level = 10, offset = { -9, -10 },
+        size = { 22.5, 24.9 }, glow = true, swipe_duration = 8 },
+    { key = "consecration", spell_id = 26573, cooldown_key = "consecration",
+        name_suffix = "IconConsecration", level = 1, zoom = 0.2, label = "FILLER",
+        swipe_duration = 8 },
+    { key = "rf", spell_id = 25780, spell_name = "Righteous Fury", cooldown_key = "rf",
+        name_suffix = "IconRF", level = 16 },
+    { key = "sor", spell_id = 20293, spell_name = "Seal of Righteousness", cooldown_key = "sor",
+        name_suffix = "IconSoR", level = 1, swipe_duration = 30, swipe_always = true },
+    { key = "sof", spell_id = 20423, spell_name = "Seal of Fury", cooldown_key = "sof",
+        name_suffix = "IconSoF", level = 40, swipe_duration = 30, swipe_always = true },
+    { key = "exorcism", spell_id = 879, cooldown_key = "exorcism",
+        name_suffix = "IconExorcism", level = 1, zoom = 0.15, label = "FILLER",
+        swipe_duration = 15 },
+    { key = "holy_shock", spell_id = 20930, name_suffix = "FillerHS",
+        level = 16, zoom = 0.15, label = "FILLER" },
+    { key = "cs", spell_id = 35395, cooldown_key = "cs",
+        name_suffix = "IconCS", level = 1, swipe_duration = 6 },
 }
 
 --=========================================================================================
@@ -3923,6 +4070,20 @@ ST.PALADIN.HUD_SLOTS = {
     -- slot here (the ids are rank-invariant icon fallbacks).
     { key = "hor", title = "Hand of Reckoning", kind = "spell", spell = 67485 },
     { key = "how_wrath", title = "Hammer of Wrath (WotLK)", kind = "spell", spell = 48806 },
+}
+
+ST.PALADIN.HUD_SLOTS_RET = ST.PALADIN.HUD_SLOTS
+ST.PALADIN.HUD_SLOTS_PROT = {
+    { key = "holy_shield", title = "Holy Shield", kind = "spell", spell = 20925 },
+    { key = "holy_strike", title = "Holy Strike", kind = "spell", spell = 10333 },
+    { key = "judgement", title = "Judgement", kind = "spell", spell = 20271 },
+    { key = "consecration", title = "Consecration", kind = "spell", spell = 26573 },
+    { key = "trinket1", title = "Trinket 1", kind = "trinket", inv_slot = 13 },
+    { key = "trinket2", title = "Trinket 2", kind = "trinket", inv_slot = 14 },
+    { key = "wings", title = "Avenging Wrath", kind = "spell", spell = 31884 },
+    { key = "rf", title = "Righteous Fury", kind = "spell", spell = 25780 },
+    { key = "exorcism", title = "Exorcism", kind = "spell", spell = 879 },
+    { key = "holy_shock", title = "Holy Shock", kind = "spell", spell = 20930 },
 }
 
 -- One reused state table: the HUD reads it immediately and never keeps a reference
@@ -4163,6 +4324,32 @@ local function hud_ability_cooldown(self, slot, now)
             end
         end
         return 0, 0
+    elseif key == "holy_shield" then
+        if practice then
+            return 0, 10
+        end
+        local name = hud_slot_name(slot) or "Holy Shield"
+        local start_time, duration = api.GetSpellCooldown(spell_query(name), slot.spell)
+        if start_time and duration and duration > 1.51 then
+            local remaining = start_time + duration - now
+            if remaining > 0 then
+                return remaining, duration
+            end
+        end
+        return 0, 10
+    elseif key == "holy_strike" then
+        if practice then
+            return 0, 6
+        end
+        local name = hud_slot_name(slot) or "Holy Strike"
+        local start_time, duration = api.GetSpellCooldown(spell_query(name), slot.spell)
+        if start_time and duration and duration > 1.51 then
+            local remaining = start_time + duration - now
+            if remaining > 0 then
+                return remaining, duration
+            end
+        end
+        return 0, 6
     end
     return 0, 0
 end

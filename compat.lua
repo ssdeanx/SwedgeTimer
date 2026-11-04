@@ -1330,6 +1330,33 @@ function api.is_item_equipped(item_id)
 	return false
 end
 
+-- Shield equipped probe: does the player wear a shield in the offhand right now?
+-- Uses slot 17 (INVSLOT_OFFHAND) and inspects itemEquipLoc == "INVTYPE_SHIELD".
+local get_inventory_item_link = rawget(_G, "GetInventoryItemLink")
+
+function api.is_shield_equipped()
+	local item_id = api.GetInventoryItemID(17)
+	if not item_id or is_secret(item_id) then
+		return false
+	end
+	local link = get_inventory_item_link and get_inventory_item_link("player", 17)
+	local target = link or item_id
+	if GetItemInfo then
+		local ok, _, _, _, _, _, _, _, equipLoc = pcall(GetItemInfo, target)
+		if ok and equipLoc == "INVTYPE_SHIELD" then
+			return true
+		end
+	end
+	local c_item = rawget(_G, "C_Item")
+	if c_item and c_item.GetItemInventoryTypeByID then
+		local ok, inv_type = pcall(c_item.GetItemInventoryTypeByID, item_id)
+		if ok and (inv_type == 14 or inv_type == "INVTYPE_SHIELD") then
+			return true
+		end
+	end
+	return false
+end
+
 -- Combat log (classic-line clients only) -------------------------------------------------
 -- CombatLogGetCurrentEventInfo() reads the current COMBAT_LOG_EVENT_UNFILTERED payload.
 -- Mainline-code clients (Retail, WoW Forever) have no classic combat log, so the wrapper

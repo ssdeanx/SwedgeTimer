@@ -40,13 +40,13 @@ bar on Cata/Mists — record it and move on.
 2. The addon prints a **login one-liner by itself at login** (`main.lua:673-677`) — record it
    verbatim:
    ```
-   SwedgeTimer diag: family=WRATH iface=38002 version=2.1.4 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:on DRUID:on SHAMAN:on HUNTER:on ROGUE:on
+   SwedgeTimer diag: family=WRATH iface=38002 version=2.1.5 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:on DRUID:on SHAMAN:on HUNTER:on ROGUE:on
    ```
    Then run **`/st diag`**. There is **no `verbose` sub-command**: the slash handler matches only
    `` / `practice` / `design` / `diag` (`main.lua:2013-2046`), so `/st diag` **is** the verbose
    report. Expected shape (values change per client):
    ```
-   SwedgeTimer diag: family=WRATH iface=38002 version=2.1.4 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:on DRUID:on SHAMAN:on HUNTER:on ROGUE:on
+   SwedgeTimer diag: family=WRATH iface=38002 version=2.1.5 engine=vendored-lib lrc=ready lcd=present ldb=pending guides=PALADIN:on WARRIOR:on DRUID:on SHAMAN:on HUNTER:on ROGUE:on
    SwedgeTimer diag: flags stl_ready=true llm_ready=false lrc_ready=true lrc_unavailable=false deadline=no init=yes
    SwedgeTimer diag: modules practice=yes hud=yes rotation=yes design=yes providers=6/6
    SwedgeTimer diag: ticks on=yes mainhand=<count> offhand=<count> ranged=<count or ?> cpu=<n.nn>s
