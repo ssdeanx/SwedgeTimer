@@ -121,7 +121,7 @@ local st = {
         end,
     },
     api = {
-        get_time = function() return 1000.0 end,
+        get_time = function() return _G.__now or 1000.0 end,
         GetSpellInfo = function(query)
             if type(query) == "number" then
                 return "Spell" .. query, nil, 134400, 0, 0, 0, query
@@ -181,6 +181,10 @@ hud_chunk("SwedgeTimer", st)
 check(st.hud ~= nil, "hud loaded successfully")
 
 local HUD = st.hud
+local function allows(slot)
+    HUD.invalidate_known_cache()
+    return HUD.spell_known_allows(slot)
+end
 
 -- 1. Test HUD slot generation on Forever across all 6 classes
 local classes = { "PALADIN", "WARRIOR", "HUNTER", "ROGUE", "DRUID", "SHAMAN" }
@@ -228,17 +232,17 @@ check(holy_strike_slot ~= nil and holy_shock_slot ~= nil, "paladin: holy_strike 
 
 known_spells = {}
 known_spells[679] = true -- Holy Strike Rank 1 known
-check(HUD.spell_known_allows(holy_strike_slot) == true, "paladin gate: Holy Strike (Rank 1 ID 679) allowed through")
-check(HUD.spell_known_allows(holy_shock_slot) == false, "paladin gate: Holy Shock correctly hidden (unlearned)")
+check(allows(holy_strike_slot) == true, "paladin gate: Holy Strike (Rank 1 ID 679) allowed through")
+check(allows(holy_shock_slot) == false, "paladin gate: Holy Shock correctly hidden (unlearned)")
 
 -- Leveling progression: player untrains Rank 1 and trains Rank 3 (1866)
 known_spells[679] = nil
 known_spells[1866] = true
-check(HUD.spell_known_allows(holy_strike_slot) == true, "paladin gate: Holy Strike (Rank 3 ID 1866) allowed via multi-rank ids")
+check(allows(holy_strike_slot) == true, "paladin gate: Holy Strike (Rank 3 ID 1866) allowed via multi-rank ids")
 
 -- Spec into Holy Shock at level 40:
 known_spells[20473] = true
-check(HUD.spell_known_allows(holy_shock_slot) == true, "paladin gate: Holy Shock dynamically allowed after talent learned")
+check(allows(holy_shock_slot) == true, "paladin gate: Holy Shock dynamically allowed after talent learned")
 
 -- WARRIOR LEVELING GATE
 local warrior_slots = st.forever_guide.get_hud_slots("WARRIOR")
@@ -249,18 +253,18 @@ check(hs_slot ~= nil and bt_slot ~= nil and ms_slot ~= nil, "warrior: hs, bt, an
 
 known_spells = {}
 known_spells[78] = true -- Heroic Strike Rank 1 known
-check(HUD.spell_known_allows(hs_slot) == true, "warrior gate: Heroic Strike (Rank 1 ID 78) allowed through")
-check(HUD.spell_known_allows(bt_slot) == false, "warrior gate: Bloodthirst correctly hidden (unlearned)")
-check(HUD.spell_known_allows(ms_slot) == false, "warrior gate: Mortal Strike correctly hidden (unlearned)")
+check(allows(hs_slot) == true, "warrior gate: Heroic Strike (Rank 1 ID 78) allowed through")
+check(allows(bt_slot) == false, "warrior gate: Bloodthirst correctly hidden (unlearned)")
+check(allows(ms_slot) == false, "warrior gate: Mortal Strike correctly hidden (unlearned)")
 
 -- Train Heroic Strike Rank 4 (1608):
 known_spells[78] = nil
 known_spells[1608] = true
-check(HUD.spell_known_allows(hs_slot) == true, "warrior gate: Heroic Strike (Rank 4 ID 1608) allowed via multi-rank ids")
+check(allows(hs_slot) == true, "warrior gate: Heroic Strike (Rank 4 ID 1608) allowed via multi-rank ids")
 
 -- Spec into Bloodthirst (23881):
 known_spells[23881] = true
-check(HUD.spell_known_allows(bt_slot) == true, "warrior gate: Bloodthirst dynamically allowed after talent learned")
+check(allows(bt_slot) == true, "warrior gate: Bloodthirst dynamically allowed after talent learned")
 
 -- HUNTER LEVELING GATE
 local hunter_slots = st.forever_guide.get_hud_slots("HUNTER")
@@ -270,17 +274,17 @@ check(serpent_slot ~= nil and strider_kick_slot ~= nil, "hunter: serpent and str
 
 known_spells = {}
 known_spells[1978] = true -- Serpent Sting Rank 1 known
-check(HUD.spell_known_allows(serpent_slot) == true, "hunter gate: Serpent Sting (Rank 1 ID 1978) allowed through")
-check(HUD.spell_known_allows(strider_kick_slot) == false, "hunter gate: Strider Kick correctly hidden (unlearned)")
+check(allows(serpent_slot) == true, "hunter gate: Serpent Sting (Rank 1 ID 1978) allowed through")
+check(allows(strider_kick_slot) == false, "hunter gate: Strider Kick correctly hidden (unlearned)")
 
 -- Train Serpent Sting Rank 4 (13551):
 known_spells[1978] = nil
 known_spells[13551] = true
-check(HUD.spell_known_allows(serpent_slot) == true, "hunter gate: Serpent Sting (Rank 4 ID 13551) allowed via multi-rank ids")
+check(allows(serpent_slot) == true, "hunter gate: Serpent Sting (Rank 4 ID 13551) allowed via multi-rank ids")
 
 -- Learn Strider Kick (1317257):
 known_spells[1317257] = true
-check(HUD.spell_known_allows(strider_kick_slot) == true, "hunter gate: Strider Kick dynamically allowed after learned")
+check(allows(strider_kick_slot) == true, "hunter gate: Strider Kick dynamically allowed after learned")
 
 -- ROGUE LEVELING GATE
 local rogue_slots = st.forever_guide.get_hud_slots("ROGUE")
@@ -291,18 +295,18 @@ check(ss_slot ~= nil and mutilate_slot ~= nil and hemo_slot ~= nil, "rogue: ss, 
 
 known_spells = {}
 known_spells[1752] = true -- Sinister Strike Rank 1 known
-check(HUD.spell_known_allows(ss_slot) == true, "rogue gate: Sinister Strike (Rank 1 ID 1752) allowed through")
-check(HUD.spell_known_allows(mutilate_slot) == false, "rogue gate: Mutilate correctly hidden (unlearned)")
-check(HUD.spell_known_allows(hemo_slot) == false, "rogue gate: Hemorrhage correctly hidden (unlearned)")
+check(allows(ss_slot) == true, "rogue gate: Sinister Strike (Rank 1 ID 1752) allowed through")
+check(allows(mutilate_slot) == false, "rogue gate: Mutilate correctly hidden (unlearned)")
+check(allows(hemo_slot) == false, "rogue gate: Hemorrhage correctly hidden (unlearned)")
 
 -- Train Sinister Strike Rank 3 (1758):
 known_spells[1752] = nil
 known_spells[1758] = true
-check(HUD.spell_known_allows(ss_slot) == true, "rogue gate: Sinister Strike (Rank 3 ID 1758) allowed via multi-rank ids")
+check(allows(ss_slot) == true, "rogue gate: Sinister Strike (Rank 3 ID 1758) allowed via multi-rank ids")
 
 -- Spec into Mutilate (1241584 on Forever):
 known_spells[1241584] = true
-check(HUD.spell_known_allows(mutilate_slot) == true, "rogue gate: Mutilate dynamically allowed after talent learned")
+check(allows(mutilate_slot) == true, "rogue gate: Mutilate dynamically allowed after talent learned")
 
 -- DRUID LEVELING GATE
 local druid_slots = st.forever_guide.get_hud_slots("DRUID")
@@ -312,17 +316,17 @@ check(maul_slot ~= nil and primal_bite_slot ~= nil, "druid: maul and primal_bite
 
 known_spells = {}
 known_spells[6807] = true -- Maul Rank 1 known
-check(HUD.spell_known_allows(maul_slot) == true, "druid gate: Maul (Rank 1 ID 6807) allowed through")
-check(HUD.spell_known_allows(primal_bite_slot) == false, "druid gate: Primal Bite correctly hidden (unlearned)")
+check(allows(maul_slot) == true, "druid gate: Maul (Rank 1 ID 6807) allowed through")
+check(allows(primal_bite_slot) == false, "druid gate: Primal Bite correctly hidden (unlearned)")
 
 -- Train Maul Rank 3 (6809):
 known_spells[6807] = nil
 known_spells[6809] = true
-check(HUD.spell_known_allows(maul_slot) == true, "druid gate: Maul (Rank 3 ID 6809) allowed via multi-rank ids")
+check(allows(maul_slot) == true, "druid gate: Maul (Rank 3 ID 6809) allowed via multi-rank ids")
 
 -- Learn Primal Bite (1238070 on Forever):
 known_spells[1238070] = true
-check(HUD.spell_known_allows(primal_bite_slot) == true, "druid gate: Primal Bite dynamically allowed after learned")
+check(allows(primal_bite_slot) == true, "druid gate: Primal Bite dynamically allowed after learned")
 
 -- SHAMAN LEVELING GATE
 local shaman_slots = st.forever_guide.get_hud_slots("SHAMAN")
@@ -332,23 +336,44 @@ check(earthshock_slot ~= nil and stormstrike_slot ~= nil, "shaman: earthshock an
 
 known_spells = {}
 known_spells[8042] = true -- Earth Shock Rank 1 known
-check(HUD.spell_known_allows(earthshock_slot) == true, "shaman gate: Earth Shock (Rank 1 ID 8042) allowed through")
-check(HUD.spell_known_allows(stormstrike_slot) == false, "shaman gate: Stormstrike correctly hidden (unlearned)")
+check(allows(earthshock_slot) == true, "shaman gate: Earth Shock (Rank 1 ID 8042) allowed through")
+check(allows(stormstrike_slot) == false, "shaman gate: Stormstrike correctly hidden (unlearned)")
 
 -- Train Earth Shock Rank 3 (8045):
 known_spells[8042] = nil
 known_spells[8045] = true
-check(HUD.spell_known_allows(earthshock_slot) == true, "shaman gate: Earth Shock (Rank 3 ID 8045) allowed via multi-rank ids")
+check(allows(earthshock_slot) == true, "shaman gate: Earth Shock (Rank 3 ID 8045) allowed via multi-rank ids")
 
 -- Spec into Stormstrike (17364):
 known_spells[17364] = true
-check(HUD.spell_known_allows(stormstrike_slot) == true, "shaman gate: Stormstrike dynamically allowed after talent learned")
+check(allows(stormstrike_slot) == true, "shaman gate: Stormstrike dynamically allowed after talent learned")
 
 -- Trinket leveling / usability gate:
 -- Trinket slots pass spell_known_allows (they are not spells), but are strictly
 -- filtered by HUD.icon_should_show / HUD.trinket_usable so empty or passive items stay hidden!
-check(HUD.spell_known_allows({ kind = "trinket", inv_slot = 13 }) == true, "leveling gate: Trinket 1 passes spellbook gate")
-check(HUD.spell_known_allows({ kind = "trinket", inv_slot = 14 }) == true, "leveling gate: Trinket 2 passes spellbook gate")
+check(allows({ kind = "trinket", inv_slot = 13 }) == true, "leveling gate: Trinket 1 passes spellbook gate")
+check(allows({ kind = "trinket", inv_slot = 14 }) == true, "leveling gate: Trinket 2 passes spellbook gate")
+
+
+-- 2b. Known-spell cache: stable within the TTL, refreshed after it, dropped on demand.
+do
+    local slot = find_slot(st.forever_guide.get_hud_slots("PALADIN"), "holy_strike")
+    known_spells = {}
+    _G.__now = 2000.0
+    HUD.invalidate_known_cache()
+    check(HUD.spell_known_allows(slot) == false, "cache: unlearned slot reads hidden")
+    known_spells[679] = true
+    check(HUD.spell_known_allows(slot) == false, "cache: answer is held inside the TTL (no per-tick re-probe)")
+    _G.__now = 2000.5
+    check(HUD.spell_known_allows(slot) == false, "cache: still held at 0.5 s")
+    _G.__now = 2001.5
+    check(HUD.spell_known_allows(slot) == true, "cache: refreshed after the TTL (newly learned spell appears)")
+    known_spells[679] = nil
+    HUD.invalidate_known_cache()
+    check(HUD.spell_known_allows(slot) == false, "cache: invalidate drops the held answer")
+    _G.__now = nil
+    known_spells = {}
+end
 
 -- 3. Verify Trinket Usability Gate on Forever (HUD.icon_should_show / HUD.trinket_usable)
 local test_addon = {

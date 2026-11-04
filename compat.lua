@@ -42,6 +42,7 @@
 ---@field AutoCastGlow_Stop fun(frame: any, key?: any)
 
 local addon_name, st = ...
+st.addon_name = st.addon_name or addon_name
 
 --------------------------------------------------------------------------------
 -- Client family detection
@@ -288,7 +289,6 @@ function api.is_spell_known_state(spell_id, fallback_id)
 			return false, "unknown"
 		end
 	end
-	local fallback_id = fallback_id
 	local fallback_resolved = false
 	for i = 1, #spell_known_probes do
 		local ok, known = pcall(spell_known_probes[i], spell_id)

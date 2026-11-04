@@ -201,7 +201,10 @@
         "C_UIFileAsset",
         "os",
         "io",
-        "LACERATE_NAME"
+        "LACERATE_NAME",
+        "SWIPE_NAME",
+        "DEMO_ROAR_NAME",
+        "FRENZIED_REGEN_NAME"
     ],
     "Lua.runtime.builtin": {
         "basic": "disable",

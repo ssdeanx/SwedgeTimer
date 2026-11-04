@@ -2925,9 +2925,9 @@ function ST.DRUID.gather_guide_inputs(self, out)
     if UnitExists and UnitExists("target") then
         local i = 1
         while i <= 40 do
-            local name, _, count, _, dur, exp, src, _, _, spell_id = api.UnitAura("target", i, "HARMFUL")
+            local name, _, count, _, _, exp, src, _, _, spell_id = api.UnitAura("target", i, "HARMFUL")
             if name ~= nil then
-                if spell_id == 33745 or name == "Lacerate" then
+                if (src == "player" or src == nil) and (spell_id == 33745 or name == "Lacerate") then
                     inputs.lacerate_active = true
                     inputs.lacerate_stacks = (type(count) == "number" and count > 0) and count or 1
                     if exp and exp > now then

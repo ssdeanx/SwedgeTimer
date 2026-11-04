@@ -28,6 +28,7 @@ env.pairs = pairs
 env.pcall = pcall
 env.string = string
 env.select = select
+env.setmetatable = setmetatable
 
 local chunk, err = loadfile(ROOT .. "forever_guide.lua")
 if not chunk then error("could not load forever_guide.lua: " .. tostring(err)) end
@@ -322,6 +323,72 @@ out = FG.evaluate("SHAMAN", nil, { ["Lightning Shield"] = true, lightningshield_
 eq(out.rotation_key, "general", "shaman leveling: spec resolves to general")
 eq(out.action, "lightningshield", "shaman leveling: lightning shield upkeep")
 eq(out.spell_name, "Lightning Shield", "shaman leveling: spell name is Lightning Shield")
+
+
+-- 7. LIVE GATHER BRIDGE: the class gather_guide_inputs key names (what the game
+-- actually feeds), not the evaluator's own names.
+check(FG.SPELLS.FLAME_SHOCK.id == 8050, "flame shock uses its own rank-1 id (8050)")
+check(FG.SPELLS.FLAME_SHOCK.id ~= FG.SPELLS.EARTH_SHOCK.id, "flame shock id is not earth shock's id")
+
+local function has_key(class, key)
+    local slots = FG.get_guide_slots(class)
+    for i = 1, #slots do
+        if slots[i].key == key then return true end
+    end
+    return false
+end
+check(has_key("HUNTER", "raptor_strike"), "guide slot key matches action: raptor_strike")
+check(has_key("HUNTER", "aspect_hawk"), "guide slot key matches action: aspect_hawk")
+check(has_key("DRUID", "ferocious_bite") and has_key("DRUID", "demoralizing_roar"), "guide slot keys match druid actions")
+check(has_key("ROGUE", "ea"), "guide slot key matches rogue action: ea")
+
+-- Warrior: Bloodthirst on cooldown by the client (no bt_remaining fed, as on Forever).
+local cd_state = { Bloodthirst = { 100, 6 } }
+st.api = {
+    get_time = function() return 102 end,
+    GetSpellCooldown = function(name)
+        local c = cd_state[name]
+        if c then return c[1], c[2] end
+        return 0, 0
+    end,
+}
+out = FG.evaluate("WARRIOR", "fury", { ["Bloodthirst"] = true, ["Whirlwind"] = true, rage = 40 })
+eq(out.action, "ww", "live: bloodthirst on client cooldown is not prompted (lazy cooldown read)")
+cd_state = {}
+out = FG.evaluate("WARRIOR", "fury", { ["Bloodthirst"] = true, ["Whirlwind"] = true, rage = 40 })
+eq(out.action, "bt", "live: bloodthirst ready by client cooldown is prompted")
+st.api = nil
+
+-- Paladin ret: live seal state (seal = "soc", seal_inactive reports only Righteousness).
+out = FG.evaluate("PALADIN", "ret", { ["Seal of Command"] = true, ["Consecration"] = true,
+    seal = "soc", seal_inactive = true, judge_remaining = 5, holy_strike_remaining = 5,
+    cons_remaining = 0, exo_remaining = 5, mana_pct = 50 })
+eq(out.action, "consecration", "live: seal up by engine seal state does not re-prompt the seal")
+
+-- Rogue: energy_now / cp / snd_remains / rupture_remains.
+out = FG.evaluate("ROGUE", "combat_ss", { ["Eviscerate"] = true, ["Rupture"] = true,
+    energy_now = 80, cp = 5, snd_remains = 10, rupture_known = true, rupture_remains = 12 })
+eq(out.action, "eviscerate", "live: rogue reads cp/energy_now and an up Rupture")
+
+-- Druid: form_index + rage + the Faerie Fire debuff clock.
+out = FG.evaluate("DRUID", nil, { ["Maul"] = true, ["Faerie Fire (Feral)"] = true,
+    form_index = 1, rage = 30, ff_debuff_remaining = 10 })
+eq(out.rotation_key, "bear", "live: druid bear form from form_index")
+eq(out.action, "maul", "live: bear rotation runs with Faerie Fire debuff up")
+
+-- Shaman: Flame Shock dot clock.
+out = FG.evaluate("SHAMAN", "enhancement", { ["Flame Shock"] = true, ["Stormstrike"] = true,
+    flameshock_allowed = true, flameshock_remaining = 8, stormstrike_remaining = 0, shock_remaining = 0 })
+eq(out.action, "stormstrike", "live: flame shock up (tracker remaining) moves on to stormstrike")
+
+-- Hunter: Aspect of the Hawk is its own action key.
+out = FG.evaluate("HUNTER", "ranged", { ["Aspect of the Hawk"] = true, hawk_remaining_cd = 0 })
+eq(out.action, "aspect_hawk", "aspect of the hawk emits aspect_hawk (not Summon Hawk's key)")
+
+out = FG.evaluate("HUNTER", "melee", { ["Aspect of the Hawk"] = true, hawk_remaining_cd = 0 })
+eq(out.action, "aspect_hawk", "melee: aspect of the hawk emits aspect_hawk")
+out = FG.evaluate("ROGUE", "combat_ss", { ["Sinister Strike"] = true, energy_now = 60, cp = 2, snd_remains = 10 })
+eq(out.action, "ss", "live: rogue builder fires on energy_now (not pooled at 0)")
 
 if failures == 0 then
     print(string.format("PASS  forever_guide_state.lua (%d checks)", checks))

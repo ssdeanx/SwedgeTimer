@@ -291,8 +291,9 @@ local function declaration_of(file, field)
     if not lines then return nil, nil, nil end
     local decl = nil
     for i, line in ipairs(lines) do
-        if line:match("^ST%.[%u]+%.([%w_]+)%s*=%s*{") then
-            local name = line:match("^ST%.[%u]+%.([%w_]+)%s*=%s*{")
+        -- Leading whitespace allowed: classes/warrior.lua declares inside its loader.
+        if line:match("^%s*ST%.[%u]+%.([%w_]+)%s*=%s*{") then
+            local name = line:match("^%s*ST%.[%u]+%.([%w_]+)%s*=%s*{")
             if name == field then
                 decl = i
                 break

@@ -593,8 +593,31 @@ local function nextaction_known_query(slot)
     return name or fallback_id, fallback_id
 end
 
+-- Forever-only gate (the Forever guide slots carry their rank ids): a slot whose
+-- spell the client CONFIRMS is not learned yet draws nothing. Every other family,
+-- slots without a spell query, and a client that cannot answer keep the icon.
 local function slot_known_allows(slot)
-    return true
+    if st.family ~= "FOREVER" or type(slot) ~= "table" or type(slot.ids) ~= "table" then
+        return true
+    end
+    if type(api.is_spell_known_state) ~= "function" then
+        return true
+    end
+    local query, fallback_id = nextaction_known_query(slot)
+    if query == nil and fallback_id == nil then
+        return true
+    end
+    for i = 1, #slot.ids do
+        local ok, known = pcall(api.is_spell_known_state, slot.ids[i])
+        if ok and known == true then
+            return true
+        end
+    end
+    local ok, known, state = pcall(api.is_spell_known_state, query, fallback_id)
+    if not ok or state == "unknown" then
+        return true
+    end
+    return known == true
 end
 ui.slot_known_allows = slot_known_allows
 

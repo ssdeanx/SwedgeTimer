@@ -22,6 +22,10 @@
   - **Cross-Client Discipline & Real-Time Leveling Gates**:
     - All TBC queries strictly adhere to localized English name with numeric ID fallback (`spell_query(id, name)`), while Era strictly queries by numeric ID.
     - Leveling gate is strictly fail-visible: unlearned abilities fall back seamlessly without stalls, errors, or `/reload` requirements.
+  - **NextAction UI & Cooldown HUD Enhancements (`nextaction_ui.lua`, `hud.lua`)**:
+    - **NextAction UI Known-Spell Knowledge Gating on WoW Forever**: Restored multi-rank spellbook query support in `slot_known_allows` using `nextaction_known_query` across `slot.ids`, ensuring unlearned ability icons and prompts do not display for low-level or leveling characters on WoW Forever.
+    - **HUD Known-Spell Query Caching (`hud.lua`)**: Introduced high-frequency query caching with a 1.0s TTL (`KNOWN_CACHE_TTL`) and explicit cache invalidation (`HUD.invalidate_known_cache()`), eliminating repetitive pcall storms during 20Hz frame ticks across multi-rank spell arrays.
+    - Verified with new revert-proof mutation tests in `tests/forever_guide_gate_state.lua` and `tests/forever_hud_gate_state.lua`.
 
 ### Fixed
 
@@ -32,6 +36,20 @@
   - **Paladin Protection Gating**: Guarded `resolve_guide_slots` in `classes/paladin.lua` with `is_forever_family`, ensuring WoW Forever Paladin guide and HUD slots are governed exclusively by `forever_guide.lua`.
   - **Druid Feral Bear Tank Resolution**: Updated `FG.resolve_druid_spec` in `forever_guide.lua` to recognize `inputs.form_index == 1` for Bear Form (and `3` for Cat Form) as gathered by `classes/druid.lua`, ensuring Bear tanks resolve as `"bear"` rather than falling back to `"caster"`.
   - **Test Suite Parity**: Retained backwards-compatible FCFS priority definitions in `nextaction.lua` to ensure full offline unit test coverage across all test suites without regressions.
+- **WoW Forever Pre-Release Contract Alignment & Runtime Hardening (`forever_guide.lua`):**
+  - **Flame Shock Spell ID & Rank Alignment**: Corrected Flame Shock base spell ID to `8050` with full rank progression `{ 8050, 8052, 8053, 10447, 10448, 29228 }` (previously mistakenly referencing Earth Shock ID `8042`).
+  - **Aspect of the Hawk Action Key Disambiguation**: Disambiguated Hunter Aspect of the Hawk action key from `"hawk"` to `"aspect_hawk"`, avoiding collisions with the 2-minute cooldown `"Summon Hawk"` (`1293241`) action.
+  - **Slot-to-Evaluator Action Key Synchronization**: Added `GUIDE_KEY_OVERRIDE` in `FG.get_guide_slots` mapping slot keys to evaluator output actions: `"raptor_strike"` -> `"raptor"`, `"ea"` -> `"expose_armor"`, `"demoralizing_roar"` -> `"demo_roar"`, `"ferocious_bite"` -> `"bite"`.
+  - **Live Gather-to-Engine Bridge**: Implemented zero-allocation input bridging (`bridge_inputs`) adapting live inputs from `classes/*.lua` (`gather_guide_inputs`) into `forever_guide.lua` format without mutating input tables. Bridges energy/rage/focus aliases, combo points (`cp` -> `combo_points`), debuff remainders (`snd_remains` -> `snd_remaining`, `rupture_remains` -> `rupture_remaining`, `ff_debuff_remaining` -> `ff_remaining`), active form indices (`form_index == 1` -> Bear, `3` -> Cat), seal states, and lazy live client cooldown queries via `CD_SPELL_BY_FIELD`.
+  - **GCD Query Optimization**: Replaced redundant per-slot per-tick API queries in `FG.get_hud_state` with `self.gcd` snapshot caching.
+  - **Target Health & Max Health Safe Wrappers**: Routed target health and maximum health queries in execute phase checks (`how`, `execute`) through `st.api.UnitHealth` / `st.api.UnitHealthMax` with raw global fallbacks.
+- **Cross-Engine Compatibility & Code Quality Maintenance:**
+  - **Addon Name Fallback (`compat.lua`)**: Initialized `st.addon_name = st.addon_name or addon_name`.
+  - **Safe Lua 5.1 `table.pack` Shim (`main.lua`)**: Guarded `table.pack` definition with `rawget(table, "pack")` and `rawset` to safely co-exist with existing environment tables.
+  - **Druid Debuff Aura Source Filter (`classes/druid.lua`)**: Refined harmful aura scanning for Lacerate to verify `(src == "player" or src == nil)`, ensuring foreign druid bleed debuffs do not interfere with personal maintenance.
+  - **Warrior Shield Block Scans (`classes/warrior.lua`)**: Cleaned up unused return variables in `scan_player_shield_block`.
+  - **Offline Test Integrity**: Updated regex parsing in `tests/prepull_contract_state.lua` and `tests/spell_query_family_state.lua` to accommodate class loader indentation.
+  - **Luacheck Baseline Compliance**: Reached the repository baseline of 2 warnings / 0 errors across all 99 files, and verified 100% test pass rate (56/56 steps) in `tests/run.sh`.
 
 ## [2.1.5]
 

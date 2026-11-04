@@ -458,7 +458,11 @@ do
         .. "        return spell_id"
     check(has("classes/paladin.lua", paladin_gate),
         "paladin: spell_query gates Era separately")
-    check(has("classes/warrior.lua", paladin_gate),
+    -- The warrior module declares it inside its class loader (one indent level deeper).
+    local warrior_gate = "    local function spell_query(spell_id)\n"
+        .. "        if st.family == \"ERA\" then\n"
+        .. "            return spell_id"
+    check(has("classes/warrior.lua", paladin_gate) or has("classes/warrior.lua", warrior_gate),
         "warrior: spell_query gates Era separately")
     check(has("classes/rogue.lua",
         "if st.family == \"TBC\" or st.family == \"WRATH\" then\n\t\treturn entry.name or entry.id")

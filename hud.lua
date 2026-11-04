@@ -547,7 +547,7 @@ function HUD.create(self)
     local is_forever = st.family == "FOREVER"
     local class_module = ST and ST[self.player_class or ""]
     local slots
-    local has_provider = false
+    local has_provider
     if is_forever and st.forever_guide and st.forever_guide.get_hud_slots then
         slots = st.forever_guide.get_hud_slots(self.player_class)
         has_provider = type(st.forever_guide.get_hud_state) == "function"
@@ -848,10 +848,7 @@ end
 -- could not answer the question (fail-visible). Only a confirmed "not_known"
 -- hides the icon (leveling: the spell is not in the book yet). A slot without
 -- a query, or a client without a knowledge probe, shows (never a guess).
-function HUD.spell_known_allows(slot)
-    if slot == nil or slot.inv_slot ~= nil then
-        return true
-    end
+local function compute_spell_known(slot)
     if slot.ids and type(slot.ids) == "table" and type(api.is_spell_known) == "function" then
         for i = 1, #slot.ids do
             local ok, known = pcall(api.is_spell_known, slot.ids[i])
@@ -885,6 +882,39 @@ function HUD.spell_known_allows(slot)
         return known == true
     end
     return true
+end
+
+-- The knowledge answer is the same for every tick between spellbook changes, yet the
+-- HUD asks once per slot per tick (up to ~20 slots at 20 Hz, each walking every rank
+-- id). Cache the answer per slot for a short TTL: a freshly learned spell appears
+-- within KNOWN_CACHE_TTL seconds, and HUD.invalidate_known_cache() drops it at once.
+local KNOWN_CACHE_TTL = 1.0
+local known_cache = setmetatable({}, { __mode = "k" })
+
+function HUD.invalidate_known_cache()
+    for slot in pairs(known_cache) do
+        known_cache[slot] = nil
+    end
+end
+
+function HUD.spell_known_allows(slot)
+    if slot == nil or slot.inv_slot ~= nil then
+        return true
+    end
+    local now = api.get_time and api.get_time() or nil
+    local entry = known_cache[slot]
+    if entry and type(now) == "number" and now >= entry.at and now - entry.at < KNOWN_CACHE_TTL then
+        return entry.value
+    end
+    local value = compute_spell_known(slot)
+    if type(now) == "number" then
+        if entry then
+            entry.at, entry.value = now, value
+        else
+            known_cache[slot] = { at = now, value = value }
+        end
+    end
+    return value
 end
 
 --=========================================================================================

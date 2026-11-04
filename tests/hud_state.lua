@@ -1289,6 +1289,8 @@ do
     check(judge_icon:IsShown(), "known gate Era: a known Judgement shows")
     -- Leveling: the player has not learned Judgement yet (id unknown).
     known_spells[20271] = nil
+    -- The known answer is cached for a second between spellbook changes; drop it here.
+    EHUD.invalidate_known_cache()
     EHUD.update_display(EST)
     check(not judge_icon:IsShown(), "known gate Era: an unknown Judgement hides (leveling)")
     eq(judge_icon.last_hidden, true, "known gate Era: the hide is recorded liveness")
@@ -1296,11 +1298,13 @@ do
     eq(EHUD.known_names[20271], nil, "known gate Era: no name resolution runs on Era")
     -- Client-cannot-answer: the probe declines, so the icon stays (fail-visible).
     known_declines = true
+    EHUD.invalidate_known_cache()
     EHUD.update_display(EST)
     check(judge_icon:IsShown(), "known gate Era: client-cannot-answer shows (fail-visible)")
     eq(EHUD.frame.width, full_width, "known gate Era: the reflow restores on fail-visible")
     known_declines = false
     known_spells[20271] = true
+    EHUD.invalidate_known_cache()
     EHUD.update_display(EST)
     check(judge_icon:IsShown(), "known gate Era: a learned Judgement shows again")
     eq(EHUD.frame.width, full_width, "known gate Era: the row is whole once learned")

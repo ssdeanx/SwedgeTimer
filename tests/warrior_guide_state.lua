@@ -3702,7 +3702,7 @@ end
 --=========================================================================================
 do
     local b = build()
-    local ST = b.ST
+    ST = b.ST
     ST.WARRIOR.post_init(ST)
 
     local out = {}

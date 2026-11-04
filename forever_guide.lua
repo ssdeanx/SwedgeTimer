@@ -6,6 +6,7 @@
 --=========================================================================================
 local addon_name, st = ...
 st = st or {}
+st.addon_name = st.addon_name or addon_name
 st.forever_guide = st.forever_guide or {}
 local FG = st.forever_guide
 
@@ -148,7 +149,7 @@ FG.SPELLS = {
     TIGERS_FURY     = { name = "Tiger's Fury",     id = 5217,    ids = { 5217, 6793, 9845, 9846 } },
 
     -- Shaman
-    FLAME_SHOCK     = { name = "Flame Shock",      id = 8042,    ids = { 8042, 8044, 8045, 8046, 10447, 10448 } },
+    FLAME_SHOCK     = { name = "Flame Shock",      id = 8050,    ids = { 8050, 8052, 8053, 10447, 10448, 29228 } },
     STORMSTRIKE     = { name = "Stormstrike",      id = 17364,   ids = { 17364 } },
     EARTH_SHOCK     = { name = "Earth Shock",      id = 8042,    ids = { 8042, 8044, 8045, 8046, 10412, 10413, 10414 } },
     FIRE_NOVA       = { name = "Fire Nova",        id = 408345,  ids = { 408345, 1535, 8498, 8499, 11314, 11315 } },
@@ -328,6 +329,15 @@ function FG.get_hud_slots(class)
     return slots
 end
 
+-- The guide's slot keys are the evaluator's action names; a few differ from the
+-- HUD slot keys (SPELL_KEY_BY_NAME), which stay untouched (hud_show_<key> toggles).
+local GUIDE_KEY_OVERRIDE = {
+    ["Raptor Strike"] = "raptor_strike",
+    ["Expose Armor"] = "ea",
+    ["Demoralizing Roar"] = "demoralizing_roar",
+    ["Ferocious Bite"] = "ferocious_bite",
+}
+
 function FG.get_guide_slots(class)
     class = class or "WARRIOR"
     local list = FG.SPELLS_BY_CLASS[class]
@@ -335,7 +345,7 @@ function FG.get_guide_slots(class)
     local slots = {}
     for i = 1, #list do
         local sp = list[i]
-        local key = SPELL_KEY_BY_NAME[sp.name] or string.lower(sp.name:gsub("%s+", "_"))
+        local key = GUIDE_KEY_OVERRIDE[sp.name] or SPELL_KEY_BY_NAME[sp.name] or string.lower(sp.name:gsub("%s+", "_"))
         slots[#slots + 1] = {
             key = key,
             spell_id = sp.id,
@@ -372,7 +382,6 @@ function FG.get_hud_state(class, self, slot, now)
         now = slot
         slot = self
         self = class
-        class = (self and self.player_class) or (ST and ST.player_class) or "WARRIOR"
     end
     if not slot or slot.kind == "trinket" then return nil end
     local api = st and st.api
@@ -395,15 +404,27 @@ function FG.get_hud_state(class, self, slot, now)
         end
     end
 
-    -- If ability is not on cooldown, check running GCD for swipe display
-    if rem <= 0 and api.GetSpellCooldown then
-        local g_probe = (st and st.gcd_probe_spell_id) or 61304
-        local g_start, g_dur = api.GetSpellCooldown(g_probe)
-        if g_start and g_dur and g_dur > 0 and g_dur <= 1.51 and g_start > 0 then
-            local g_rem = (g_start + g_dur) - now
+    -- If ability is not on cooldown, show the running GCD swipe. The addon already
+    -- tracks the GCD (self.gcd, as every class hud_gcd_remaining does), so read that
+    -- instead of re-asking the client once per slot per tick; the probe query is only
+    -- the fallback when no tracked GCD exists.
+    if rem <= 0 then
+        local g = self and self.gcd
+        if type(g) == "table" and type(g.expires) == "number" then
+            local g_rem = g.expires - now
             if g_rem > 0 then
                 rem = g_rem
-                dur = g_dur
+                dur = g.spell_length or g.duration or 1.5
+            end
+        elseif api.GetSpellCooldown then
+            local g_probe = (st and st.gcd_probe_spell_id) or 61304
+            local g_start, g_dur = api.GetSpellCooldown(g_probe)
+            if g_start and g_dur and g_dur > 0 and g_dur <= 1.51 and g_start > 0 then
+                local g_rem = (g_start + g_dur) - now
+                if g_rem > 0 then
+                    rem = g_rem
+                    dur = g_dur
+                end
             end
         end
     end
@@ -441,16 +462,22 @@ function FG.get_hud_state(class, self, slot, now)
             end
         end
     elseif k == "how" then
-        if rem <= 0 and UnitExists and UnitExists("target") and UnitHealth and UnitHealthMax then
-            local max_hp = UnitHealthMax("target")
-            if max_hp and max_hp > 0 and (UnitHealth("target") / max_hp) < 0.2 then
+        if rem <= 0 and UnitExists and UnitExists("target") then
+            local hp_fn = api.UnitHealth or UnitHealth
+            local max_fn = api.UnitHealthMax or UnitHealthMax
+            local max_hp = max_fn and max_fn("target")
+            local hp = hp_fn and hp_fn("target")
+            if type(max_hp) == "number" and max_hp > 0 and type(hp) == "number" and (hp / max_hp) < 0.2 then
                 glow = true
             end
         end
     elseif k == "execute" then
-        if rem <= 0 and UnitExists and UnitExists("target") and UnitHealth and UnitHealthMax then
-            local max_hp = UnitHealthMax("target")
-            if max_hp and max_hp > 0 and (UnitHealth("target") / max_hp) < 0.2 then
+        if rem <= 0 and UnitExists and UnitExists("target") then
+            local hp_fn = api.UnitHealth or UnitHealth
+            local max_fn = api.UnitHealthMax or UnitHealthMax
+            local max_hp = max_fn and max_fn("target")
+            local hp = hp_fn and hp_fn("target")
+            if type(max_hp) == "number" and max_hp > 0 and type(hp) == "number" and (hp / max_hp) < 0.2 then
                 glow = true
             end
         end
@@ -921,7 +948,7 @@ function FG.evaluate_hunter(spec, inputs, out)
             out.action = "wing_clip"
             out.spell_name = "Wing Clip"
         elseif is_known(inputs, "Aspect of the Hawk", "hawk_known") and is_ready(inputs.hawk_remaining_cd) and (type(inputs.hawk_active_count) ~= "number" or inputs.hawk_active_count < 3) then
-            out.action = "hawk"
+            out.action = "aspect_hawk"
             out.spell_name = "Aspect of the Hawk"
         end
         return out
@@ -973,7 +1000,7 @@ function FG.evaluate_hunter(spec, inputs, out)
         out.action = "hawk"
         out.spell_name = "Summon Hawk"
     elseif is_known(inputs, "Aspect of the Hawk", "hawk_known") and is_ready(inputs.hawk_remaining_cd) and (type(inputs.hawk_active_count) ~= "number" or inputs.hawk_active_count < 3) then
-        out.action = "hawk"
+        out.action = "aspect_hawk"
         out.spell_name = "Aspect of the Hawk"
     end
     return out
@@ -1240,18 +1267,220 @@ function FG.evaluate_shaman(spec, inputs, out)
 end
 
 --=========================================================================================
+-- Live-gather bridge
+-- The class modules' gather_guide_inputs publish cooldowns as <x>_remaining, aura
+-- state as <x>_remaining / tri-states and a few differently named fields. The
+-- evaluators above read the keys below; FG.evaluate hands them a read-through view
+-- of the raw inputs: a key the caller set always wins (so direct callers and the
+-- offline tests are unchanged), otherwise a live alias or a lazy client cooldown
+-- read (by spell name, GCD echo filtered) fills it in. Reads are lazy, so only the
+-- fields a rule actually reaches cost a client query, and nothing is stored on the
+-- caller's table (no stale value can survive between ticks).
+--=========================================================================================
+local CD_SPELL_BY_FIELD = {
+    -- Warrior
+    bt_remaining = "Bloodthirst", ms_remaining = "Mortal Strike", ww_remaining = "Whirlwind",
+    shield_slam_remaining = "Shield Slam", revenge_remaining = "Revenge",
+    shield_wall_remaining = "Shield Wall", last_stand_remaining = "Last Stand",
+    shield_block_remaining = "Shield Block", tc_remaining = "Thunder Clap",
+    demo_remaining = "Demoralizing Shout", op_remaining = "Overpower",
+    slam_remaining = "Slam", execute_remaining = "Execute",
+    -- Paladin
+    judge_remaining = "Judgement", cons_remaining = "Consecration", exo_remaining = "Exorcism",
+    holy_strike_remaining = "Holy Strike", holy_shock_remaining = "Holy Shock",
+    holy_shield_remaining = "Holy Shield", how_remaining = "Hammer of Wrath",
+    divine_favor_remaining = "Divine Favor",
+    -- Hunter
+    raptor_strike_remaining_cd = "Raptor Strike", mongoose_bite_remaining_cd = "Mongoose Bite",
+    strider_kick_remaining_cd = "Strider Kick", immolation_trap_remaining_cd = "Immolation Trap",
+    summon_hawk_remaining_cd = "Summon Hawk", wing_clip_remaining_cd = "Wing Clip",
+    hawk_remaining_cd = "Aspect of the Hawk", arcane_remaining_cd = "Arcane Shot",
+    multi_remaining_cd = "Multi-Shot", aimed_remaining_cd = "Aimed Shot",
+    sniper_remaining_cd = "Sniper Shot",
+    -- Druid
+    barkskin_remaining = "Barkskin", frenzied_regen_remaining = "Frenzied Regeneration",
+    enrage_remaining = "Enrage", primal_bite_remaining = "Primal Bite",
+    -- Shaman
+    stormstrike_remaining = "Stormstrike", firenova_remaining = "Fire Nova",
+    shock_remaining = "Flame Shock",
+}
+
+-- Seconds left on a spell's own cooldown (0 = ready). The GCD echo (<= 1.51 s) is
+-- never a cooldown. nil when the client cannot answer, which the rules read as ready.
+local function live_cooldown(spell_name)
+    local api = st and st.api
+    if not (api and api.GetSpellCooldown) then
+        return nil
+    end
+    local sp_def = FG.SPELLS_BY_NAME and FG.SPELLS_BY_NAME[spell_name]
+    local ok, start, duration = pcall(api.GetSpellCooldown, spell_name, sp_def and sp_def.id)
+    if not ok or type(start) ~= "number" or type(duration) ~= "number" then
+        return nil
+    end
+    if duration > 1.51 and start > 0 then
+        local now = api.get_time and api.get_time() or 0
+        local remaining = start + duration - now
+        if remaining > 0 then
+            return remaining
+        end
+    end
+    return 0
+end
+
+local function positive(v)
+    if type(v) ~= "number" then
+        return nil
+    end
+    return v > 0
+end
+
+-- Any seal up: Righteousness/Fury rides seal_inactive == false, Command/the twist
+-- seal ride the engine's seal state string.
+local function live_seal_active(raw)
+    if raw.seal_inactive == false then
+        return true
+    end
+    if raw.seal ~= nil then
+        return raw.seal ~= "none"
+    end
+    return nil
+end
+
+-- The Hunter's Mark debuff on the target (memoised per evaluate call: it walks the
+-- target's auras).
+local function live_hunters_mark(memo)
+    if memo.hunters_mark ~= nil then
+        return memo.hunters_mark
+    end
+    local result = nil
+    local api = st and st.api
+    if api and api.scan_unit_aura then
+        local remaining = api.scan_unit_aura("target", function(_, name)
+            return name == "Hunter's Mark"
+        end, "HARMFUL")
+        result = remaining ~= nil
+    end
+    memo.hunters_mark = result == nil and "unknown" or result
+    return memo.hunters_mark
+end
+
+local ALIAS = {
+    -- Warrior
+    shield_block_active = function(r) return r.has_shield_block_buff end,
+    tc_active = function(r) return positive(r.thunder_clap_debuff_remaining) end,
+    demo_active = function(r) return positive(r.demo_shout_debuff_remaining) end,
+    rend_active = function(r)
+        if r.rend_remaining == nil and r.rend_known == nil then return nil end
+        return positive(r.rend_remaining) == true
+    end,
+    -- Paladin
+    seal_active = live_seal_active,
+    -- Hunter
+    mana_fraction = function(r) return r.mana_frac end,
+    -- Druid
+    faerie_fire_active = function(r)
+        local v = r.ff_debuff_remaining
+        if type(v) == "number" then return true end
+        return v
+    end,
+    rip_active = function(r) if r.rip_known ~= nil then return positive(r.rip_remaining) == true end end,
+    rake_active = function(r) if r.rake_known ~= nil then return positive(r.rake_remaining) == true end end,
+    clearcasting_active = function(r) return r.clearcast end,
+    ttd = function(r) return r.time_to_die end,
+    -- Rogue
+    energy = function(r) return r.energy_now end,
+    combo_points = function(r) return r.cp end,
+    snd_remaining = function(r) return r.snd_remains end,
+    rupture_active = function(r)
+        if r.rupture_known == nil then return nil end
+        return r.rupture_remains ~= nil
+    end,
+    ea_active = function(r) return r.ea_remains ~= nil end,
+    use_ea = function(r) return r.ea_duty end,
+    -- Shaman
+    flameshock_active = function(r)
+        if r.flameshock_allowed == nil then return nil end
+        return positive(r.flameshock_remaining) == true
+    end,
+    soe_active = function(r) return positive(r.strength_of_earth_remaining) end,
+    searing_active = function(r)
+        if r.searing_down == nil then return nil end
+        return r.searing_down == false
+    end,
+    lightningshield_active = function(r)
+        if r.lightningshield_due == nil then return nil end
+        return r.lightningshield_due == false
+    end,
+    watershield_active = function(r)
+        if r.lightningshield_due == nil then return nil end
+        return r.lightningshield_due == false
+    end,
+}
+
+local bridge_raw
+local bridge_memo = {}
+local bridge_view = setmetatable({}, {
+    __index = function(_, key)
+        local raw = bridge_raw
+        local v = raw[key]
+        if v ~= nil then
+            -- The seal state is the one raw field whose live meaning differs
+            -- (seal_inactive only tracks Righteousness/Fury): trust the engine's
+            -- own seal state whenever it is present.
+            if key == "seal_inactive" and raw.seal ~= nil then
+                local active = live_seal_active(raw)
+                if active ~= nil then return not active end
+            end
+            return v
+        end
+        if key == "hunters_mark_active" then
+            local mark = live_hunters_mark(bridge_memo)
+            if mark == "unknown" then return nil end
+            return mark
+        end
+        if key == "mongoose_bite_usable" and raw.now ~= nil then
+            local api = st and st.api
+            if api and api.IsSpellUsable then
+                local ok, usable = pcall(api.IsSpellUsable, "Mongoose Bite")
+                if ok then return usable == true end
+            end
+            return nil
+        end
+        local alias = ALIAS[key]
+        if alias then
+            return alias(raw)
+        end
+        local spell_name = CD_SPELL_BY_FIELD[key]
+        if spell_name then
+            return live_cooldown(spell_name)
+        end
+        return nil
+    end,
+})
+
+local function bridge_inputs(inputs)
+    bridge_raw = inputs
+    for k in pairs(bridge_memo) do
+        bridge_memo[k] = nil
+    end
+    return bridge_view
+end
+
+--=========================================================================================
 -- Master Evaluator
 --=========================================================================================
 function FG.evaluate(class, spec, inputs, out)
     inputs = inputs or {}
     out = out or {}
+    local raw_inputs = inputs
+    inputs = bridge_inputs(raw_inputs)
     out.hold = false
     out.hold_text = nil
     out.riding = nil
     out.filler_slot = nil
     out.judge_slot = nil
     out.waiting_judgement = false
-    out.inputs_unknown = inputs.inputs_unknown == true
+    out.inputs_unknown = raw_inputs.inputs_unknown == true
 
     local res
     if class == "WARRIOR" then

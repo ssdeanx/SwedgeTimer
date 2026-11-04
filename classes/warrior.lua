@@ -4559,7 +4559,7 @@ st.class_loaders["WARRIOR"] = function()
                 inputs.last_stand_remaining, inputs.last_stand_duration = get_guide_cooldown(12975)
             end
 
-            local sb_dur, sb_exp = scan_player_shield_block(now)
+            local _, sb_exp = scan_player_shield_block(now)
             if sb_exp and sb_exp > now then
                 inputs.has_shield_block_buff = true
             else

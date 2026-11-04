@@ -84,8 +84,10 @@ end
 
 -- Lua 5.1 has no table.pack (pinned by tests/main_init_state.lua and the
 -- enemy_swing.lua header note): this shim provides it for 5.1 clients.
-function table.pack(...)
-	return { n = select("#", ...), ... }
+if not rawget(table, "pack") then
+	rawset(table, "pack", function(...)
+		return { n = select("#", ...), ... }
+	end)
 end
 
 ST.interfaces_are_initialised = false
