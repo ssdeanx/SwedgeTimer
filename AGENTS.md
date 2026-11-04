@@ -27,6 +27,8 @@ WoW addon (Lua) shipping one universal build for the classic-line and Mainline c
 
 ## Conventions
 
+- Never assume or guess instead of verifying: verify against concrete evidence, API definitions, and actual runtime contracts at true enterprise-grade quality. No half-assed shortcuts.
+- Always use revert-proof pins (mutation proofs) when creating or updating tests: mutate or invert each test assertion on an isolated/temporary copy to prove that the test reliably catches regressions with an explicit failure and non-zero exit code, before confirming the untouched code passes 100%. Never write vacuous or unproven tests.
 - Modules are Lua 5.1 WoW addons: start with `local addon_name, st = ...`, get the addon with `LibStub("AceAddon-3.0"):GetAddon(addon_name)`.
 - Expose handlers as `ST:Name` or `ST.CLASS.Name`.
 - Events and lib callbacks are dispatched by `ST.callback_event_handler` to `ST[event]`, so handlers must be named exactly after the event/callback.

@@ -10,6 +10,7 @@ local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 st.class_loaders = st.class_loaders or {}
 st.class_loaders["WARRIOR"] = function()
+---@type LibCustomGlow
 local LCG = LibStub("LibCustomGlow-1.0")
 local LSM = LibStub("LibSharedMedia-3.0")
 -- Cross-client API wrappers (see compat.lua).

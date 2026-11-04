@@ -24,6 +24,10 @@ local env = setmetatable({}, {
 env.math = math
 env.type = type
 env.tostring = tostring
+env.pairs = pairs
+env.pcall = pcall
+env.string = string
+env.select = select
 
 local chunk, err = loadfile(ROOT .. "forever_guide.lua")
 if not chunk then error("could not load forever_guide.lua: " .. tostring(err)) end

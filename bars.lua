@@ -15,6 +15,7 @@ local addon_name, st = ...
 -- alias for the client's raw global print here: a bare call to it would bypass the
 -- addon's chat path, so the identifier is kept out of the file on purpose.
 local LSM = LibStub("LibSharedMedia-3.0")
+---@type LibCustomGlow
 local LCG = LibStub("LibCustomGlow-1.0")
 local floor = math.floor
 local max = math.max

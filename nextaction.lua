@@ -484,6 +484,12 @@ function st.nextaction.evaluate(inputs, out)
         return out
     end
 
+    if inputs.forever_guide == true or (inputs.class and inputs.class ~= "PALADIN" and (st.family == "FOREVER" or inputs.forever == true)) then
+        if st.forever_guide and st.forever_guide.evaluate then
+            return st.forever_guide.evaluate(inputs.class or "PALADIN", inputs.spec or inputs.fcfs_mode, inputs, out)
+        end
+    end
+
     -- M6: the caller's explicit "core inputs unusable" bit is threaded through
     -- untouched; the UI renders "…" instead of advice while it is set. The engine
     -- itself only reports what the caller declared - the provider owns the reads.

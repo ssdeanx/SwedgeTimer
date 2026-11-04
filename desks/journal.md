@@ -1794,3 +1794,15 @@ Closes the remaining filed AceDB `**` trap reads (paladin `play_twist_sound`, `g
   frame + bars_state census extra_frames 6 -> 7 in one owner's pass.
 - **FINAL STATE: READY TO PUBLISH PENDING THE OPERATOR'S IN-CLIENT TEST** (version 2.1.3,
   no commit — the operator owns git and the publish decision).
+
+## Reconcile (2026-11-03): WoW Forever HUD & Next Action Guide Integration Wave
+
+- Lane: `forever-hud-guide-wire` | `forever_guide.lua`, `hud.lua`, `nextaction.lua`, `nextaction_ui.lua`, `tests/forever_hud_gate_state.lua` | done.
+- Integration:
+  1. `hud.lua`: On `st.family == "FOREVER"`, `HUD.create` fetches class ability slots via `st.forever_guide.get_hud_slots(self.player_class)` with trinket channels. Provider calls route via `call_hud_provider` to `st.forever_guide.get_hud_state` for cooldowns, GCD swipes, resource/mana usability tint, range tint, and proc glows.
+  2. Dynamic Leveling Gate: `HUD.spell_known_allows(slot)` evaluates `slot.ids` (all rank IDs) and `api.is_spell_known_state` / `api.is_spell_known` on every tick. Any unlearned spell is hidden from the HUD; upon learning or training new ranks or talents, the ability automatically appears on the HUD without requiring `/reload`.
+  3. `nextaction.lua` & `nextaction_ui.lua`: Next action guide evaluation on Forever delegates directly to `st.forever_guide.evaluate` across all 6 classes (Paladin, Warrior, Hunter, Rogue, Druid, Shaman) and their specs, mapping rotations, holds/pools, and target cues cleanly. `nextaction_ui.lua:ui.init` instantiates display icons for all class rotational abilities via `st.forever_guide.get_guide_slots(self.player_class)`.
+- Verification:
+  - Added `tests/forever_hud_gate_state.lua` (45 checks passing) covering HUD slot creation for all 6 classes on Forever, leveling gate progression, multi-rank ID fallback, provider cooldown/range/mana states, and Next Action evaluation.
+  - Full test suite: `bash tests/run.sh` -> **55 steps, 0 failed** (100% green).
+

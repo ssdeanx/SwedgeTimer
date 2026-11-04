@@ -1,4 +1,3 @@
----@diagnostic disable: undefined-global, undefined-field
 --=========================================================================================
 -- Cross-client compatibility layer.
 --
@@ -33,6 +32,15 @@
 -- st.api. Per-family data (spell IDs, form indices, talent checks) lives with the
 -- class modules in classes/.
 --=========================================================================================
+
+---@class LibCustomGlow
+---@field PixelGlow_Start fun(frame: any, color?: table, N?: number, frequency?: number, length?: number, th?: number, xOffset?: number, yOffset?: number, border?: boolean, key?: any, frameLevel?: number)
+---@field PixelGlow_Stop fun(frame: any, key?: any)
+---@field ButtonGlow_Start fun(frame: any, color?: table, frequency?: number, frameLevel?: number)
+---@field ButtonGlow_Stop fun(frame: any)
+---@field AutoCastGlow_Start fun(frame: any, color?: table, N?: number, frequency?: number, scale?: number, xOffset?: number, yOffset?: number, key?: any, frameLevel?: number)
+---@field AutoCastGlow_Stop fun(frame: any, key?: any)
+
 local addon_name, st = ...
 
 --------------------------------------------------------------------------------
@@ -462,8 +470,8 @@ end
 local is_current_spell = _G.IsCurrentSpell
 
 api.IsCurrentSpell = is_current_spell or (C_Spell and C_Spell.IsCurrentSpell) or function()
-		return false
-	end
+	return false
+end
 
 -- Resources (rage, mana, energy) ---------------------------------------------------------
 -- UnitPower / UnitPowerMax exist on every supported client (the modern ones prefer
@@ -577,7 +585,7 @@ end
 -- nils. All three source paths are wrapped, including the classic-global pass-through.
 
 local function aura_entry_is_secret(name, icon, count, dispel_name, duration, expiration,
-	source, is_stealable, nameplate_show_personal, spell_id)
+									source, is_stealable, nameplate_show_personal, spell_id)
 	return is_secret(name) or is_secret(icon) or is_secret(count) or is_secret(dispel_name)
 		or is_secret(duration) or is_secret(expiration) or is_secret(source)
 		or is_secret(is_stealable) or is_secret(nameplate_show_personal) or is_secret(spell_id)
@@ -586,9 +594,9 @@ end
 if UnitAura then
 	api.UnitAura = function(unit, index, filter)
 		local name, icon, count, dispel_name, duration, expiration, source, is_stealable,
-			nameplate_show_personal, spell_id = UnitAura(unit, index, filter)
+		nameplate_show_personal, spell_id = UnitAura(unit, index, filter)
 		if aura_entry_is_secret(name, icon, count, dispel_name, duration, expiration,
-			source, is_stealable, nameplate_show_personal, spell_id) then
+				source, is_stealable, nameplate_show_personal, spell_id) then
 			return nil
 		end
 		return name, icon, count, dispel_name, duration, expiration, source, is_stealable,
@@ -601,11 +609,11 @@ elseif C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
 			return nil
 		end
 		local name, icon, count, dispel_name, duration, expiration, source, is_stealable,
-			nameplate_show_personal, spell_id = aura.name, aura.icon, aura.applications,
+		nameplate_show_personal, spell_id = aura.name, aura.icon, aura.applications,
 			aura.dispelName, aura.duration, aura.expirationTime, aura.sourceUnit,
 			aura.isStealable, aura.nameplateShowPersonal, aura.spellId
 		if aura_entry_is_secret(name, icon, count, dispel_name, duration, expiration,
-			source, is_stealable, nameplate_show_personal, spell_id) then
+				source, is_stealable, nameplate_show_personal, spell_id) then
 			return nil
 		end
 		return name, icon, count, dispel_name, duration, expiration, source, is_stealable,
@@ -776,7 +784,7 @@ end
 if legacy_unit_casting_info then
 	api.UnitCastingInfo = function(unit)
 		local name, text, texture, start_ms, end_ms, is_trade_skill, cast_id,
-			not_interruptible, spell_id = legacy_unit_casting_info(unit)
+		not_interruptible, spell_id = legacy_unit_casting_info(unit)
 		if cast_payload_is_secret(name, start_ms, end_ms, spell_id) then
 			return nil
 		end
@@ -789,7 +797,7 @@ end
 if legacy_unit_channel_info then
 	api.UnitChannelInfo = function(unit)
 		local name, text, texture, start_ms, end_ms, is_trade_skill, not_interruptible,
-			spell_id = legacy_unit_channel_info(unit)
+		spell_id = legacy_unit_channel_info(unit)
 		if cast_payload_is_secret(name, start_ms, end_ms, spell_id) then
 			return nil
 		end
@@ -1893,4 +1901,3 @@ function api.get_class_color_table(class_filename, alpha)
 		a,
 	}
 end
-

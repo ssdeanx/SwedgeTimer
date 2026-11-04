@@ -5,6 +5,7 @@ local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 st.class_loaders = st.class_loaders or {}
 st.class_loaders["PALADIN"] = function()
+---@type LibCustomGlow
 local LCG = LibStub("LibCustomGlow-1.0")
 local LSM = LibStub("LibSharedMedia-3.0")
 -- Cross-client API wrappers (see compat.lua).
@@ -3922,7 +3923,7 @@ ST.PALADIN.guide = {
         elseif raw.action == "holy_strike" then
             out.action = "holy_strike"
         elseif raw.action == "sor" then
-            out.action = "sor"
+            out.action = (ST.PALADIN.guide.slots == ST.PALADIN.guide_slots_prot) and "sor" or "sob"
         elseif raw.action == "sof" then
             out.action = "sof"
         elseif raw.action == "how" then

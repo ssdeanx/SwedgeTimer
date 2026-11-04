@@ -21,6 +21,7 @@
 No more separate downloads for Era, TBC, Wrath, or **WoW Forever** — SwedgeTimer automatically detects your client and loads the exact right engine, spell data, and priority rules on login!
 
 SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time leveling support for **6 classes** across **16 distinct raid specializations and leveling paths**:
+
 - **<span style="color:#F58CBA">Paladin</span>** (3 specs + leveling): Retribution, Holy Shock (Shockadin), Protection Tank
 - **<span style="color:#C79C6E">Warrior</span>** (3 specs + leveling): Arms, Fury, Protection Tank
 - **<span style="color:#ABD473">Hunter</span>** (2 specs + leveling): Melee Survival, Ranged Weave & Turret
@@ -40,7 +41,7 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 
 ### 🌟 Release Highlights
 
-- ⚔️ **Complete WoW Forever APL Rotations**:
+- ⚔️ **Complete WoW Forever 1.60.1 Rotation Engines (6 Classes / 16 Specs)**:
   - **<span style="color:#F58CBA">Paladin</span>**: Retribution (Holy Strike weaving, HoW execute, Seal cycling), Holy Shock burst, and Protection Tank (Holy Shield, Seal of Fury, Righteous Fury).
   - **<span style="color:#C79C6E">Warrior</span>**: Arms (Bloodthrill Overpower procs, Slam weaving), Fury (Bloodthrill Overpower within 5–73 rage), and Protection Tank (Shield Wall $\le 35\%$, Last Stand $\le 40\%$, Shield Slam, Revenge).
   - **<span style="color:#ABD473">Hunter</span>**: Melee Survival (gated strictly on `Strider Kick`), Ranged Turret/Weaving (with 4.0s Sniper Shot & Auto Shot clip protection), and Summon Hawk.
@@ -48,7 +49,10 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
   - **<span style="color:#FF7D0A">Druid</span>**: Feral Bear Tank (Barkskin $\le 40\%$, Frenzied Regen $\le 30\%$, Primal Bite, Lacerate 5-stacks) and Feral Cat DPS (Stealth Ravage, Clearcasting Shred, 5-CP Rip, Ferocious Bite).
   - **<span style="color:#0070DE">Shaman</span>**: Authentic 2H Enhancement rotation (Flame Shock, Stormstrike, 5-stack Maelstrom Weapon instant Lightning Bolt, Earth Shock, Fire Nova).
 - 🛡️ **Full Tanking Engines**: Dedicated Protection Paladin, Protection Warrior, and Feral Bear engines with auto-shield detection and health-threshold defensives.
-- 📈 **Dynamic Leveling Progression (Level 1–60)**: Spells unlock dynamically in the guide as you train them—**no `/reload` required**! Clean leveling fallbacks ensure you never stall on unlearned talents.
+- 🎛️ **WoW Forever Cooldown HUD & Guide Integration**:
+  - Live HUD slot providers for all 6 classes: active cooldown remaining, GCD swipes, resource/mana blue tint, out-of-range red tint, and proc/execute glows.
+  - Next-Action Guide UI dynamically instantiated directly from Forever rotational action slots.
+- 📈 **Dynamic Leveling Progression (Level 1–60)**: Spells unlock dynamically in both the HUD and Next-Action Guide as you train them—**no `/reload` required**! Clean leveling fallbacks ensure you never stall on unlearned talents.
 - ⏱️ **Native Hardware-Accurate Timing**: Seamless integration with WoW Forever's native `C_SwingTimer` API and `PLAYER_SWING` events for jitter-free weapon timing.
 
 ---
@@ -111,7 +115,7 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 
 ## ⚔️ Class Rotations & Specializations
 
-### 🛡️ <span style="color:#F58CBA">Paladin</span>
+### 🛡️ **<span style="color:#F58CBA">Paladin</span>**
 
 - **Retribution**: Immediate `Judgement` on cooldown $\rightarrow$ `Hammer of Wrath` execute $\rightarrow$ `Holy Strike` weaving (filling empty globals between judgements) $\rightarrow$ `Seal of Command` / `Seal of Righteousness` upkeep $\rightarrow$ `Consecration` & `Exorcism` mana-managed fillers.
 - **Holy Shock (Shockadin)**: `Judgement` $\rightarrow$ `Consecration` $\rightarrow$ Seal upkeep $\rightarrow$ `Holy Strike` $\rightarrow$ `Divine Favor` + `Holy Shock` burst $\rightarrow$ `Hammer of Wrath` $\rightarrow$ `Exorcism`.
@@ -122,14 +126,14 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 > [!TIP]
 > **Holy Strike Weaving**: Paladins on WoW Forever learn Holy Strike at level 6. SwedgeTimer prompts Holy Strike to fill empty global cooldowns while Judgement is on cooldown, delivering maximum DPS without clipping swing timers.
 
-### ⚔️ <span style="color:#C79C6E">Warrior</span>
+### ⚔️ **<span style="color:#C79C6E">Warrior</span>**
 
 - **Arms**: `Overpower` on Bloodthrill procs and dodges (only 5 rage!) $\rightarrow$ `Mortal Strike` $\rightarrow$ `Whirlwind` $\rightarrow$ `Slam` $\rightarrow$ `Rend` upkeep $\rightarrow$ `Execute` burn phase $\rightarrow$ `Cleave` (multi-target) & `Heroic Strike` rage dump (90+ rage).
 - **Fury**: `Whirlwind` on AoE $\rightarrow$ `Overpower` weaving on Bloodthrill procs (5–73 rage) $\rightarrow$ `Execute` phase $\rightarrow$ `Bloodthirst` $\rightarrow$ `Heroic Strike` queueing $\rightarrow$ `Rend` weaving & `Hamstring` utility.
 - **Protection (Tank)**: Emergency defensives (`Shield Wall` at $\le 35\%$ HP, `Last Stand` at $\le 40\%$ HP) $\rightarrow$ `Shield Block` uptime $\rightarrow$ `Shield Slam` $\rightarrow$ Fury-Prot `Bloodthirst` & Arms-Prot `Mortal Strike` $\rightarrow$ `Revenge` procs $\rightarrow$ `Sunder Armor` 5-stack upkeep $\rightarrow$ `Thunder Clap` & `Demoralizing Shout` $\rightarrow$ `Cleave` / `Heroic Strike`.
 - **Leveling**: High-priority Overpower procs, Execute, Rend bleed upkeep, Sunder Armor, and Heroic Strike rage dumping.
 
-### 🏹 <span style="color:#ABD473">Hunter</span>
+### 🏹 **<span style="color:#ABD473">Hunter</span>**
 
 - **Melee Survival**: Gated on the **`Strider Kick`** talent $\rightarrow$ `Raptor Strike` $\rightarrow$ `Hunter's Mark` $\rightarrow$ `Mongoose Bite` (on dodge) $\rightarrow$ `Strider Kick` $\rightarrow$ `Immolation Trap` $\rightarrow$ `Summon Hawk` $\rightarrow$ `Wing Clip` $\rightarrow$ gap closers while moving into melee.
 - **Ranged Weave & Turret**: Auto Shot clipping management $\rightarrow$ `Hunter's Mark` $\rightarrow$ `Serpent Sting` $\rightarrow$ `Arcane Shot` $\rightarrow$ `Multi-Shot` $\rightarrow$ `Aimed Shot` $\rightarrow$ **`Sniper Shot`** (4s heavy cast) $\rightarrow$ **`Summon Hawk`**. In melee range, immediately weaves `Raptor Strike`, `Strider Kick`, `Mongoose Bite`, and `Immolation Trap`.
@@ -138,7 +142,7 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 > [!NOTE]
 > **Survival Melee Mode**: The melee rotation is strictly gated on having learned the **Strider Kick** talent (or manually enabling it in `/st`), ensuring ranged hunters are never erroneously prompted for melee abilities just for standing close.
 
-### 🗡️ <span style="color:#FFF569">Rogue</span>
+### 🗡️ **<span style="color:#FFF569">Rogue</span>**
 
 - **Mutilate (Assassination / Combat)**: 2-Combo-Point builder `Mutilate` $\rightarrow$ `Slice and Dice` 100% uptime $\rightarrow$ `Envenom` / `Rupture` $\rightarrow$ `Eviscerate` at 4–5 Combo Points.
 - **Combat Daggers**: Positional `Backstab` builder $\rightarrow$ `Slice and Dice` $\rightarrow$ `Rupture` / `Eviscerate`.
@@ -147,13 +151,13 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 - **Defense & Utility**: `Riposte` on parry (only 10 energy!) and `Expose Armor` maintenance.
 - **Leveling**: Reliable Sinister Strike, Slice and Dice, Eviscerate, and Riposte progression.
 
-### 🐾 <span style="color:#FF7D0A">Druid</span>
+### 🐾 **<span style="color:#FF7D0A">Druid</span>**
 
 - **Feral Bear (Tank)**: Emergency defensives (`Barkskin` at $\le 40\%$ HP, `Frenzied Regeneration` at $\le 35\%$ HP) $\rightarrow$ `Enrage` rage generation $\rightarrow$ `Faerie Fire (Feral)` $\rightarrow$ `Demoralizing Roar` $\rightarrow$ **`Primal Bite`** on cooldown $\rightarrow$ **`Lacerate`** 5-stack building and upkeep $\rightarrow$ `Swipe` on AoE $\rightarrow$ `Maul` queueing.
 - **Feral Cat (DPS)**: Prowl `Ravage` opener $\rightarrow$ `Faerie Fire (Feral)` $\rightarrow$ Clearcasting proc `Shred` priority $\rightarrow$ 5-Combo-Point `Rip` bleed upkeep $\rightarrow$ `Ferocious Bite` finisher $\rightarrow$ `Tiger's Fury` damage buff $\rightarrow$ `Rake` bleed upkeep $\rightarrow$ `Shred` (behind target) or `Claw` builder.
 - **Leveling**: Seamless shapeshifting progression covering Caster Wrath/Moonfire (Levels 1–9), Bear Maul/Enrage (Level 10+), and Cat Claw/Rip (Level 20+).
 
-### ⚡ <span style="color:#0070DE">Shaman</span>
+### ⚡ **<span style="color:#0070DE">Shaman</span>**
 
 - **2H Enhancement**: Built purely for 2-Handed weapon combat (**no Dual Wield, no Lava Lash**) $\rightarrow$ `Flame Shock` debuff upkeep $\rightarrow$ `Stormstrike` on cooldown $\rightarrow$ 5-stack Maelstrom Weapon instant **`Lightning Bolt`** weave $\rightarrow$ `Earth Shock` $\rightarrow$ `Fire Nova` $\rightarrow$ Totem upkeep (Strength of Earth, Windfury/Grace of Air, Mana Spring, Searing Totem) $\rightarrow$ `Water Shield` / `Lightning Shield`.
 - **Leveling**: Rockbiter / Flametongue weapon imbues $\rightarrow$ Lightning Shield upkeep $\rightarrow$ Flame Shock dot $\rightarrow$ Earth Shock burst $\rightarrow$ Searing Totem $\rightarrow$ Lightning Bolt finisher.

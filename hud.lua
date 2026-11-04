@@ -84,6 +84,7 @@
 local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LSM = LibStub("LibSharedMedia-3.0")
+---@type LibCustomGlow
 local LCG = LibStub("LibCustomGlow-1.0")
 -- Cross-client API wrappers (see compat.lua).
 local api = st.api
@@ -219,6 +220,12 @@ local HUD_HIDDEN_STATE = { hidden = true }
 -- (`mod.get_hud_state(` is the dynamic call site); the shared guard (st.guard.run)
 -- wraps this helper.
 local function call_hud_provider(mod, self, slot, now)
+    if st.family == "FOREVER" and st.forever_guide and st.forever_guide.get_hud_state then
+        local state = st.forever_guide.get_hud_state(self.player_class, self, slot, now)
+        if state then
+            return state
+        end
+    end
     return mod.get_hud_state(self, slot, now)
 end
 
@@ -537,10 +544,18 @@ end
 -- One renderable icon per valid descriptor; invalid ones (unusable kind, no icon
 -- source, no provider for a spell slot) are skipped. Returns true when the HUD exists.
 function HUD.create(self)
-    local class_module = ST[self.player_class or ""]
-    local slots = class_module and class_module.HUD_SLOTS
+    local is_forever = st.family == "FOREVER"
+    local class_module = ST and ST[self.player_class or ""]
+    local slots
+    local has_provider = false
+    if is_forever and st.forever_guide and st.forever_guide.get_hud_slots then
+        slots = st.forever_guide.get_hud_slots(self.player_class)
+        has_provider = type(st.forever_guide.get_hud_state) == "function"
+    else
+        slots = class_module and class_module.HUD_SLOTS
+        has_provider = class_module ~= nil and type(class_module.get_hud_state) == "function"
+    end
     HUD.class_module = class_module
-    local has_provider = class_module ~= nil and type(class_module.get_hud_state) == "function"
     local usable = {}
     if type(slots) == "table" then
         for i = 1, #slots do
@@ -836,6 +851,14 @@ end
 function HUD.spell_known_allows(slot)
     if slot == nil or slot.inv_slot ~= nil then
         return true
+    end
+    if slot.ids and type(slot.ids) == "table" and type(api.is_spell_known) == "function" then
+        for i = 1, #slot.ids do
+            local ok, known = pcall(api.is_spell_known, slot.ids[i])
+            if ok and known == true then
+                return true
+            end
+        end
     end
     local query, fallback_id = hud_known_query(slot)
     if query == nil and fallback_id == nil then
@@ -1338,13 +1361,14 @@ function HUD.update_display(self)
             if not s then
                 if icon.slot.inv_slot then
                     s = HUD.trinket_state(self, icon.slot, now)
-                elseif HUD.class_module then
+                elseif HUD.class_module or (st.family == "FOREVER" and st.forever_guide) then
                     local site = icon.guard_site or ("hud:" .. tostring(icon.slot.key or "?"))
                     -- Isolated through the shared contract (guard.lua): a quarantined
                     -- site is not called at all, a throwing provider costs only its
                     -- own icon - the row still paints.
+                    local mod = HUD.class_module or st.forever_guide
                     local ok, state = st.guard.run(self, site, call_hud_provider,
-                        HUD.class_module, self, icon.slot, now)
+                        mod, self, icon.slot, now)
                     if ok then
                         s = state
                     else

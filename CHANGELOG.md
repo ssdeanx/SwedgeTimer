@@ -54,6 +54,12 @@
     - **Druid**: Gated Bear Mangle, Cat Rip, Cat Mangle, Ferocious Bite, and Shred on spellbook knowledge. In Bear form, pools rage when Mangle is unlearned. In Cat form, smoothly falls back to Claw as the core builder across TBC, Wrath, Forever, and Era whenever Shred or Mangle are unlearned.
     - **Rogue**: Builder candidate chain dynamically falls back to Sinister Strike when high-level builders (Saber Slash, Mutilate, Hemorrhage) are unlearned. Rupture smoothly falls back to Eviscerate when unlearned, and Slice and Dice is gated on spellbook knowledge.
     - **Paladin**: Crusader Strike, Divine Storm, Judgement, Exorcism, and Consecration are gated on spellbook knowledge. On WoW Forever, Retribution paladins without Exorcism (learned at level 24) smoothly fall back to Consecration (learned at level 20) and seal management without stalling or requesting unlearned spells. Both Retribution and Protection paladins dynamically adapt during leveling.
+- **WoW Forever Cooldown HUD & Next-Action Guide Integration (Offline Verified, Pre-Launch):**
+  - Integrated simulation-calibrated Action Priority Lists from `forever_guide.lua` across all 6 class modules (`classes/{paladin,warrior,hunter,rogue,druid,shaman}.lua`) for the upcoming WoW Forever client (`st.family == "FOREVER"`, Interface 16001). Since the server has not yet launched, all mechanics are verified strictly offline using TBC/Era runtime contracts and unit test suites.
+  - Leveling gate integration in `HUD.spell_known_allows(slot)`: checks `slot.ids` (all ranks) dynamically via `api.is_spell_known(id)`. Unlearned abilities remain hidden on the Cooldown HUD; learning new ranks or talents dynamically unhides the ability without requiring `/reload`.
+  - Usable-only trinket visibility (`HUD.trinket_usable` in `hud.lua`): empty trinket slots and passive stat sticks (where `GetInventoryItemCooldown` returns `enable = 0`) remain hidden, displaying only when equipped with active on-use cooldowns or tracked proc buffs.
+  - Added mutation-verified offline test suite `tests/forever_hud_gate_state.lua` (102 checks with confirmed non-zero mutation proof exits across all 6 classes) covering dynamic leveling gate progression, multi-rank ID lookups, unusable trinket suppression, and Next Action leveling fallback paths for Paladin, Warrior, Hunter, Rogue, Druid, and Shaman.
+  - Preserved cross-engine isolation: Era, TBC, and Wrath runtime branches and offline pins remain completely untouched and passing.
 
 ## [2.1.4]
 

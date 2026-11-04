@@ -72,6 +72,7 @@ run "lua5.1 tests/druid_guide_state.lua" lua5.1 tests/druid_guide_state.lua
 run "lua5.1 tests/shaman_guide_state.lua" lua5.1 tests/shaman_guide_state.lua
 run "lua5.1 tests/hunter_guide_state.lua" lua5.1 tests/hunter_guide_state.lua
 run "lua5.1 tests/forever_guide_state.lua" lua5.1 tests/forever_guide_state.lua
+run "lua5.1 tests/forever_hud_gate_state.lua" lua5.1 tests/forever_hud_gate_state.lua
 run "lua5.1 tests/practice_state.lua" lua5.1 tests/practice_state.lua
 run "lua5.1 tests/practice_progress_state.lua" lua5.1 tests/practice_progress_state.lua
 run "lua5.1 tests/practice_stats_state.lua" lua5.1 tests/practice_stats_state.lua

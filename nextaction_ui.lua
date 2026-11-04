@@ -97,6 +97,7 @@
 local addon_name, st = ...
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LSM = LibStub("LibSharedMedia-3.0")
+---@type LibCustomGlow
 local LCG = LibStub("LibCustomGlow-1.0")
 -- Cross-client API wrappers (see compat.lua).
 local api = st.api
@@ -317,6 +318,12 @@ function ui.init(self)
     local slots = {}
     local n = 0
     local raw_slots = provider.slots
+    if st.family == "FOREVER" and st.forever_guide and st.forever_guide.get_guide_slots then
+        local fg_slots = st.forever_guide.get_guide_slots(self.player_class)
+        if fg_slots and #fg_slots > 0 then
+            raw_slots = fg_slots
+        end
+    end
     if type(raw_slots) == "table" then
         for i = 1, #raw_slots do
             local slot = raw_slots[i]

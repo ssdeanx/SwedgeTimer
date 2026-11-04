@@ -10,15 +10,54 @@ st.forever_guide = st.forever_guide or {}
 local FG = st.forever_guide
 
 -- Helper: check if a cooldown is ready (<= 0 or nil)
-local function is_ready(cd)
+local function is_ready(cd, spell_name)
+    if type(cd) == "number" then
+        return cd <= 0
+    end
+    if spell_name then
+        local api = st and st.api
+        if api and api.GetSpellCooldown then
+            local sp_def = FG.SPELLS_BY_NAME and FG.SPELLS_BY_NAME[spell_name]
+            local query = (sp_def and sp_def.id) or spell_name
+            local ok, start, duration = pcall(api.GetSpellCooldown, query)
+            if ok and start and duration and duration > 1.51 and start > 0 then
+                local now = api.get_time and api.get_time() or 0
+                return (start + duration - now) <= 0
+            end
+            return true
+        end
+    end
     return cd == nil or (type(cd) == "number" and cd <= 0)
 end
 
 -- Helper: check if a spell is known (strictly boolean true from exact name or legacy flag)
 local function is_known(inputs, name, flag)
-    if type(inputs) ~= "table" then return false end
-    if name and inputs[name] == true then return true end
-    if flag and inputs[flag] == true then return true end
+    if type(inputs) == "table" then
+        if name and inputs[name] == true then return true end
+        if flag and inputs[flag] == true then return true end
+        if name and inputs[name] == false then return false end
+        if flag and inputs[flag] == false then return false end
+    end
+    local api = st and st.api
+    if api and type(api.is_spell_known) == "function" and name then
+        local sp_def = FG.SPELLS_BY_NAME and FG.SPELLS_BY_NAME[name]
+        if sp_def then
+            if sp_def.id and api.is_spell_known(sp_def.id) == true then
+                return true
+            end
+            if sp_def.ids then
+                for i = 1, #sp_def.ids do
+                    if api.is_spell_known(sp_def.ids[i]) == true then
+                        return true
+                    end
+                end
+            end
+        end
+        local ok, known = pcall(api.is_spell_known, name)
+        if ok and known == true then
+            return true
+        end
+    end
     return false
 end
 
@@ -164,12 +203,282 @@ FG.SPELLS_BY_CLASS = {
     },
 }
 
+local SPELL_KEY_BY_NAME = {
+    -- Paladin
+    ["Holy Strike"] = "holy_strike",
+    ["Judgement"] = "judge",
+    ["Seal of Righteousness"] = "sor",
+    ["Seal of Command"] = "soc",
+    ["Seal of the Crusader"] = "sotc",
+    ["Seal of Fury"] = "sof",
+    ["Consecration"] = "consecration",
+    ["Exorcism"] = "exorcism",
+    ["Hammer of Wrath"] = "how",
+    ["Holy Shock"] = "holy_shock",
+    ["Divine Favor"] = "divine_favor",
+    ["Holy Shield"] = "holy_shield",
+    ["Righteous Fury"] = "rf",
+    ["Crusader Strike"] = "cs",
+
+    -- Warrior
+    ["Heroic Strike"] = "hs",
+    ["Rend"] = "rend",
+    ["Overpower"] = "op",
+    ["Bloodthrill"] = "bloodthrill",
+    ["Mortal Strike"] = "ms",
+    ["Bloodthirst"] = "bt",
+    ["Whirlwind"] = "ww",
+    ["Execute"] = "execute",
+    ["Slam"] = "slam",
+    ["Sunder Armor"] = "sunder",
+    ["Thunder Clap"] = "thunder_clap",
+    ["Demoralizing Shout"] = "demo_shout",
+    ["Revenge"] = "revenge",
+    ["Shield Slam"] = "shield_slam",
+    ["Shield Block"] = "shield_block",
+    ["Shield Wall"] = "shield_wall",
+    ["Last Stand"] = "last_stand",
+    ["Hamstring"] = "hamstring",
+    ["Cleave"] = "cleave",
+    ["Battle Shout"] = "battle_shout",
+
+    -- Hunter
+    ["Serpent Sting"] = "serpent",
+    ["Raptor Strike"] = "raptor",
+    ["Strider Kick"] = "strider_kick",
+    ["Mongoose Bite"] = "mongoose_bite",
+    ["Hunter's Mark"] = "hunters_mark",
+    ["Arcane Shot"] = "arcane",
+    ["Multi-Shot"] = "multi",
+    ["Wing Clip"] = "wing_clip",
+    ["Immolation Trap"] = "immolation_trap",
+    ["Aimed Shot"] = "aimed",
+    ["Sniper Shot"] = "sniper",
+    ["Summon Hawk"] = "hawk",
+    ["Aspect of the Hawk"] = "aspect_hawk",
+
+    -- Rogue
+    ["Sinister Strike"] = "ss",
+    ["Eviscerate"] = "eviscerate",
+    ["Slice and Dice"] = "snd",
+    ["Rupture"] = "rupture",
+    ["Mutilate"] = "mutilate",
+    ["Hemorrhage"] = "hemo",
+    ["Backstab"] = "backstab",
+    ["Riposte"] = "riposte",
+    ["Envenom"] = "envenom",
+    ["Expose Armor"] = "expose",
+
+    -- Druid
+    ["Maul"] = "maul",
+    ["Swipe"] = "swipe",
+    ["Demoralizing Roar"] = "demo_roar",
+    ["Enrage"] = "enrage",
+    ["Faerie Fire (Feral)"] = "faerie_fire",
+    ["Claw"] = "claw",
+    ["Shred"] = "shred",
+    ["Rip"] = "rip",
+    ["Ferocious Bite"] = "bite",
+    ["Lacerate"] = "lacerate",
+    ["Primal Bite"] = "primal_bite",
+    ["Barkskin"] = "barkskin",
+    ["Frenzied Regeneration"] = "frenzied_regen",
+    ["Rake"] = "rake",
+    ["Ravage"] = "ravage",
+    ["Tiger's Fury"] = "tigers_fury",
+
+    -- Shaman
+    ["Flame Shock"] = "flameshock",
+    ["Stormstrike"] = "stormstrike",
+    ["Earth Shock"] = "earthshock",
+    ["Fire Nova"] = "firenova",
+    ["Lightning Bolt"] = "weave",
+    ["Lightning Shield"] = "lightningshield",
+    ["Water Shield"] = "watershield",
+    ["Searing Totem"] = "searing",
+    ["Strength of Earth Totem"] = "strength_of_earth",
+}
+
+FG.SPELLS_BY_NAME = {}
+for _, sp in pairs(FG.SPELLS) do
+    if type(sp) == "table" and sp.name then
+        FG.SPELLS_BY_NAME[sp.name] = sp
+    end
+end
+
+function FG.get_hud_slots(class)
+    class = class or "WARRIOR"
+    local list = FG.SPELLS_BY_CLASS[class]
+    if not list then return nil end
+    local slots = {}
+    for i = 1, #list do
+        local sp = list[i]
+        local key = SPELL_KEY_BY_NAME[sp.name] or string.lower(sp.name:gsub("%s+", "_"))
+        slots[#slots + 1] = {
+            key = key,
+            title = sp.name,
+            kind = "spell",
+            spell = sp.id,
+            spell_name = sp.name,
+            ids = sp.ids,
+        }
+    end
+    slots[#slots + 1] = { key = "trinket1", title = "Trinket 1", kind = "trinket", inv_slot = 13 }
+    slots[#slots + 1] = { key = "trinket2", title = "Trinket 2", kind = "trinket", inv_slot = 14 }
+    return slots
+end
+
+function FG.get_guide_slots(class)
+    class = class or "WARRIOR"
+    local list = FG.SPELLS_BY_CLASS[class]
+    if not list then return nil end
+    local slots = {}
+    for i = 1, #list do
+        local sp = list[i]
+        local key = SPELL_KEY_BY_NAME[sp.name] or string.lower(sp.name:gsub("%s+", "_"))
+        slots[#slots + 1] = {
+            key = key,
+            spell_id = sp.id,
+            spell_name = sp.name,
+            name_suffix = "Icon" .. key,
+            ids = sp.ids,
+        }
+    end
+    if class == "PALADIN" then
+        slots[#slots + 1] = {
+            key = "twist",
+            spell_id = 20375,
+            name_suffix = "TwistLeft",
+            level = 8,
+            overlay = {
+                spell_id = 20293,
+                name_suffix = "TwistRight",
+                size = { 22.5, 45 },
+                offset = { 11.25, 0 },
+                keep_aspect = true,
+            },
+        }
+        slots[#slots + 1] = { key = "sob", spell_id = 20293, name_suffix = "IconBlood", level = 5 }
+        slots[#slots + 1] = { key = "cs", spell_id = 35395, name_suffix = "IconCS", level = 1 }
+    elseif class == "ROGUE" then
+        slots[#slots + 1] = { key = "builder", name_suffix = "IconBuilder" }
+    end
+    return slots
+end
+
+local fg_hud_state_reused = {}
+function FG.get_hud_state(class, self, slot, now)
+    if type(class) == "table" then
+        now = slot
+        slot = self
+        self = class
+        class = (self and self.player_class) or (ST and ST.player_class) or "WARRIOR"
+    end
+    if not slot or slot.kind == "trinket" then return nil end
+    local api = st and st.api
+    if not api then return nil end
+    now = now or (api.get_time and api.get_time() or 0)
+    local spell_query = slot.spell_name or slot.spell
+    if not spell_query then return nil end
+
+    local rem, dur = 0, 0
+    local start, duration
+    if api.GetSpellCooldown then
+        start, duration = api.GetSpellCooldown(spell_query)
+        if (not start or duration == 0) and slot.spell then
+            start, duration = api.GetSpellCooldown(slot.spell)
+        end
+        if start and duration and duration > 0 and start > 0 then
+            rem = (start + duration) - now
+            if rem < 0 then rem = 0 end
+            dur = duration
+        end
+    end
+
+    -- If ability is not on cooldown, check running GCD for swipe display
+    if rem <= 0 and api.GetSpellCooldown then
+        local g_probe = (st and st.gcd_probe_spell_id) or 61304
+        local g_start, g_dur = api.GetSpellCooldown(g_probe)
+        if g_start and g_dur and g_dur > 0 and g_dur <= 1.51 and g_start > 0 then
+            local g_rem = (g_start + g_dur) - now
+            if g_rem > 0 then
+                rem = g_rem
+                dur = g_dur
+            end
+        end
+    end
+
+    local usable = true
+    if api.IsSpellUsable then
+        local ok, is_usable, no_mana = pcall(api.IsSpellUsable, spell_query)
+        if (not ok or is_usable == nil) and slot.spell then
+            ok, is_usable, no_mana = pcall(api.IsSpellUsable, slot.spell)
+        end
+        if ok and (is_usable == false or no_mana == true) then
+            usable = false
+        end
+    end
+
+    local in_range = true
+    if api.IsSpellInRange and UnitExists and UnitExists("target") then
+        local ok, r = pcall(api.IsSpellInRange, spell_query, "target")
+        if (not ok or r == nil) and slot.spell then
+            ok, r = pcall(api.IsSpellInRange, slot.spell, "target")
+        end
+        if ok and r == 0 then
+            in_range = false
+        end
+    end
+
+    -- Dynamic proc / condition glow
+    local glow = false
+    local k = slot.key
+    if k == "exorcism" then
+        if rem <= 0 and UnitExists and UnitExists("target") and UnitCreatureType then
+            local ct = UnitCreatureType("target")
+            if ct == "Undead" or ct == "Demon" then
+                glow = true
+            end
+        end
+    elseif k == "how" then
+        if rem <= 0 and UnitExists and UnitExists("target") and UnitHealth and UnitHealthMax then
+            local max_hp = UnitHealthMax("target")
+            if max_hp and max_hp > 0 and (UnitHealth("target") / max_hp) < 0.2 then
+                glow = true
+            end
+        end
+    elseif k == "execute" then
+        if rem <= 0 and UnitExists and UnitExists("target") and UnitHealth and UnitHealthMax then
+            local max_hp = UnitHealthMax("target")
+            if max_hp and max_hp > 0 and (UnitHealth("target") / max_hp) < 0.2 then
+                glow = true
+            end
+        end
+    elseif k == "op" or k == "revenge" or k == "riposte" or k == "mongoose_bite" then
+        if rem <= 0 and usable then
+            glow = true
+        end
+    end
+
+    fg_hud_state_reused.remaining = rem
+    fg_hud_state_reused.duration = dur
+    fg_hud_state_reused.text_remaining = (rem > 0 and dur > 2) and rem or nil
+    fg_hud_state_reused.desaturate = (rem > 0 and dur > 1.51) and true or false
+    fg_hud_state_reused.usable = usable
+    fg_hud_state_reused.in_range = in_range
+    fg_hud_state_reused.glow = glow
+    fg_hud_state_reused.hidden = nil
+
+    return fg_hud_state_reused
+end
+
 --=========================================================================================
 -- Spec Resolvers (detects active spec for each class on WoW Forever)
 -- Leveling characters without talents smoothly resolve to "general" baseline
 --=========================================================================================
 function FG.resolve_warrior_spec(inputs)
-    if inputs.is_shield_equipped == true or is_known(inputs, "Shield Slam", "shield_slam_known") or inputs.prot == true then
+    inputs = inputs or {}
+    if inputs.is_shield_equipped == true or inputs.has_shield == true or is_known(inputs, "Shield Slam", "shield_slam_known") or inputs.prot == true then
         return "prot"
     elseif is_known(inputs, "Mortal Strike", "ms_known") then
         return "arms"
@@ -181,7 +490,10 @@ function FG.resolve_warrior_spec(inputs)
 end
 
 function FG.resolve_paladin_spec(inputs)
-    if inputs.is_shield_equipped == true or is_known(inputs, "Holy Shield", "holy_shield_known") then
+    inputs = inputs or {}
+    if inputs.is_shield_equipped == true or inputs.has_shield == true
+        or inputs.fcfs_mode == "prot_forever" or inputs.fcfs_mode == "prot"
+        or is_known(inputs, "Holy Shield", "holy_shield_known") then
         return "prot"
     elseif is_known(inputs, "Holy Shock", "holy_shock_known") then
         return "shockadin"
@@ -930,18 +1242,35 @@ end
 -- Master Evaluator
 --=========================================================================================
 function FG.evaluate(class, spec, inputs, out)
+    inputs = inputs or {}
+    out = out or {}
+    out.hold = false
+    out.hold_text = nil
+    out.riding = nil
+    out.filler_slot = nil
+    out.judge_slot = nil
+    out.waiting_judgement = false
+    out.inputs_unknown = inputs.inputs_unknown == true
+
+    local res
     if class == "WARRIOR" then
-        return FG.evaluate_warrior(spec, inputs, out)
+        res = FG.evaluate_warrior(spec, inputs, out)
     elseif class == "PALADIN" then
-        return FG.evaluate_paladin(spec, inputs, out)
+        res = FG.evaluate_paladin(spec, inputs, out)
     elseif class == "HUNTER" then
-        return FG.evaluate_hunter(spec, inputs, out)
+        res = FG.evaluate_hunter(spec, inputs, out)
     elseif class == "ROGUE" then
-        return FG.evaluate_rogue(spec, inputs, out)
+        res = FG.evaluate_rogue(spec, inputs, out)
     elseif class == "DRUID" then
-        return FG.evaluate_druid(spec, inputs, out)
+        res = FG.evaluate_druid(spec, inputs, out)
     elseif class == "SHAMAN" then
-        return FG.evaluate_shaman(spec, inputs, out)
+        res = FG.evaluate_shaman(spec, inputs, out)
+    else
+        res = out
     end
-    return out
+
+    if out.judge_call or out.action == "judge" then
+        out.judge_slot = "judge"
+    end
+    return res
 end
