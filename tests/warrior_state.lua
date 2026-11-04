@@ -5981,6 +5981,347 @@ do
     end
 end
 
+-- TBC Protection Warrior & Devastate Tests -------------------------------------
+do
+    -- Real spell names map for TBC name-only client
+    local real_names_tbc = {
+        [20243] = "Devastate",
+        [30016] = "Devastate",
+        [30022] = "Devastate",
+        [23922] = "Shield Slam",
+        [30356] = "Shield Slam",
+        [6572] = "Revenge",
+        [30357] = "Revenge",
+        [2565] = "Shield Block",
+        [7386] = "Sunder Armor",
+        [6343] = "Thunder Clap",
+        [25264] = "Thunder Clap",
+        [1160] = "Demoralizing Shout",
+        [25203] = "Demoralizing Shout",
+        [772] = "Rend",
+        [78] = "Heroic Strike",
+        [29707] = "Heroic Strike",
+        [845] = "Cleave",
+        [25231] = "Cleave",
+        [871] = "Shield Wall",
+        [12975] = "Last Stand",
+        [2687] = "Bloodrage",
+        [71] = "Defensive Stance",
+    }
+
+    local sb = build({
+        project = 5,
+        name_only_client = true,
+        known = {
+            [20243] = true,
+            [23922] = true,
+            [6572] = true,
+            [2565] = true,
+            [7386] = true,
+            [6343] = true,
+            [1160] = true,
+            [772] = true,
+            [78] = true,
+            [845] = true,
+            [871] = true,
+            [12975] = true,
+        },
+    })
+    sb.real_names = real_names_tbc
+    local ST = sb.ST
+
+    -- 1. Devastate, Shield Wall, Last Stand slots exist in prot guide and HUD sets
+    local expected_guide_slots = {
+        "shield_wall", "last_stand", "shield_block", "shield_slam",
+        "devastate", "revenge", "sunder", "thunder_clap",
+        "demo_shout", "hs", "cleave", "rend", "bloodrage", "defensive_stance"
+    }
+    for _, exp_key in ipairs(expected_guide_slots) do
+        local found = false
+        for _, slot in ipairs(ST.WARRIOR.guide_slots_prot) do
+            if slot and slot.key == exp_key then found = true; break end
+        end
+        check(found, "TBC Prot guide carries slot: " .. exp_key)
+    end
+
+    local expected_hud_slots = {
+        "shield_block", "shield_slam", "devastate", "revenge", "sunder",
+        "thunder_clap", "demo_shout", "hs", "cleave", "shield_wall", "last_stand"
+    }
+    for _, exp_key in ipairs(expected_hud_slots) do
+        local found = false
+        for _, slot in ipairs(ST.WARRIOR.hud_slots_prot) do
+            if slot and slot.key == exp_key then found = true; break end
+        end
+        check(found, "TBC Prot HUD carries slot: " .. exp_key)
+    end
+
+    -- 2. Protection spec detection on TBC (is_prot_spec)
+    eq(ST.WARRIOR.is_devastate_known(), true, "is_devastate_known returns true on TBC with 20243")
+    eq(ST.WARRIOR.is_shield_slam_known(), true, "is_shield_slam_known returns true on TBC with 23922")
+    eq(ST.WARRIOR.is_prot_spec(ST), true, "is_prot_spec returns true when Devastate/Shield Slam known")
+
+    -- Spec override: explicit arms/fury overrides auto detection
+    ST.get_class_table = function() return { warrior_spec = "arms" } end
+    eq(ST.WARRIOR.is_prot_spec(ST), false, "is_prot_spec returns false when warrior_spec is arms")
+    ST.get_class_table = function() return { warrior_spec = "fury" } end
+    eq(ST.WARRIOR.is_prot_spec(ST), false, "is_prot_spec returns false when warrior_spec is fury")
+    ST.get_class_table = function() return { warrior_spec = "protection" } end
+    eq(ST.WARRIOR.is_prot_spec(ST), true, "is_prot_spec returns true when warrior_spec is protection")
+    ST.get_class_table = function() return { warrior_spec = "auto" } end
+
+    -- 3. resolve_guide_slots wires guide.slots and HUD_SLOTS on TBC
+    ST.warrior_is_prot = nil
+    ST.WARRIOR.resolve_guide_slots(ST)
+    eq(ST.warrior_is_prot, true, "resolve_guide_slots latches warrior_is_prot = true")
+    eq(ST.WARRIOR.guide.slots, ST.WARRIOR.guide_slots_prot, "guide.slots wired to guide_slots_prot")
+    eq(ST.WARRIOR.HUD_SLOTS, ST.WARRIOR.hud_slots_prot, "HUD_SLOTS wired to hud_slots_prot")
+
+    -- 4. Live Gather on TBC: verifies all prot inputs populated via name-only client
+    sb.clock = 100
+    ST.warrior_is_prot = true
+    local gathered = ST.WARRIOR.gather_guide_inputs(ST, {})
+    eq(gathered.prot, true, "live gather: prot == true")
+    eq(gathered.devastate_known, true, "live gather: devastate_known == true")
+    eq(gathered.shield_slam_known, true, "live gather: shield_slam_known == true")
+    eq(gathered.revenge_known, true, "live gather: revenge_known == true")
+    eq(gathered.shield_block_known, true, "live gather: shield_block_known == true")
+    eq(gathered.sunder_known, true, "live gather: sunder_known == true")
+    eq(gathered.thunder_clap_known, true, "live gather: thunder_clap_known == true")
+    eq(gathered.demo_shout_known, true, "live gather: demo_shout_known == true")
+    eq(gathered.rend_known, true, "live gather: rend_known == true")
+    eq(gathered.hs_known, true, "live gather: hs_known == true")
+    eq(gathered.cleave_known, true, "live gather: cleave_known == true")
+    eq(gathered.shield_wall_known, true, "live gather: shield_wall_known == true")
+    eq(gathered.last_stand_known, true, "live gather: last_stand_known == true")
+
+    -- 5. Emergency defensives: Shield Wall (<= 35% HP) and Last Stand (<= 40% HP)
+    local out_sw = ST.WARRIOR.evaluate_prot({
+        player_health_pct = 30,
+        shield_wall_known = true,
+        shield_wall_remaining = 0,
+    }, {})
+    eq(out_sw.action, "shield_wall", "Prot Warrior: emergency Shield Wall <= 35% HP")
+    eq(out_sw.hold, true, "Prot Warrior: Shield Wall sets hold = true")
+    eq(out_sw.hold_text, "SHIELD WALL", "Prot Warrior: Shield Wall hold_text = SHIELD WALL")
+
+    local out_ls = ST.WARRIOR.evaluate_prot({
+        player_health_pct = 38,
+        shield_wall_known = true,
+        shield_wall_remaining = 300,
+        last_stand_known = true,
+        last_stand_remaining = 0,
+    }, {})
+    eq(out_ls.action, "last_stand", "Prot Warrior: emergency Last Stand <= 40% HP")
+    eq(out_ls.hold, true, "Prot Warrior: Last Stand sets hold = true")
+    eq(out_ls.hold_text, "LAST STAND", "Prot Warrior: Last Stand hold_text = LAST STAND")
+
+    -- 6. Shield Block: rage >= 10 and buff missing or rage >= 40
+    local out_sb = ST.WARRIOR.evaluate_prot({
+        player_health_pct = 100,
+        has_shield = true,
+        shield_block_known = true,
+        shield_block_remaining = 0,
+        has_shield_block_buff = false,
+        rage = 15,
+    }, {})
+    eq(out_sb.action, "shield_block", "Prot Warrior: Shield Block prompts when buff missing")
+
+    -- 7. Shield Slam: top priority single-target strike
+    local out_ss = ST.WARRIOR.evaluate_prot({
+        player_health_pct = 100,
+        has_shield = true,
+        shield_block_known = true,
+        shield_block_remaining = 3,
+        has_shield_block_buff = true,
+        shield_slam_known = true,
+        shield_slam_remaining = 0,
+        rage = 25,
+    }, {})
+    eq(out_ss.action, "shield_slam", "Prot Warrior: Shield Slam prompts when ready")
+
+    -- 8. Revenge: reactive proc after block/dodge/parry
+    local out_rev = ST.WARRIOR.evaluate_prot({
+        player_health_pct = 100,
+        has_shield = true,
+        shield_block_known = true,
+        shield_block_remaining = 3,
+        has_shield_block_buff = true,
+        shield_slam_known = true,
+        shield_slam_remaining = 4,
+        revenge_known = true,
+        revenge_usable = true,
+        revenge_remaining = 0,
+        rage = 10,
+    }, {})
+    eq(out_rev.action, "revenge", "Prot Warrior: Revenge prompts when usable")
+
+    -- 9. Devastate: TBC primary attack when known (replaces raw Sunder)
+    local out_dev = ST.WARRIOR.evaluate_prot({
+        player_health_pct = 100,
+        has_shield = true,
+        shield_block_known = true,
+        shield_block_remaining = 3,
+        has_shield_block_buff = true,
+        shield_slam_known = true,
+        shield_slam_remaining = 4,
+        revenge_known = true,
+        revenge_usable = false,
+        devastate_known = true,
+        sunder_stacks = 5,
+        rage = 20,
+    }, {})
+    eq(out_dev.action, "devastate", "Prot Warrior: Devastate prompts when known (TBC 41-pt)")
+
+    -- 10. Sunder Armor: fallback when Devastate is unlearned (<5 stacks)
+    local out_sund = ST.WARRIOR.evaluate_prot({
+        player_health_pct = 100,
+        has_shield = true,
+        shield_block_known = true,
+        shield_block_remaining = 3,
+        has_shield_block_buff = true,
+        shield_slam_known = true,
+        shield_slam_remaining = 4,
+        revenge_known = true,
+        revenge_usable = false,
+        devastate_known = false,
+        sunder_known = true,
+        sunder_stacks = 2,
+        rage = 20,
+    }, {})
+    eq(out_sund.action, "sunder", "Prot Warrior: Sunder prompts when Devastate unlearned (<5 stacks)")
+
+    -- 11. Thunder Clap debuff refresh (<= 6s remaining or missing)
+    local out_tc = ST.WARRIOR.evaluate_prot({
+        player_health_pct = 100,
+        has_shield = true,
+        shield_block_known = true,
+        shield_block_remaining = 3,
+        has_shield_block_buff = true,
+        shield_slam_known = true,
+        shield_slam_remaining = 4,
+        revenge_known = true,
+        revenge_usable = false,
+        devastate_known = true,
+        thunder_clap_known = true,
+        thunder_clap_remaining = 0,
+        thunder_clap_debuff_remaining = 3,
+        rage = 25,
+    }, {})
+    eq(out_tc.action, "thunder_clap", "Prot Warrior: Thunder Clap prompts when debuff <= 6s")
+
+    -- 12. Demoralizing Shout debuff refresh (<= 6s remaining or missing)
+    local out_demo = ST.WARRIOR.evaluate_prot({
+        player_health_pct = 100,
+        has_shield = true,
+        shield_block_known = true,
+        shield_block_remaining = 3,
+        has_shield_block_buff = true,
+        shield_slam_known = true,
+        shield_slam_remaining = 4,
+        revenge_known = true,
+        revenge_usable = false,
+        devastate_known = true,
+        thunder_clap_known = true,
+        thunder_clap_remaining = 3,
+        thunder_clap_debuff_remaining = 20,
+        demo_shout_known = true,
+        demo_shout_debuff_remaining = 4,
+        rage = 15,
+    }, {})
+    eq(out_demo.action, "demo_shout", "Prot Warrior: Demo Shout prompts when debuff <= 6s")
+
+    -- 13. Queued attacks ride (hs_queued or cleave_queued -> RIDE)
+    local out_ride = ST.WARRIOR.evaluate_prot({
+        hs_queued = true,
+        rage = 50,
+    }, {})
+    eq(out_ride.action, nil, "Prot Warrior: queued HS yields action = nil")
+    eq(out_ride.hold, true, "Prot Warrior: queued HS sets hold = true")
+    eq(out_ride.hold_text, "RIDE", "Prot Warrior: queued HS sets hold_text = RIDE")
+
+    -- 14. Comprehensive Leveling Fallback Suite
+    -- Level 1: Only Heroic Strike known
+    local out_lvl1_poor = ST.WARRIOR.evaluate_prot({
+        hs_known = true,
+        rage = 10,
+    }, {})
+    eq(out_lvl1_poor.action, nil, "Level 1 Warrior (<15 rage): pools rage smoothly without stall")
+
+    local out_lvl1_rich = ST.WARRIOR.evaluate_prot({
+        hs_known = true,
+        rage = 20,
+    }, {})
+    eq(out_lvl1_rich.action, "hs", "Level 1 Warrior (>=15 rage): prompts Heroic Strike")
+
+    -- Level 4: Rend learned
+    local out_lvl4_rend = ST.WARRIOR.evaluate_prot({
+        hs_known = true,
+        rend_known = true,
+        rend_remaining = 0,
+        rage = 15,
+    }, {})
+    eq(out_lvl4_rend.action, "rend", "Level 4 Warrior: prompts Rend when missing on target")
+
+    local out_lvl4_hs = ST.WARRIOR.evaluate_prot({
+        hs_known = true,
+        rend_known = true,
+        rend_remaining = 10,
+        rage = 20,
+    }, {})
+    eq(out_lvl4_hs.action, "hs", "Level 4 Warrior: falls back to HS when Rend is active")
+
+    -- Level 6: Thunder Clap learned
+    local out_lvl6_tc = ST.WARRIOR.evaluate_prot({
+        hs_known = true,
+        rend_known = true,
+        rend_remaining = 10,
+        thunder_clap_known = true,
+        thunder_clap_remaining = 0,
+        thunder_clap_debuff_remaining = nil,
+        rage = 25,
+    }, {})
+    eq(out_lvl6_tc.action, "thunder_clap", "Level 6 Warrior: prompts Thunder Clap")
+
+    -- Level 10: Sunder Armor learned
+    local out_lvl10_sunder = ST.WARRIOR.evaluate_prot({
+        hs_known = true,
+        rend_known = true,
+        rend_remaining = 10,
+        thunder_clap_known = true,
+        thunder_clap_remaining = 4,
+        thunder_clap_debuff_remaining = 20,
+        sunder_known = true,
+        sunder_stacks = 1,
+        rage = 20,
+    }, {})
+    eq(out_lvl10_sunder.action, "sunder", "Level 10 Warrior: prompts Sunder Armor to build stacks")
+
+    -- 15. HUD get_hud_state for Prot Warrior
+    sb.clock = 200
+    local s_sw = ST.WARRIOR.get_hud_state(ST, ST.WARRIOR.hud_slot_shield_wall, 200)
+    check(s_sw ~= nil, "HUD state for shield_wall is valid")
+    eq(s_sw.hidden, nil, "HUD shield_wall slot is not provider-hidden")
+
+    local s_ls = ST.WARRIOR.get_hud_state(ST, ST.WARRIOR.hud_slot_last_stand, 200)
+    check(s_ls ~= nil, "HUD state for last_stand is valid")
+    eq(s_ls.hidden, nil, "HUD last_stand slot is not provider-hidden")
+
+    eq(ST.WARRIOR.HUD_SKIP_GCD.shield_wall, true, "HUD_SKIP_GCD carries shield_wall")
+    eq(ST.WARRIOR.HUD_SKIP_GCD.last_stand, true, "HUD_SKIP_GCD carries last_stand")
+
+    -- HUD Sunder display logic: shown without toggle when Devastate is unlearned, hidden when Devastate is known
+    sb.known[20243] = nil
+    sb.known[30016] = nil
+    sb.known[30022] = nil
+    local s_sunder_leveling = ST.WARRIOR.get_hud_state(ST, { key = "sunder", title = "Sunder Armor", spell = 7386 }, 200)
+    eq(s_sunder_leveling.hidden, nil, "HUD sunder slot shows for Prot warrior leveling pre-Devastate")
+
+    sb.known[20243] = true
+    local s_sunder_dev_known = ST.WARRIOR.get_hud_state(ST, { key = "sunder", title = "Sunder Armor", spell = 7386 }, 200)
+    eq(s_sunder_dev_known.hidden, true, "HUD sunder slot hides for Prot warrior when Devastate is known and toggle off")
+end
+
 if failures == 0 then
     print("PASS  warrior_state.lua (" .. tostring(checks) .. " checks)")
 else

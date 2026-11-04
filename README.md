@@ -34,10 +34,10 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 
 ---
 
-## 🚀 What's New in v2.1.5
+## 🚀 What's New in v2.1.6
 
 > [!IMPORTANT]
-> **WoW Forever (Camelot 1.60.1) Launch Ready!** SwedgeTimer v2.1.5 delivers full, enterprise-grade rotations for all 6 melee classes calibrated directly against official simulation priority models, along with full tanking engines and real-time leveling progression.
+> **WoW Forever (Camelot 1.60.1) & TBC Anniversary (2.5.6) Launch Ready!** SwedgeTimer v2.1.6 delivers full, enterprise-grade rotations for all 6 melee classes calibrated directly against official simulation priority models, with unified tank routing across Protection Paladin, Protection Warrior, and Feral Bear Druid, along with full leveling progression.
 
 ### 🌟 Release Highlights
 
@@ -48,11 +48,11 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
   - **<span style="color:#FFF569">Rogue</span>**: Mutilate, Combat Daggers (Backstab), Subtlety (Hemo), and Combat Swords (Sinister Strike) with 100% Slice & Dice uptime, Envenom, TTD-based Rupture, and reactive Riposte parry procs.
   - **<span style="color:#FF7D0A">Druid</span>**: Feral Bear Tank (Barkskin $\le 40\%$, Frenzied Regen $\le 30\%$, Primal Bite, Lacerate 5-stacks) and Feral Cat DPS (Stealth Ravage, Clearcasting Shred, 5-CP Rip, Ferocious Bite).
   - **<span style="color:#0070DE">Shaman</span>**: Authentic 2H Enhancement rotation (Flame Shock, Stormstrike, 5-stack Maelstrom Weapon instant Lightning Bolt, Earth Shock, Fire Nova).
-- 🛡️ **Full Tanking Engines**: Dedicated Protection Paladin, Protection Warrior, and Feral Bear engines with auto-shield detection and health-threshold defensives.
-- 🎛️ **WoW Forever Cooldown HUD & Guide Integration**:
+- 🛡️ **Full Tanking Engines across WoW Forever & TBC Anniversary**: Dedicated Protection Paladin (Holy Shield, Avenger's Shield, Righteous Fury), Protection Warrior (Shield Wall $\le 35\%$, Last Stand $\le 40\%$, Shield Block, Shield Slam, Revenge, Devastate vs Sunder ladder), and Feral Bear Druid (Frenzied Regen $\le 40\%$, Maul queue RIDE, Mangle, Faerie Fire, Demo Roar, Lacerate 5-stack, Swipe filler) engines with auto-shield/form detection, emergency health thresholds, and real-time leveling fallbacks.
+- 🎛️ **Cooldown HUD & Guide Integration**:
   - Live HUD slot providers for all 6 classes: active cooldown remaining, GCD swipes, resource/mana blue tint, out-of-range red tint, and proc/execute glows.
-  - Next-Action Guide UI dynamically instantiated directly from Forever rotational action slots.
-- 📈 **Dynamic Leveling Progression (Level 1–60)**: Spells unlock dynamically in both the HUD and Next-Action Guide as you train them—**no `/reload` required**! Clean leveling fallbacks ensure you never stall on unlearned talents.
+  - Next-Action Guide UI dynamically instantiated directly from rotational action slots.
+- 📈 **Dynamic Leveling Progression (Level 1–70)**: Spells unlock dynamically in both the HUD and Next-Action Guide as you train them—**no `/reload` required**! Clean leveling fallbacks ensure you never stall on unlearned talents.
 - ⏱️ **Native Hardware-Accurate Timing**: Seamless integration with WoW Forever's native `C_SwingTimer` API and `PLAYER_SWING` events for jitter-free weapon timing.
 
 ---
@@ -63,7 +63,7 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 | :--- | :--- | :--- | :--- |
 | **<span style="color:#FFD700">WoW Forever</span>** (Camelot) | `16001` | **<span style="color:#00FF00">● LIVE</span>** | Native swing engine, full 6-class Forever APL rotations, 2H Shaman, Melee Hunter, Tank rotations & leveling fallbacks |
 | **<span style="color:#FFD700">Classic Era & SoD</span>** | `11509` | **<span style="color:#00FF00">● LIVE</span>** | Classic combat engine, Season of Discovery runes, Exodin & Shockadin builds, Hunter melee stack |
-| **<span style="color:#FFD700">TBC Anniversary</span>** | `20506` | **<span style="color:#00FF00">● LIVE</span>** | Dedicated Paladin Seal-Twisting window, Hunter Auto Shot clipping bar, Windfury sync |
+| **<span style="color:#FFD700">TBC Anniversary</span>** | `20506` | **<span style="color:#00FF00">● LIVE</span>** | Dedicated Paladin Seal-Twisting window, Hunter Auto Shot clipping bar, Windfury sync, Protection Paladin/Warrior & Feral Bear tank engines |
 | **<span style="color:#FFD700">WotLK Titanforge</span>** | `38002` | **<span style="color:#00FF00">● LIVE</span>** | High-precision FCFS next-action rotation, Wrath utility band, rank consolidation |
 | **<span style="color:#AAAAAA">Retail / Midnight</span>** | `12.1.x` | **<span style="color:#888888">○ UI Only</span>** | Cooldown HUD, layout designer, range checking & options active (swing bars static by design) |
 | **<span style="color:#AAAAAA">Cataclysm / Mists</span>** | `40402` / `50500` | **<span style="color:#888888">○ UI Only</span>** | Cooldown HUD, design mode & options interface active |

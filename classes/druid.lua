@@ -755,6 +755,7 @@ function ST.DRUID.post_init(self)
     -- the spell data is live, then hand the provider (ST.DRUID.guide at the end of
     -- this file) to the shared frame. Guarded so a flavor without nextaction_ui stays
     -- inert; the guide itself stays hidden until nextaction_enabled is turned on.
+    self.DRUID.resolve_guide_slots(self)
     self.DRUID.resolve_guide_icons()
     -- D2: the TF/Berserk HUD slots follow the same rank resolution (icon art only -
     -- the cooldown read is name-based).
@@ -2317,6 +2318,14 @@ local guide_slot_shred = { key = "shred", spell_id = 5221 }
 -- follow-up); the slot is declared so the contract names it when the probe
 -- lands.
 local guide_slot_claw = { key = "claw", spell_id = 9850 }
+ST.DRUID.guide_slot_lacerate = { key = "lacerate", spell_id = 33745, cooldown_key = "lacerate",
+    swipe_duration = 15 }
+ST.DRUID.guide_slot_swipe = { key = "swipe", spell_id = 779 }
+ST.DRUID.guide_slot_faerie_fire = { key = "faerie_fire", spell_id = 16857, cooldown_key = "faerie_fire",
+    swipe_duration = 6 }
+ST.DRUID.guide_slot_demo_roar = { key = "demo_roar", spell_id = 99 }
+ST.DRUID.guide_slot_frenzied_regen = { key = "frenzied_regen", spell_id = 22842, cooldown_key = "frenzied_regen",
+    swipe_duration = 180 }
 
 -- Resolve the guide icons to the client's current ranks; called once from post_init,
 -- before the shared frame builds its icons. A rank that does not resolve keeps the
@@ -2329,6 +2338,11 @@ function ST.DRUID.resolve_guide_icons()
     if st.family == "TBC" then
         guide_slot_maul.spell_id = MAUL_NAME
         guide_slot_mangle.spell_id = MANGLE_NAME
+        ST.DRUID.guide_slot_lacerate.spell_id = "Lacerate"
+        ST.DRUID.guide_slot_swipe.spell_id = "Swipe"
+        ST.DRUID.guide_slot_faerie_fire.spell_id = FERAL_FF_NAME
+        ST.DRUID.guide_slot_demo_roar.spell_id = "Demoralizing Roar"
+        ST.DRUID.guide_slot_frenzied_regen.spell_id = "Frenzied Regeneration"
         guide_slot_rip.spell_id = RIP_NAME
         guide_slot_rake.spell_id = RAKE_NAME
         guide_slot_bite.spell_id = BITE_NAME
@@ -2879,12 +2893,83 @@ function ST.DRUID.gather_guide_inputs(self, out)
     inputs.shred_known = is_druid_spell_known(5221, SHRED_NAME)
     inputs.bite_known = is_druid_spell_known(22568, BITE_NAME)
     inputs.claw_known = is_druid_spell_known(9850, CLAW_NAME)
+    inputs.lacerate_known = is_druid_spell_known(33745, LACERATE_NAME)
+    inputs.swipe_known = is_druid_spell_known(779, SWIPE_NAME)
+    inputs.demo_roar_known = is_druid_spell_known(99, DEMO_ROAR_NAME)
+    inputs.faerie_fire_known = is_druid_spell_known(16857, FERAL_FF_NAME)
+    inputs.frenzied_regen_known = is_druid_spell_known(22842, FRENZIED_REGEN_NAME)
+
+    if st.family == "TBC" and form == 1 and inputs.mangle_known then
+        inputs.mangle_cooldown = guide_cooldown_remaining(spell_query(33878, MANGLE_NAME), now)
+    end
+    if inputs.frenzied_regen_known then
+        inputs.frenzied_regen_remaining = guide_cooldown_remaining(spell_query(22842, FRENZIED_REGEN_NAME), now)
+    end
+    if inputs.faerie_fire_known then
+        inputs.ff_remaining = guide_cooldown_remaining(spell_query(16857, FERAL_FF_NAME), now)
+    end
+
+    local cur_hp = api.UnitHealth("player")
+    local max_hp = api.UnitHealthMax("player")
+    if type(cur_hp) == "number" and type(max_hp) == "number" and max_hp > 0 then
+        inputs.player_health_pct = (cur_hp / max_hp) * 100
+    end
+
+    inputs.lacerate_active = nil
+    inputs.lacerate_stacks = 0
+    inputs.lacerate_remaining = nil
+    inputs.demo_roar_active = nil
+    inputs.demo_roar_remaining = nil
+    inputs.demo_shout_active = nil
+
+    if UnitExists and UnitExists("target") then
+        local i = 1
+        while i <= 40 do
+            local name, _, count, _, dur, exp, src, _, _, spell_id = api.UnitAura("target", i, "HARMFUL")
+            if name ~= nil then
+                if spell_id == 33745 or name == "Lacerate" then
+                    inputs.lacerate_active = true
+                    inputs.lacerate_stacks = (type(count) == "number" and count > 0) and count or 1
+                    if exp and exp > now then
+                        inputs.lacerate_remaining = exp - now
+                    end
+                elseif spell_id == 99 or spell_id == 1735 or spell_id == 9490 or spell_id == 9747 or spell_id == 9898 or spell_id == 26998 or name == "Demoralizing Roar" then
+                    inputs.demo_roar_active = true
+                    if exp and exp > now then
+                        inputs.demo_roar_remaining = exp - now
+                    end
+                elseif spell_id == 1160 or spell_id == 25203 or name == "Demoralizing Shout" then
+                    inputs.demo_shout_active = true
+                end
+            end
+            i = i + 1
+        end
+    end
     return inputs
 end
 
+ST.DRUID.guide_slots_cat = {
+    guide_slot_maul,
+    guide_slot_mangle,
+    guide_slot_rip,
+    guide_slot_rake,
+    guide_slot_bite,
+    guide_slot_shred,
+    guide_slot_claw,
+}
+
+ST.DRUID.guide_slots_bear = {
+    guide_slot_maul,
+    guide_slot_mangle,
+    ST.DRUID.guide_slot_lacerate,
+    ST.DRUID.guide_slot_swipe,
+    ST.DRUID.guide_slot_faerie_fire,
+    ST.DRUID.guide_slot_demo_roar,
+    ST.DRUID.guide_slot_frenzied_regen,
+}
+
 ST.DRUID.guide = {
-    slots = { guide_slot_maul, guide_slot_mangle, guide_slot_rip, guide_slot_rake,
-        guide_slot_bite, guide_slot_shred, guide_slot_claw },
+    slots = ST.DRUID.guide_slots_cat,
 
     -- Live inputs: the gather above, verbatim, into the caller's reused table.
     gather = function(self, out)
@@ -2941,7 +3026,7 @@ ST.DRUID.guide = {
 local hud_slot_tf = { key = "tf", title = "Tiger's Fury", kind = "spell", spell = 9845 }
 local hud_slot_berserk = { key = "berserk", title = "Berserk", kind = "spell", spell = 50334 }
 
-ST.DRUID.HUD_SLOTS = {
+ST.DRUID.hud_slots_cat = {
     { key = "maul", title = "Maul", kind = "spell", spell = 6807 },
     { key = "mangle", title = "Mangle", kind = "spell", spell = 33878 },
     { key = "rip", title = "Rip", kind = "spell", spell = 1079 },
@@ -2954,6 +3039,43 @@ ST.DRUID.HUD_SLOTS = {
     { key = "trinket1", title = "Trinket 1", kind = "trinket", inv_slot = 13 },
     { key = "trinket2", title = "Trinket 2", kind = "trinket", inv_slot = 14 },
 }
+
+ST.DRUID.hud_slots_bear = {
+    { key = "maul", title = "Maul", kind = "spell", spell = 6807 },
+    { key = "mangle", title = "Mangle", kind = "spell", spell = 33878 },
+    { key = "lacerate", title = "Lacerate", kind = "spell", spell = 33745 },
+    { key = "swipe", title = "Swipe", kind = "spell", spell = 779 },
+    { key = "faerie_fire", title = "Faerie Fire (Feral)", kind = "spell", spell = 16857 },
+    { key = "demo_roar", title = "Demoralizing Roar", kind = "spell", spell = 99 },
+    { key = "frenzied_regen", title = "Frenzied Regeneration", kind = "spell", spell = 22842 },
+    { key = "trinket1", title = "Trinket 1", kind = "trinket", inv_slot = 13 },
+    { key = "trinket2", title = "Trinket 2", kind = "trinket", inv_slot = 14 },
+}
+
+ST.DRUID.HUD_SLOTS = ST.DRUID.hud_slots_cat
+
+function ST.DRUID.is_bear_spec(self)
+    local db = self and self.get_class_table and self:get_class_table()
+    if type(db) == "table" and db.druid_spec == "bear" then
+        return true
+    elseif type(db) == "table" and db.druid_spec == "cat" then
+        return false
+    end
+    if self and self.form_index == 1 then
+        return true
+    end
+    return false
+end
+
+function ST.DRUID.resolve_guide_slots(self)
+    if ST.DRUID.is_bear_spec(self) then
+        ST.DRUID.guide.slots = ST.DRUID.guide_slots_bear
+        ST.DRUID.HUD_SLOTS = ST.DRUID.hud_slots_bear
+    else
+        ST.DRUID.guide.slots = ST.DRUID.guide_slots_cat
+        ST.DRUID.HUD_SLOTS = ST.DRUID.hud_slots_cat
+    end
+end
 
 -- D2: re-point the TF/Berserk slot icons at the client's current ranks (called once
 -- from post_init, after the guide icon resolution). Only the icon art follows the
@@ -3048,6 +3170,11 @@ local hud_slot_names = {}
 local HUD_SLOT_TBC_NAMES = {
     maul = MAUL_NAME,
     mangle = MANGLE_NAME,
+    lacerate = "Lacerate",
+    swipe = "Swipe",
+    faerie_fire = FERAL_FF_NAME,
+    demo_roar = "Demoralizing Roar",
+    frenzied_regen = "Frenzied Regeneration",
     rip = RIP_NAME,
     rake = RAKE_NAME,
     bite = BITE_NAME,
@@ -3084,6 +3211,11 @@ end
 local HUD_COOLDOWN_FALLBACK = {
     maul = 0,
     mangle = 0,
+    lacerate = 0,
+    swipe = 0,
+    faerie_fire = 6,
+    demo_roar = 0,
+    frenzied_regen = 180,
     rip = 0,
     rake = 0,
     bite = 0,
@@ -3098,7 +3230,7 @@ local HUD_COOLDOWN_FALLBACK = {
 -- cooldown on the classic line - UNCONFIRMED, in-game to confirm; a wrong entry
 -- only withholds a GCD swipe from a ready icon). Every rotational slot shows the
 -- running GCD.
-local HUD_SKIP_GCD = { tf = true, berserk = true }
+local HUD_SKIP_GCD = { tf = true, berserk = true, frenzied_regen = true }
 
 -- The running GCD (classes/paladin.lua hud_gcd_remaining, verbatim).
 local function hud_gcd_remaining(self, now)
@@ -3175,6 +3307,21 @@ function ST.DRUID.get_hud_state(self, slot, now)
         s.hidden = true
         return s
     end
+    -- Form-specific slot gating:
+    -- Bear form (form_index == 1) hides cat-only slots: rip, rake, bite, shred, claw, tf
+    if self.form_index == 1 then
+        if slot.key == "rip" or slot.key == "rake" or slot.key == "bite"
+            or slot.key == "shred" or slot.key == "claw" or slot.key == "tf" then
+            s.hidden = true
+            return s
+        end
+    -- Cat form (form_index == 3) hides bear-only slots: lacerate, demo_roar, frenzied_regen
+    elseif self.form_index == 3 then
+        if slot.key == "lacerate" or slot.key == "demo_roar" or slot.key == "frenzied_regen" then
+            s.hidden = true
+            return s
+        end
+    end
     if slot.key == "mangle" and st.family == "ERA" and sod_runes_present() ~= true then
         s.hidden = true
         return s
@@ -3234,6 +3381,16 @@ function ST.DRUID.get_hud_state(self, slot, now)
         -- The standard ready-in-combat glow (the paladin wings rule): the icon
         -- lights while the ability is available.
         s.glow = (remaining <= 0 and self.in_combat == true) or false
+    elseif slot.key == "frenzied_regen" then
+        local hp_pct = self.player_health_pct
+        if hp_pct == nil and api.UnitHealth and api.UnitHealthMax then
+            local cur_hp = api.UnitHealth("player")
+            local max_hp = api.UnitHealthMax("player")
+            if type(cur_hp) == "number" and type(max_hp) == "number" and max_hp > 0 then
+                hp_pct = (cur_hp / max_hp) * 100
+            end
+        end
+        s.glow = (remaining <= 0 and self.in_combat == true and type(hp_pct) == "number" and hp_pct <= 40) or false
     end
     return s
 end

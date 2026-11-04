@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.1.5"
+local version = "2.1.6"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version

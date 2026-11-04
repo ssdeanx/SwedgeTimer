@@ -3285,6 +3285,9 @@ end
 -- post_init, before the guide frame builds its icons. Defined after the DS/HW
 -- resolvers above (lexical locals) and before the guide table below.
 function ST.PALADIN.resolve_guide_slots(self)
+    if is_forever_family then
+        return
+    end
     local db = self and self:get_class_table() or {}
     local spec = db.paladin_spec or "auto"
     local is_prot = spec == "protection"
@@ -3718,6 +3721,15 @@ function ST.PALADIN.gather_guide_inputs(self, out)
         inputs.holy_shield_remaining = nil
     end
 
+    local as_known = is_spell_known_query(31935)
+    inputs.as_known = as_known
+    if as_known then
+        inputs.as_remaining = get_guide_cooldown_remaining(self, 31935,
+            "guide_as_expires", "guide_as_duration")
+    else
+        inputs.as_remaining = nil
+    end
+
     if self.holy_strike_known then
         inputs.holy_strike_remaining = get_guide_cooldown_remaining(self, 10333,
             "guide_holy_strike_expires", "guide_holy_strike_duration")
@@ -3920,6 +3932,8 @@ ST.PALADIN.guide = {
             out.action = "rf"
         elseif raw.action == "holy_shield" then
             out.action = "holy_shield"
+        elseif raw.action == "as" then
+            out.action = "as"
         elseif raw.action == "holy_strike" then
             out.action = "holy_strike"
         elseif raw.action == "sor" then
@@ -4000,27 +4014,24 @@ ST.PALADIN.guide_slots_ret = ST.PALADIN.guide.slots
 ST.PALADIN.guide_slots_prot = {
     { key = "holy_shield", spell_id = 20925, spell_name = "Holy Shield", cooldown_key = "holy_shield",
         name_suffix = "IconHolyShield", level = 40, swipe_duration = 10 },
-    { key = "holy_strike", spell_id = 10333, spell_name = "Holy Strike", cooldown_key = "holy_strike",
-        name_suffix = "IconHolyStrike", level = 2 },
+    { key = "as", spell_id = 31935, spell_name = "Avenger's Shield", cooldown_key = "as",
+        name_suffix = "IconAvengerShield", level = 50, swipe_duration = 30 },
     { key = "judge", spell_id = 20271, cooldown_key = "judge",
         name_suffix = "IconJudgement", level = 10, offset = { -9, -10 },
         size = { 22.5, 24.9 }, glow = true, swipe_duration = 8 },
     { key = "consecration", spell_id = 26573, cooldown_key = "consecration",
-        name_suffix = "IconConsecration", level = 1, zoom = 0.2, label = "FILLER",
+        name_suffix = "IconConsecration", level = 20, zoom = 0.2, label = "FILLER",
         swipe_duration = 8 },
     { key = "rf", spell_id = 25780, spell_name = "Righteous Fury", cooldown_key = "rf",
         name_suffix = "IconRF", level = 16 },
-    { key = "sor", spell_id = 20293, spell_name = "Seal of Righteousness", cooldown_key = "sor",
+    { key = "sor", spell_id = 21084, spell_name = "Seal of Righteousness", cooldown_key = "sor",
         name_suffix = "IconSoR", level = 1, swipe_duration = 30, swipe_always = true },
-    { key = "sof", spell_id = 20423, spell_name = "Seal of Fury", cooldown_key = "sof",
-        name_suffix = "IconSoF", level = 40, swipe_duration = 30, swipe_always = true },
     { key = "exorcism", spell_id = 879, cooldown_key = "exorcism",
-        name_suffix = "IconExorcism", level = 1, zoom = 0.15, label = "FILLER",
+        name_suffix = "IconExorcism", level = 24, zoom = 0.15, label = "FILLER",
         swipe_duration = 15 },
-    { key = "holy_shock", spell_id = 20930, name_suffix = "FillerHS",
-        level = 16, zoom = 0.15, label = "FILLER" },
-    { key = "cs", spell_id = 35395, cooldown_key = "cs",
-        name_suffix = "IconCS", level = 1, swipe_duration = 6 },
+    { key = "how", spell_id = 24275, cooldown_key = "how",
+        name_suffix = "IconHoW", level = 44, zoom = 0.15, label = "EXECUTE",
+        swipe_duration = 6 },
 }
 
 --=========================================================================================
@@ -4076,15 +4087,16 @@ ST.PALADIN.HUD_SLOTS = {
 ST.PALADIN.HUD_SLOTS_RET = ST.PALADIN.HUD_SLOTS
 ST.PALADIN.HUD_SLOTS_PROT = {
     { key = "holy_shield", title = "Holy Shield", kind = "spell", spell = 20925 },
-    { key = "holy_strike", title = "Holy Strike", kind = "spell", spell = 10333 },
+    { key = "as", title = "Avenger's Shield", kind = "spell", spell = 31935 },
     { key = "judgement", title = "Judgement", kind = "spell", spell = 20271 },
     { key = "consecration", title = "Consecration", kind = "spell", spell = 26573 },
     { key = "trinket1", title = "Trinket 1", kind = "trinket", inv_slot = 13 },
     { key = "trinket2", title = "Trinket 2", kind = "trinket", inv_slot = 14 },
     { key = "wings", title = "Avenging Wrath", kind = "spell", spell = 31884 },
     { key = "rf", title = "Righteous Fury", kind = "spell", spell = 25780 },
+    { key = "sor", title = "Seal of Righteousness", kind = "spell", spell = 21084 },
     { key = "exorcism", title = "Exorcism", kind = "spell", spell = 879 },
-    { key = "holy_shock", title = "Holy Shock", kind = "spell", spell = 20930 },
+    { key = "how", title = "Hammer of Wrath", kind = "spell", spell = 24275 },
 }
 
 -- One reused state table: the HUD reads it immediately and never keeps a reference
@@ -4338,6 +4350,19 @@ local function hud_ability_cooldown(self, slot, now)
             end
         end
         return 0, 10
+    elseif key == "as" then
+        if practice then
+            return 0, 30
+        end
+        local name = hud_slot_name(slot) or "Avenger's Shield"
+        local start_time, duration = api.GetSpellCooldown(spell_query(name), slot.spell)
+        if start_time and duration and duration > 1.51 then
+            local remaining = start_time + duration - now
+            if remaining > 0 then
+                return remaining, duration
+            end
+        end
+        return 0, 30
     elseif key == "holy_strike" then
         if practice then
             return 0, 6

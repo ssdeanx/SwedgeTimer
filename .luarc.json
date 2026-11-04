@@ -200,7 +200,8 @@
         "debug",
         "C_UIFileAsset",
         "os",
-        "io"
+        "io",
+        "LACERATE_NAME"
     ],
     "Lua.runtime.builtin": {
         "basic": "disable",

@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.1.6]
+
+### Added
+
+- **TBC Anniversary (2.5.6 / Interface 20506) Tank Action Priority Lists & HUD / Next-Action Integration:**
+  - **Protection Paladin (`docs/apls_tbc_2026-11-03/paladin/protection/default.apl.json`)**:
+    - Implemented authentic TBC Protection APL: Righteous Fury stance upkeep, Holy Shield active mitigation maintenance, Avenger's Shield (`31935`, 30s cooldown) on pull / cooldown, Judgement on cooldown with active seal, Consecration high-threat ground AoE, Holy Wrath against undead/demons, and Hammer of Wrath execute (<20% HP).
+    - Replaced Forever-specific placeholder slots (`holy_strike` 10333, `sof` 20423) with authentic TBC Avenger's Shield in `guide_slots_prot` and `HUD_SLOTS_PROT`.
+    - Fully verified with 100% revert-proof mutation proofs in `tests/nextaction_state.lua` (659 checks).
+  - **Protection Warrior (`docs/apls_tbc_2026-11-03/warrior/protection/default.apl.json`)**:
+    - Implemented authentic TBC Protection APL: Emergency defensives (Shield Wall <= 35% HP, Last Stand <= 40% HP), Shield Block active mitigation (<40 rage or missing buff), Shield Slam on cooldown, Revenge reactive procs via `api.IsSpellUsable`, Devastate (Rank 1-3: 20243, 30016, 30022) to build and refresh 5 Sunder stacks, Thunder Clap attack speed debuff upkeep (<= 6s or missing), Demoralizing Shout attack power debuff upkeep (<= 6s or missing), and on-next-attack Heroic Strike / Cleave rage dumps (>50 rage).
+    - Dynamic leveling ladder: Level 1-9 Heroic Strike, Level 4 Rend upkeep, Level 6 Thunder Clap, Level 10 Sunder Armor pre-Devastate building/refreshing. HUD automatically displays Sunder Armor when Devastate is unlearned and cleanly hides it once Devastate is acquired.
+    - Added dedicated cooldown slots for Shield Wall (`871`) and Last Stand (`12975`) with `HUD_SKIP_GCD` registration.
+    - Fully verified with 100% revert-proof mutation proofs in `tests/warrior_state.lua` (2,186 checks).
+  - **Feral Bear Druid (`docs/apls_tbc_2026-11-03/druid/feralbear/default.apl.json`)**:
+    - Implemented authentic TBC Feral Bear APL: Emergency Frenzied Regeneration (`22842`, <= 40% HP with instant HUD emergency glow), queued Maul ride detection (`RIDE` hold overlay), Mangle (Bear) (`33878`, 6s cooldown) strike, Faerie Fire (Feral) (`16857`) debuff upkeep (<= 6s or missing, `FAERIE FIRE` hold overlay), Demoralizing Roar (`99`) debuff upkeep (<= 6s or missing, intelligently suppressed when Warrior Demoralizing Shout is active), Lacerate (`33745`) 5-stack building and <= 3s refresh, on-next-attack Maul rage dumps (>= 50 rage), and Swipe (`779`) filler (>= 20 rage).
+    - Clean leveling ladder: Level 10 Bear Form (Demo Roar upkeep, Maul fallback, smooth rage pooling on low rage), Level 16 Swipe filler, Level 66 Lacerate stack building.
+    - Form-aware slot resolution: `resolve_guide_slots` and `get_hud_state` dynamically switch between Cat (7 guide slots, 11 HUD slots) and Bear (7 guide slots, 9 HUD slots) with zero local variable overflow (185 locals, 15 headroom under the 190 ceiling).
+    - Fully verified with 100% revert-proof mutation proofs in `tests/druid_state.lua` (1,777 checks).
+  - **Cross-Client Discipline & Real-Time Leveling Gates**:
+    - All TBC queries strictly adhere to localized English name with numeric ID fallback (`spell_query(id, name)`), while Era strictly queries by numeric ID.
+    - Leveling gate is strictly fail-visible: unlearned abilities fall back seamlessly without stalls, errors, or `/reload` requirements.
+
+### Fixed
+
+- **WoW Forever (Camelot 1.60.1 / Interface 16001) Unified Tank Routing & Duplicate Elimination:**
+  - **Eliminated Duplicate Tank Logic**: Completely resolved conflicting duplicate tank/protection logic between `classes/` modules and `forever_guide.lua`.
+  - **Paladin Routing**: Removed the `inputs.class ~= "PALADIN"` bypass in `nextaction.lua` so Paladin on WoW Forever routes directly through `forever_guide.lua` for Protection, Retribution, Holy Shock, and Leveling identically to all other classes.
+  - **Warrior Protection Gating**: Reordered `resolve_guide_slots` in `classes/warrior.lua` so `is_forever_guide` takes precedence over `if prot then`, preventing WoW Forever Protection Warriors from having their slots hijacked into legacy prototype tables.
+  - **Paladin Protection Gating**: Guarded `resolve_guide_slots` in `classes/paladin.lua` with `is_forever_family`, ensuring WoW Forever Paladin guide and HUD slots are governed exclusively by `forever_guide.lua`.
+  - **Druid Feral Bear Tank Resolution**: Updated `FG.resolve_druid_spec` in `forever_guide.lua` to recognize `inputs.form_index == 1` for Bear Form (and `3` for Cat Form) as gathered by `classes/druid.lua`, ensuring Bear tanks resolve as `"bear"` rather than falling back to `"caster"`.
+  - **Test Suite Parity**: Retained backwards-compatible FCFS priority definitions in `nextaction.lua` to ensure full offline unit test coverage across all test suites without regressions.
+
 ## [2.1.5]
 
 ### Added

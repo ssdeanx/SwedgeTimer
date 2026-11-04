@@ -1141,33 +1141,86 @@ function st.druid_guide.evaluate(inputs, out)
         hold = true
         hold_text = "INNERVATE"
     elseif form == 1 then
-        if inputs.maul_queued == true then
-            -- 1. A queued Maul is already riding the next swing: ride it. RIDE is
-            -- the press-nothing hold - the player presses NO key (the guide names
-            -- the spell to press in every other hold).
-            hold = true
-            hold_text = "RIDE"
-        else
-            -- 2. Maul only when the gathered numbers prove it affordable; the module's
-            -- shortfall flag can veto a proof but never stand in for one.
-            local rage = inputs.rage
-            local cost = inputs.maul_cost
-            local sufficient = type(rage) == "number" and type(cost) == "number"
-                and rage >= cost and inputs.insufficient_rage ~= true
-            if sufficient and inputs.maul_known ~= false then
-                action = "maul"
-            elseif druid_client_has_mangle(inputs) == false or inputs.mangle_known == false then
-                -- 3e. A client with NO Mangle spell: pool rage instead of guessing
-                -- a spell the client cannot know (wait: nil, no hold). Runeless Era
-                -- (the module's Mangle ids 33983/33987 are TBC+) and the FOREVER
-                -- client (no Mangle spell at all - the Forever sim carries no
-                -- Mangle table and the Forever APL's builders are 9830 Shred and
-                -- 9850 Claw) wait here. SoD shares the Era token but proves Mangle
-                -- via rune and rides rule 3 below.
-                action = nil
-            else
-                -- 3. The bear fallback.
+        local is_tbc_bear_apl = inputs.family == "TBC" and (
+            inputs.lacerate_known ~= nil or inputs.demo_roar_known ~= nil
+            or inputs.frenzied_regen_known ~= nil or inputs.faerie_fire_known ~= nil
+            or inputs.bear_apl == true or inputs.player_health_pct ~= nil
+        )
+        if is_tbc_bear_apl then
+            -- TBC FERAL BEAR TANK (docs/apls_tbc_2026-11-03/druid/feralbear/default.apl.json)
+            -- 1. Emergency: Frenzied Regeneration <= 40% HP
+            if type(inputs.player_health_pct) == "number" and inputs.player_health_pct <= 40
+                and inputs.frenzied_regen_known == true
+                and (type(inputs.frenzied_regen_remaining) ~= "number" or inputs.frenzied_regen_remaining <= 0)
+                and (type(inputs.rage) == "number" and inputs.rage >= 10) then
+                action = "frenzied_regen"
+            -- 2. Queued Maul rides next swing
+            elseif inputs.maul_queued == true then
+                hold = true
+                hold_text = "RIDE"
+            -- 3. Mangle (Bear): primary 6s cooldown strike
+            elseif inputs.mangle_known ~= false and druid_client_has_mangle(inputs)
+                and (type(inputs.mangle_cooldown) ~= "number" or inputs.mangle_cooldown <= 0)
+                and (type(inputs.rage) == "number" and inputs.rage >= (inputs.mangle_cost or 20)) then
                 action = "mangle"
+            -- 4. Faerie Fire (Feral): upkeep debuff on target (missing or <= 6s)
+            elseif inputs.faerie_fire_known == true
+                and (inputs.ff_debuff_remaining == false or (type(inputs.ff_debuff_remaining) == "number" and inputs.ff_debuff_remaining <= 6))
+                and (type(inputs.ff_remaining) ~= "number" or inputs.ff_remaining <= 0) then
+                action = "faerie_fire"
+                hold = true
+                hold_text = "FAERIE FIRE"
+            -- 5. Demoralizing Roar: upkeep debuff on target (missing or <= 6s, unless Demo Shout active)
+            elseif inputs.demo_roar_known == true and inputs.demo_shout_active ~= true
+                and (inputs.demo_roar_active ~= true or (type(inputs.demo_roar_remaining) == "number" and inputs.demo_roar_remaining <= 6))
+                and (type(inputs.rage) == "number" and inputs.rage >= (inputs.demo_roar_cost or 10)) then
+                action = "demo_roar"
+            -- 6. Lacerate: build 5 stacks and refresh <= 3s
+            elseif inputs.lacerate_known == true
+                and (inputs.lacerate_active ~= true or (type(inputs.lacerate_stacks) == "number" and inputs.lacerate_stacks < 5)
+                     or (type(inputs.lacerate_remaining) == "number" and inputs.lacerate_remaining <= 3))
+                and (type(inputs.rage) == "number" and inputs.rage >= (inputs.lacerate_cost or 15)) then
+                action = "lacerate"
+            -- 7. Maul: on-next-attack rage dump when rage >= 50
+            elseif inputs.maul_known ~= false and (type(inputs.rage) == "number" and inputs.rage >= 50) then
+                action = "maul"
+            -- 8. Swipe: filler AoE / threat spender when rage >= 20
+            elseif inputs.swipe_known == true and (type(inputs.rage) == "number" and inputs.rage >= (inputs.swipe_cost or 20)) then
+                action = "swipe"
+            -- 9. Leveling pre-Mangle / pre-Lacerate fallback (e.g. levels 10-49)
+            elseif inputs.mangle_known ~= true and inputs.lacerate_known ~= true and inputs.maul_known ~= false
+                and (type(inputs.rage) == "number" and inputs.rage >= (inputs.maul_cost or 15)) then
+                action = "maul"
+            end
+        else
+            if inputs.maul_queued == true then
+                -- 1. A queued Maul is already riding the next swing: ride it. RIDE is
+                -- the press-nothing hold - the player presses NO key (the guide names
+                -- the spell to press in every other hold).
+                hold = true
+                hold_text = "RIDE"
+            else
+                -- 2. Maul only when the gathered numbers prove it affordable; the module's
+                -- shortfall flag can veto a proof but never stand in for one.
+                local rage = inputs.rage
+                local cost = inputs.maul_cost
+                local sufficient = type(rage) == "number" and type(cost) == "number"
+                    and rage >= cost and inputs.insufficient_rage ~= true
+                if sufficient and inputs.maul_known ~= false then
+                    action = "maul"
+                elseif druid_client_has_mangle(inputs) == false or inputs.mangle_known == false then
+                    -- 3e. A client with NO Mangle spell: pool rage instead of guessing
+                    -- a spell the client cannot know (wait: nil, no hold). Runeless Era
+                    -- (the module's Mangle ids 33983/33987 are TBC+) and the FOREVER
+                    -- client (no Mangle spell at all - the Forever sim carries no
+                    -- Mangle table and the Forever APL's builders are 9830 Shred and
+                    -- 9850 Claw) wait here. SoD shares the Era token but proves Mangle
+                    -- via rune and rides rule 3 below.
+                    action = nil
+                else
+                    -- 3. The bear fallback.
+                    action = "mangle"
+                end
             end
         end
     elseif form == 3 then

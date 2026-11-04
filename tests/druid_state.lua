@@ -4472,6 +4472,315 @@ do
     eq(de.get_gcd_tick_fraction(0, 0.5, 0 / 0, 2), nil, "FAILURE CHECK: NaN GCD reads nil")
 end
 
+--=========================================================================================
+-- 11) TBC Feral Bear Tank: spec detection, guide slots, HUD state, APL priority, leveling
+--=========================================================================================
+do
+    local sb = build({ project = 5 }) -- TBC sandbox
+    local ST = sb.ST
+    local de = sb.st.druid_guide
+
+    -- 1. is_bear_spec detection
+    sb.class_db.druid_spec = "bear"
+    ST.form_index = 0
+    eq(ST.DRUID.is_bear_spec(ST), true, "druid_spec = 'bear' forces bear spec")
+
+    sb.class_db.druid_spec = "cat"
+    ST.form_index = 1
+    eq(ST.DRUID.is_bear_spec(ST), false, "druid_spec = 'cat' rejects bear spec even in bear form")
+
+    sb.class_db.druid_spec = "auto"
+    ST.form_index = 1
+    eq(ST.DRUID.is_bear_spec(ST), true, "druid_spec = 'auto' detects bear form (index 1)")
+    ST.form_index = 3
+    eq(ST.DRUID.is_bear_spec(ST), false, "druid_spec = 'auto' rejects cat form (index 3)")
+    ST.form_index = 0
+    eq(ST.DRUID.is_bear_spec(ST), false, "druid_spec = 'auto' rejects caster form (index 0)")
+
+    -- 2. resolve_guide_slots
+    ST.form_index = 1
+    ST.DRUID.resolve_guide_slots(ST)
+    eq(ST.DRUID.guide.slots, ST.DRUID.guide_slots_bear, "resolve_guide_slots switches guide.slots to bear in bear form")
+    eq(#ST.DRUID.guide_slots_bear, 7, "guide_slots_bear defines 7 abilities")
+    eq(ST.DRUID.HUD_SLOTS, ST.DRUID.hud_slots_bear, "resolve_guide_slots switches HUD_SLOTS to bear in bear form")
+    eq(#ST.DRUID.hud_slots_bear, 9, "hud_slots_bear defines 9 slots (7 abilities + 2 trinkets)")
+
+    ST.form_index = 3
+    ST.DRUID.resolve_guide_slots(ST)
+    eq(ST.DRUID.guide.slots, ST.DRUID.guide_slots_cat, "resolve_guide_slots restores guide.slots to cat in cat form")
+    eq(#ST.DRUID.guide_slots_cat, 7, "guide_slots_cat defines 7 abilities")
+    eq(ST.DRUID.HUD_SLOTS, ST.DRUID.hud_slots_cat, "resolve_guide_slots restores HUD_SLOTS to cat in cat form")
+    eq(#ST.DRUID.hud_slots_cat, 11, "hud_slots_cat defines 11 slots")
+
+    -- 3. HUD get_hud_state for Bear slots
+    ST.form_index = 1
+    ST.in_combat = true
+    ST.player_health_pct = 35
+    local s_fr = ST.DRUID.get_hud_state(ST, ST.DRUID.guide_slot_frenzied_regen, 100)
+    check(s_fr ~= nil, "HUD state for frenzied_regen is valid")
+    eq(s_fr.glow, true, "frenzied_regen glows when HP <= 40% in combat")
+
+    ST.player_health_pct = 50
+    local s_fr_high = ST.DRUID.get_hud_state(ST, ST.DRUID.guide_slot_frenzied_regen, 100)
+    eq(s_fr_high.glow, false, "frenzied_regen does not glow when HP > 40%")
+
+    local s_lac = ST.DRUID.get_hud_state(ST, ST.DRUID.guide_slot_lacerate, 100)
+    check(s_lac ~= nil, "HUD state for lacerate is valid")
+    eq(s_lac.hidden, nil, "lacerate is visible in Bear form")
+
+    -- Cat abilities are hidden in Bear form
+    local s_rip = ST.DRUID.get_hud_state(ST, { key = "rip", title = "Rip", spell = 1079 }, 100)
+    eq(s_rip.hidden, true, "Cat slot Rip is provider-hidden in Bear form")
+
+    -- Bear abilities are hidden in Cat form
+    ST.form_index = 3
+    local s_lac_cat = ST.DRUID.get_hud_state(ST, ST.DRUID.guide_slot_lacerate, 100)
+    eq(s_lac_cat.hidden, true, "Bear slot Lacerate is provider-hidden in Cat form")
+
+    -- 4. TBC Feral Bear APL Priority Evaluation (druid_guide.lua)
+    -- Rule 1: Emergency Frenzied Regeneration (<= 40% HP)
+    local out_fr = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 35,
+        frenzied_regen_known = true,
+        frenzied_regen_remaining = 0,
+        rage = 15,
+        maul_known = true,
+        mangle_known = true,
+    }, {})
+    eq(out_fr.action, "frenzied_regen", "Feral Bear: Frenzied Regen triggers at <= 40% HP")
+
+    -- Rule 2: Queued Maul Ride
+    local out_ride = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 100,
+        maul_queued = true,
+        rage = 30,
+        mangle_known = true,
+    }, {})
+    eq(out_ride.action, nil, "Feral Bear: queued Maul yields action = nil")
+    eq(out_ride.hold, true, "Feral Bear: queued Maul sets hold = true")
+    eq(out_ride.hold_text, "RIDE", "Feral Bear: queued Maul sets hold_text = RIDE")
+
+    -- Rule 3: Mangle (Bear) on CD / ready
+    local out_mangle = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 100,
+        maul_queued = false,
+        mangle_known = true,
+        mangle_cooldown = 0,
+        rage = 25,
+    }, {})
+    eq(out_mangle.action, "mangle", "Feral Bear: prompts Mangle when ready and affordable")
+
+    -- Rule 4: Faerie Fire (Feral) debuff upkeep (missing or <= 6s)
+    local out_ff = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 100,
+        maul_queued = false,
+        mangle_known = true,
+        mangle_cooldown = 4,
+        faerie_fire_known = true,
+        ff_debuff_remaining = false,
+        ff_remaining = 0,
+        rage = 15,
+    }, {})
+    eq(out_ff.action, "faerie_fire", "Feral Bear: prompts Faerie Fire when missing on target")
+    eq(out_ff.hold, true, "Feral Bear: Faerie Fire sets hold = true")
+    eq(out_ff.hold_text, "FAERIE FIRE", "Feral Bear: Faerie Fire sets hold_text = FAERIE FIRE")
+
+    -- Rule 5: Demoralizing Roar upkeep (missing or <= 6s, unless Demo Shout active)
+    local out_demo = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 100,
+        maul_queued = false,
+        mangle_known = true,
+        mangle_cooldown = 4,
+        faerie_fire_known = true,
+        ff_debuff_remaining = 25,
+        demo_roar_known = true,
+        demo_roar_active = false,
+        demo_shout_active = false,
+        rage = 15,
+    }, {})
+    eq(out_demo.action, "demo_roar", "Feral Bear: prompts Demo Roar when missing on target")
+
+    -- Suppressed when Warrior Demo Shout is active on target
+    local out_demo_suppressed = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 100,
+        maul_queued = false,
+        mangle_known = true,
+        mangle_cooldown = 4,
+        faerie_fire_known = true,
+        ff_debuff_remaining = 25,
+        demo_roar_known = true,
+        demo_roar_active = false,
+        demo_shout_active = true,
+        lacerate_known = true,
+        lacerate_stacks = 2,
+        rage = 20,
+    }, {})
+    eq(out_demo_suppressed.action, "lacerate", "Feral Bear: Demo Roar suppressed by Warrior Demo Shout, falls to Lacerate")
+
+    -- Rule 6: Lacerate building to 5 stacks
+    local out_lac_build = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 100,
+        maul_queued = false,
+        mangle_known = true,
+        mangle_cooldown = 4,
+        faerie_fire_known = true,
+        ff_debuff_remaining = 25,
+        demo_roar_known = true,
+        demo_roar_active = true,
+        demo_roar_remaining = 20,
+        lacerate_known = true,
+        lacerate_stacks = 3,
+        lacerate_remaining = 10,
+        rage = 20,
+    }, {})
+    eq(out_lac_build.action, "lacerate", "Feral Bear: builds Lacerate stacks (< 5)")
+
+    -- Lacerate refresh when <= 3s remaining
+    local out_lac_refresh = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 100,
+        maul_queued = false,
+        mangle_known = true,
+        mangle_cooldown = 4,
+        faerie_fire_known = true,
+        ff_debuff_remaining = 25,
+        demo_roar_known = true,
+        demo_roar_active = true,
+        demo_roar_remaining = 20,
+        lacerate_known = true,
+        lacerate_stacks = 5,
+        lacerate_remaining = 2.5,
+        rage = 20,
+    }, {})
+    eq(out_lac_refresh.action, "lacerate", "Feral Bear: refreshes Lacerate 5-stack at <= 3s")
+
+    -- Rule 7: Maul rage dump when rage >= 50
+    local out_maul_dump = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 100,
+        maul_queued = false,
+        maul_known = true,
+        mangle_known = true,
+        mangle_cooldown = 4,
+        faerie_fire_known = true,
+        ff_debuff_remaining = 25,
+        demo_roar_known = true,
+        demo_roar_active = true,
+        demo_roar_remaining = 20,
+        lacerate_known = true,
+        lacerate_active = true,
+        lacerate_stacks = 5,
+        lacerate_remaining = 10,
+        rage = 55,
+    }, {})
+    eq(out_maul_dump.action, "maul", "Feral Bear: dumps rage with Maul when rage >= 50")
+
+    -- Rule 8: Swipe filler when rage >= 20
+    local out_swipe = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        player_health_pct = 100,
+        maul_queued = false,
+        maul_known = true,
+        mangle_known = true,
+        mangle_cooldown = 4,
+        faerie_fire_known = true,
+        ff_debuff_remaining = 25,
+        demo_roar_known = true,
+        demo_roar_active = true,
+        demo_roar_remaining = 20,
+        lacerate_known = true,
+        lacerate_active = true,
+        lacerate_stacks = 5,
+        lacerate_remaining = 10,
+        swipe_known = true,
+        rage = 30,
+    }, {})
+    eq(out_swipe.action, "swipe", "Feral Bear: casts Swipe filler when rage >= 20")
+
+    -- 5. Leveling Fallback Ladder
+    -- Level 10: Bear form just learned (only Maul and Demo Roar)
+    local out_lvl10_poor = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        mangle_known = false,
+        lacerate_known = false,
+        swipe_known = false,
+        faerie_fire_known = false,
+        frenzied_regen_known = false,
+        maul_known = true,
+        demo_roar_known = true,
+        demo_roar_active = true,
+        demo_roar_remaining = 20,
+        rage = 5,
+    }, {})
+    eq(out_lvl10_poor.action, nil, "Level 10 Bear (<10 rage): pools rage smoothly without stall")
+
+    local out_lvl10_demo = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        mangle_known = false,
+        lacerate_known = false,
+        swipe_known = false,
+        faerie_fire_known = false,
+        frenzied_regen_known = false,
+        maul_known = true,
+        demo_roar_known = true,
+        demo_roar_active = false,
+        rage = 15,
+    }, {})
+    eq(out_lvl10_demo.action, "demo_roar", "Level 10 Bear: prompts Demo Roar upkeep")
+
+    local out_lvl10_maul = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        mangle_known = false,
+        lacerate_known = false,
+        swipe_known = false,
+        faerie_fire_known = false,
+        frenzied_regen_known = false,
+        maul_known = true,
+        demo_roar_known = true,
+        demo_roar_active = true,
+        demo_roar_remaining = 20,
+        rage = 15,
+    }, {})
+    eq(out_lvl10_maul.action, "maul", "Level 10 Bear: falls back to Maul when Demo Roar active")
+
+    -- Level 16: Swipe learned (pre-Mangle, pre-Lacerate)
+    local out_lvl16_swipe = de.evaluate({
+        family = "TBC",
+        form_index = 1,
+        mangle_known = false,
+        lacerate_known = false,
+        swipe_known = true,
+        faerie_fire_known = false,
+        frenzied_regen_known = false,
+        maul_known = true,
+        demo_roar_known = true,
+        demo_roar_active = true,
+        demo_roar_remaining = 20,
+        rage = 25,
+    }, {})
+    eq(out_lvl16_swipe.action, "swipe", "Level 16 Bear: prompts Swipe filler")
+end
+
 if failures == 0 then
     print("PASS  druid_state.lua (" .. tostring(checks) .. " checks)")
 else

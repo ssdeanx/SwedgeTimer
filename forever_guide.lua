@@ -525,9 +525,10 @@ function FG.resolve_rogue_spec(inputs)
 end
 
 function FG.resolve_druid_spec(inputs)
-    if inputs.form == "bear" or inputs.shapeshift_form == 1 then
+    inputs = inputs or {}
+    if inputs.form == "bear" or inputs.shapeshift_form == 1 or inputs.form_index == 1 then
         return "bear"
-    elseif inputs.form == "cat" or inputs.shapeshift_form == 3 then
+    elseif inputs.form == "cat" or inputs.shapeshift_form == 3 or inputs.form_index == 3 then
         return "cat"
     else
         return "caster"

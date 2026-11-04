@@ -1672,6 +1672,119 @@ do
     eq(r7_cd.hold, true, "prot_forever(level 5): judge on cooldown holds cleanly without error")
 end
 
+-- TBC Protection Paladin FCFS tests (authentic APL: Holy Shield, Judge, Seal, Cons, AS, Exo, HoW) --
+do
+    -- 1. Righteous Fury missing: prompts rf
+    local r1 = na.evaluate_fcfs({
+        fcfs_mode = "prot",
+        righteous_fury_known = true,
+        has_righteous_fury = false,
+    }, {})
+    eq(r1.action, "rf", "prot(tbc): missing Righteous Fury prompts rf")
+
+    -- 2. Holy Shield ready (Shield equipped, Holy Shield known)
+    local r2 = na.evaluate_fcfs({
+        fcfs_mode = "prot",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        has_shield = true,
+        holy_shield_known = true,
+        holy_shield_remaining = 0,
+    }, {})
+    eq(r2.action, "holy_shield", "prot(tbc): Holy Shield ready prompts holy_shield")
+
+    -- 3. Judgement ready (Holy Shield on CD)
+    local r3 = na.evaluate_fcfs({
+        fcfs_mode = "prot",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        has_shield = true,
+        holy_shield_known = true,
+        holy_shield_remaining = 8,
+        judge_remaining = 0,
+    }, {})
+    eq(r3.action, "judge", "prot(tbc): judge ready prompts judge")
+    eq(r3.judge_call, true, "prot(tbc): judge ready sets judge_call")
+
+    -- 4. Seal inactive: prompts sor
+    local r4 = na.evaluate_fcfs({
+        fcfs_mode = "prot",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        has_shield = true,
+        holy_shield_known = true,
+        holy_shield_remaining = 8,
+        judge_remaining = 6,
+        seal_inactive = true,
+    }, {})
+    eq(r4.action, "sor", "prot(tbc): inactive seal prompts sor")
+
+    -- 5. Consecration ready (Judge on CD, seal active)
+    local r5 = na.evaluate_fcfs({
+        fcfs_mode = "prot",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        has_shield = true,
+        holy_shield_known = true,
+        holy_shield_remaining = 8,
+        judge_remaining = 6,
+        seal_inactive = false,
+        cons_remaining = 0,
+        mana_pct = 80,
+    }, {})
+    eq(r5.action, "consecration", "prot(tbc): cons ready prompts consecration")
+
+    -- 6. Avenger's Shield ready (Judge/Cons on CD)
+    local r6 = na.evaluate_fcfs({
+        fcfs_mode = "prot",
+        righteous_fury_known = true,
+        has_righteous_fury = true,
+        has_shield = true,
+        holy_shield_known = true,
+        holy_shield_remaining = 8,
+        judge_remaining = 6,
+        seal_inactive = false,
+        cons_remaining = 6,
+        mana_pct = 80,
+        as_known = true,
+        as_remaining = 0,
+    }, {})
+    eq(r6.action, "as", "prot(tbc): Avenger's Shield ready prompts as")
+
+    -- 7. Level Gated: Level 5 player (only has Judgement, no Holy Shield/AS/Cons/RF)
+    local r7_ready = na.evaluate_fcfs({
+        fcfs_mode = "prot",
+        righteous_fury_known = false,
+        has_righteous_fury = false,
+        seal_inactive = false,
+        judge_remaining = 0,
+        cons_remaining = nil,
+        has_shield = true,
+        holy_shield_known = false,
+        holy_shield_remaining = nil,
+        as_known = false,
+        as_remaining = nil,
+        exo_remaining = nil,
+    }, {})
+    eq(r7_ready.action, "judge", "prot(tbc level 5): unlearned spells skipped smoothly, judge prompts")
+
+    local r7_cd = na.evaluate_fcfs({
+        fcfs_mode = "prot",
+        righteous_fury_known = false,
+        has_righteous_fury = false,
+        seal_inactive = false,
+        judge_remaining = 4,
+        cons_remaining = nil,
+        has_shield = true,
+        holy_shield_known = false,
+        holy_shield_remaining = nil,
+        as_known = false,
+        as_remaining = nil,
+        exo_remaining = nil,
+    }, {})
+    eq(r7_cd.hold, true, "prot(tbc level 5): judge on cooldown holds cleanly without error")
+end
+
 --=========================================================================================
 -- The display half's FontStrings (nextaction_ui.lua): every one carries a font
 -- BEFORE its first SetText

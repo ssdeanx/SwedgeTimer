@@ -451,8 +451,14 @@ ST.DRUID.defaults = {
     -- checkbox match the effective default.
     hud_show_tf = true,
     hud_show_berserk = true,
+    hud_show_lacerate = true,
+    hud_show_swipe = true,
+    hud_show_faerie_fire = true,
+    hud_show_demo_roar = true,
+    hud_show_frenzied_regen = true,
     hud_show_trinket1 = true,
     hud_show_trinket2 = true,
+    druid_spec = "auto",
     -- Layout template selection (bench/hud_templates_2026-10-19.md §7): nil =
     -- Custom (current behavior, zero default-visible change). The curated sets
     -- live in ST.DRUID.HUD_TEMPLATES below; the options select applies one on

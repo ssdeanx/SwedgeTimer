@@ -484,7 +484,7 @@ function st.nextaction.evaluate(inputs, out)
         return out
     end
 
-    if inputs.forever_guide == true or (inputs.class and inputs.class ~= "PALADIN" and (st.family == "FOREVER" or inputs.forever == true)) then
+    if inputs.forever_guide == true or st.family == "FOREVER" or inputs.forever == true then
         if st.forever_guide and st.forever_guide.evaluate then
             return st.forever_guide.evaluate(inputs.class or "PALADIN", inputs.spec or inputs.fcfs_mode, inputs, out)
         end
@@ -992,7 +992,7 @@ local FCFS_ORDER_SOD_STACK = { "ds", "cs", "exo", "hw", "cons", "judge" }
 local FCFS_ORDER_SOD_SHOCK = { "exo", "am", "hs", "cs" }
 local FCFS_ORDER_SOD_WRATH = { "ds", "cs", "exo", "judge", "cons" }
 local FCFS_ORDER_PROT_FOREVER = { "rf", "seal", "judge", "cons", "hs", "holy_shield", "holy_strike", "exo" }
-local FCFS_ORDER_PROT = { "rf", "seal", "judge", "cons", "hs", "holy_shield", "exo" }
+local FCFS_ORDER_PROT = { "rf", "holy_shield", "judge", "seal", "cons", "as", "exo", "how" }
 
 -- The priority tables, published so no caller has to copy them (the
 -- practice rotation table and the priority-order drill read them instead of
@@ -1204,8 +1204,6 @@ local function fcfs_eligible(mode, key, inputs)
         end
         if mode == "sod_shock" then
             return inputs.holy_power_stacks == 3
-        elseif mode == "prot_forever" or mode == "prot" then
-            return inputs.hs_known == true
         end
         return false
     elseif key == "am" then
@@ -1235,6 +1233,11 @@ local function fcfs_eligible(mode, key, inputs)
             return false
         end
         return inputs.holy_strike_known == true
+    elseif key == "as" then
+        if not fcfs_known(inputs.as_remaining) then
+            return false
+        end
+        return inputs.has_shield == true and inputs.as_known == true
     end
     return false
 end
@@ -1250,6 +1253,8 @@ local function fcfs_remaining(key, inputs)
         return inputs.holy_shield_remaining
     elseif key == "holy_strike" then
         return inputs.holy_strike_remaining
+    elseif key == "as" then
+        return inputs.as_remaining
     elseif key == "cs" then
         return inputs.cs_remaining
     elseif key == "judge" then
@@ -1443,27 +1448,27 @@ function st.nextaction.evaluate_fcfs(inputs, out)
             action = "how_wrath"
         elseif winner == "judge" then
             judge_call = true
-            if mode == "prot_forever" or mode == "prot" then
+            if mode == "prot" or mode == "prot_forever" then
                 action = "judge"
             end
         elseif winner == "ds" then
             action = "sob"
         elseif winner == "cons" then
-            if mode == "prot_forever" or mode == "prot" then
+            if mode == "prot" or mode == "prot_forever" then
                 action = "consecration"
             end
             filler_kind = "consecration"
         elseif winner == "exo" then
-            if mode == "prot_forever" or mode == "prot" then
+            if mode == "prot" or mode == "prot_forever" then
                 action = "exorcism"
             end
             filler_kind = "exorcism"
         elseif winner == "hw" or winner == "how" then
+            if mode == "prot" or mode == "prot_forever" then
+                action = "how"
+            end
             filler_kind = "how"
         elseif winner == "hs" then
-            if mode == "prot_forever" or mode == "prot" then
-                action = "holy_shock"
-            end
             filler_kind = "holy_shock"
         elseif winner == "am" then
             filler_kind = "aura_mastery"
@@ -1471,6 +1476,8 @@ function st.nextaction.evaluate_fcfs(inputs, out)
             action = "holy_shield"
         elseif winner == "holy_strike" then
             action = "holy_strike"
+        elseif winner == "as" then
+            action = "as"
         elseif winner == "rf" then
             action = "rf"
         elseif winner == "seal" then
