@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-05T04:35:30Z",
+  "run_id": "release-217-2026-11-05",
+  "agent_name": "release-217",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Verifying the tree before editing paid off twice: git status was clean (so the 9-file diff is provably only this lane), and the TOCs are LF today despite the 2026-10-19 version-bump note saying CRLF - checking `grep -c $'\\r'` instead of trusting the note meant the endings were preserved as found. Editing one unique line per file with an exact-match replace kept the diff to 10 paired lines, and running toc_check before AND after gave a stable 1104/0 baseline to compare against.",
+    "what_was_hard": "The dispatch's line numbers only held for the live fields; the TOC version header sits at line 6 now while the prior desk journal records line 5, so the older note had to be treated as history rather than instruction. Also, git diff --stat cannot see the new desk files (untracked), so the scope proof needed git status --porcelain alongside it, not instead of it.",
+    "skill_gap": "No automated pin guards version-field sync, so this lane's proof is one-off grep evidence rather than a durable regression test; that gap is filed rather than closed because tests/ is out of write scope."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Reconcile the nine files and write the ## [2.1.7] CHANGELOG section once the parallel fix lanes land (deliberately not written here). Optional follow-up outside this lane: add a toc_check assertion that all seven TOCs plus main.lua carry an identical version string."
+  }
+}

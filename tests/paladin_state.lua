@@ -370,8 +370,13 @@ local function build(opts)
     end
 
     local st = {}
-    local modules = { "compat.lua", "utils.lua", "twist.lua", "nextaction.lua",
-        "classes/paladin.lua" }
+    local modules = { "compat.lua", "utils.lua", "twist.lua", "nextaction.lua" }
+    -- The Forever guide engine is loaded only for the passthrough pins, so every
+    -- pre-existing profile keeps the exact module set it was written against.
+    if opts.forever_guide == true then
+        modules[#modules + 1] = "forever_guide.lua"
+    end
+    modules[#modules + 1] = "classes/paladin.lua"
     for i = 1, #modules do
         local chunk = assert(loadfile(ROOT .. modules[i]))
         setfenv(chunk, env)
@@ -4078,6 +4083,61 @@ do
         eq(helper_mentions, 3,
             "S4: the fixed helper is defined once and called from both twist paths")
     end
+end
+
+--=========================================================================================
+-- 43) Forever guide passthrough (audit wave 2026-11-05): FG owns the Forever
+-- verdict, so the archived display remap must not rewrite it - sor stays sor (no
+-- sob remap) and FG's WAIT hold text survives (no HOLD stamp). Other families keep
+-- the legacy map exactly.
+--=========================================================================================
+do
+    local f = build({ project = 18, interface = 16001, forever_guide = true })
+    local F = f.ST
+    F.PALADIN.post_init(F)
+
+    -- FG's general branch emits "sor" when Seal of Righteousness is known;
+    -- on a bare client (levels 1-3, nothing learned) it holds WAIT instead.
+    -- The legacy wrapper remapped it to "sob" (the ret slot set). Forever
+    -- passes it through.
+    local sor_out = F.PALADIN.guide.evaluate({ seal_known = true }, {})
+    eq(sor_out.action, "sor",
+        "forever passthrough: FG's sor action reaches the display unmapped")
+    eq(sor_out.hold, false,
+        "forever passthrough: the known-seal tick does not hold")
+
+    -- FG's prot branch holds with WAIT when nothing is known; the legacy wrapper
+    -- stamped HOLD. Forever carries FG's text.
+    local wait_out = F.PALADIN.guide.evaluate({ has_shield = true }, {})
+    eq(wait_out.action, nil, "forever passthrough: the WAIT branch shows no action")
+    eq(wait_out.hold, true, "forever passthrough: the WAIT branch still holds")
+    eq(wait_out.hold_text, "WAIT",
+        "forever passthrough: FG's WAIT text survives the display mapping")
+
+    -- A legacy family keeps the archived map: the same engine verdict remaps
+    -- sor -> sob and stamps HOLD.
+    local tbc = build({ project = 5, interface = 20506 })
+    local T = tbc.ST
+    T.PALADIN.post_init(T)
+    local real_na = tbc.st.nextaction.evaluate
+    tbc.st.nextaction.evaluate = function(ins, raw)
+        raw.action = "sor"
+        raw.hold = false
+        raw.hold_text = nil
+        raw.riding = nil
+        return raw
+    end
+    local legacy_out = T.PALADIN.guide.evaluate({
+        speed = 3.0, swing_remaining = 3.0, G = 1.5, gcd_remaining = 0,
+        twist_window = 0.4, reaction = 0.1, cs_remaining = 6,
+        judge_remaining = 6, seal = "none", cs_delay_max = 1.7,
+        melee_count = 0, mana_pct = 50,
+    }, {})
+    eq(legacy_out.action, "sob",
+        "non-forever passthrough: the legacy sor -> sob remap is unchanged")
+    eq(legacy_out.hold_text, "HOLD",
+        "non-forever passthrough: the legacy HOLD text is unchanged")
+    tbc.st.nextaction.evaluate = real_na
 end
 
 if failures == 0 then

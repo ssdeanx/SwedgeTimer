@@ -3928,7 +3928,13 @@ ST.PALADIN.guide = {
         elseif na and na.evaluate then
             na.evaluate(inputs, raw)
         end
-        if raw.action == "rf" then
+        if is_forever_family then
+            -- Forever hands FG's verdict through untouched: FG's action keys are
+            -- already the Forever guide's slot keys (sor stays sor instead of the
+            -- legacy sob remap), and its WAIT hold text must survive the archived
+            -- HOLD stamp. Every other family keeps the legacy map below exactly.
+            out.action = raw.action
+        elseif raw.action == "rf" then
             out.action = "rf"
         elseif raw.action == "holy_shield" then
             out.action = "holy_shield"
@@ -3954,7 +3960,11 @@ ST.PALADIN.guide = {
             out.action = raw.riding and "sob" or raw.action
         end
         out.hold = raw.hold
-        out.hold_text = raw.riding and "RIDE" or "HOLD"
+        if is_forever_family then
+            out.hold_text = raw.hold_text or (raw.riding and "RIDE" or "HOLD")
+        else
+            out.hold_text = raw.riding and "RIDE" or "HOLD"
+        end
         out.filler_slot = raw.filler_kind
         out.judge_slot = raw.judge_call and "judge" or nil
         -- M6: the engine threads the provider's inputs_unknown; copy it into the

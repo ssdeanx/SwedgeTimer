@@ -4781,6 +4781,73 @@ do
     eq(out_lvl16_swipe.action, "swipe", "Level 16 Bear: prompts Swipe filler")
 end
 
+--=========================================================================================
+-- 57) Forever Prowl producer (audit wave 2026-11-05): the FG cat opener's Ravage
+-- row reads inputs.prowl_active, which had no producer. The Forever-only def rides
+-- the class's own merged player-buff walk; the tri-state is up / proven absent /
+-- unknown. Every other family never publishes the field.
+--=========================================================================================
+do
+    local sb = build({ project = 18 })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).prowl_active, nil,
+        "prowl: before the aura walk answers, prowl_active stays unknown")
+    sb.class_db.nextaction_enabled = true
+    sb.clock = 100
+    sb.player_auras = {
+        { name = "Prowl", spell_id = 9913, source = "player",
+            duration = 3600, expiration = 3700 },
+    }
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).prowl_active, true,
+        "prowl: the Forever walk finds the Prowl aura by id")
+    -- The name leg: an id-less row still matches (the client-localized shape).
+    sb.player_auras = {
+        { name = "Prowl", spell_id = nil, source = "player" },
+    }
+    sb.clock = 101
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).prowl_active, true,
+        "prowl: the name leg finds an id-less Prowl row")
+    -- A walk that finds none is a proven absence, never an unknown.
+    sb.player_auras = {}
+    sb.clock = 102
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).prowl_active, false,
+        "prowl: a scan that finds none reads proven absent")
+    -- Under the secret-aura regime a miss is unreadable, never "proven absent";
+    -- a matched row still reads up.
+    sb.st.api.auras_may_be_secret = function() return true end
+    sb.clock = 103
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).prowl_active, nil,
+        "prowl: a secret-regime miss reads unknown, not absent")
+    sb.player_auras = {
+        { name = "Prowl", spell_id = 9913, source = "player" },
+    }
+    sb.clock = 104
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    eq(ST.DRUID.gather_guide_inputs(ST, {}).prowl_active, true,
+        "prowl: a matched row stays up under the secret regime")
+
+    -- Non-Forever: the field is never published, even with a matching aura row.
+    local era = build({ project = 2 })
+    local EST = era.ST
+    EST.interfaces_are_initialised = true
+    EST.DRUID.post_init(EST)
+    era.class_db.nextaction_enabled = true
+    era.clock = 100
+    era.player_auras = {
+        { name = "Prowl", spell_id = 9913, source = "player",
+            duration = 3600, expiration = 3700 },
+    }
+    EST.DRUID.on_bar_update(EST, "mainhand")
+    eq(EST.DRUID.gather_guide_inputs(EST, {}).prowl_active, nil,
+        "prowl: non-Forever never publishes prowl_active")
+end
+
 if failures == 0 then
     print("PASS  druid_state.lua (" .. tostring(checks) .. " checks)")
 else

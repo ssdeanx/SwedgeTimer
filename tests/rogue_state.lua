@@ -573,8 +573,15 @@ local function build(opts)
     local modules = {
         "compat.lua", "utils.lua", "guard.lua", "rogue_guide.lua",
         "nextaction.lua", "practice.lua", "nextaction_ui.lua", "hud.lua",
-        "classes/rogue.lua", "practice_ui.lua",
     }
+    -- The Forever guide engine is loaded only for the pins that exercise the
+    -- Forever provider path, so every pre-existing profile keeps the exact module
+    -- set it was written against.
+    if opts.forever_guide == true then
+        modules[#modules + 1] = "forever_guide.lua"
+    end
+    modules[#modules + 1] = "classes/rogue.lua"
+    modules[#modules + 1] = "practice_ui.lua"
     for i = 1, #modules do
         local chunk = assert(loadfile(ROOT .. modules[i]))
         setfenv(chunk, env)
@@ -4127,6 +4134,114 @@ do
     ST_nil.get_class_table = function() return nil end
     local ok, err = pcall(ST_nil.ROGUE.on_bar_update, ST_nil, "mainhand")
     check(ok, "NILSWEEP R2 on_bar_update tolerates a nil class table (error: " .. tostring(err) .. ")")
+end
+
+--=========================================================================================
+-- 46) Forever producers (audit wave 2026-11-05): the family-gated gather fields and
+-- the FG display wrapper. Every pin is Forever-only except the name contrasts, and
+-- the non-Forever profiles above stay untouched.
+--=========================================================================================
+do
+    -- (a) mh_is_dagger: the class's own dagger helper feeds FG.resolve_rogue_spec.
+    local dagger = build({ project = 18 })
+    dagger.items = { [16] = 90002 }
+    local dg = dagger.ST.ROGUE.gather_guide_inputs(dagger.ST, {})
+    eq(dg.mh_is_dagger, true, "forever dagger: a dagger mainhand publishes mh_is_dagger")
+    local sword = build({ project = 18 })
+    sword.items = { [16] = 90001 }
+    local sw = sword.ST.ROGUE.gather_guide_inputs(sword.ST, {})
+    eq(sw.mh_is_dagger, false, "forever dagger: a sword mainhand publishes false")
+    local tbc = build({ project = 5 })
+    tbc.items = { [16] = 90002 }
+    eq(tbc.ST.ROGUE.gather_guide_inputs(tbc.ST, {}).mh_is_dagger, nil,
+        "non-forever: mh_is_dagger is never published (the gather is unchanged)")
+
+    -- (b) the Forever name: the guide slot resolves Venom, the aura read matches
+    -- the client's Venom row, and the practice label follows the client. TBC keeps
+    -- every Envenom shape it had.
+    local forever = build({ project = 18 })
+    local FST = forever.ST
+    FST.ROGUE.post_init(FST)
+    local envenom_slot
+    for i = 1, #FST.ROGUE.guide.slots do
+        if FST.ROGUE.guide.slots[i].key == "envenom" then
+            envenom_slot = FST.ROGUE.guide.slots[i]
+        end
+    end
+    check(envenom_slot ~= nil, "forever venom: the guide keeps the envenom slot key")
+    eq(envenom_slot and envenom_slot.spell_name, "Venom",
+        "forever venom: the slot resolves the client name Venom")
+    forever.auras = { player = { { name = "Venom", duration = 10,
+        expiration = forever.clock + 6, spell_id = 125 } } }
+    forever.power[3] = 50
+    forever.power[4] = 4
+    local fg_inputs = FST.ROGUE.gather_guide_inputs(FST, {})
+    eq(fg_inputs.envenom_buff_remains, 6,
+        "forever venom: the player aura read matches Venom")
+    local tbc_names = build({ project = 5 })
+    local TST = tbc_names.ST
+    TST.ROGUE.post_init(TST)
+    local tbc_slot
+    for i = 1, #TST.ROGUE.guide.slots do
+        if TST.ROGUE.guide.slots[i].key == "envenom" then
+            tbc_slot = TST.ROGUE.guide.slots[i]
+        end
+    end
+    eq(tbc_slot and tbc_slot.spell_name, "Envenom",
+        "non-forever venom: the TBC slot keeps the Envenom name")
+    tbc_names.auras = { player = { { name = "Venom", duration = 10,
+        expiration = tbc_names.clock + 6, spell_id = 125 } } }
+    tbc_names.power[3] = 50
+    tbc_names.power[4] = 4
+    eq(TST.ROGUE.gather_guide_inputs(TST, {}).envenom_buff_remains, nil,
+        "non-forever venom: a Venom row never satisfies the Envenom read")
+
+    -- (c) the permanent label follows the running client.
+    local function envenom_row(STx)
+        for i = 1, #STx.ROGUE.practice_rotation do
+            if STx.ROGUE.practice_rotation[i].action == "envenom" then
+                return STx.ROGUE.practice_rotation[i]
+            end
+        end
+        return nil
+    end
+    eq(envenom_row(FST) and envenom_row(FST).label, "Venom",
+        "forever venom: the practice rotation label is Venom")
+    eq(envenom_row(TST) and envenom_row(TST).label, "Envenom",
+        "non-forever venom: the practice rotation label stays Envenom")
+
+    -- (d) the wrapper threads FG's own unknown bit. FG sets out.inputs_unknown on a
+    -- restricted tick; the rogue wrapper used to drop it. The spy stands in for that
+    -- tick so the contract is pinned independently of which cooldown field FG
+    -- happens to read this release.
+    local wrapper = build({ project = 18, forever_guide = true })
+    local WST = wrapper.ST
+    wrapper.power[3] = 80
+    wrapper.power[4] = 5
+    local real_evaluate = wrapper.st.forever_guide.evaluate
+    wrapper.st.forever_guide.evaluate = function(class, spec, ins, raw)
+        raw.action = "ss"
+        raw.hold = false
+        raw.hold_text = nil
+        raw.inputs_unknown = true
+        return raw
+    end
+    local wout = {}
+    WST.ROGUE.guide.evaluate({}, wout)
+    eq(wout.inputs_unknown, true,
+        "forever unknown: FG's raw.inputs_unknown reaches out.inputs_unknown")
+    wrapper.st.forever_guide.evaluate = function(class, spec, ins, raw)
+        raw.action = "ss"
+        raw.hold = false
+        raw.hold_text = nil
+        raw.inputs_unknown = false
+        return raw
+    end
+    local ok_out = {}
+    WST.ROGUE.guide.evaluate({}, ok_out)
+    eq(ok_out.inputs_unknown, false, "forever unknown: an honest FG tick clears the bit")
+    eq(ok_out.action, "ss", "forever unknown: an honest FG tick keeps the action")
+    wrapper.st.forever_guide.evaluate = real_evaluate
 end
 
 --=========================================================================================

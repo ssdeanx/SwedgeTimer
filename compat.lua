@@ -166,8 +166,10 @@ st.api = api
 -- Under the Mainline secret-value regime, restricted reads (cooldowns, power, health,
 -- auras, combat stats, casts) can return opaque "secret" values: type() still reports the
 -- underlying type, so a type() or "== nil" guard cannot see them, while arithmetic,
--- comparison and table indexing with one raises a Lua error. Feature-detect the probe
--- once; on every classic client it is absent and every guard below is an exact no-op.
+-- comparison and table indexing with one raises a Lua error. The probe itself is
+-- documented on every shipped branch, but only the Mainline-code clients declare any
+-- SecretWhen* predicate (the classic branches declare access preconditions only), so no
+-- value is ever secret there and every guard below is an exact no-op.
 
 local is_secret = issecretvalue or function()
 	return false
@@ -333,39 +335,141 @@ end
 
 local classic_get_spell_cooldown = GetSpellCooldown
 local retail_get_spell_cooldown = C_Spell and C_Spell.GetSpellCooldown
+-- Mainline-code clients answer a restricted cooldown through a duration object that is
+-- itself never secret; it is the only readable source while cooldown restrictions are on.
+local retail_get_spell_cooldown_duration = C_Spell and C_Spell.GetSpellCooldownDuration
 
+-- Every classic return is checked before any of them is used: a restricted duration would
+-- otherwise reach the "duration == 0" test below, and comparing a secret value raises.
+local function spell_cooldown_values_are_secret(start_time, duration, enabled, mod_rate)
+	return is_secret(start_time) or is_secret(duration) or is_secret(enabled)
+		or is_secret(mod_rate)
+end
+
+-- A finite number only: NaN and +-inf are not usable cooldown readings either.
+local function is_finite_number(value)
+	return type(value) == "number" and value == value
+		and value ~= math.huge and value ~= -math.huge
+end
+
+-- C_Spell.GetSpellCooldownDuration (Retail, WoW Forever) returns a LuaDurationObject whose
+-- HasSecretValues() is documented as never secret; its individual reads are NOT, so they are
+-- only trusted when that probe answers exactly false. Everything is pcall-wrapped: an object
+-- with a different method set declines instead of throwing.
+local function read_cooldown_duration_object(object)
+	local has_secret_values = object.HasSecretValues
+	if type(has_secret_values) ~= "function" then
+		return nil
+	end
+	local secret_ok, secret = pcall(has_secret_values, object)
+	if not secret_ok or secret ~= false then
+		return nil
+	end
+	local remaining_ok, remaining = pcall(object.GetRemainingDuration, object)
+	local total_ok, total = pcall(object.GetTotalDuration, object)
+	local start_ok, object_start = pcall(object.GetStartTime, object)
+	if not remaining_ok or not total_ok or not start_ok then
+		return nil
+	end
+	return remaining, total, object_start
+end
+
+-- Classic shape (start, duration) from the duration object: start = end - duration with
+-- end = now + remaining, so the four classic returns stay the one shape every caller knows.
+-- nil when the client cannot answer or the object reports a restricted read.
+local function cooldown_duration_fallback(token)
+	if type(retail_get_spell_cooldown_duration) ~= "function" then
+		return nil
+	end
+	local ok, object = pcall(retail_get_spell_cooldown_duration, token)
+	if not ok or object == nil then
+		return nil
+	end
+	local read_ok, remaining, total, object_start =
+		pcall(read_cooldown_duration_object, object)
+	if not read_ok or remaining == nil then
+		return nil
+	end
+	if not is_finite_number(remaining) or not is_finite_number(total)
+		or not is_finite_number(object_start) then
+		return nil
+	end
+	if total <= 0 then
+		return nil
+	end
+	local now = api.get_time()
+	if not is_finite_number(now) or is_secret(now) then
+		return nil
+	end
+	return now - (total - remaining), total
+end
+
+-- raw_query's fifth return is `restricted`: true only when a restricted (secret) reading was
+-- hit and no readable source produced a duration.
 local function raw_query_spell_cooldown(token)
 	if token == nil then
 		return 0, 0, 0, 0
 	end
 	local start_time, duration, enabled, mod_rate
+	local restricted = false
+	-- Whether any source actually answered. A readable zero IS an answer ("not on
+	-- cooldown"), so it clears the flag; only "every source was restricted" reports
+	-- restricted. Without this, one restricted source would discard another source's
+	-- readable values (compat.lua's own contract: the flag means no readable source).
+	local readable = false
 	if classic_get_spell_cooldown then
 		local ok, s, d, e, m = pcall(classic_get_spell_cooldown, token)
-		if ok and s and not is_secret(s) then
-			start_time = s
-			duration = d
-			enabled = e
-			mod_rate = m
+		if ok then
+			if spell_cooldown_values_are_secret(s, d, e, m) then
+				restricted = true
+			elseif s then
+				start_time = s
+				duration = d
+				enabled = e
+				mod_rate = m
+				readable = true
+			end
 		end
 	end
-	if (not duration or duration == 0) and retail_get_spell_cooldown then
+	if retail_get_spell_cooldown and (not duration or duration == 0) then
 		local ok, info = pcall(retail_get_spell_cooldown, token)
-		if ok and type(info) == "table" and not is_secret(info.startTime) then
+		if ok and type(info) == "table" then
 			local enabled_raw = info.isEnabled
-			if not is_secret(enabled_raw) then
+			if spell_cooldown_values_are_secret(info.startTime, info.duration, enabled_raw,
+					info.modRate) then
+				restricted = true
+			else
 				start_time = info.startTime
 				duration = info.duration
 				enabled = enabled_raw and 1 or 0
 				mod_rate = info.modRate
+				readable = true
 			end
 		end
 	end
-	if is_secret(start_time) or is_secret(duration) or is_secret(enabled) or is_secret(mod_rate) then
-		return 0, 0, 0, 0
+	if readable then
+		restricted = false
+	end
+	-- Cooldown restrictions (combat, encounter, challenge, PvP) are the only source of a
+	-- restricted read. On Mainline-code clients the duration object can still answer; on the
+	-- classic-line families no secret values exist, so this branch stays unreachable.
+	if restricted and st.is_mainline then
+		local fallback_start, fallback_duration = cooldown_duration_fallback(token)
+		if fallback_duration then
+			return fallback_start, fallback_duration, 1, 1
+		end
+	end
+	if restricted then
+		return 0, 0, 0, 0, true
 	end
 	return start_time or 0, duration or 0, enabled or 0, mod_rate or 0
 end
 
+-- Public wrapper: the classic four values, plus a fifth `restricted` value ONLY when the
+-- cooldown could not be read at all right now (a restricted read and no readable fallback).
+-- Every other read keeps the classic four-value arity exactly, so no classic-line caller
+-- (Era/TBC/Wrath) can observe a shape change. A consumer that must not render "unknown" as
+-- "ready" checks the fifth (nil == not restricted).
 function api.GetSpellCooldown(spell, fallback_id)
 	if type(spell) ~= "number" and type(spell) ~= "string" then
 		if type(fallback_id) == "number" or type(fallback_id) == "string" then
@@ -375,18 +479,27 @@ function api.GetSpellCooldown(spell, fallback_id)
 			return 0, 0, 0, 0
 		end
 	end
-	local start_time, duration, enabled, mod_rate = raw_query_spell_cooldown(spell)
+	local start_time, duration, enabled, mod_rate, restricted = raw_query_spell_cooldown(spell)
 	if duration and duration > 0 then
 		return start_time, duration, enabled, mod_rate
 	end
 	if fallback_id and fallback_id ~= spell then
-		local fb_s, fb_d, fb_e, fb_m = raw_query_spell_cooldown(fallback_id)
+		local fb_s, fb_d, fb_e, fb_m, fb_restricted = raw_query_spell_cooldown(fallback_id)
 		if fb_d and fb_d > 0 then
 			return fb_s, fb_d, fb_e, fb_m
 		end
 		if start_time == 0 and fb_s and fb_s > 0 then
 			return fb_s, fb_d, fb_e, fb_m
 		end
+		if restricted then
+			-- Only a restricted primary defers to the fallback's verdict: a readable
+			-- fallback (zeros included) is an answer and clears the flag; a readable
+			-- primary is never demoted by a restricted alternate rank.
+			restricted = fb_restricted == true
+		end
+	end
+	if restricted then
+		return 0, 0, 0, 0, true
 	end
 	return start_time or 0, duration or 0, enabled or 0, mod_rate or 0
 end
@@ -591,6 +704,23 @@ local function aura_entry_is_secret(name, icon, count, dispel_name, duration, ex
 		or is_secret(is_stealable) or is_secret(nameplate_show_personal) or is_secret(spell_id)
 end
 
+-- The C_UnitAuras read RAISES on a restricted row (RequiresUnitAuraAccess with
+-- FailureMode = "Error") instead of reporting it absent, and an error is not a shape any
+-- aura loop can consume. Ask C_Secrets about the exact index first; the per-index probe is
+-- optional (clients without C_Secrets keep reading), and only an exact true skips the read.
+local function aura_index_is_secret(unit, index, filter)
+	local c_secrets = rawget(_G, "C_Secrets")
+	if type(c_secrets) ~= "table" then
+		return false
+	end
+	local probe = rawget(c_secrets, "ShouldUnitAuraIndexBeSecret")
+	if type(probe) ~= "function" then
+		return false
+	end
+	local ok, secret = pcall(probe, unit, index, filter)
+	return ok and secret == true
+end
+
 if UnitAura then
 	api.UnitAura = function(unit, index, filter)
 		local name, icon, count, dispel_name, duration, expiration, source, is_stealable,
@@ -604,8 +734,11 @@ if UnitAura then
 	end
 elseif C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
 	api.UnitAura = function(unit, index, filter)
-		local aura = C_UnitAuras.GetAuraDataByIndex(unit, index, filter)
-		if not aura then
+		if aura_index_is_secret(unit, index, filter) then
+			return nil
+		end
+		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unit, index, filter)
+		if not ok or not aura then
 			return nil
 		end
 		local name, icon, count, dispel_name, duration, expiration, source, is_stealable,
@@ -934,7 +1067,9 @@ api.GetActiveTalentGroup = getActiveTalentGroup
 -- C_ShapeshiftForm namespace on any client (absent on era/anniversary/titan/forever/live
 -- alike), so no C_ branch is probed here: the bare global answers on the classic-line
 -- clients (engine-provided there - RestrictedEnvironment.lua allowlists it on
--- era/anniversary/titan), and every other client reports 0 (unknown form).
+-- era/anniversary/titan) and on FOREVER (the Camelot client calls the bare
+-- GetShapeshiftForm() itself - PaperDollFrameStats.lua:683 - so _G carries it and
+-- the branch above picks it up); every other client reports 0 (unknown form).
 local get_shapeshift_form = _G.GetShapeshiftForm
 
 if get_shapeshift_form then

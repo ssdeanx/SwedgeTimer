@@ -67,35 +67,35 @@ end
 --=========================================================================================
 FG.SPELLS = {
     -- Hunter
-    SERPENT_STING   = { name = "Serpent Sting",    id = 1978,    ids = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295 } },
+    SERPENT_STING   = { name = "Serpent Sting",    id = 1978,    ids = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 425728, 425729, 425730, 425732, 425733, 425734, 425735, 425736, 425737 } },
     RAPTOR_STRIKE   = { name = "Raptor Strike",    id = 2973,    ids = { 2973, 14260, 14261, 14262, 14263, 14264, 14265, 14266 } },
     STRIDER_KICK    = { name = "Strider Kick",     id = 1317257, ids = { 1317257 } },
     MONGOOSE_BITE   = { name = "Mongoose Bite",    id = 1495,    ids = { 1495, 14269, 14270, 14271 } },
     HUNTERS_MARK    = { name = "Hunter's Mark",    id = 1130,    ids = { 1130, 14323, 14324, 14325 } },
     ARCANE_SHOT     = { name = "Arcane Shot",      id = 3044,    ids = { 3044, 14281, 14282, 14283, 14284, 14285, 14286, 14287 } },
-    MULTI_SHOT      = { name = "Multi-Shot",       id = 2643,    ids = { 2643, 14288, 14289, 14290, 25294 } },
+    MULTI_SHOT      = { name = "Multi-Shot",       id = 2643,    ids = { 2643 } },
     WING_CLIP       = { name = "Wing Clip",        id = 2974,    ids = { 2974, 14267, 14268 } },
     IMMOLATION_TRAP = { name = "Immolation Trap",  id = 13795,   ids = { 13795, 14302, 14303, 14304, 14305 } },
     AIMED_SHOT      = { name = "Aimed Shot",       id = 19434,   ids = { 19434, 20900, 20901, 20902, 20903, 20904 } },
-    SNIPER_SHOT     = { name = "Sniper Shot",      id = 14266,   ids = { 14266 } },
-    SUMMON_HAWK     = { name = "Summon Hawk",      id = 1293241, ids = { 1293241, 1293525, 1293526, 1293527 } },
+    SNIPER_SHOT     = { name = "Sniper Shot",      id = 1310687, ids = { 1310687, 1310786 } },
+    SUMMON_HAWK     = { name = "Summon Hawk",      id = 1293241, ids = { 1293241 } },
     ASPECT_HAWK     = { name = "Aspect of the Hawk", id = 13165, ids = { 13165, 14318, 14319, 14320, 14321, 14322, 25296 } },
 
     -- Warrior
     HEROIC_STRIKE   = { name = "Heroic Strike",    id = 78,      ids = { 78, 284, 285, 1608, 11564, 11565, 11566, 11567, 25286 } },
     REND            = { name = "Rend",             id = 772,     ids = { 772, 6546, 6547, 6548, 11572, 11573, 11574 } },
     OVERPOWER       = { name = "Overpower",        id = 7384,    ids = { 7384, 7887, 11584, 11585 } },
-    BLOODTHRILL     = { name = "Bloodthrill",      id = 1282733, ids = { 1282733 } },
-    MORTAL_STRIKE   = { name = "Mortal Strike",    id = 12294,   ids = { 12294, 21551, 21552, 21553, 25248 } },
-    BLOODTHIRST     = { name = "Bloodthirst",      id = 23881,   ids = { 23881, 23892, 23893, 23894, 25251 } },
+    BLOODTHRILL     = { name = "Bloodthrill",      id = 1289682, ids = { 1289681, 1289682 } },
+    MORTAL_STRIKE   = { name = "Mortal Strike",    id = 12294,   ids = { 12294, 21551, 21552, 21553 } },
+    BLOODTHIRST     = { name = "Bloodthirst",      id = 23881,   ids = { 23881, 23892, 23893, 23894 } },
     WHIRLWIND       = { name = "Whirlwind",        id = 1680,    ids = { 1680 } },
     EXECUTE         = { name = "Execute",          id = 5308,    ids = { 5308, 20658, 20660, 20661, 20662 } },
-    SLAM            = { name = "Slam",             id = 1464,    ids = { 1464, 8820, 11604, 11605 } },
+    SLAM            = { name = "Slam",             id = 1240193, ids = { 1240193, 1464, 8820, 11604, 11605 } },
     SUNDER_ARMOR    = { name = "Sunder Armor",     id = 7386,    ids = { 7386, 7405, 8380, 11596, 11597 } },
     THUNDER_CLAP    = { name = "Thunder Clap",     id = 6343,    ids = { 6343, 8198, 8204, 8205, 11580, 11581 } },
-    DEMO_SHOUT      = { name = "Demoralizing Shout", id = 1160,  ids = { 1160, 6190, 11549, 11550, 11551, 25202 } },
+    DEMO_SHOUT      = { name = "Demoralizing Shout", id = 1160,  ids = { 1160, 6190, 11554, 11555, 11556 } },
     REVENGE         = { name = "Revenge",          id = 6572,    ids = { 6572, 6574, 7379, 11600, 11601, 25288 } },
-    SHIELD_SLAM     = { name = "Shield Slam",      id = 23922,   ids = { 23922, 23923, 23924, 23925, 25258 } },
+    SHIELD_SLAM     = { name = "Shield Slam",      id = 23922,   ids = { 23922, 23923, 23924, 23925 } },
     SHIELD_BLOCK    = { name = "Shield Block",     id = 2565,    ids = { 2565 } },
     SHIELD_WALL     = { name = "Shield Wall",      id = 871,     ids = { 871 } },
     LAST_STAND      = { name = "Last Stand",       id = 12975,   ids = { 12975 } },
@@ -106,57 +106,60 @@ FG.SPELLS = {
     -- Paladin
     HOLY_STRIKE     = { name = "Holy Strike",      id = 679,     ids = { 679, 678, 1866, 680, 2495, 5569, 10332, 10333 } },
     JUDGEMENT       = { name = "Judgement",        id = 20271,   ids = { 20271 } },
-    SEAL_RIGHTEOUSNESS = { name = "Seal of Righteousness", id = 21084, ids = { 21084, 20287, 20288, 20289, 20290, 20291, 20292, 20293 } },
+    SEAL_RIGHTEOUSNESS = { name = "Seal of Righteousness", id = 21084, ids = { 21084, 20154, 20287, 20288, 20289, 20290, 20291, 20292, 20293 } },
     SEAL_COMMAND    = { name = "Seal of Command",  id = 20375,   ids = { 20375, 20915, 20918, 20919, 20920 } },
-    SEAL_CRUSADER   = { name = "Seal of the Crusader", id = 20162, ids = { 20162, 20305, 20306, 20307, 20308, 21183 } },
-    CONSECRATION    = { name = "Consecration",     id = 26573,   ids = { 26573, 20142, 20922, 20923, 20924 } },
-    EXORCISM        = { name = "Exorcism",         id = 879,     ids = { 879, 5614, 5615, 10312, 10313, 10314 } },
+    SEAL_CRUSADER   = { name = "Seal of the Crusader", id = 21082, ids = { 21082, 20162, 20305, 20306, 20307, 20308 } },
+    CONSECRATION    = { name = "Consecration",     id = 26573,   ids = { 26573, 20116, 20922, 20923, 20924 } },
+    EXORCISM        = { name = "Exorcism",         id = 879,     ids = { 879, 5614, 5615, 10312, 10313, 10314, 415068, 415069, 415070, 415071, 415072, 415073 } },
     HAMMER_OF_WRATH = { name = "Hammer of Wrath",  id = 24275,   ids = { 24275, 24274, 24239 } },
     HOLY_SHOCK      = { name = "Holy Shock",       id = 20473,   ids = { 20473, 20929, 20930 } },
     DIVINE_FAVOR    = { name = "Divine Favor",     id = 20216,   ids = { 20216 } },
-    HOLY_SHIELD     = { name = "Holy Shield",      id = 20925,   ids = { 20925, 20927, 20928 } },
-    RIGHTEOUS_FURY  = { name = "Righteous Fury",   id = 25780,   ids = { 25780 } },
-    SEAL_FURY       = { name = "Seal of Fury",      id = 20423,   ids = { 20423 } },
+    HOLY_SHIELD     = { name = "Holy Shield",      id = 20925,   ids = { 20925 } },
+    RIGHTEOUS_FURY  = { name = "Righteous Fury",   id = 25780,   ids = { 25780, 407627 } },
+    SEAL_FURY       = { name = "Seal of Fury",      id = 20423,   ids = { 1311649, 1311656, 20163, 20419, 20421, 20422, 20423 } },
 
     -- Rogue
     SINISTER_STRIKE = { name = "Sinister Strike",  id = 1752,    ids = { 1752, 1757, 1758, 1759, 1760, 8621, 11293, 11294 } },
     EVISCERATE      = { name = "Eviscerate",       id = 2098,    ids = { 2098, 6760, 6761, 6762, 8623, 8624, 11299, 11300, 31016 } },
     SLICE_AND_DICE  = { name = "Slice and Dice",   id = 5171,    ids = { 5171, 6774 } },
-    RUPTURE         = { name = "Rupture",          id = 1943,    ids = { 1943, 8639, 8640, 8640, 11273, 11274, 11275 } },
-    MUTILATE        = { name = "Mutilate",         id = 1241584, ids = { 1241584 } },
-    HEMORRHAGE      = { name = "Hemorrhage",       id = 16511,   ids = { 16511, 17347, 17348 } },
-    BACKSTAB        = { name = "Backstab",         id = 53,      ids = { 53, 2589, 2590, 2591, 8721, 11279, 11280, 11281 } },
+    RUPTURE         = { name = "Rupture",          id = 1943,    ids = { 1943, 8639, 8640, 11273, 11274, 11275 } },
+    MUTILATE        = { name = "Mutilate",         id = 1241584, ids = { 399960, 399961, 1241582, 1241584, 1241585, 1241586, 1241588, 1241590 } },
+    HEMORRHAGE      = { name = "Hemorrhage",       id = 16511,   ids = { 16511 } },
+    BACKSTAB        = { name = "Backstab",         id = 53,      ids = { 53, 2589, 2590, 2591, 8721, 11279, 11280, 11281, 25300 } },
     RIPOSTE         = { name = "Riposte",          id = 14251,   ids = { 14251 } },
-    ENVENOM         = { name = "Envenom",          id = 1310703, ids = { 1310703 } },
+    ENVENOM         = { name = "Venom",            id = 1310703, ids = { 1310703 } },
     EXPOSE_ARMOR    = { name = "Expose Armor",     id = 8647,    ids = { 8647, 8649, 8650, 11197, 11198 } },
 
     -- Druid
-    MAUL            = { name = "Maul",             id = 6807,    ids = { 6807, 6808, 6809, 6810, 9880, 9881 } },
-    SWIPE           = { name = "Swipe",            id = 779,     ids = { 779, 780, 769, 9754, 9908 } },
+    MAUL            = { name = "Maul",             id = 6807,    ids = { 6807, 6808, 6809, 8972, 9745, 9880, 9881 } },
+    SWIPE           = { name = "Swipe",            id = 779,     ids = { 779, 780, 769, 9754, 9908, 1264494, 1264497, 1264498, 1264501, 1264502 } },
     DEMO_ROAR       = { name = "Demoralizing Roar", id = 99,     ids = { 99, 1735, 9490, 9747, 9898 } },
     ENRAGE          = { name = "Enrage",           id = 5229,    ids = { 5229 } },
-    FAERIE_FIRE_FERAL = { name = "Faerie Fire (Feral)", id = 16857, ids = { 16857, 17390, 17391, 17392 } },
-    CLAW            = { name = "Claw",             id = 1082,    ids = { 1082, 3029, 9823, 9827 } },
-    SHRED           = { name = "Shred",            id = 5221,    ids = { 5221, 8992, 9829, 9830 } },
+    -- UNVERIFIED: not present in the Wowhead Forever DB. 16857/17390-17392 are the
+    -- classic fallback ladder; 784/1070/13424/13752 are the unverified Forever
+    -- candidate variants (operator order: "use all the ids for now").
+    FAERIE_FIRE_FERAL = { name = "Faerie Fire (Feral)", id = 16857, ids = { 16857, 17390, 17391, 17392, 784, 1070, 13424, 13752 } },
+    CLAW            = { name = "Claw",             id = 1082,    ids = { 1082, 3029, 5201, 9849, 9850 } },
+    SHRED           = { name = "Shred",            id = 5221,    ids = { 5221, 6800, 8992, 9829, 9830 } },
     RIP             = { name = "Rip",              id = 1079,    ids = { 1079, 9492, 9493, 9752, 9894, 9896 } },
-    FEROCIOUS_BITE  = { name = "Ferocious Bite",   id = 22568,   ids = { 22568, 22827, 22828, 22829 } },
-    LACERATE        = { name = "Lacerate",         id = 1235827, ids = { 1235827 } },
-    PRIMAL_BITE     = { name = "Primal Bite",      id = 1238070, ids = { 1238070 } },
+    FEROCIOUS_BITE  = { name = "Ferocious Bite",   id = 22568,   ids = { 1328618, 22568, 22827, 22828, 22829, 31018 } },
+    LACERATE        = { name = "Lacerate",         id = 1235827, ids = { 1328617, 1328616, 414644, 1235826, 1235827, 1299332 } },
+    PRIMAL_BITE     = { name = "Primal Bite",      id = 1238070, ids = { 407995, 1238069, 1238070, 1238073 } },
     BARKSKIN        = { name = "Barkskin",         id = 22812,   ids = { 22812 } },
     FRENZIED_REGEN  = { name = "Frenzied Regeneration", id = 22842, ids = { 22842 } },
     RAKE            = { name = "Rake",             id = 1822,    ids = { 1822, 1823, 1824, 9904 } },
     RAVAGE          = { name = "Ravage",           id = 6785,    ids = { 6785, 6787, 9866, 9867 } },
-    TIGERS_FURY     = { name = "Tiger's Fury",     id = 5217,    ids = { 5217, 6793, 9845, 9846 } },
+    TIGERS_FURY     = { name = "Tiger's Fury",     id = 5217,    ids = { 5217 } },
 
     -- Shaman
     FLAME_SHOCK     = { name = "Flame Shock",      id = 8050,    ids = { 8050, 8052, 8053, 10447, 10448, 29228 } },
     STORMSTRIKE     = { name = "Stormstrike",      id = 17364,   ids = { 17364 } },
     EARTH_SHOCK     = { name = "Earth Shock",      id = 8042,    ids = { 8042, 8044, 8045, 8046, 10412, 10413, 10414 } },
-    FIRE_NOVA       = { name = "Fire Nova",        id = 408345,  ids = { 408345, 1535, 8498, 8499, 11314, 11315 } },
-    LIGHTNING_BOLT  = { name = "Lightning Bolt",   id = 403,     ids = { 403, 529, 548, 915, 943, 6041, 10391, 10392, 15208 } },
+    FIRE_NOVA       = { name = "Fire Nova",        id = 408345,  ids = { 408341, 408342, 408343, 408344, 408345 } },
+    LIGHTNING_BOLT  = { name = "Lightning Bolt",   id = 403,     ids = { 403, 529, 548, 915, 943, 6041, 10391, 10392, 15207, 15208, 408439, 408440, 408441, 408442, 408443, 408472, 408473, 408474, 408475, 408477 } },
     LIGHTNING_SHIELD = { name = "Lightning Shield", id = 324,    ids = { 324, 325, 905, 945, 8134, 10431, 10432 } },
     WATER_SHIELD    = { name = "Water Shield",     id = 408510,  ids = { 408510 } },
-    SEARING_TOTEM   = { name = "Searing Totem",    id = 3599,    ids = { 3599, 6363, 6364, 6365, 10437, 10438, 10587 } },
+    SEARING_TOTEM   = { name = "Searing Totem",    id = 3599,    ids = { 3599, 6363, 6364, 6365, 10437, 10438 } },
     STRENGTH_OF_EARTH = { name = "Strength of Earth Totem", id = 8075, ids = { 8075, 8160, 8161, 10442, 25361 } },
 }
 
@@ -267,7 +270,7 @@ local SPELL_KEY_BY_NAME = {
     ["Hemorrhage"] = "hemo",
     ["Backstab"] = "backstab",
     ["Riposte"] = "riposte",
-    ["Envenom"] = "envenom",
+    ["Venom"] = "envenom",
     ["Expose Armor"] = "expose",
 
     -- Druid
@@ -338,6 +341,79 @@ local GUIDE_KEY_OVERRIDE = {
     ["Ferocious Bite"] = "ferocious_bite",
 }
 
+-- D5 (audit 2026-11-05): cooldown swipe keys for the guide frame. nextaction_ui
+-- derives the per-frame field names as cooldown_key .. "_remaining" / "_duration" /
+-- "_expires" (nextaction_ui.lua:383-387) and only arms set_icon_cooldown for slots
+-- that name one (nextaction_ui.lua:727-740), so a slot without cooldown_key never
+-- swipes. Keys are keyed by the guide slot key (post-GUIDE_KEY_OVERRIDE) and name
+-- the input the class gather feeds on Forever: the CD_SPELL_BY_FIELD entry minus
+-- the "_remaining" suffix. Spells with no cooldown input (dots, seals, rage dumps,
+-- procs, maintains that ride a due flag, rogue energy spenders - the class side
+-- carries no cooldown_key for those either) stay keyless. swipe_duration is the
+-- display fallback only (classes/warrior.lua:913-914: a real cooldown always
+-- carries the client-reported length); values are the class slots' own stated
+-- fallbacks, otherwise the 1.5 s frame-safe generic (marked FALLBACK below - an
+-- unwritten remaining read is a proven no-op in set_icon_cooldown, never a wrong
+-- swipe). Hunter gathers feed <base>_remaining_cd, which the frame's
+-- cooldown_key .. "_remaining" shape cannot address, so hunter keys are structural
+-- until the gather names align (filed follow-up); the sniper and multi keys do
+-- resolve today through the gather's live-cast <base>_remaining feeds.
+local FG_GUIDE_SWIPE = {
+    -- Warrior (classes/warrior.lua:3674-3699: 1.5 s display fallback convention;
+    -- thunder_clap slot ibid.:964-965; the gather feeds <key>_remaining pairs).
+    op = { "op", 1.5 },
+    ms = { "ms", 1.5 }, -- FALLBACK (no class-stated value; client length wins)
+    bt = { "bt", 1.5 }, -- FALLBACK (no class-stated value; client length wins)
+    ww = { "ww", 1.5 }, -- FALLBACK (no class-stated value; client length wins)
+    execute = { "execute", 1.5 },
+    slam = { "slam", 1.5 },
+    thunder_clap = { "tc", 1.5 },
+    demo_shout = { "demo", 1.5 }, -- FALLBACK (no class-stated value)
+    revenge = { "revenge", 1.5 }, -- FALLBACK (no class-stated value)
+    shield_slam = { "shield_slam", 1.5 }, -- FALLBACK (no class-stated value)
+    shield_block = { "shield_block", 1.5 }, -- FALLBACK (no class-stated value)
+    shield_wall = { "shield_wall", 1.5 }, -- FALLBACK (no class-stated value)
+    last_stand = { "last_stand", 1.5 }, -- FALLBACK (no class-stated value)
+    -- Paladin (classes/paladin.lua:3842-3867 ret set, 4025-4044 prot set).
+    holy_strike = { "holy_strike", 1.5 }, -- FALLBACK (Forever sim: no cooldown; dark)
+    judge = { "judge", 8 },
+    consecration = { "consecration", 8 },
+    exorcism = { "exorcism", 15 },
+    how = { "how", 6 },
+    holy_shock = { "holy_shock", 1.5 }, -- FALLBACK (no class-stated value; dark on Forever)
+    divine_favor = { "divine_favor", 1.5 }, -- FALLBACK (no class-stated value)
+    holy_shield = { "holy_shield", 10 },
+    -- Hunter (structural until the gather names align - see note above; aimed and
+    -- sniper durations are the class slots' own: classes/hunter.lua:2686,2704-2705;
+    -- multi rides the live-cast feed at the classic 0.5 s cast - FALLBACK,
+    -- unverified for Forever).
+    raptor_strike = { "raptor_strike", 1.5 },
+    mongoose_bite = { "mongoose_bite", 1.5 },
+    strider_kick = { "strider_kick", 1.5 },
+    immolation_trap = { "immolation_trap", 1.5 },
+    hawk = { "summon_hawk", 1.5 },
+    wing_clip = { "wing_clip", 1.5 },
+    aspect_hawk = { "hawk", 1.5 },
+    arcane = { "arcane", 1.5 },
+    multi = { "multi", 0.5 },
+    aimed = { "aimed", 3.0 },
+    sniper = { "sniper", 4.0 },
+    -- Druid (frenzied_regen duration is the class slot's own:
+    -- classes/druid.lua:2341-2342; the rest are FALLBACK/display-only).
+    enrage = { "enrage", 1.5 },
+    primal_bite = { "primal_bite", 1.5 },
+    barkskin = { "barkskin", 1.5 },
+    frenzied_regen = { "frenzied_regen", 180 },
+    -- Shaman (stormstrike 10 s: classes/shaman.lua:118-124, families with no
+    -- sourced value keep the shipped 10 s; flameshock 12 s and firenova 15 s are
+    -- the class slots' own: classes/shaman.lua:2948-2949,2952. flameshock follows
+    -- the class's debuff-window convention (flameshock_remaining), not the map's
+    -- shared shock global (shock_remaining).)
+    stormstrike = { "stormstrike", 10 },
+    flameshock = { "flameshock", 12 },
+    firenova = { "firenova", 15 },
+}
+
 function FG.get_guide_slots(class)
     class = class or "WARRIOR"
     local list = FG.SPELLS_BY_CLASS[class]
@@ -346,12 +422,15 @@ function FG.get_guide_slots(class)
     for i = 1, #list do
         local sp = list[i]
         local key = GUIDE_KEY_OVERRIDE[sp.name] or SPELL_KEY_BY_NAME[sp.name] or string.lower(sp.name:gsub("%s+", "_"))
+        local swipe = FG_GUIDE_SWIPE[key]
         slots[#slots + 1] = {
             key = key,
             spell_id = sp.id,
             spell_name = sp.name,
             name_suffix = "Icon" .. key,
             ids = sp.ids,
+            cooldown_key = swipe and swipe[1] or nil,
+            swipe_duration = swipe and swipe[2] or nil,
         }
     end
     if class == "PALADIN" then
@@ -392,10 +471,21 @@ function FG.get_hud_state(class, self, slot, now)
 
     local rem, dur = 0, 0
     local start, duration
+    -- The fifth return is compat's restriction flag: true only when the client handed
+    -- back secret timing and no readable fallback answered. It is nil on every
+    -- classic-line family, so the classic read below is untouched by it.
+    local restricted, _
     if api.GetSpellCooldown then
-        start, duration = api.GetSpellCooldown(spell_query)
+        start, duration, _, _, restricted = api.GetSpellCooldown(spell_query)
         if (not start or duration == 0) and slot.spell then
-            start, duration = api.GetSpellCooldown(slot.spell)
+            local fb_restricted
+            start, duration, _, _, fb_restricted = api.GetSpellCooldown(slot.spell)
+            -- This slot's own spell id is the final answer for the slot: a readable
+            -- fallback (zeros included) means the timing IS known, so its verdict
+            -- replaces the name query's flag instead of only ever setting it.
+            if restricted then
+                restricted = fb_restricted == true
+            end
         end
         if start and duration and duration > 0 and start > 0 then
             rem = (start + duration) - now
@@ -403,12 +493,18 @@ function FG.get_hud_state(class, self, slot, now)
             dur = duration
         end
     end
+    -- A restricted read with no readable duration is unknown, not ready: rem/dur stay
+    -- 0 (no swipe invented from the secret value) and the state carries the flag so a
+    -- consumer can render unknown instead of an idle slot. The GCD echo below is
+    -- skipped as well - a swipe that expires still reads as "ready". Classic-line
+    -- families always pass restricted == nil, so nothing there changes.
+    local restricted_state = restricted == true and dur <= 0
 
     -- If ability is not on cooldown, show the running GCD swipe. The addon already
     -- tracks the GCD (self.gcd, as every class hud_gcd_remaining does), so read that
     -- instead of re-asking the client once per slot per tick; the probe query is only
     -- the fallback when no tracked GCD exists.
-    if rem <= 0 then
+    if rem <= 0 and not restricted_state then
         local g = self and self.gcd
         if type(g) == "table" and type(g.expires) == "number" then
             local g_rem = g.expires - now
@@ -495,6 +591,10 @@ function FG.get_hud_state(class, self, slot, now)
     fg_hud_state_reused.in_range = in_range
     fg_hud_state_reused.glow = glow
     fg_hud_state_reused.hidden = nil
+    fg_hud_state_reused.restricted = nil
+    if restricted_state then
+        fg_hud_state_reused.restricted = true
+    end
 
     return fg_hud_state_reused
 end
@@ -584,6 +684,14 @@ function FG.evaluate_warrior(spec, inputs, out)
 
     out.rotation_key = spec
 
+    -- D4 (audit 2026-11-05, filed skeleton): the target_count arms below (prot
+    -- Thunder Clap, the three Cleave arms) have no Forever producer - the enemy-
+    -- count sensor does not exist (classes/warrior.lua:437-445; the gather never
+    -- feeds target_count on any family), so they are unreachable in-game. They
+    -- stay pinned for direct callers (tests/forever_guide_state.lua:84-85) until
+    -- the sensor lands; removal would widen the fallthrough arms at evaluator
+    -- level, so this lane keeps them and documents the gap instead.
+
     if spec == "prot" then
         -- PROTECTION WARRIOR (Tank) - wowsims/forever warrior protection/default.apl.json
         local player_hp = type(inputs.player_health_pct) == "number" and inputs.player_health_pct or 100
@@ -611,6 +719,7 @@ function FG.evaluate_warrior(spec, inputs, out)
         elseif is_known(inputs, "Sunder Armor", "sunder_known") and (type(inputs.sunder_stacks) ~= "number" or inputs.sunder_stacks < 5 or (type(inputs.sunder_remaining) == "number" and inputs.sunder_remaining <= 10)) and rage >= 15 then
             out.action = "sunder"
             out.spell_name = "Sunder Armor"
+        -- D4 (filed): no Forever target_count producer - unreachable in-game.
         elseif is_known(inputs, "Thunder Clap", "tc_known") and (inputs.tc_active ~= true) and is_ready(inputs.tc_remaining) and (inputs.target_count and inputs.target_count > 1) and rage >= 20 then
             out.action = "thunder_clap"
             out.spell_name = "Thunder Clap"
@@ -623,6 +732,8 @@ function FG.evaluate_warrior(spec, inputs, out)
         elseif inputs.hs_queued == true or inputs.cleave_queued == true then
             out.hold = true
             out.hold_text = "RIDE"
+        -- D4 (filed): no Forever target_count producer - the cleave leg is
+        -- unreachable in-game; without it this arm is the hs dump.
         elseif rage >= (inputs.hs_rage_floor or 40) or (inputs.shield_slam_known ~= true and inputs.sunder_known ~= true and rage >= (inputs.hs_cost or 15)) then
             out.action = (inputs.target_count and inputs.target_count > 1 and is_known(inputs, "Cleave", "cleave_known")) and "cleave" or "hs"
             out.spell_name = out.action == "cleave" and "Cleave" or "Heroic Strike"
@@ -657,6 +768,7 @@ function FG.evaluate_warrior(spec, inputs, out)
         elseif inputs.hs_queued == true or inputs.cleave_queued == true then
             out.hold = true
             out.hold_text = "RIDE"
+        -- D4 (filed): no Forever target_count producer - unreachable in-game.
         elseif is_known(inputs, "Cleave", "cleave_known") and inputs.target_count and inputs.target_count > 1 and rage >= 40 then
             out.action = "cleave"
             out.spell_name = "Cleave"
@@ -694,6 +806,7 @@ function FG.evaluate_warrior(spec, inputs, out)
         elseif inputs.hs_queued == true or inputs.cleave_queued == true then
             out.hold = true
             out.hold_text = "RIDE"
+        -- D4 (filed): no Forever target_count producer - unreachable in-game.
         elseif is_known(inputs, "Cleave", "cleave_known") and inputs.target_count and inputs.target_count > 1 and rage >= 25 then
             out.action = "cleave"
             out.spell_name = "Cleave"
@@ -876,9 +989,14 @@ function FG.evaluate_paladin(spec, inputs, out)
         elseif is_known(inputs, "Holy Strike", "holy_strike_known") and is_ready(inputs.holy_strike_remaining) then
             out.action = "holy_strike"
             out.spell_name = "Holy Strike"
-        else
+        elseif is_known(inputs, "Seal of Command", "soc_known") or is_known(inputs, "Seal of Righteousness", "seal_known") then
             out.action = is_known(inputs, "Seal of Command", "soc_known") and "soc" or "sor"
             out.spell_name = out.action == "soc" and "Seal of Command" or "Seal of Righteousness"
+        else
+            -- D1 (audit 2026-11-05): neither seal learned yet (levels 1-3) - hold,
+            -- never prompt an unlearned Seal.
+            out.hold = true
+            out.hold_text = "WAIT"
         end
         return out
     end
@@ -904,9 +1022,14 @@ function FG.evaluate_paladin(spec, inputs, out)
     elseif is_known(inputs, "Exorcism", "exo_known") and is_ready(inputs.exo_remaining) and mana_pct >= 20 then
         out.action = "exorcism"
         out.spell_name = "Exorcism"
-    else
+    elseif is_known(inputs, "Seal of Righteousness", "seal_known") then
         out.action = "sor"
         out.spell_name = "Seal of Righteousness"
+    else
+        -- D1 (audit 2026-11-05): Seal of Righteousness not yet learned (levels
+        -- 1-3) - hold, never prompt an unlearned Seal.
+        out.hold = true
+        out.hold_text = "WAIT"
     end
     return out
 end
@@ -1002,6 +1125,11 @@ function FG.evaluate_hunter(spec, inputs, out)
     elseif is_known(inputs, "Aspect of the Hawk", "hawk_known") and is_ready(inputs.hawk_remaining_cd) and (type(inputs.hawk_active_count) ~= "number" or inputs.hawk_active_count < 3) then
         out.action = "aspect_hawk"
         out.spell_name = "Aspect of the Hawk"
+    else
+        -- D2 (audit 2026-11-05): nothing known yet (early leveling) - hold
+        -- instead of returning an empty out (blank guide).
+        out.hold = true
+        out.hold_text = "WAIT"
     end
     return out
 end
@@ -1043,9 +1171,9 @@ function FG.evaluate_rogue(spec, inputs, out)
         elseif is_known(inputs, "Slice and Dice", "snd_known") and snd_rem <= 3 then
             out.action = "snd"
             out.spell_name = "Slice and Dice"
-        elseif is_known(inputs, "Envenom", "envenom_known") and inputs.envenom_usable == true then
+        elseif is_known(inputs, "Venom", "envenom_known") and inputs.envenom_usable == true then
             out.action = "envenom"
-            out.spell_name = "Envenom"
+            out.spell_name = "Venom"
         elseif is_known(inputs, "Rupture", "rupture_known") and inputs.rupture_active ~= true and (inputs.ttd == nil or inputs.ttd >= 8) then
             out.action = "rupture"
             out.spell_name = "Rupture"
@@ -1164,6 +1292,10 @@ function FG.evaluate_druid(spec, inputs, out)
         end
 
         -- Clearcasting proc: Shred immediately
+        -- D8 (audit 2026-11-05, allow-but-note): nil passes ~= false, so Shred is
+        -- legal when the facing read is unknown - no facing probe exists on any
+        -- client, so the guide allows the cast and notes the gap instead of
+        -- guessing. No behavior change.
         if inputs.clearcasting_active == true and is_known(inputs, "Shred", "shred_known") and inputs.behind_target ~= false then
             out.action = "shred"
             out.spell_name = "Shred"
@@ -1193,6 +1325,8 @@ function FG.evaluate_druid(spec, inputs, out)
         end
 
         -- Builders
+        -- D8 (audit 2026-11-05, allow-but-note): see the Clearcasting note above -
+        -- nil ~= false keeps Shred legal with no facing probe. No behavior change.
         if is_known(inputs, "Shred", "shred_known") and inputs.behind_target ~= false then
             if energy >= (inputs.shred_cost or 60) then
                 out.action = "shred"
@@ -1214,6 +1348,10 @@ function FG.evaluate_druid(spec, inputs, out)
     end
 
     -- CASTER / BASELINE DRUID
+    -- D3 (audit 2026-11-05): caster DPS is unmodeled - hold instead of returning
+    -- an empty out (blank guide).
+    out.hold = true
+    out.hold_text = "WAIT"
     return out
 end
 
@@ -1307,13 +1445,24 @@ local CD_SPELL_BY_FIELD = {
 
 -- Seconds left on a spell's own cooldown (0 = ready). The GCD echo (<= 1.51 s) is
 -- never a cooldown. nil when the client cannot answer, which the rules read as ready.
+--
+-- restricted_seen: this tick read at least one cooldown the client reported as
+-- restricted (secret timing, no readable fallback). FG.evaluate clears it before the
+-- decision model runs and ORs it into out.inputs_unknown afterwards, so a restricted
+-- read never turns into a "ready" claim (M6: unknown suppresses the advice).
+local restricted_seen = false
 local function live_cooldown(spell_name)
     local api = st and st.api
     if not (api and api.GetSpellCooldown) then
         return nil
     end
     local sp_def = FG.SPELLS_BY_NAME and FG.SPELLS_BY_NAME[spell_name]
-    local ok, start, duration = pcall(api.GetSpellCooldown, spell_name, sp_def and sp_def.id)
+    local ok, start, duration, _, _, restricted = pcall(api.GetSpellCooldown, spell_name, sp_def and sp_def.id)
+    -- Unknown, never 0 ("ready"): the flag makes this tick's advice unknown instead.
+    if restricted == true then
+        restricted_seen = true
+        return nil
+    end
     if not ok or type(start) ~= "number" or type(duration) ~= "number" then
         return nil
     end
@@ -1397,6 +1546,26 @@ local ALIAS = {
     end,
     ea_active = function(r) return r.ea_remains ~= nil end,
     use_ea = function(r) return r.ea_duty end,
+    -- The Forever Venom finisher's usability. The class gather NEVER writes
+    -- envenom_usable; it supplies venom_ready (known + usable + off cooldown,
+    -- classes/rogue.lua:1241) and venom_buff_active (classes/rogue.lua:1245). The APL
+    -- row the engine cites (classes/rogue.lua:2754) is "the buff is down AND cp >= 3".
+    -- Tri-state, so an unreadable producer can never invent a missing buff:
+    --   true  = ready AND the buff is CONFIRMED down AND cp >= 3
+    --   false = ready and buff-down but cp < 3 (a real "not yet")
+    --   nil   = unknown (not ready / no buff reading / no cp reading) - never fires.
+    -- nil is NOT "down": venom_buff_active is nil when the client has no aura scan at
+    -- all (classes/rogue.lua:434-437), and this addon's unknown-hides rule keeps the
+    -- row quiet rather than claiming a buff state it did not read.
+    envenom_usable = function(r)
+        if r.venom_ready ~= true or r.venom_buff_active ~= false then
+            return nil
+        end
+        if type(r.cp) ~= "number" then
+            return nil
+        end
+        return r.cp >= 3
+    end,
     -- Shaman
     flameshock_active = function(r)
         if r.flameshock_allowed == nil then return nil end
@@ -1411,9 +1580,11 @@ local ALIAS = {
         if r.lightningshield_due == nil then return nil end
         return r.lightningshield_due == false
     end,
+    -- D7 (audit 2026-11-05): reads the dedicated watershield_due producer
+    -- (classes/shaman.lua gather, Forever-only) - never the Lightning Shield leg.
     watershield_active = function(r)
-        if r.lightningshield_due == nil then return nil end
-        return r.lightningshield_due == false
+        if r.watershield_due == nil then return nil end
+        return r.watershield_due == false
     end,
 }
 
@@ -1480,7 +1651,17 @@ function FG.evaluate(class, spec, inputs, out)
     out.filler_slot = nil
     out.judge_slot = nil
     out.waiting_judgement = false
+    -- Every field a branch can write is cleared first: the output table is reused
+    -- across ticks and fights (nextaction_ui and the class providers pass the same
+    -- one back in), so a HOLD / POOL / WAIT branch that sets no action must not
+    -- re-display the previous tick's action, and judge_call must not latch the
+    -- Judgement icon on later ticks.
+    out.action = nil
+    out.spell_name = nil
+    out.judge_call = nil
+    out.rotation_key = nil
     out.inputs_unknown = raw_inputs.inputs_unknown == true
+    restricted_seen = false
 
     local res
     if class == "WARRIOR" then
@@ -1499,6 +1680,9 @@ function FG.evaluate(class, spec, inputs, out)
         res = out
     end
 
+    if restricted_seen then
+        out.inputs_unknown = true
+    end
     if out.judge_call or out.action == "judge" then
         out.judge_slot = "judge"
     end

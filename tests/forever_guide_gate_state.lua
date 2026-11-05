@@ -39,7 +39,8 @@ chunk("SwedgeTimer", st)
 local allows = st.nextaction_ui.slot_known_allows
 eq(type(allows), "function", "ui.slot_known_allows exported")
 
-local slot = { key = "holy_strike", spell_id = 679, spell_name = "Holy Strike", ids = { 679, 678, 1866 } }
+local slot = { key = "holy_strike", spell_id = 679, spell_name = "Holy Strike",
+    ids = { 679, 678, 1866, 680, 2495, 5569, 10332, 10333 } }
 eq(allows(slot), false, "forever: unlearned ranked slot is hidden")
 known[1866] = true
 eq(allows(slot), true, "forever: a later learned rank shows the slot")

@@ -1,0 +1,37 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-05T04:40:46Z",
+  "run_id": "forever-secrets-2026-11-05",
+  "agent_name": "forever-secrets",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Read the exact compat.lua regions first; implemented A/B/C as specified with the classic path left byte-identical in behaviour; the throwaway-client sandbox pins the documented Forever contract without leaking globals.",
+    "what_was_hard": "Keeping the fifth return nil (not false) on every readable path while propagating it through the fallback-id arm; proving each individual LuaDurationObject read is required, not just the aggregate.",
+    "skill_gap": "The real LuaDurationObject / C_Secrets binary behaviour and in-combat restricted reads remain in-client-only; no consumer reads the fifth return in this lane's scope."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Dispatch the consumer lane (hud.lua / nextaction_ui.lua / forever_guide.lua / classes) to render restricted cooldowns as unknown instead of ready, and add the in-client Forever combat check to TESTING.md."
+  },
+  "journal_marker": "desks/forever-secrets/journal.md § 2026-11-05 A/B/C landed; suite + mutations green",
+  "files_changed": [
+    "compat.lua",
+    "tests/forever_secret_compat_state.lua",
+    "tests/run.sh",
+    "desks/forever-secrets/journal.md"
+  ],
+  "evidence": {
+    "suite": "lua5.1 tests/forever_secret_compat_state.lua -> 114 checks, 0 failed (exit 0)",
+    "luacheck": "luacheck compat.lua tests/forever_secret_compat_state.lua -> 0 warnings / 0 errors",
+    "whole_tree_floor": "luacheck . -> 2 warnings / 0 errors in 100 files",
+    "adjacent_suites": "secret_guard_state 433, spell_query_family_state 76, spell_known_state 251, engine_matrix_state 101, range_source_state 148 - all green",
+    "mutations": "14/14 killed on /tmp/opencode/st-mut with non-zero exit; pristine restore re-run 114/0"
+  }
+}

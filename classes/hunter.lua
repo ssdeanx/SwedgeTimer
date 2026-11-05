@@ -3512,9 +3512,10 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     end
     -- The mana fraction the aspect swaps read (the APL's own thresholds): the
     -- read runs only on the families that have an aspect row, so no other
-    -- client spends the probe. Unknown (nil) never prompts a swap.
+    -- client spends the probe. Unknown (nil) never prompts a swap. Forever's
+    -- ranged APL carries the aspect rows too, so it reads the same pair.
     if utility_family == "SOD" or utility_family == "TBC"
-        or utility_family == "WRATH" then
+        or utility_family == "WRATH" or utility_family == "FOREVER" then
         inputs.mana_frac = ST.HUNTER.get_mana_fraction()
     else
         inputs.mana_frac = nil

@@ -89,6 +89,65 @@ ST.player_class = string.lower(ST.player_class_pretty)
 ST.info_panel = {}
 ST.class_info_panel = {}
 
+--=========================================================================================
+-- HUD slot keys (family-aware)
+--=========================================================================================
+-- Forever draws the Forever guide's slot set (hud.lua's create reads
+-- st.forever_guide.get_hud_slots), and those icons gate on their own
+-- hud_forever_show_<key> namespace: several legacy hud_show_<key> defaults ship false
+-- for the same keys, which would pin the Forever icons hidden at every level. Every
+-- other family keeps the legacy key unchanged. `key` is the bare slot key (e.g. "judge").
+local function hud_show_key(key)
+    return (st.family == "FOREVER" and "hud_forever_show_" or "hud_show_") .. key
+end
+
+-- The option widgets keep the legacy hud_show_<key> id shape (so panel widget ids do
+-- not change); only the db key they read/write is family-aware.
+local function hud_slot_db_key(widget_key)
+    local key = tostring(widget_key or "")
+    local bare = key:match("^hud_show_(.+)$")
+    if bare then
+        return hud_show_key(bare)
+    end
+    return key
+end
+
+-- The HUD-slot toggle list: Forever's HUD draws the guide's slots, so the panel must
+-- offer exactly those (its key set differs from the class HUD_SLOTS: judge, not
+-- judgement). A class with no guide slots, or a non-Forever family, keeps the
+-- class-derived list passed in `fallback` untouched.
+local function hud_slot_toggles_for(class_token, fallback)
+    if st.family ~= "FOREVER" then
+        return fallback
+    end
+    local fg = st.forever_guide
+    if type(fg) ~= "table" or type(fg.get_hud_slots) ~= "function" then
+        return fallback
+    end
+    local slots = fg.get_hud_slots(class_token or ST.player_class)
+    if type(slots) ~= "table" or #slots == 0 then
+        return fallback
+    end
+    local toggles = {}
+    for i = 1, #slots do
+        local slot = slots[i]
+        if type(slot) == "table" and type(slot.key) == "string" and slot.key ~= "" then
+            local title = type(slot.title) == "string" and slot.title or slot.key
+            toggles[#toggles + 1] = {
+                key = "hud_show_" .. slot.key,
+                name = title,
+                desc = slot.kind == "trinket"
+                    and ("Show the " .. title .. " slot (hidden while the slot is empty).")
+                    or ("Show the " .. title .. " icon."),
+            }
+        end
+    end
+    if #toggles == 0 then
+        return fallback
+    end
+    return toggles
+end
+
 -- Setter and getter for global funcs
 ST.opts_funcs.global = {}
 -- Retrieve the localized class name of the player (e.g., "Paladin"),
@@ -598,7 +657,7 @@ function ST:generate_top_level_options_table()
                     end
                     if type(template.slots) == "table" then
                         for slot_key, show in pairs(template.slots) do
-                            db["hud_show_" .. slot_key] = show and true or false
+                            db[hud_show_key(slot_key)] = show and true or false
                         end
                     end
                     if template.hud_icon_size ~= nil then
@@ -1708,10 +1767,11 @@ function ST:generate_class_getters_setters()
         return db[info[#info]]
     end
 
-    -- A generic setter func
-    ST.class_getsetters.setter = function(_, info, value)
+    -- The shared write path: the db key is explicit, because HUD slot toggles map
+    -- their widget id through the family-aware key helper.
+    local function apply_class_setting(key, value)
         local db = ST:get_class_table()
-        db[info[#info]] = value
+        db[key] = value
         ST:determine_form_visibility_flag()
         for h in ST:iter_hands() do
             ST:configure_texts(h)
@@ -1725,6 +1785,22 @@ function ST:generate_class_getters_setters()
         if st.hud and type(st.hud.apply_settings) == "function" then
             st.hud.apply_settings(ST)
         end
+    end
+
+    -- A generic setter func
+    ST.class_getsetters.setter = function(_, info, value)
+        apply_class_setting(info[#info], value)
+    end
+
+    -- HUD slot toggles: the widget id is hud_show_<key> on every family, but Forever
+    -- reads/writes its own hud_forever_show_<key> namespace (see hud.lua's show_key).
+    ST.class_getsetters.hud_slot_getter = function(_, info)
+        local db = ST:get_class_table()
+        return db[hud_slot_db_key(info[#info])]
+    end
+
+    ST.class_getsetters.hud_slot_setter = function(_, info, value)
+        apply_class_setting(hud_slot_db_key(info[#info]), value)
     end
 
     ST.class_getsetters.color_getter = function(_, info)
@@ -2280,8 +2356,8 @@ local function hud_rotation_widgets(slot_toggles, hud_desc, glow_desc, format_de
             order = 8.41 + (i - 1) * 0.01,
             name = slot.name,
             desc = slot.desc,
-            get = "getter",
-            set = "setter",
+            get = "hud_slot_getter",
+            set = "hud_slot_setter",
         }
     end
     return widgets
@@ -2312,7 +2388,7 @@ hud_template_matches = function(db, template)
     end
     for slot_key, show in pairs(slots) do
         local want = show and true or false
-        local got = db["hud_show_" .. slot_key] and true or false
+        local got = db[hud_show_key(slot_key)] and true or false
         if got ~= want then
             return false
         end
@@ -2377,7 +2453,7 @@ local function hud_template_widget(class_token, values)
             end
             if type(template.slots) == "table" then
                 for slot_key, show in pairs(template.slots) do
-                    db["hud_show_" .. slot_key] = show and true or false
+                    db[hud_show_key(slot_key)] = show and true or false
                 end
             end
             if template.hud_icon_size ~= nil then
@@ -3914,6 +3990,31 @@ function ST.class_opts_funcs.PALADIN(self)
                 "enable the guide above and run its prompts against the sim APL.",
         },
     }
+    -- D1: on Forever the HUD draws the Forever guide's slot set (hud.lua's create),
+    -- so the class-list toggles above are replaced by the guide-derived set. The
+    -- widgets keep the hud_show_<key> id shape; their get/set map to the family
+    -- namespace through the shared helper. Every other family keeps the literal above.
+    if st.family == "FOREVER" then
+        local fg_toggles = hud_slot_toggles_for("PALADIN", nil)
+        if fg_toggles then
+            for key in pairs(opts_group) do
+                if type(key) == "string" and key:match("^hud_show_") and key ~= "hud_show_text" then
+                    opts_group[key] = nil
+                end
+            end
+            for i = 1, #fg_toggles do
+                local toggle = fg_toggles[i]
+                opts_group[toggle.key] = {
+                    type = "toggle",
+                    order = 8.41 + (i - 1) * 0.01,
+                    name = toggle.name,
+                    desc = toggle.desc,
+                    get = "hud_slot_getter",
+                    set = "hud_slot_setter",
+                }
+            end
+        end
+    end
     return opts_group
 end
 
@@ -4623,7 +4724,7 @@ function ST.class_opts_funcs.WARRIOR(self)
     -- 8.x/9.x structure as the paladin's sections; the slot toggles mirror
     -- ST.WARRIOR.HUD_SLOTS, both family sets). Overpower glows while its dodge
     -- window is live and Execute glows in combat inside Execute range.
-    for k, v in pairs(hud_rotation_widgets({
+    for k, v in pairs(hud_rotation_widgets(hud_slot_toggles_for("WARRIOR", {
         { key = "hud_show_op", name = "Overpower", desc = "Show the Overpower icon (glows while the dodge window is live)." },
         { key = "hud_show_execute", name = "Execute", desc = "Show the Execute icon (glows in combat inside Execute range)." },
         { key = "hud_show_slam", name = "Slam", desc = "Show the Slam icon (with its GCD swipe)." },
@@ -4643,7 +4744,7 @@ function ST.class_opts_funcs.WARRIOR(self)
         { key = "hud_show_sunder", name = "Sunder Armor", desc = "Show the Sunder Armor icon (with its GCD swipe)." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
-    },
+    }),
         "A row of ability icons with cooldown swipes and remaining-time text. Icons grey out "..
             "while on cooldown, tint blue without mana and red out of range. Overpower glows "..
             "while its dodge window is live and Execute glows in combat inside Execute range. "..
@@ -5262,7 +5363,7 @@ function ST.class_opts_funcs.HUNTER(self)
     -- Cooldown HUD + Rotation Text (shared hud_rotation_widgets builder: the same
     -- 8.x/9.x structure as the paladin's sections; the slot toggles mirror
     -- ST.HUNTER.HUD_SLOTS). Kill Command glows once it is ready in combat.
-    for k, v in pairs(hud_rotation_widgets({
+    for k, v in pairs(hud_rotation_widgets(hud_slot_toggles_for("HUNTER", {
         { key = "hud_show_steady", name = "Steady Shot", desc = "Show the Steady Shot icon (with its GCD swipe)." },
         { key = "hud_show_raptor", name = "Raptor Strike", desc = "Show the Raptor Strike icon (with its GCD swipe)." },
         { key = "hud_show_kill_command", name = "Kill Command", desc = "Show the Kill Command icon (glows once it is ready in combat)." },
@@ -5272,7 +5373,7 @@ function ST.class_opts_funcs.HUNTER(self)
         { key = "hud_show_aimed", name = "Aimed Shot", desc = "Show the Aimed Shot icon (with its GCD swipe)." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
-    },
+    }),
         "A row of ability icons with cooldown swipes and remaining-time text. Icons grey out "..
             "while on cooldown, tint blue without mana and red out of range. Kill Command glows "..
             "once it is ready in combat. Unlock the frame to drag it into place.",
@@ -5958,7 +6059,7 @@ function ST.class_opts_funcs.DRUID(self)
     -- 8.x/9.x structure as the paladin's sections; the slot toggles mirror
     -- ST.DRUID.HUD_SLOTS). The Maul slot greys while a queued Maul is
     -- unaffordable; Tiger's Fury and Berserk glow in combat once ready.
-    for k, v in pairs(hud_rotation_widgets({
+    for k, v in pairs(hud_rotation_widgets(hud_slot_toggles_for("DRUID", {
         { key = "hud_show_maul", name = "Maul", desc = "Show the Maul icon (greys while a queued Maul is unaffordable)." },
         { key = "hud_show_mangle", name = "Mangle", desc = "Show the Mangle icon (with its GCD swipe)." },
         { key = "hud_show_rip", name = "Rip", desc = "Show the Rip icon (with its GCD swipe)." },
@@ -5973,7 +6074,7 @@ function ST.class_opts_funcs.DRUID(self)
         { key = "hud_show_berserk", name = "Berserk", desc = "Show the Berserk icon (glows in combat once it is ready)." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
-    },
+    }),
         "A row of ability icons with cooldown swipes and remaining-time text. Icons grey out "..
             "while on cooldown (Maul also while a queued Maul is unaffordable), tint blue "..
             "without mana and red out of range. Tiger's Fury and Berserk glow in combat "..
@@ -6548,7 +6649,7 @@ function ST.class_opts_funcs.SHAMAN(self)
     -- Cooldown HUD + Rotation Text (shared hud_rotation_widgets builder: the same
     -- 8.x/9.x structure as the paladin's sections; the slot toggles mirror
     -- ST.SHAMAN.HUD_SLOTS). Stormstrike glows once it is ready in combat.
-    for k, v in pairs(hud_rotation_widgets({
+    for k, v in pairs(hud_rotation_widgets(hud_slot_toggles_for("SHAMAN", {
         { key = "hud_show_stormstrike", name = "Stormstrike", desc = "Show the Stormstrike icon (glows once it is ready in combat)." },
         { key = "hud_show_flameshock", name = "Flame Shock", desc = "Show the Flame Shock icon (with its GCD swipe)." },
         { key = "hud_show_weave", name = "Lightning Bolt", desc = "Show the Lightning Bolt weave icon (with its GCD swipe)." },
@@ -6574,7 +6675,7 @@ function ST.class_opts_funcs.SHAMAN(self)
         { key = "hud_show_coe", name = "Call of the Elements", desc = "Show the Call of the Elements icon (glows in combat while the water totem has under 20 s left)." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
-    },
+    }),
         "A row of ability icons with cooldown swipes and remaining-time text. Icons grey out "..
             "while on cooldown, tint blue without mana and red out of range. Stormstrike glows "..
             "once it is ready in combat. Unlock the frame to drag it into place.",
@@ -7164,7 +7265,7 @@ function ST.class_opts_funcs.ROGUE(self)
     -- ST.ROGUE.HUD_SLOTS). Slice and Dice, Rupture and Expose Armor glow in their
     -- final 3 seconds; the rotation label reads ST.ROGUE.get_rotation_key (the
     -- guide's own decision: POOL, NOW, or the localized action name).
-    for k, v in pairs(hud_rotation_widgets({
+    for k, v in pairs(hud_rotation_widgets(hud_slot_toggles_for("ROGUE", {
         { key = "hud_show_snd", name = "Slice and Dice", desc = "Show the Slice and Dice icon." },
         { key = "hud_show_rupture", name = "Rupture", desc = "Show the Rupture icon." },
         { key = "hud_show_ea", name = "Expose Armor", desc = "Show the Expose Armor icon." },
@@ -7182,7 +7283,7 @@ function ST.class_opts_funcs.ROGUE(self)
         { key = "hud_show_coldblood", name = "Cold Blood", desc = "Show the Cold Blood icon." },
         { key = "hud_show_trinket1", name = "Trinket 1", desc = "Show the top trinket slot (hidden while the slot is empty)." },
         { key = "hud_show_trinket2", name = "Trinket 2", desc = "Show the bottom trinket slot (hidden while the slot is empty)." },
-    },
+    }),
         "A row of ability icons with cooldown swipes and remaining-time text. Icons grey out "..
             "while on cooldown, tint blue without energy and red out of range. Slice and Dice, "..
             "Rupture and Expose Armor glow in their final seconds. Unlock the frame to drag it "..

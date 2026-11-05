@@ -100,6 +100,7 @@ run "lua5.1 tests/secret_guard_state.lua" lua5.1 tests/secret_guard_state.lua
 run "lua5.1 tests/lrc_guard_state.lua" lua5.1 tests/lrc_guard_state.lua
 run "lua5.1 tests/spell_known_state.lua" lua5.1 tests/spell_known_state.lua
 run "lua5.1 tests/spell_query_family_state.lua" lua5.1 tests/spell_query_family_state.lua
+run "lua5.1 tests/forever_secret_compat_state.lua" lua5.1 tests/forever_secret_compat_state.lua
 run "lua5.1 tests/range_source_state.lua" lua5.1 tests/range_source_state.lua
 run "lua5.1 tests/power_bar_state.lua" lua5.1 tests/power_bar_state.lua
 run "lua5.1 tests/toc_check.lua" lua5.1 tests/toc_check.lua

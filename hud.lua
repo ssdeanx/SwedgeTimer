@@ -54,6 +54,9 @@
 --     text_remaining  countdown text override (defaults to remaining); swipes shorter
 --                     than 2 s (the GCD) never show text
 --     desaturate      true = grey the icon
+--     restricted      true = the client hid the cooldown timing (secret value): the
+--                     slot is UNKNOWN, not ready. The HUD greys it like a cooldown and
+--                     never fabricates a swipe or countdown text from the unknown read
 --     usable          false = tint blue (no mana / insufficient resources)
 --     in_range        false = tint red (target out of the ability's range)
 --     glow            true = proc glow while hud_glow_enabled
@@ -220,11 +223,14 @@ local HUD_HIDDEN_STATE = { hidden = true }
 -- (`mod.get_hud_state(` is the dynamic call site); the shared guard (st.guard.run)
 -- wraps this helper.
 local function call_hud_provider(mod, self, slot, now)
-    if st.family == "FOREVER" and st.forever_guide and st.forever_guide.get_hud_state then
-        local state = st.forever_guide.get_hud_state(self.player_class, self, slot, now)
-        if state then
-            return state
+    if st.family == "FOREVER" then
+        -- The Forever guide owns every slot it lists. A nil from its provider is an
+        -- unknown slot, never a licence to run the class provider on a Forever row.
+        local fg = st.forever_guide
+        if type(fg) == "table" and type(fg.get_hud_state) == "function" then
+            return fg.get_hud_state(self.player_class, self, slot, now)
         end
+        return nil
     end
     return mod.get_hud_state(self, slot, now)
 end
@@ -603,7 +609,15 @@ function HUD.create(self)
     end
     for i = 1, #usable do
         local icon = create_icon(frame, usable[i], i, db_for_font)
+        -- Forever guide slots are keyed in their own namespace: the legacy
+        -- hud_show_<key> defaults ship false for several of the same keys
+        -- (holy_shield, holy_strike, lightningshield, searing, claw), which would
+        -- pin those Forever icons hidden at every level. Non-Forever families keep
+        -- the exact legacy key, and only Forever overrides it.
         icon.show_key = "hud_show_" .. usable[i].key
+        if is_forever then
+            icon.show_key = "hud_forever_show_" .. usable[i].key
+        end
         icon.guard_site = "hud:" .. tostring(usable[i].key or "?")
         HUD.icons[#HUD.icons + 1] = icon
     end
@@ -647,8 +661,8 @@ function HUD.build_event_frame()
     frame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
     frame:RegisterEvent("PLAYER_ENTERING_WORLD")
     local utils = rawget(_G, "C_EventUtils")
-    local valid = true
-    if type(utils) == "table" and type(utils.IsEventValid) == "function" then
+    local valid = not st.is_mainline
+    if valid and type(utils) == "table" and type(utils.IsEventValid) == "function" then
         valid = utils.IsEventValid("COMBAT_LOG_EVENT_UNFILTERED") and true or false
     end
     -- Fallback (hunter-audit item 5): the CLEU registration is probed +
@@ -1193,6 +1207,10 @@ function HUD.paint(self, icon, s, now)
     end
     now = now or api.get_time()
     local db = self:get_class_table()
+    -- A restricted cooldown read is unknown, not ready: the provider keeps
+    -- remaining/duration at 0 (never inventing a swipe) and flags the state. Paint it
+    -- as a distinct unknown state below - greyed, with no fabricated text or swipe.
+    local restricted = s.restricted == true
 
     -- texture: the static default from creation, or the state's per-tick override
     -- (a trinket swaps its texture with the equipped item)
@@ -1206,7 +1224,7 @@ function HUD.paint(self, icon, s, now)
     -- cooldown is constant (end - duration), so the comparison re-sets only when a
     -- cooldown appears, restarts or changes shape - the archive's string-key rule
     -- without the per-tick string.
-    if s.duration and s.duration > 0 and (s.remaining or 0) > 0 then
+    if not restricted and s.duration and s.duration > 0 and (s.remaining or 0) > 0 then
         local start = s.start or (now - (s.duration - s.remaining))
         local reverse = s.reverse and true or false
         if not icon.cd_key
@@ -1250,7 +1268,7 @@ function HUD.paint(self, icon, s, now)
     if text_remaining == nil then
         text_remaining = s.remaining
     end
-    if db.hud_show_text ~= false and text_remaining and text_remaining > 0
+    if not restricted and db.hud_show_text ~= false and text_remaining and text_remaining > 0
         and not (s.duration and s.duration < GCD_TEXT_HIDE) then
         local rounded
         if text_remaining < WARN_SECONDS then
@@ -1286,8 +1304,9 @@ function HUD.paint(self, icon, s, now)
         icon.text:Hide()
     end
 
-    -- desaturate while on cooldown (or when the provider asks for it)
-    local desaturate = (db.hud_desaturate and s.desaturate) and true or false
+    -- desaturate while on cooldown (or when the provider asks for it, or when the
+    -- client hid the timing: an unknown cooldown must not read as ready)
+    local desaturate = ((db.hud_desaturate and s.desaturate) or restricted) and true or false
     if desaturate ~= icon.desaturated then
         icon.desaturated = desaturate
         icon.texture:SetDesaturated(desaturate)

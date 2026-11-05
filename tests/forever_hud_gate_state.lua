@@ -211,6 +211,133 @@ for _, cls in ipairs(classes) do
     local ok = HUD.create(mock_self)
     check(ok == true, "HUD.create succeeded on Forever for " .. cls)
     check(#HUD.icons == #slots, cls .. " HUD created exactly " .. #slots .. " icons (got " .. #HUD.icons .. ")")
+
+    -- Forever icons are gated in their own show-key namespace. The legacy
+    -- hud_show_<key> defaults ship false for several of the same slot keys
+    -- (holy_shield, holy_strike, lightningshield, searing, claw), so an icon reading
+    -- the legacy key could never appear at any level.
+    local namespace_ok = true
+    local legacy_key_used = false
+    for i = 1, #HUD.icons do
+        local k = HUD.icons[i].slot.key
+        if HUD.icons[i].show_key ~= "hud_forever_show_" .. k then namespace_ok = false end
+        if HUD.icons[i].show_key == "hud_show_" .. k then legacy_key_used = true end
+    end
+    check(namespace_ok, cls .. ": every Forever icon reads the hud_forever_show_<key> namespace")
+    check(not legacy_key_used, cls .. ": no Forever icon reads a legacy hud_show_<key> gate")
+end
+
+-- 1b. D2: a restricted cooldown read is unknown, not ready. The Forever provider flags
+-- it (state.restricted) with remaining/duration 0; paint must grey the icon and must
+-- never fabricate a swipe or countdown text - not even from numbers a provider supplies
+-- alongside the flag. A non-restricted ready state stays full-bright (unchanged).
+do
+    local db = { hud_show_text = true, hud_desaturate = true }
+    local paint_self = {
+        get_class_table = function() return db end,
+        convert_color = function() return 1, 1, 1, 1 end,
+    }
+    HUD.frame = nil
+    HUD.icons = {}
+    local ok = HUD.create({
+        player_class = "PALADIN",
+        get_class_table = function() return db end,
+        get_hand_table = function() return { bar_width = 275 } end,
+        convert_color = function() return 1, 1, 1, 1 end,
+    })
+    check(ok == true and HUD.icons[1] ~= nil, "D2: the paladin HUD builds a paint fixture")
+    local icon = HUD.icons[1]
+    if icon then
+        -- Control: a readable cooldown paints the swipe, the text and the grey.
+        HUD.paint(paint_self, icon, { remaining = 4, duration = 6, text_remaining = 4, desaturate = true }, 1000)
+        eq(icon.cooldown.shown, true, "D2 control: a readable cooldown shows the swipe")
+        eq(icon.text.hidden, false, "D2 control: a readable cooldown shows the text")
+        eq(icon.texture.desaturated, true, "D2 control: a readable cooldown desaturates")
+        -- The restricted state: greyed, no swipe, no text.
+        HUD.paint(paint_self, icon, { restricted = true, remaining = 0, duration = 0 }, 1000)
+        eq(icon.cooldown.shown, false, "D2: a restricted state draws no swipe")
+        eq(icon.text.hidden, true, "D2: a restricted state draws no countdown text")
+        eq(icon.texture.desaturated, true, "D2: a restricted state desaturates")
+        -- Even a provider that supplies numbers alongside the flag cannot fabricate
+        -- readiness: the unknown flag wins.
+        HUD.paint(paint_self, icon, { restricted = true, remaining = 3, duration = 6, text_remaining = 3 }, 1000)
+        eq(icon.cooldown.shown, false, "D2: restricted suppresses a supplied swipe")
+        eq(icon.text.hidden, true, "D2: restricted suppresses supplied countdown text")
+        -- Non-restricted / non-Forever state unchanged: a ready state is full-bright.
+        local family = st.family
+        st.family = "TBC"
+        HUD.paint(paint_self, icon, { remaining = 0, duration = 0 }, 1000)
+        eq(icon.texture.desaturated, false, "D2: a non-restricted ready state does not desaturate")
+        eq(icon.cooldown.shown, false, "D2: a non-restricted ready state draws no swipe")
+        st.family = family
+    end
+end
+
+-- 1c. D11: the Forever row never falls through to the class provider. When the guide's
+-- provider answers nil for a slot, that slot is unknown - the class provider (which
+-- used to run when the guide answered nil) must not be consulted. Non-Forever keeps
+-- its class path.
+do
+    local db = { hud_locked = true, hud_enabled = true }
+    local class_called = false
+    local class_module = {
+        HUD_SLOTS = {},
+        get_hud_state = function()
+            class_called = true
+            return { glow = true }
+        end,
+    }
+    local self_stub = {
+        player_class = "PALADIN",
+        get_class_table = function() return db end,
+        get_hand_table = function() return { bar_width = 275 } end,
+        convert_color = function() return 1, 1, 1, 1 end,
+    }
+    HUD.frame = nil
+    HUD.icons = {}
+    HUD.create(self_stub)
+    HUD.class_module = class_module
+    local orig_fg_state = st.forever_guide.get_hud_state
+    st.forever_guide.get_hud_state = function() return nil end
+    HUD.update_display(self_stub)
+    check(class_called == false,
+        "D11: a nil Forever provider never falls through to the class provider")
+    st.family = "TBC"
+    HUD.update_display(self_stub)
+    check(class_called == true,
+        "D11: a non-Forever row still uses the class provider")
+    st.family = "FOREVER"
+    st.forever_guide.get_hud_state = orig_fg_state
+end
+
+-- The five collision keys are the reason for the namespace: each ships false in the
+-- legacy per-class defaults, so the Forever icon for the same key must not read it.
+do
+    local collision_keys = { "holy_shield", "holy_strike", "lightningshield", "searing", "claw" }
+    local seen = {}
+    for _, cls in ipairs(classes) do
+        local slots = st.forever_guide.get_hud_slots(cls)
+        for i = 1, #slots do
+            seen[slots[i].key] = true
+        end
+    end
+    for i = 1, #collision_keys do
+        check(seen[collision_keys[i]] == true,
+            "forever slots include the legacy-collision key " .. collision_keys[i])
+    end
+    local presets_file = io.open(ROOT .. "config_presets.lua", "r")
+    check(presets_file ~= nil, "config_presets.lua is readable for the collision pin")
+    if presets_file then
+        local presets_src = presets_file:read("*a")
+        presets_file:close()
+        for i = 1, #collision_keys do
+            local legacy = "hud_show_" .. collision_keys[i]
+            check(presets_src:find("%f[%a_]" .. legacy .. "%s*=%s*false") ~= nil,
+                legacy .. " still ships false in the legacy defaults (the collision this closes)")
+            check(presets_src:find("%f[%a_]hud_forever_show_" .. collision_keys[i]) == nil,
+                "no hud_forever_show_" .. collision_keys[i] .. " default ships (nil = shown)")
+        end
+    end
 end
 
 -- Helper to find a slot by key
@@ -348,6 +475,59 @@ check(allows(earthshock_slot) == true, "shaman gate: Earth Shock (Rank 3 ID 8045
 known_spells[17364] = true
 check(allows(stormstrike_slot) == true, "shaman gate: Stormstrike dynamically allowed after talent learned")
 
+-- 2a. VERIFIED FOREVER IDS: the rank tables now carry the Wowhead Forever ladders.
+-- The gate walks the slot's whole ids table (hud.lua compute_spell_known), so every
+-- changed primary id must still open its slot and an unlearned slot must stay hidden.
+do
+    local warrior_by_key, paladin_by_key, shaman_by_key = {}, {}, {}
+    for _, s in ipairs(st.forever_guide.get_hud_slots("WARRIOR")) do warrior_by_key[s.key] = s end
+    for _, s in ipairs(st.forever_guide.get_hud_slots("PALADIN")) do paladin_by_key[s.key] = s end
+    for _, s in ipairs(st.forever_guide.get_hud_slots("SHAMAN")) do shaman_by_key[s.key] = s end
+
+    local slam_slot = warrior_by_key.slam
+    local bloodthrill_slot = warrior_by_key.bloodthrill
+    local shield_slam_slot = warrior_by_key.shield_slam
+    check(slam_slot ~= nil and bloodthrill_slot ~= nil and shield_slam_slot ~= nil,
+        "verified ids: warrior slam/bloodthrill/shield_slam slots found")
+    known_spells = {}
+    check(allows(slam_slot) == false, "verified ids: Slam hidden before it is learned")
+    known_spells[1240193] = true
+    check(allows(slam_slot) == true, "verified ids: Slam's new primary id 1240193 opens the slot")
+    known_spells = {}
+    known_spells[1289682] = true
+    check(allows(bloodthrill_slot) == true, "verified ids: Bloodthrill's 1289682 opens the slot")
+    known_spells = {}
+    known_spells[23925] = true
+    check(allows(shield_slam_slot) == true, "verified ids: Shield Slam's top rank 23925 opens the slot")
+
+    local crusader_slot = paladin_by_key.sotc
+    local cons_slot = paladin_by_key.consecration
+    local rf_slot = paladin_by_key.rf
+    check(crusader_slot ~= nil and cons_slot ~= nil and rf_slot ~= nil,
+        "verified ids: paladin sotc/consecration/rf slots found")
+    known_spells = {}
+    known_spells[21082] = true
+    check(allows(crusader_slot) == true, "verified ids: Seal of the Crusader's 21082 opens the slot")
+    known_spells = {}
+    known_spells[20116] = true
+    check(allows(cons_slot) == true, "verified ids: Consecration rank 2 (20116) opens the slot")
+    known_spells = {}
+    known_spells[407627] = true
+    check(allows(rf_slot) == true, "verified ids: Righteous Fury's 407627 opens the slot")
+
+    local nova_slot = shaman_by_key.firenova
+    local searing_slot = shaman_by_key.searing
+    check(nova_slot ~= nil and searing_slot ~= nil,
+        "verified ids: shaman firenova/searing slots found")
+    known_spells = {}
+    known_spells[408341] = true
+    check(allows(nova_slot) == true, "verified ids: Fire Nova's 408341 opens the slot")
+    known_spells = {}
+    known_spells[10438] = true
+    check(allows(searing_slot) == true, "verified ids: Searing Totem's 10438 opens the slot")
+    known_spells = {}
+end
+
 -- Trinket leveling / usability gate:
 -- Trinket slots pass spell_known_allows (they are not spells), but are strictly
 -- filtered by HUD.icon_should_show / HUD.trinket_usable so empty or passive items stay hidden!
@@ -420,6 +600,58 @@ hs_state = st.forever_guide.get_hud_state("PALADIN", {}, holy_strike_slot, 1002.
 eq(hs_state.remaining, 4.0, "Holy Strike remaining cooldown is 4s")
 eq(hs_state.duration, 6.0, "Holy Strike duration is 6s")
 eq(hs_state.desaturate, true, "Holy Strike desaturates on cooldown")
+
+-- 4b. Restricted (secret-timing) cooldown read: the fifth return is true only when
+-- the client could not answer readably. That is unknown, not ready - no swipe may be
+-- invented (the running GCD echo included: a swipe that expires still reads "ready")
+-- and the state carries the flag (gated per call so it cannot latch).
+local orig_get_cooldown = st.api.GetSpellCooldown
+st.api.GetSpellCooldown = function() return 0, 0, 0, 0, true end
+local gcd_self = { gcd = { expires = 1003.0, spell_length = 1.5 } }
+local restricted_state = st.forever_guide.get_hud_state("PALADIN", gcd_self, holy_strike_slot, 1002.0)
+eq(restricted_state.remaining, 0, "restricted: no cooldown swipe is invented")
+eq(restricted_state.duration, 0, "restricted: no duration is invented")
+eq(restricted_state.restricted, true, "restricted: the state carries the restriction flag")
+eq(restricted_state.desaturate, false, "restricted: an unknown cooldown does not desaturate")
+eq(restricted_state.text_remaining, nil, "restricted: no countdown text is invented")
+st.api.GetSpellCooldown = orig_get_cooldown
+local readable_self = { gcd = { expires = 1003.0, spell_length = 1.5 } }
+local readable_state = st.forever_guide.get_hud_state("PALADIN", readable_self, holy_strike_slot, 1002.0)
+eq(readable_state.restricted, nil, "restricted: the flag is cleared on the next readable read")
+eq(readable_state.remaining, 4.0, "restricted: the readable path is unchanged after a restricted read")
+
+-- A restricted flag alongside a readable duration is not unknown: the timing wins.
+st.api.GetSpellCooldown = function() return 1000.0, 6.0, 0, 0, true end
+local flagged_readable = st.forever_guide.get_hud_state("PALADIN", {}, holy_strike_slot, 1002.0)
+eq(flagged_readable.restricted, nil, "restricted: a readable duration keeps the flag clear")
+eq(flagged_readable.remaining, 4.0, "restricted: a readable duration still swipes")
+st.api.GetSpellCooldown = orig_get_cooldown
+
+-- 4c. Name-vs-id fallback: the NAME query is restricted, this slot's own ID answers
+-- readably with no cooldown. The readable answer is an answer ("not on cooldown"), so
+-- the flag clears and the running GCD echo paints - it used to be suppressed by the
+-- stale name-query flag, which also dropped the state's readable verdict.
+st.api.GetSpellCooldown = function(query)
+    if type(query) == "string" then
+        return 0, 0, 0, 0, true
+    end
+    return 0, 0
+end
+local fallback_self = { gcd = { expires = 1003.0, spell_length = 1.5 } }
+local fallback_state = st.forever_guide.get_hud_state("PALADIN", fallback_self, holy_strike_slot, 1002.0)
+eq(fallback_state.restricted, nil, "restricted fallback: a readable id answer clears the flag")
+eq(fallback_state.remaining, 1.0, "restricted fallback: the readable id answer restores the GCD echo")
+eq(fallback_state.duration, 1.5, "restricted fallback: the GCD duration is used")
+st.api.GetSpellCooldown = orig_get_cooldown
+
+-- No fallback at all (the slot carries no id): the restricted flag stands and no swipe
+-- or GCD echo is invented.
+local name_only_slot = { key = "name_only", kind = "spell", spell_name = "Name Only" }
+st.api.GetSpellCooldown = function() return 0, 0, 0, 0, true end
+local name_only_state = st.forever_guide.get_hud_state("PALADIN", fallback_self, name_only_slot, 1002.0)
+eq(name_only_state.restricted, true, "restricted name-only slot: the flag stands")
+eq(name_only_state.remaining, 0, "restricted name-only slot: no cooldown or GCD swipe is invented")
+st.api.GetSpellCooldown = orig_get_cooldown
 
 -- 5. Test Next Action Leveling Fallback Logic across ALL 6 CLASSES
 

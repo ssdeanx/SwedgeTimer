@@ -183,7 +183,11 @@ local GUIDE_SPELL_NAMES = {
 	builder = "Sinister Strike",
 	rupture = "Rupture",
 	eviscerate = "Eviscerate",
-	envenom = "Envenom",
+	-- The Forever client names the finisher "Venom" (the practice row already
+	-- carries spell_names = { FOREVER = "Venom" }); the classic-line clients
+	-- keep "Envenom". Family-aware at load, so every other family resolves the
+	-- exact name it always did.
+	envenom = (st.family == "FOREVER") and "Venom" or "Envenom",
 	expose = "Expose Armor",
 	shiv = "Shiv",
 	tea = "Thistle Tea",
@@ -924,6 +928,7 @@ ST.ROGUE.guide = {
 			raw.unknown = true
 		end
 		local unknown = raw.unknown == true
+			or raw.inputs_unknown == true
 			or (type(inputs) == "table" and inputs.inputs_unknown == true)
 		out.action = unknown and nil or raw.action
 		out.hold = false
@@ -975,6 +980,18 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 	inputs.max_energy = (type(max_energy) == "number" and max_energy > 0) and max_energy or nil
 	local cp = api.UnitPower("player", 4)
 	inputs.cp = type(cp) == "number" and cp or nil
+
+	-- Forever: the dagger-builder gate. FG.resolve_rogue_spec reads
+	-- inputs.mh_is_dagger to choose Backstab over Sinister Strike, and the class
+	-- gather had no producer for it. Only the Forever gather publishes the field;
+	-- every other family leaves it untouched (nil) exactly as before. The read is
+	-- the class's own dagger_mainhand() helper (live mainhand subclass through
+	-- compat); the helper answers false when the client cannot identify the item
+	-- (its existing shape at the builder gate), so the producer follows that one
+	-- read rather than inventing a second one.
+	if st.family == "FOREVER" then
+		inputs.mh_is_dagger = dagger_mainhand()
+	end
 
 	-- The proc-aware tick predictor feeds the pooling band ("finisher before the tick
 	-- that would cap you"); nil = unknown, and the band predicate then pools silently.
@@ -1030,7 +1047,7 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 	inputs.deadly_stacks = deadly_found and deadly_stacks or nil
 	inputs.deadly_remaining = deadly_found and (deadly_remains or 0) or nil
 
-	local envenom_entry = resolve_named_spell("player:envenom", "Envenom", now)
+	local envenom_entry = resolve_named_spell("player:envenom", GUIDE_SPELL_NAMES.envenom, now)
 	local envenom_found, envenom_remains = false, nil
 	if envenom_entry then
 		envenom_found, envenom_remains = find_unit_aura("player", "HELPFUL",
@@ -2493,7 +2510,10 @@ ST.ROGUE.practice_rotation = {
 	},
 	{
 		action = "envenom",
-		label = "Envenom",
+		-- The Forever client names this finisher "Venom"; every other family keeps
+		-- "Envenom". The label follows the running client, like the gathered
+		-- spell names (the practice slice itself is family-selected separately).
+		label = (st.family == "FOREVER") and "Venom" or "Envenom",
 		rule = "3",
 		note = "the per-family Envenom rule",
 		source = "sod P5_Saber.apl.json (Envenom-primary, 4+CP); wotlk combat.apl.json (Envenom 57993 at 4+CP)",

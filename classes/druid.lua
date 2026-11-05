@@ -1159,6 +1159,20 @@ local druid_player_defs = {
     },
 }
 
+-- The Forever cat opener's Prowl def (the Ravage row's gate): appended only on
+-- the Forever family, so every other client's merged walk - and its pending
+-- count - is exactly as it was. gather_guide_inputs publishes prowl_active
+-- from this def. 9913 is the Prowl id the Forever feralcat APL's first row
+-- checks (auraIsActive(9913) -> Ravage, docs/apls_2026-11-03/druid/feralcat/
+-- adaptive.apl.json); the localized/literal name legs cover the other ranks.
+if st.family == "FOREVER" then
+    druid_player_defs[#druid_player_defs + 1] = {
+        key = "prowl",
+        ids = get_tab({ 9913 }),
+        fallback_names = { ["Prowl"] = true },
+    }
+end
+
 -- Reused scan state for the merged player walk, keyed by buff key (assignments
 -- only, like the target scan above).
 local druid_player_found = {}
@@ -2805,6 +2819,28 @@ function ST.DRUID.gather_guide_inputs(self, out)
     inputs.cat_form_active = nil
     if druid_player_scanned == true then
         inputs.cat_form_active = druid_player_found.catform == true
+    end
+    -- The Prowl aura (the Forever cat opener's Ravage gate, FG's
+    -- inputs.prowl_active): the same merged walk, feeding the Forever-only def
+    -- added above. true = up, false = the walk ran and found none, nil = the
+    -- walk has not answered yet (unknown - the opener stays hidden). The whole
+    -- block is unreachable on every other family, so their input table is
+    -- untouched.
+    if st.family == "FOREVER" then
+        inputs.prowl_active = nil
+        if druid_player_scanned == true then
+            inputs.prowl_active = druid_player_found.prowl == true
+            -- A miss under the secret-aura regime is unreadable, not proven
+            -- absent: compat's probe answers true only when the client says the
+            -- aura list may be secret (the hunter utility-read convention; every
+            -- classic client answers nil). A matched row stays true either way.
+            if inputs.prowl_active == false then
+                local secret_probe = api.auras_may_be_secret
+                if type(secret_probe) == "function" and secret_probe() == true then
+                    inputs.prowl_active = nil
+                end
+            end
+        end
     end
     -- The Feral-tree spec probe (the class's own "is this a feral druid?" read):
     -- the family's Feral-tree talent, probed through api.is_spell_known - true

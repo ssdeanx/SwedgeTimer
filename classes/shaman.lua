@@ -3638,6 +3638,24 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 		end
 	end
 
+	-- Water Shield maintain (D7, audit 2026-11-05): the dedicated Forever-only
+	-- producer the FG alias reads (forever_guide.lua ALIAS.watershield_active).
+	-- Same unknown-hides shape as the Lightning Shield maintain above: true = due
+	-- (the shield walk ran and NO shield aura is up), false = a shield aura is up,
+	-- nil = unknown (walk not run, secret auras, unknown spell) - never prompts.
+	-- An active Lightning Shield suppresses the prompt (switching shields mid-fight
+	-- is unconfirmed sim behaviour - filed). The probe is name-first per
+	-- spell_query; the id is the repo's own Forever Water Shield id
+	-- (FG.SPELLS.WATER_SHIELD 408510, forever_guide.lua), fallback only - nothing
+	-- invented, st.api only.
+	inputs.watershield_due = nil
+	if st.family == "FOREVER"
+		and self.weave_shield_scanned == true
+		and known_probe(spell_query(408510, "Water Shield"), "Water Shield")
+		and (type(api.auras_may_be_secret) ~= "function" or api.auras_may_be_secret() ~= true) then
+		inputs.watershield_due = (self.weave_shield_type == nil)
+	end
+
 	-- Era static totem maintain (G2, audit 2026-10-19 Era §: WF 10614 refresh
 	-- first, GoA 10627 when inactive, both above Stormstrike). Era-base only:
 	-- family ERA without the SoD MW-rune latch (SoD runs no totem maintain per

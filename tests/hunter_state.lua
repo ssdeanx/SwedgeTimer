@@ -6736,6 +6736,29 @@ do
     check(ok2, "NILSWEEP HU2 the mainhand tick tolerates a missing class row (error: " .. tostring(err2) .. ")")
 end
 
+--=========================================================================================
+-- V) Forever mana producer (audit wave 2026-11-05): the FG Serpent Sting mana gate
+-- reads inputs.mana_frac, but the gather only wrote it on SOD/TBC/WRATH. Forever now
+-- reads the same UnitPower/UnitPowerMax pair; an unavailable read stays nil.
+--=========================================================================================
+do
+    local forever = build({ project = 18, mana = { cur = 30, max = 100 } })
+    forever.ST.HUNTER.post_init(forever.ST)
+    local gathered = forever.ST.HUNTER.gather_guide_inputs(forever.ST, {})
+    near(gathered.mana_frac, 0.3,
+        "forever mana: the gather publishes the live mana fraction")
+
+    local unavailable = build({ project = 18 })
+    unavailable.ST.HUNTER.post_init(unavailable.ST)
+    eq(unavailable.ST.HUNTER.gather_guide_inputs(unavailable.ST, {}).mana_frac, nil,
+        "forever mana: an unreadable power pair stays unknown (nil)")
+
+    local era = build({ project = 2, mana = { cur = 30, max = 100 } })
+    era.ST.HUNTER.post_init(era.ST)
+    eq(era.ST.HUNTER.gather_guide_inputs(era.ST, {}).mana_frac, nil,
+        "non-forever mana: a family without an aspect row still skips the read")
+end
+
 if failures == 0 then
     print("PASS  hunter_state.lua (" .. tostring(checks) .. " checks)")
 else

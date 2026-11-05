@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.1.6"
+local version = "2.1.7"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -3240,7 +3240,8 @@ function ST:print_runtime_diag()
 			self:Print(text)
 		end
 	end
-	if st.forever_guide and type(st.forever_guide.SPELLS_BY_CLASS) == "table" then
+	if st.family == "FOREVER" and st.forever_guide
+		and type(st.forever_guide.SPELLS_BY_CLASS) == "table" then
 		local class_spells = st.forever_guide.SPELLS_BY_CLASS[self.player_class]
 		if type(class_spells) == "table" then
 			local missing_count = 0

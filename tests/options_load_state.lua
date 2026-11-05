@@ -110,7 +110,7 @@ local MODULES = {
 -- Load the real modules into a fresh namespace. Returns ST, st, env, sb - or nil + error.
 -- This stops right before set_opts() so the runtime-casing probe can run the REAL
 -- initialization order without the test-side normalisation the walk needs.
-local function load_modules(class_pretty)
+local function load_modules(class_pretty, forever, no_guide)
     local sb = { hash_calls = {}, registered = {} }
 
     -- The addon object: the class tables main.lua seeds, the db accessors the generators
@@ -200,6 +200,26 @@ local function load_modules(class_pretty)
         end
     end
     sb.st, sb.env = st, env
+    if forever then
+        -- D1 fixture: the real forever_guide.lua is not loaded by this walk; only its
+        -- slot-list surface is consumed by the options builder. The keys deliberately
+        -- differ from the class HUD_SLOTS names (judge vs judgement), which is exactly
+        -- the mismatch the family-aware toggle list must close.
+        st.family = "FOREVER"
+        if not no_guide then
+            st.forever_guide = {
+                get_hud_slots = function(class)
+                    if class ~= "PALADIN" then return nil end
+                    return {
+                        { key = "judge", title = "Judgement", kind = "spell", spell = 20271 },
+                        { key = "cs", title = "Crusader Strike", kind = "spell", spell = 35395 },
+                        { key = "trinket1", title = "Trinket 1", kind = "trinket", inv_slot = 13 },
+                        { key = "trinket2", title = "Trinket 2", kind = "trinket", inv_slot = 14 },
+                    }
+                end,
+            }
+        end
+    end
     return ST, st, env, sb
 end
 
@@ -209,8 +229,8 @@ end
 -- The second step papers over the live casing defect recorded in section 3 (the shipped
 -- option_tables.lua:83-93 table is lowercase-keyed, so the untampered runtime order
 -- crashes before any tree exists) - without it there is nothing to walk at all.
-local function build(class_pretty)
-    local ST, st, env, sb = load_modules(class_pretty)
+local function build(class_pretty, forever, no_guide)
+    local ST, st, env, sb = load_modules(class_pretty, forever, no_guide)
     if not ST then return nil, st end
 
     -- main.lua:281, verbatim: player_class_pretty, player_class = UnitClass("player").
@@ -4794,6 +4814,139 @@ do
         "LATENT L4 gcd_marker_offset_mode uses rawget")
     check(src:find('db.gcd_marker_offset_mode == "Fixed"', 1, true) == nil,
         "LATENT L4 no plain metatable-triggering gcd_marker_offset_mode read remains")
+end
+
+--=========================================================================================
+-- 27) D1: HUD slot toggles are family-aware
+--   Forever's HUD draws st.forever_guide.get_hud_slots (its own key set: judge, not
+--   judgement) and gates those icons on hud_forever_show_<key>. The options panel must
+--   therefore offer the guide's slots and read/write that namespace; every other
+--   family keeps the legacy class list and hud_show_<key> keys. The template writer and
+--   matcher ride the same helper. A helper reverted to the legacy prefix, or a slot
+--   list reverted to the class HUD_SLOTS, fails these pins.
+--=========================================================================================
+do
+    local function resolve(handler, name)
+        return type(name) == "function" and name
+            or (type(name) == "string" and type(handler) == "table" and handler[name])
+            or nil
+    end
+    local function stub_setter_tail(ST)
+        -- The shared class setter reaches into main.lua / bars.lua, which this sandbox
+        -- does not load; stub the calls so the write itself can be pinned.
+        for _, fn in ipairs({
+            "determine_form_visibility_flag", "configure_texts",
+            "configure_bar_size_and_positions", "configure_bar_appearances",
+            "configure_bar_outline", "configure_gcd_markers",
+            "set_gcd_marker_positions", "handle_bar_visibility",
+        }) do
+            ST[fn] = ST[fn] or function() end
+        end
+    end
+
+    -- (a) Forever: guide-derived slot list + forever namespace.
+    local fsb, ferr = build("Paladin", true)
+    check(fsb ~= nil, "D1: the Forever paladin options tree builds"
+        .. (fsb and "" or (": " .. tostring(ferr))))
+    if fsb then
+        local args = fsb.ST.opts_table.args.class.args or {}
+        local handler = fsb.ST.opts_table.args.class.handler
+        stub_setter_tail(fsb.ST)
+        check(type(args.hud_show_judge) == "table" and args.hud_show_judge.type == "toggle",
+            "D1: Forever offers the guide's judge slot (got "
+            .. tostring(type(args.hud_show_judge) == "table" and args.hud_show_judge.type or nil) .. ")")
+        check(args.hud_show_judgement == nil,
+            "D1: Forever drops the class-only judgement slot")
+        check(args.hud_show_holy_strike == nil and args.hud_show_cs ~= nil,
+            "D1: the Forever list is the guide's key set, not the class HUD_SLOTS")
+
+        local w = args.hud_show_judge
+        local getter = type(w) == "table" and resolve(handler, w.get) or nil
+        local setter = type(w) == "table" and resolve(handler, w.set) or nil
+        check(type(getter) == "function" and type(setter) == "function",
+            "D1: the Forever judge toggle resolves a get/set pair")
+        if type(getter) == "function" and type(setter) == "function" then
+            fsb.class_db.hud_forever_show_judge = true
+            eq(getter(nil, { "class", "hud_show_judge" }), true,
+                "D1: the Forever toggle reads hud_forever_show_<key>")
+            fsb.class_db.hud_show_judge = false
+            eq(getter(nil, { "class", "hud_show_judge" }), true,
+                "D1: the Forever toggle ignores the legacy key when the forever key is set")
+            fsb.class_db.hud_show_judge = nil
+            setter(nil, { "class", "hud_show_judge" }, false)
+            eq(fsb.class_db.hud_forever_show_judge, false,
+                "D1: the Forever toggle writes hud_forever_show_<key>")
+            check(fsb.class_db.hud_show_judge == nil,
+                "D1: the Forever toggle never writes the legacy key")
+        end
+
+        -- The template writer and matcher use the same namespace.
+        local tmpl = args.hud_template
+        check(type(tmpl) == "table" and type(tmpl.set) == "function"
+                and type(tmpl.get) == "function",
+            "D1: the Forever paladin template widget is present")
+        if type(tmpl) == "table" and type(tmpl.set) == "function" then
+            fsb.class_db = {}
+            tmpl.set(nil, "twist_core")
+            eq(fsb.class_db.hud_forever_show_cs, true,
+                "D1: the template writer writes the forever namespace")
+            check(fsb.class_db.hud_show_cs == nil,
+                "D1: the template writer never writes the legacy namespace")
+            eq(tmpl.get(), "twist_core",
+                "D1: the template matcher reads back its own forever keys")
+        end
+    end
+
+    -- (b) Forever without guide data: the existing class list is the fallback.
+    local nsb = build("Paladin", true, true)
+    check(nsb ~= nil, "D1: the Forever (no guide) options tree builds")
+    if nsb then
+        local args = nsb.ST.opts_table.args.class.args or {}
+        check(type(args.hud_show_judgement) == "table",
+            "D1: Forever without guide slots falls back to the class HUD_SLOTS list")
+        check(args.hud_show_judge == nil,
+            "D1: Forever without guide slots invents no guide slot")
+    end
+    -- A guide that answers nil for this class (the fixture has no WARRIOR entry) is
+    -- the same fallback: the class list stays, no guide slots are invented.
+    local wsb = build("Warrior", true)
+    check(wsb ~= nil, "D1: the Forever warrior options tree builds")
+    if wsb then
+        local args = wsb.ST.opts_table.args.class.args or {}
+        check(type(args.hud_show_bladestorm) == "table",
+            "D1: a Forever class with no guide slots keeps the class HUD_SLOTS list")
+        check(args.hud_show_thunder_clap == nil,
+            "D1: a Forever class with no guide slots invents no guide slot")
+    end
+
+    -- (c) Non-Forever: the class list and the legacy namespace are unchanged.
+    local lsb = build("Paladin")
+    check(lsb ~= nil, "D1: the non-Forever paladin options tree builds")
+    if lsb then
+        local args = lsb.ST.opts_table.args.class.args or {}
+        local handler = lsb.ST.opts_table.args.class.handler
+        stub_setter_tail(lsb.ST)
+        check(type(args.hud_show_judgement) == "table",
+            "D1: non-Forever keeps the class judgement slot")
+        check(args.hud_show_judge == nil,
+            "D1: non-Forever keeps the class key set")
+        local w = args.hud_show_judgement
+        local getter = type(w) == "table" and resolve(handler, w.get) or nil
+        local setter = type(w) == "table" and resolve(handler, w.set) or nil
+        check(type(getter) == "function" and type(setter) == "function",
+            "D1: the non-Forever judgement toggle resolves a get/set pair")
+        if type(getter) == "function" and type(setter) == "function" then
+            lsb.class_db.hud_show_judgement = true
+            eq(getter(nil, { "class", "hud_show_judgement" }), true,
+                "D1: a non-Forever toggle reads hud_show_<key>")
+            lsb.class_db.hud_show_judgement = nil
+            setter(nil, { "class", "hud_show_judgement" }, true)
+            eq(lsb.class_db.hud_show_judgement, true,
+                "D1: a non-Forever toggle writes hud_show_<key>")
+            check(lsb.class_db.hud_forever_show_judgement == nil,
+                "D1: a non-Forever toggle never writes the forever namespace")
+        end
+    end
 end
 
 print(string.format("%d checks, %d failed", checks, failures))

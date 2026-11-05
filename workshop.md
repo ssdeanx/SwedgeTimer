@@ -237,3 +237,7 @@ hardest, written for a desk that has never seen this tree:
     session's own fight state (`playhead_running` / frozen stamp) instead of letting a wall
     clock run from `start()`, and give every route (class session, scenario, drill list) the
     same two-frame trailer — a route that shows only the panel is a defect, not a variant.
+
+25. **A tainted register is not a pcall error.** `pcall(frame.RegisterEvent, frame, "COMBAT_LOG_EVENT_UNFILTERED")` cannot catch `ADDON_ACTION_FORBIDDEN` on Mainline-code clients — the taint block fires the forbidden event, it does not raise a Lua error. Gate the registration by family (`not st.is_mainline`) instead of probing + pcall. (Forever HUD event frame, 2026-11-05.)
+26. **A secret duration object is the readable cooldown.** `C_Spell.GetSpellCooldownDuration` carries no `SecretWhenCooldownsRestricted` while `GetSpellCooldown` does; `HasSecretValues()==false` is the gate, and only then are `GetRemainingDuration`/`GetTotalDuration`/`GetStartTime` trusted. A readable zero clears the restricted verdict — zero is "not on cooldown", not unknown. (Forever compat, 2026-11-05, operator probe `true false`.)
+27. **A wrong id in a shared ladder hides a learned spell.** Sniper `14266`, Demo Shout `11549-11551`, Searing `10587`, Claw `9823/9827`, Crusader `21183`, Consecration `20142`, Bloodthrill `1282733` each answered for the wrong spell. Rank tables come from the client's own Forever DB (`/forever/search?q=<name>` listview), never from a max-level table or another client. (Forever rank wave, 2026-11-05.)

@@ -34,10 +34,10 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 
 ---
 
-## 🚀 What's New in v2.1.6
+## 🚀 What's New in v2.1.7
 
 > [!IMPORTANT]
-> **<span style="color:#FFD700">WoW Forever (Camelot 1.60.1)</span> & <span style="color:#00BFFF">TBC Anniversary (2.5.6)</span> Launch Ready!** SwedgeTimer v2.1.6 brings complete rotation engines for all 6 melee classes calibrated directly against official simulation priority models, unified tanking rotations for Protection Paladin, Protection Warrior, and Feral Bear Druid, buttery-smooth frame performance, and real-time leveling progression from Level 1 to 70.
+> **<span style="color:#FFD700">WoW Forever (Camelot 1.60.1)</span> & <span style="color:#00BFFF">TBC Anniversary (2.5.6)</span> Launch Ready!** SwedgeTimer v2.1.7 brings complete rotation engines for all 6 melee classes calibrated directly against official simulation priority models, unified tanking rotations for Protection Paladin, Protection Warrior, and Feral Bear Druid, buttery-smooth frame performance, and real-time leveling progression from Level 1 to 70. It also hardens the WoW Forever runtime against restricted (secret) aura and cooldown reads and aligns the rogue finisher with the client's `Venom` name.
 
 ### 🌟 Release Highlights
 
@@ -45,7 +45,7 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
   - **<span style="color:#F58CBA">Paladin</span>**: Retribution (Holy Strike weaving, HoW execute, Seal cycling), Holy Shock burst, and Protection Tank (Holy Shield, Seal of Fury, Righteous Fury).
   - **<span style="color:#C79C6E">Warrior</span>**: Arms (Bloodthrill Overpower procs, Slam weaving), Fury (Bloodthrill Overpower within 5–73 rage), and Protection Tank (Shield Wall <span style="color:#FF4500"><= 35% HP</span>, Last Stand <span style="color:#FF4500"><= 40% HP</span>, Shield Slam, Revenge).
   - **<span style="color:#ABD473">Hunter</span>**: Melee Survival (gated strictly on `Strider Kick`), Ranged Turret/Weaving (with 4.0s Sniper Shot & Auto Shot clip protection), and Summon Hawk.
-  - **<span style="color:#FFF569">Rogue</span>**: Mutilate, Combat Daggers (Backstab), Subtlety (Hemo), and Combat Swords (Sinister Strike) with <span style="color:#00FF00">100% Slice & Dice uptime</span>, Envenom, TTD-based Rupture, and reactive Riposte parry procs.
+  - **<span style="color:#FFF569">Rogue</span>**: Mutilate, Combat Daggers (Backstab), Subtlety (Hemo), and Combat Swords (Sinister Strike) with <span style="color:#00FF00">100% Slice & Dice uptime</span>, Venom, TTD-based Rupture, and reactive Riposte parry procs.
   - **<span style="color:#FF7D0A">Druid</span>**: Feral Bear Tank (Barkskin <span style="color:#FF4500"><= 40% HP</span>, Frenzied Regen <span style="color:#FF4500"><= 30% HP</span>, Primal Bite, Lacerate 5-stacks) and Feral Cat DPS (Stealth Ravage, Clearcasting Shred, 5-CP Rip, Ferocious Bite).
   - **<span style="color:#0070DE">Shaman</span>**: Authentic 2H Enhancement rotation (Flame Shock DOT upkeep, Stormstrike, 5-stack Maelstrom Weapon instant Lightning Bolt, Earth Shock, Fire Nova).
 - 🛡️ **Full Tanking Engines across <span style="color:#FFD700">WoW Forever</span> & <span style="color:#00BFFF">TBC Anniversary</span>**: Dedicated **<span style="color:#F58CBA">Protection Paladin</span>** (Holy Shield, Avenger's Shield, Righteous Fury), **<span style="color:#C79C6E">Protection Warrior</span>** (Shield Wall <span style="color:#FF4500"><= 35% HP</span>, Last Stand <span style="color:#FF4500"><= 40% HP</span>, Shield Block, Shield Slam, Revenge, Devastate vs Sunder ladder), and **<span style="color:#FF7D0A">Feral Bear Druid</span>** (Frenzied Regen <span style="color:#FF4500"><= 40% HP</span>, Maul queue RIDE, Mangle, Faerie Fire, Demo Roar, Lacerate 5-stack, Swipe filler) engines with auto-shield/form detection, emergency health thresholds, and real-time leveling fallbacks.
@@ -59,6 +59,21 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
   - Fine-tuned spell matching: corrected Flame Shock rank scaling, disambiguated Hunter Aspect of the Hawk from Summon Hawk, and aligned all action prompts with HUD icon slots.
 - 📈 **Dynamic Leveling Progression (Level 1–70)**: Spells unlock dynamically in both the HUD and Next-Action Guide as you train them—**<span style="color:#00FF00">no /reload required</span>**! Clean leveling fallbacks ensure you never stall on unlearned talents.
 - ⏱️ **Native Hardware-Accurate Timing**: Seamless integration with WoW Forever's native `C_SwingTimer` API and `PLAYER_SWING` events for <span style="color:#00FF00">jitter-free weapon timing</span>.
+
+### 🛠️ WoW Forever Runtime Hardening (v2.1.7)
+
+- 🧾 **Verified Spell Rank Tables**: `FG.SPELLS` now carries the Wowhead Forever ladder set for the 81 tracked spells, replacing the earlier mixed classic/Forever ids: 80 ladders are verified against the Forever DB, with Faerie Fire (Feral) the one documented exception below. Wrong ids were removed: Sniper Shot `14266` (Raptor Strike R8) → `1310687`, Demoralizing Shout `11549`/`11550`/`11551` (Battle Shout) → `11554`/`11555`/`11556`, Searing Totem `10587` (Magma Totem) removed, Claw `9823`/`9827` (Pounce) → `5201`/`9849`/`9850`, Seal of the Crusader `21183` (Judgement debuff) removed with `21082` added, Consecration `20142` → `20116`, and Bloodthrill `1282733` (the APL's Overpower proc aura) → `1289682`.
+- ➕ **Missing Ranks Restored**: Slam R1 `1240193`, Mutilate's eight-id ladder, Backstab R9 `25300`, Lacerate R1–R5 plus alternate R4 `1299332`, Primal Bite R1–R4, Ferocious Bite R1 `1328618` and R6 `31018`, Fire Nova `408341`–`408345`, Holy Shield's single rank, the full Seal of Fury ladder, Righteous Fury `407627`, the Exorcism/Serpent Sting/Lightning Bolt alternate families, and the Maul/Shred/Swipe rank fills. Faerie Fire (Feral) now carries the operator-ordered union `{16857, 17390, 17391, 17392, 784, 1070, 13424, 13752}`: the first four are the classic fallback and `784`/`1070`/`13424`/`13752` are **unverified Forever candidates** (the spell is not present in Wowhead's Forever DB), kept by operator order — the one line not verified against Forever data.
+- 🧿 **Restricted Aura Reads Fixed**: `C_Secrets.ShouldUnitAuraIndexBeSecret` is probed before each indexed `C_UnitAuras.GetAuraDataByIndex` read, and the read is `pcall`-wrapped — a secret aura row now reports absent instead of raising the BugSack error `GetAuraDataByIndex(): Auras cannot be accessed when secret...`.
+- ⏳ **Restricted Cooldown Reads Handled Honestly**: A readable cooldown source is no longer discarded because another source returned secret values, and `C_Spell.GetSpellCooldownDuration` is used as a fallback when `GetSpellCooldown` is restricted. `api.GetSpellCooldown` gains a fifth `restricted` return so consumers can tell hidden timing apart from "ready"; the classic four-value shape is unchanged on Era / TBC / Wrath.
+- 🚫 **No Invented Timing Cues**: The Next-Action Guide marks a tick `inputs_unknown` and withholds the suggestion when the client hides cooldown timing, and the Cooldown HUD renders a restricted read as unknown — greyed, with no swipe or countdown text — instead of ready.
+- 🖼️ **Forever HUD Wiring Fixed**: Forever icons, per-icon option toggles and the HUD templates all read and write `hud_forever_show_<key>` (legacy `hud_show_*` unchanged elsewhere), so legacy `false` defaults no longer hide Holy Strike, Holy Shield, Lightning Shield, Searing Totem or Claw. A nil Forever provider answer no longer falls through to the class provider, and `/st diag`'s Forever spell-registry check now runs only on Forever clients. The HUD event frame no longer registers `COMBAT_LOG_EVENT_UNFILTERED` on Mainline-code clients (tainted register raises `ADDON_ACTION_FORBIDDEN`, uncatchable by `pcall`); classic registration unchanged.
+- 🔌 **Class-Side Forever Wiring**: Rogue threads FG's `inputs_unknown` into the guide's unknown state, publishes `mh_is_dagger` from the existing dagger helper, and uses `Venom` for Forever labels/probes (TBC/Wrath keep `Envenom`). Druid publishes tri-state `prowl_active` from the merged player-buff walk (`nil` = unknown on a secret-regime miss), hunter reads `mana_frac`, and paladin passes FG's `sor`/`WAIT` through unmapped (the legacy `sob`/`HOLD` remap stays on other families).
+- 🧹 **Guide Output No Longer Stale**: `action`, `spell_name`, `judge_call` and `rotation_key` are cleared every tick, so HOLD / POOL / WAIT branches and new fights no longer re-display the previous tick's action or latch the Judgement icon.
+- 🧭 **Guide Leveling, Stalls, Swipes and Shield Wiring**: paladin leveling requires its Seal known else HOLD/WAIT; hunter leveling and druid caster hold WAIT instead of blanking; Forever guide slots carry cooldown keys where a matching input exists; warrior Thunder Clap / Cleave stay marked filed-skeleton without a Forever target-count producer; shaman Water Shield uses its own Forever-gated due flag.
+- 🗡️ **Rogue Finisher Uses Venom**: The WoW Forever rogue finisher now uses the client's `Venom` name (id `1310703`) and is driven by `venom_ready`, `venom_buff_active` and `cp >= 3`; the internal action key stays `envenom`, so nothing else moves.
+
+*All WoW Forever behaviour in this section is verified offline; in-client confirmation on the Forever client is still pending.*
 
 ---
 
@@ -149,7 +164,7 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 
 ### 🗡️ **<span style="color:#FFF569">Rogue</span>**
 
-- **Mutilate (Assassination / Combat)**: 2-Combo-Point builder `Mutilate` → `Slice and Dice` 100% uptime → `Envenom` / `Rupture` → `Eviscerate` at 4–5 Combo Points.
+- **Mutilate (Assassination / Combat)**: 2-Combo-Point builder `Mutilate` → `Slice and Dice` 100% uptime → `Venom` / `Rupture` → `Eviscerate` at 4–5 Combo Points.
 - **Combat Daggers**: Positional `Backstab` builder → `Slice and Dice` → `Rupture` / `Eviscerate`.
 - **Subtlety**: Low-cost `Hemorrhage` builder → `Slice and Dice` → `Rupture` / `Eviscerate`.
 - **Combat Swords / Maces**: `Sinister Strike` builder → `Slice and Dice` → `Rupture` / `Eviscerate`.

@@ -1,5 +1,53 @@
 # Changelog
 
+## [2.1.7]
+
+**Verification status:** all WoW Forever changes in this release are verified offline by the unit suites; in-client behaviour on the Forever client is UNCONFIRMED (no in-client pass is recorded for 2.1.7 yet).
+
+### Fixed
+
+- **WoW Forever Spell Rank Tables Corrected (`forever_guide.lua`):**
+  - `FG.SPELLS` now pins the Wowhead Forever ladder set for the 81 tracked spells, replacing the earlier mixed classic/Forever ids: 80 ladders are verified against the Forever DB, with Faerie Fire (Feral) the one documented exception below. `tests/forever_guide_state.lua` pins every id and its order, and `tests/forever_hud_gate_state.lua` proves the corrected primary ids still open their HUD slots.
+  - Wrong ids removed: Sniper Shot `14266` (Raptor Strike R8) → `1310687`; Demoralizing Shout `11549`/`11550`/`11551` (Battle Shout) → `11554`/`11555`/`11556`; Searing Totem `10587` (Magma Totem) removed; Claw `9823`/`9827` (Pounce) → `5201`/`9849`/`9850`; Seal of the Crusader `21183` (Judgement debuff) removed and `21082` added; Consecration `20142` (retired) → `20116`; Bloodthrill `1282733` (the APL's Overpower proc aura) → `1289682`.
+  - Missing ranks added: Slam R1 `1240193`; Mutilate's eight-id ladder (`399960`, `399961`, `1241582`, `1241584`, `1241585`, `1241586`, `1241588`, `1241590`); Backstab R9 `25300`; Lacerate R1–R5 plus the alternate R4 `1299332`; Primal Bite R1–R4 (`407995`, `1238069`, `1238070`, `1238073`); Ferocious Bite R1 `1328618` and R6 `31018`; Fire Nova `408341`–`408345`; Holy Shield's single rank `20925`; the full Seal of Fury ladder (`1311649`, `1311656`, `20163`, `20419`, `20421`, `20422`, `20423`); Righteous Fury `407627`; the Exorcism `415068`–`415073`, Serpent Sting `425728`–`425737` and Lightning Bolt `408439`–`408477` alternate families; and the Maul/Shred/Swipe rank fills.
+  - Also trimmed or deduplicated in the same pass: Multi-Shot, Summon Hawk, Mortal Strike, Bloodthirst, Shield Slam, Hemorrhage, Rupture and Tiger's Fury; Seal of Righteousness gains its `20154` base.
+  - **Explicitly unverified — Faerie Fire (Feral):** the ladder is now the operator-ordered union `{16857, 17390, 17391, 17392, 784, 1070, 13424, 13752}`. `16857`/`17390`–`17392` are the classic fallback; `784`/`1070`/`13424`/`13752` are unverified Forever candidates (Faerie Fire (Feral) itself is not present in Wowhead's Forever DB), kept by operator order. This remains the only ladder not verified against Forever data.
+- **WoW Forever (Camelot 1.60.1 / Interface 16001) Restricted Aura Reads (`compat.lua`):**
+  - `api.UnitAura` asks `C_Secrets.ShouldUnitAuraIndexBeSecret` about the exact unit/index/filter first and skips only a row the client declares secret; the indexed `C_UnitAuras.GetAuraDataByIndex` read is also `pcall`-wrapped, so a restricted row returns nil instead of raising the BugSack error `GetAuraDataByIndex(): Auras cannot be accessed when secret...`.
+  - Clients without `C_Secrets` keep reading every row (the probe is a no-op), and a raised read now degrades to absent instead of propagating.
+- **WoW Forever Restricted Cooldown Reads (`compat.lua`):**
+  - A readable cooldown source is no longer discarded because another source returned secret values: any readable answer, including a readable zero ("not on cooldown"), clears the restricted verdict.
+  - When `C_Spell.GetSpellCooldown` returns secret timing, `C_Spell.GetSpellCooldownDuration` is used as a fallback (only when its `HasSecretValues()` answers exactly `false`) and reconstructed into the classic `(start, duration)` shape.
+  - `api.GetSpellCooldown` gains a fifth `restricted` return, true only when no readable source answered. Every other read keeps the classic four-value arity, so Era / TBC / Wrath callers observe no shape change.
+- **WoW Forever HUD Event Frame (`hud.lua`):**
+  - `HUD.build_event_frame` no longer attempts `COMBAT_LOG_EVENT_UNFILTERED` registration on Mainline-code clients (`st.is_mainline`): the register call from tainted code raises `ADDON_ACTION_FORBIDDEN`, which `pcall` cannot catch. Classic Era / TBC / Wrath keep the probed + `pcall`-guarded registration exactly.
+- **WoW Forever Next-Action Guide (`forever_guide.lua`):**
+  - A restricted cooldown read marks the tick `inputs_unknown` instead of reading as "ready", so the guide withholds its suggestion rather than cueing an ability whose timing the client is hiding.
+- **WoW Forever HUD Wiring (`hud.lua`, `option_tables.lua`, `main.lua`):**
+  - Forever HUD icons, per-icon option toggles and the HUD template writer/matcher all use the `hud_forever_show_<key>` namespace; the legacy `hud_show_<key>` namespace is unchanged on other families. The option panel also offers the Forever guide's own slot keys (`judge`, not `judgement`).
+  - A restricted cooldown read renders as unknown, not ready: the icon is greyed with no swipe or countdown text, even if a provider supplies timing numbers alongside the flag.
+  - A nil Forever provider answer no longer falls through to the class provider; that slot stays unknown instead of borrowing a class-module state.
+  - `/st diag`'s Forever spell-registry resolution check is gated to `st.family == "FOREVER"`, so classic clients no longer receive Forever-table `MISSING spell` lines.
+- **WoW Forever Class-Side Guide Wiring (`classes/rogue.lua`, `classes/druid.lua`, `classes/hunter.lua`, `classes/paladin.lua`):** (offline-verified; in-client UNCONFIRMED)
+  - **Rogue:** `raw.inputs_unknown` now threads into the guide's unknown state, so a restricted FG tick suppresses the action instead of displaying it. `mh_is_dagger` is published from the existing `dagger_mainhand()` helper for the Forever spec resolver, and Forever labels/probes use `Venom` while every non-Forever family (TBC/Wrath included) keeps `Envenom`.
+  - **Druid:** `prowl_active` is published tri-state — `true`/`false` from the existing merged player-buff walk, `nil` before the walk answers or when a secret-regime miss cannot be read — so the cat opener's Ravage row stays hidden on unknown instead of treating Prowl as down.
+  - **Hunter:** `mana_frac` is read on Forever as well, feeding the aspect rows' mana thresholds.
+  - **Paladin:** Forever passes FG's `action`/`hold_text` through unchanged (`sor` stays `sor`, `WAIT` stays `WAIT`); the legacy `sob`/`HOLD` display remap is unchanged on every other family.
+- **Next-Action Output Reuse (`forever_guide.lua`):**
+  - `FG.evaluate` clears `action`, `spell_name`, `judge_call` and `rotation_key` at the start of every tick, so a HOLD / POOL / WAIT branch or a new fight no longer re-displays the previous tick's action or latches the Judgement icon.
+- **WoW Forever Guide Leveling, Stalls, Swipes and Shield Wiring (`forever_guide.lua`, `classes/shaman.lua`, `compat.lua`):**
+  - Paladin leveling no longer prompts an unlearned Seal: the ret and general fallbacks require Seal of Command / Seal of Righteousness known, else HOLD/WAIT (levels 1-3 hold instead of cueing).
+  - Hunter leveling and druid caster no longer blank the guide: an empty Forever priority holds WAIT with a comment that caster DPS is unmodeled.
+  - Forever guide slots now carry `cooldown_key` + `swipe_duration` where a matching cooldown input exists, so the Next-Action frame can render cooldown swipes; keyless where no input exists.
+  - Warrior Thunder Clap / Cleave arms kept with filed-skeleton markers: `target_count` has no Forever producer, so they stay unreachable rather than removed and widening a fallthrough.
+  - Shaman Water Shield uses a dedicated Forever-gated `watershield_due` producer instead of sharing the Lightning Shield line.
+  - Druid Shred keeps its allow-but-note comment (`behind_target` has no honest probe); `compat.lua` shapeshift comment exempts Forever.
+
+### Changed
+
+- **Rogue Finisher Renamed to Venom on WoW Forever (`forever_guide.lua`):** `FG.SPELLS.ENVENOM` now carries the client name `Venom` (id `1310703`, unchanged) and `SPELLS_BY_NAME` maps `Venom`. The finisher is reachable through the Forever producer fields `venom_ready`, `venom_buff_active` and `cp >= 3`; the internal Lua key stays `ENVENOM` and the action/slot key stays `envenom`, so the class modules and options surface are untouched.
+- **Version 2.1.7:** Every flavor TOC and `main.lua` now report version `2.1.7`.
+
 ## [2.1.6]
 
 ### Added
