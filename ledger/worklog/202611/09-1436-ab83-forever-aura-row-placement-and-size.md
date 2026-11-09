@@ -1,7 +1,7 @@
 # 20261109-1436-ab83-forever-aura-row-placement-and-size: Forever aura row placement and size
 
 - **Tags**: aura_icons, Forever, layout, size
-- **Status**: doing · 2026-11-09 15:07:23 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
+- **Status**: doing · 2026-11-09 15:23:47 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
 - **Created**: 2026-11-09 14:36:34 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
 
 <!-- Header lines are maintained by the script, fixed order: Tags → Status → Created → Sealed.
@@ -37,12 +37,14 @@ chose (swing bar vs cast/Rapid Fire/target warning) and its `GetTop`; no height 
   27 once, guarded by `aura_icons_size_27`, then leaves later explicit sizes alone.
 - Placement: the row anchors above the highest plain `GetTop` among the topmost visible
   swing bar, `ST.hunter_ui.cast_frame`, `.rapid_fire_bar` and `.target_warning`; the
-  chosen widget becomes the `BOTTOM`/`TOP` anchor at `BAR_GAP`. This uses actual frame
-  geometry (not a guessed cast-bar height), never measures an aura container, and moves
-  the row above the Auto Shot cast bar when that widget is higher.
+  chosen widget becomes the `BOTTOM`/`TOP` anchor at `BAR_GAP + HUNTER_GAP` (6 + 6 px).
+  The crop of the operator screenshot showed the row correctly above the Auto Shot bar
+  but only ~2 px clear; `HUNTER_GAP` adds the missing visual clearance. This uses actual
+  frame geometry (not a guessed cast-bar height) and never measures an aura container.
 - Tests: `aura_icons_state` 863/0 (default 27, 22->27 migration, hunter widget anchor and
-  restore, both rows); mutants M11 hunter-widget anchor ignored (2 fails), M7 reservation
-  removed (2), M8 default 22 (13); full harness 59/0; luacheck 2/0 tree floor.
+  restore, 12/55 px gap, both rows); mutants M14 hunter clearance removed (2 fails), M11
+  hunter-widget anchor ignored (2), M7 reservation removed (2), M8 default 22 (13); full
+  harness 59/0; luacheck 2/0 tree floor.
 - UNCONFIRMED: the live hunter widget tops and the exact on-screen clearance; the
   in-client Auto Shot observation is the only close.
 
@@ -59,3 +61,4 @@ verification of the Auto Shot clearance and the 27 px edge is pending.
 - 2026-11-09 14:36:55 · claim · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · claimed → doing
 - 2026-11-09 14:40:26 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Icon edge 22->27 with one-time 22->27 migration; A.anchor reserves hunter cast_frame + rapid_fire_bar heights (+2 each) above the top bar. aura_icons_state 860/0, mutants M7/M8 killed, full 59/0. Next: reload and confirm Auto Shot cast bar clearance.
 - 2026-11-09 15:07:23 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Aura row now anchors to the highest plain GetTop among the topmost swing bar, hunter cast_frame, rapid_fire_bar and target_warning (no guessed height). aura_icons_state 863/0, M11 killed, full 59/0. Next: reload and confirm Auto Shot cast bar clearance.
+- 2026-11-09 15:23:47 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Screenshot crop proved the row was correctly above the cast bar but only ~2 px clear. Added A.HUNTER_GAP=6 on top of BAR_GAP=6 for hunter-widget anchors; 12/55 px offsets. aura_icons_state 863/0, M14 killed, full 59/0. Next: reload and re-check the Auto Shot edge.
