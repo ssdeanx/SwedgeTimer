@@ -1,6 +1,5 @@
 {
   "tasks": {
-    "20261109-1436-ab83-forever-aura-row-placement-and-size": {"category": null, "created": "2026-11-09 14:36:34", "creator": "eca46018-7d91-4ccd-92cf-2be388cff71c", "creator_name": "taskmaster", "finished": null, "owner": null, "owner_name": null, "started": null, "status": "open", "tags": ["aura_icons", "Forever", "layout", "size"], "title": "Forever aura row placement and size", "updated": "2026-11-09 14:36:34", "worklog": "worklog/202611/09-1436-ab83-forever-aura-row-placement-and-size.md"}
   },
   "version": "20261022000000"
 }
