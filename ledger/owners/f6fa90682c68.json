@@ -1,7 +1,6 @@
 {
   "identity": {"uuid": "eca46018-7d91-4ccd-92cf-2be388cff71c"},
   "tasks": {
-    "20261109-0421-c7bd-forever-hud-动作条级冷却硬化": {"category": "缺陷修复", "created": "2026-11-09 04:21:29", "creator": "eca46018-7d91-4ccd-92cf-2be388cff71c", "creator_name": "taskmaster", "finished": null, "owner": "eca46018-7d91-4ccd-92cf-2be388cff71c", "owner_name": "taskmaster", "started": "2026-11-09 04:21:29", "status": "doing", "tags": ["HUD", "cooldown", "GCD", "Forever", "taint"], "title": "Forever HUD 动作条级冷却硬化", "updated": "2026-11-09 04:22:12", "worklog": "worklog/202611/09-0421-c7bd-forever-hud-动作条级冷却硬化.md"}
   },
   "version": "20261022000000"
 }
