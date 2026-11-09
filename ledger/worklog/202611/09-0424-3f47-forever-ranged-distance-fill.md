@@ -1,7 +1,7 @@
 # 20261109-0424-3f47-forever-ranged-distance-fill: Forever ranged distance fill
 
 - **Tags**: range, weave_range, Forever, exact-distance
-- **Status**: doing · 2026-11-09 15:07:20 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
+- **Status**: doing · 2026-11-09 15:23:49 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
 - **Created**: 2026-11-09 04:24:49 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
 
 <!-- Header lines are maintained by the script, fixed order: Tags → Status → Created → Sealed.
@@ -57,18 +57,20 @@ event validity, UnitDistanceSquared). Source points:
   `BOTTOMLEFT` at `-BAR_GAP`; width follows the anchor; top and bottom screen clamps.
   The aura row above the top bar is no longer in the same space.
 - Bottom-bar in-instance fallback (2026-11-09): the left hunter range helper works
-  through `api.IsSpellInRange`. `weave_range.spell_band` uses the hunter UI's Auto Shot /
-  Wing Clip / Raptor Strike tokens (fallback names) when both native checks are silent;
-  `wr.update` tries swing -> spell and records `src=spell`. This is a band, not an
-  invented yard count; the exact `UnitPosition` tier still wins when it answers.
+  through `api.IsSpellInRange` with numeric-ID fallbacks. The first duplicate used only
+  names and still returned nil. `weave_range.spell_band` now calls the helper's own
+  `ui.spell_range_band()` bridge (same Auto Shot / Wing Clip / Raptor Strike probes and
+  IDs); a name-only duplicate remains only for older loads. `wr.update` tries swing ->
+  spell and records `src=spell`. This is a band, not an invented yard count; the exact
+  `UnitPosition` tier still wins when it answers.
 - LRC: not used and not patched. Vendored `LibRangeCheck-2.0.lua` sets
   `modernSpellRange` true on Forever and deliberately builds no spell checkers; its
   interact ladder was removed because `CheckInteractDistance` is protected. `GetRange`
   returns nil. `Libs/` is untouched.
-- Tests: `range_source_state` 161/0; `weave_bar_state` 182/0 (below-power anchor,
-  hidden-power fallback, clamp, spell-band fallback); mutations M6 old above-anchor
-  (4 fails), M13 spell band removed (8), M1 exact fallback removed (2), M5 map guard
-  disabled (1); full harness 59/0; luacheck 2/0.
+- Tests: `range_source_state` 161/0; `weave_bar_state` 186/0 (below-power anchor,
+  hidden-power fallback, clamp, helper-bridge spell band); mutations M6 old above-anchor
+  (4 fails), M15 helper bridge ignored (1), M13 spell band removed (8), M1 exact fallback
+  removed (2), M5 map guard disabled (1); full harness 59/0; luacheck 2/0.
 - UNCONFIRMED: `UnitPosition` availability/values in a live instance and the exact
   on-screen placement; the in-client test is the only close.
 
@@ -87,3 +89,4 @@ was not modified.
 - 2026-11-09 04:42:10 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Exact source implemented: UnitPosition fallback in compat.lua api.UnitDistance (2D yards, same-map/non-finite/secret guards, Forever only); range_source_state 161/0, mutants M1/M5 killed, full 59/0. LRC not used, Libs untouched. Next: in-client /st diag weave= token.
 - 2026-11-09 14:40:23 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Placed below the power bar via bottom_anchor (shown power frame, else lowest visible melee bar); TOPLEFT/BOTTOMLEFT -BAR_GAP; width follows anchor; top+bottom screen clamp. weave_bar_state 170/0, mutant M6 killed, full 59/0. Next: reload + in-client bar position and /st diag src=exact.
 - 2026-11-09 15:07:20 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Bottom-bar grey in instances fixed with wr.spell_band: same Auto Shot / Wing Clip / Raptor Strike api.IsSpellInRange probes as the working left helper; update tries swing then spell and records src=spell. weave_bar_state 182/0, M13 killed, full 59/0. Next: in-client src=spell should paint the band instead of --.
+- 2026-11-09 15:23:49 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Bottom bar still grey because the duplicate spell probe used names/tokens; exported hunter_ui.spell_range_band() using the left helper's exact probe_in_range tokens and numeric IDs, and weave_range now calls that bridge first. weave_bar_state 186/0, M15 killed, full 59/0. Next: reload; if still --, print SwedgeTimer.hunter_ui.spell_range_band() and /st diag weave token.
