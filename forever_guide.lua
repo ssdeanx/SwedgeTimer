@@ -504,6 +504,7 @@ function FG.get_hud_state(class, self, slot, now)
     -- tracks the GCD (self.gcd, as every class hud_gcd_remaining does), so read that
     -- instead of re-asking the client once per slot per tick; the probe query is only
     -- the fallback when no tracked GCD exists.
+    local gcd_object, gcd_on_gcd
     if rem <= 0 and not restricted_state then
         local g = self and self.gcd
         if type(g) == "table" and type(g.expires) == "number" then
@@ -512,6 +513,12 @@ function FG.get_hud_state(class, self, slot, now)
                 rem = g_rem
                 dur = g.spell_length or g.duration or 1.5
             end
+        elseif type(g) == "table" and g.gcd_object ~= nil then
+            -- Forever object channel (2026-11-09): while cooldown timing is restricted the
+            -- numeric expiry is absent, but LibGlobalCooldown carries the opaque GCD handle.
+            -- Hand it to paint; it feeds the native sink and never reads a number.
+            gcd_object = g.gcd_object
+            gcd_on_gcd = g.gcd_on_gcd == true
         elseif api.GetSpellCooldown then
             local g_probe = (st and st.gcd_probe_spell_id) or 61304
             local g_start, g_dur = api.GetSpellCooldown(g_probe)
@@ -551,9 +558,13 @@ function FG.get_hud_state(class, self, slot, now)
     local glow = false
     local k = slot.key
     if k == "exorcism" then
-        if rem <= 0 and UnitExists and UnitExists("target") and UnitCreatureType then
-            local ct = UnitCreatureType("target")
-            if ct == "Undead" or ct == "Demon" then
+        if rem <= 0 and UnitExists and UnitExists("target") then
+            -- SEC-3/M6 (2026-11-06): the creature type is an identity read and is
+            -- restricted on Mainline-code clients. api.UnitCreatureType answers nil when
+            -- it cannot be read; nil is UNKNOWN, not "not undead", so no undead/demon
+            -- specific cue is emitted from a fact we do not have.
+            local creature_type = api.UnitCreatureType and api.UnitCreatureType("target")
+            if creature_type == "Undead" or creature_type == "Demon" then
                 glow = true
             end
         end
@@ -592,6 +603,10 @@ function FG.get_hud_state(class, self, slot, now)
     fg_hud_state_reused.glow = glow
     fg_hud_state_reused.hidden = nil
     fg_hud_state_reused.restricted = nil
+    -- Forever GCD object channel (plain handle + plain NeverSecret bool); the HUD uses it
+    -- only when it is present, and the object path never reads a number out of it.
+    fg_hud_state_reused.cooldown_object = gcd_object
+    fg_hud_state_reused.on_gcd = gcd_object ~= nil and gcd_on_gcd or nil
     if restricted_state then
         fg_hud_state_reused.restricted = true
     end
@@ -1507,7 +1522,26 @@ local function live_hunters_mark(memo)
         local remaining = api.scan_unit_aura("target", function(_, name)
             return name == "Hunter's Mark"
         end, "HARMFUL")
-        result = remaining ~= nil
+        if remaining ~= nil then
+            result = true
+        else
+            -- H3 (2026-11-06): nil is UNKNOWN, never "absent". scan_unit_aura returns
+            -- nil both when the mark is not there and when the target-aura list could
+            -- not be read (a restricted row/list); the old `remaining ~= nil` made the
+            -- unknown branch unreachable, so a restricted list re-cued Hunter's Mark
+            -- forever. Only the client's own secrecy predicate may turn that nil into
+            -- "unknown"; without one (classic clients have no C_Secrets) nil keeps its
+            -- historical meaning of absent.
+            local may_be_secret = false
+            local may = api.spell_aura_may_be_secret
+            if type(may) == "function" and may(FG.SPELLS.HUNTERS_MARK.id) == true then
+                may_be_secret = true
+            elseif type(api.auras_may_be_secret) == "function"
+                and api.auras_may_be_secret() == true then
+                may_be_secret = true
+            end
+            result = may_be_secret and "unknown" or false
+        end
     end
     memo.hunters_mark = result == nil and "unknown" or result
     return memo.hunters_mark
@@ -1606,7 +1640,15 @@ local bridge_view = setmetatable({}, {
         end
         if key == "hunters_mark_active" then
             local mark = live_hunters_mark(bridge_memo)
-            if mark == "unknown" then return nil end
+            if mark == "unknown" then
+                -- H3 (2026-11-06): unknown is not "absent". The cue rule tests
+                -- `hunters_mark_active ~= true`, so returning nil would re-cue a mark
+                -- that may already be up. Report it as active for the rule (no cue) AND
+                -- flag the tick unknown via restricted_seen so the display takes its
+                -- HOLD/unknown face instead of a confident action.
+                restricted_seen = true
+                return true
+            end
             return mark
         end
         if key == "mongoose_bite_usable" and raw.now ~= nil then

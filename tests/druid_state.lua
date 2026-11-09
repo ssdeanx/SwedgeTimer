@@ -80,6 +80,9 @@ local function build(opts)
         rage_cost = nil,          -- what GetSpellPowerCost returns (nil = no cost data)
         known = opts.known or {}, -- spell ids this client knows
         target_guid = opts.target_guid, -- what UnitGUID("target") reports (D1 sampler)
+        -- SEC wave (2026-11-06): the one value the sandbox treats as a restricted
+        -- (secret) read. Mutable after build; every other value reads honest.
+        secret_marker = nil,
         target_hp = opts.target_hp,     -- what UnitHealth("target") reports (D1 sampler)
         -- Spell names this client knows (knowledge-level, for the SoD rune probe).
         known_names = opts.known_names or {},
@@ -164,6 +167,10 @@ local function build(opts)
     env.WOW_PROJECT_MAINLINE = 1
     env.WOW_PROJECT_FOREVER = 18
     env.GetTime = function() return sb.clock end
+    -- Restricted-read marker for the compat wrappers loaded below (SEC wave).
+    env.issecretvalue = function(value)
+        return sb.secret_marker ~= nil and value == sb.secret_marker
+    end
     -- The TBC Anniversary client answers by NAME (operator rule 2026-10-19): the id
     -- form finds nothing and the C_Spell namespace carries the id -> name mapping.
     -- opts.name_only_client turns the fixture into that client.
@@ -2146,6 +2153,90 @@ do
     check(sb2.visuals.druid_ttd_text.hidden, "D1: no target identity hides the readout")
 end
 
+do
+    -- SEC-1/SEC-5: a restricted target identity is not a stable identity. The sampler
+    -- must never compare it (a secret raises on ~=); it drops the baseline and reports
+    -- nil, exactly like "no readable target" - never a diff across an unknown identity.
+    local sb = build({ target_guid = "Target-1", target_hp = 1000 })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    ST.DRUID.post_init(ST)
+    sb.class_db.show_druid_ttd_readout = true
+    sb.clock = 100
+    sb.power = 40
+    sb.power_type = 3
+    ST.form_index = 3
+    ST.DRUID.on_bar_update(ST, "mainhand") -- seed with the readable identity
+    sb.target_hp = 900
+    sb.clock = 100.3
+    ST.DRUID.on_bar_update(ST, "mainhand") -- second sample seeds the velocity
+    check(not sb.visuals.druid_ttd_text.hidden,
+        "SEC-1: fixture: a readable identity estimates a TTD")
+    eq(ST.druid_ttd_guid, "Target-1", "SEC-1: the readable identity is baselined")
+
+    -- The identity read becomes restricted: an opaque table that raises if compared.
+    local secret_guid = setmetatable({}, {
+        __eq = function() error("restricted identity compared") end,
+    })
+    sb.secret_marker = secret_guid
+    sb.target_guid = secret_guid
+    sb.target_hp = 800
+    sb.clock = 100.6
+    local ok, err = pcall(ST.DRUID.on_bar_update, ST, "mainhand")
+    check(ok, "SEC-1: a restricted target identity never throws out of the tick ("
+        .. tostring(err) .. ")")
+    check(sb.visuals.druid_ttd_text.hidden,
+        "SEC-1: a restricted identity hides the TTD readout (unknown, never a guess)")
+    eq(ST.druid_ttd_guid, nil, "SEC-1: a restricted identity drops the baseline")
+
+    -- Readable again with a DIFFERENT identity: a clean re-seed, no cross-target diff.
+    sb.secret_marker = nil
+    sb.target_guid = "Target-2"
+    sb.target_hp = 1000
+    sb.clock = 100.9
+    ok = pcall(ST.DRUID.on_bar_update, ST, "mainhand")
+    check(ok, "SEC-1: the readable-after-restricted tick does not throw")
+    check(sb.visuals.druid_ttd_text.hidden,
+        "SEC-1: the new identity re-seeds instead of diffing against the old target")
+    sb.target_hp = 900
+    sb.clock = 101.2
+    ST.DRUID.on_bar_update(ST, "mainhand")
+    check(not sb.visuals.druid_ttd_text.hidden,
+        "SEC-1: a readable identity estimates again after the restricted gap")
+    eq(ST.druid_ttd_guid, "Target-2",
+        "SEC-1: the readable identity is baselined again")
+
+    -- Source-shape pin (plain Lua cannot raise on a secret string): the raw alias/call
+    -- must be gone and the compat wrapper used.
+    local fh = assert(io.open(ROOT .. "classes/druid.lua", "r"))
+    local dsrc = fh:read("*a")
+    fh:close()
+    local dcode = {}
+    for line in dsrc:gmatch("[^\r\n]+") do
+        if not line:match("^%s*%-%-") then
+            dcode[#dcode + 1] = line
+        end
+    end
+    dsrc = table.concat(dcode, "\n")
+    check(dsrc:find("unit_guid = UnitGUID", 1, true) == nil,
+        "SEC-1: classes/druid.lua has no raw UnitGUID alias")
+    local function has_raw_call(code, name)
+        local raw_pattern = name .. "%("
+        local api_pattern = "api%." .. name .. "%("
+        for line in code:gmatch("[^\r\n]+") do
+            local _, all_count = line:gsub(raw_pattern, "")
+            local _, api_count = line:gsub(api_pattern, "")
+            if all_count > api_count then
+                return true
+            end
+        end
+        return false
+    end
+    check(not has_raw_call(dsrc, "UnitGUID"),
+        "SEC-1: classes/druid.lua has no raw UnitGUID call")
+    check(dsrc:find('api%.UnitGUID%("target"%)') ~= nil,
+        "SEC-1: classes/druid.lua routes the identity through api.UnitGUID")
+end
 --=========================================================================================
 -- D2 wiring: SoD TF proc edge (capped partial never forges, combo still anchors)
 --=========================================================================================
@@ -4846,6 +4937,86 @@ do
     EST.DRUID.on_bar_update(EST, "mainhand")
     eq(EST.DRUID.gather_guide_inputs(EST, {}).prowl_active, nil,
         "prowl: non-Forever never publishes prowl_active")
+end
+
+--=========================================================================================
+-- 38) Secret-restricted reads (2026-11-06 H1/H2/H4/M2): unknown, never 0/"absent"
+--=========================================================================================
+-- Wow Forever restricted reads: the form power, the spell cooldowns, the target aura
+-- rows and the target health max come back opaque. The gather must publish
+-- inputs_unknown (the display suppression path, nextaction_ui.lua:638) and never a
+-- 0 = "ready" or a missing-debuff "absent" claim. The sandbox's marker value is the
+-- only one issecretvalue flags, exactly like compat's own suite.
+do
+    local sb = build()
+    local S = sb.ST
+    S.form_index = 3
+    sb.power_type = 3
+    sb.power = sb.secret_marker or "<secret>"
+    sb.secret_marker = sb.power -- make the marker the restricted value
+    sb.target_auras = {}
+    sb.known[22842] = true -- Frenzied Regeneration known: the cooldown helper is reached
+    sb.cooldowns_by_query[22842] = { sb.secret_marker, sb.secret_marker }
+    local prev_secrets = rawget(_G, "C_Secrets")
+    _G.C_Secrets = {
+        ShouldCooldownsBeSecret = function() return true end,
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+        ShouldUnitPowerBeSecret = function() return true end,
+        ShouldUnitHealthMaxBeSecret = function() return true end,
+    }
+    local g = S.DRUID.gather_guide_inputs(S, {})
+    _G.C_Secrets = prev_secrets
+
+    eq(g.inputs_unknown, true,
+        "secret gather: a restricted tick is marked unknown (the display suppression path)")
+    -- H2: a restricted cooldown is UNKNOWN, never 0 = "ready".
+    eq(g.frenzied_regen_remaining, nil,
+        "secret H2: a restricted Frenzied Regeneration cooldown is nil, not 0 (ready)")
+    -- H1: an unreadable form pool is unknown, never 0.
+    eq(g.energy, nil, "secret H1: a restricted cat energy read stays nil (never 0)")
+    eq(g.rage, nil, "secret H1: the non-current form pool stays nil")
+    -- H4: a hidden target-aura row is unknown, never "Rip/Rake are absent".
+    eq(g.rip_remaining, nil, "secret H4: a hidden Rip row reads nil (not absent)")
+    eq(g.rake_remaining, nil, "secret H4: a hidden Rake row reads nil (not absent)")
+    -- M2: a restricted target health read cannot silently remove the execute signal.
+    eq(g.time_to_die, nil, "secret M2: the TTD/execute read stays nil")
+
+    -- Control: the same profile with readable values keeps the old shapes.
+    local plain = build()
+    local PS = plain.ST
+    PS.form_index = 3
+    plain.power_type = 3
+    plain.power = 50
+    plain.target_auras = {}
+    plain.known[22842] = true
+    local pg = PS.DRUID.gather_guide_inputs(PS, {})
+    check(pg.inputs_unknown ~= true,
+        "control: an unrestricted gather keeps inputs_unknown clear")
+    eq(pg.energy, 50, "control: a readable energy pool passes through")
+    eq(pg.frenzied_regen_remaining, 0,
+        "control: a readable idle cooldown is 0 = ready (unchanged)")
+
+    -- H4 on its own: only the target-aura list is restricted, so the hidden Rip/Rake
+    -- miss is the ONLY unknown source (a dropped aura probe clears the bit).
+    local ab = build()
+    local AS = ab.ST
+    AS.form_index = 1
+    ab.power_type = 1
+    ab.power = 50
+    ab.target_auras = {}
+    ab.known[22842] = true
+    local prev_aura_secrets = rawget(_G, "C_Secrets")
+    _G.C_Secrets = {
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+    }
+    local ag = AS.DRUID.gather_guide_inputs(AS, {})
+    _G.C_Secrets = prev_aura_secrets
+    eq(ag.rip_remaining, nil, "aura-only H4: a hidden Rip row reads nil, not absent")
+    eq(ag.rake_remaining, nil, "aura-only H4: a hidden Rake row reads nil, not absent")
+    eq(ag.inputs_unknown, true,
+        "aura-only H4: the hidden Rip/Rake rows are the druid tick's unknown source")
 end
 
 if failures == 0 then

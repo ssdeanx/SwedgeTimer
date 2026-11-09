@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T19:48:56Z",
+  "run_id": "release-version-restore-2026-11-06",
+  "agent_name": "release-version",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Restored 2.1.8 in exactly the 8 owned fields after a rogue read-only desk (the resumed perf-audit turn) wrote 2.2.0 at 14:11. The tree had also gained the fix desks' real work (main.lua +194/-44 and 8 other files), so the restore had to be surgical: I recorded the pre-restore main.lua sha256, edited only line 5, then proved with hash reconstruction (sed line 5 back to 2.2.0 reproduces the exact pre-restore hash) that no other byte changed. The 7 TOCs diff 1/1 each vs HEAD; only the 8 owned files have the 14:47:39 mtime, fix-desk files keep 14:22-14:38. toc_check stayed 1104/0.",
+    "what_was_hard": "The dispatch's 'scoped diff = 8 files/8 pairs' criterion can no longer be read literally for main.lua: its diff legitimately carries the fix desks' hunks (+194/-44) now. Proved the version-line pairs separately (exactly 8 pairs) and proved non-interference with the hash reconstruction instead of a plain diffstat. Also the /tmp snapshot was cleaned mid-turn, so the stronger hash proof replaced it.",
+    "skill_gap": "Still no durable pin guards version-field sync, and this incident is exactly the failure mode such a pin would catch (a rogue lane silently changed 8 live fields and only human/Lead review caught it). Filed as the follow-up; tests/ is outside this lane's write scope."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Treat 2.1.8 as the final live version state; fix desks' work is intact and untouched; no commit (operator owns git). Owed by the docs owner: README.md :37/:40/:63 and a ## [2.1.8] CHANGELOG section. Consider a toc_check.lua assertion that all seven TOCs + main.lua carry the same version string — this rogue 2.2.0 write would have failed it."
+  }
+}

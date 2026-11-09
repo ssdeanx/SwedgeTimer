@@ -7,8 +7,9 @@
 --      far bound, the enable rule).
 --   2. Inert: no UIParent/CreateFrame - init() must stay a safe no-op and update()/
 --      poll() must not throw.
--- A static scan pins the contract that the module has ONE distance source
--- (st.api.UnitDistance), no range library, no band fallback and no clock/API call of
+-- A static scan pins the contract that the module has exactly TWO distance tiers -
+-- st.api.UnitDistance (exact yards) then st.api.is_target_in_swing_range (the client's
+-- exact native band) - with no range library, no protected call and no clock/API call of
 -- its own.
 --
 -- The frame driver (creation, anchoring, screen clamp, paint latching, driver cadence,
@@ -165,6 +166,20 @@ eq(wr.state_color("melee"), wr.MELEE_COLOR, "colour: melee")
 eq(wr.state_color("out"), wr.OUT_COLOR, "colour: out")
 eq(wr.state_color("in_range"), wr.IN_RANGE_COLOR, "colour: in range")
 eq(wr.state_color(nil), wr.IN_RANGE_COLOR, "colour: an unknown state falls back to in-range")
+eq(wr.state_color("out_melee"), wr.OUT_COLOR, "colour: outside melee uses the out colour")
+
+-- band_label / band_fraction (the native swing-range tier) ------------------
+eq(wr.band_label("melee", 5, 35), "<=5 yd  MELEE", "band label: melee near bound")
+eq(wr.band_label("in_range", 5, 35), "5-35 yd  IN RANGE", "band label: the exact far band")
+eq(wr.band_label("out", 5, 35), ">35 yd  OUT", "band label: beyond the far bound")
+eq(wr.band_label("out_melee", 5, 35), ">5 yd  OUT",
+    "band label: outside melee without a ranged check claims only the near bound")
+eq(wr.band_label(nil, 5, 35), nil, "band label: unknown key -> nil")
+eq(wr.band_fraction("melee"), 1, "band fraction: melee fills the track")
+eq(wr.band_fraction("in_range"), wr.BAND_IN_RANGE_FRACTION, "band fraction: in-range midpoint")
+eq(wr.band_fraction("out"), 0, "band fraction: out is empty")
+eq(wr.band_fraction("out_melee"), 0, "band fraction: out_melee is empty")
+eq(wr.band_fraction(nil), nil, "band fraction: unknown key -> nil")
 
 -- format_yards / label -----------------------------------------------------
 eq(wr.format_yards(12), "12 yd", "label: whole yards -> 12 yd")

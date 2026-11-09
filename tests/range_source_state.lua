@@ -292,6 +292,16 @@ local function build(opts)
         end
         return sb.target_yards * sb.target_yards, sb.target_checked ~= false
     end
+    -- Forever exact fallback source (compat.api.UnitDistance). The test scripts the two
+    -- positions; the lookup is live so a test can change the map/coords after build().
+    env.UnitPosition = function(unit)
+        sb.unit_position_calls = (sb.unit_position_calls or 0) + 1
+        local p = sb.unit_position and sb.unit_position[unit]
+        if not p then
+            return nil
+        end
+        return p.x, p.y, p.z or 0, p.map or 0
+    end
     -- The failing client's protected call: present as a THROWING recorder, exactly like
     -- the in-client ADDON_ACTION_BLOCKED. Any call from the addon or the vendored library
     -- both aborts the caller and fails the zero-call pins below.
@@ -1284,6 +1294,67 @@ do
         "one throw does not quarantine the site")
     check((F.counts.bar_inactive or 0) >= 1, "the rest of post_init still ran its hand loop")
     eq(F.diag.calls, 1, "the readiness self-report still ran")
+end
+
+--=========================================================================================
+-- 8) Forever exact position fallback: UnitPosition yards when UnitDistanceSquared refuses
+--    the enemy (checkedDistance=false). The exact 3-4-5 triangle proves the metric; the
+--    map/secret/missing cases must stay unknown, and no other family may call it.
+--=========================================================================================
+do
+    local b = build({ project = 18, interface = 16001, engine = "forever" })
+    local api = b.st.api
+    local sb = b.sb
+    check(api ~= nil, "position fallback: the Forever sandbox exposes st.api")
+
+    -- 8a. UnitDistanceSquared says "not checked" (enemy); UnitPosition answers 3-4-5 yd.
+    sb.target_yards = nil
+    sb.unit_position = {
+        player = { x = 0, y = 0, z = 0, map = 1 },
+        target = { x = 3, y = 4, z = 0, map = 1 },
+    }
+    near(api.UnitDistance("target"), 5, "position fallback: 3-4-5 triangle is 5 yd")
+
+    -- 8b. A genuinely checked UnitDistanceSquared reading wins; no position read.
+    sb.target_yards = 12
+    sb.unit_position_calls = 0
+    sb.unit_position = {
+        player = { x = 0, y = 0, z = 0, map = 1 },
+        target = { x = 0, y = 0, z = 0, map = 1 },
+    }
+    near(api.UnitDistance("target"), 12, "position fallback: a checked squared read wins")
+    eq(sb.unit_position_calls, 0, "position fallback: a checked squared read skips UnitPosition")
+
+    -- 8c. Different map -> unknown, never a cross-map distance.
+    sb.target_yards = nil
+    sb.unit_position = {
+        player = { x = 0, y = 0, z = 0, map = 1 },
+        target = { x = 3, y = 4, z = 0, map = 2 },
+    }
+    eq(api.UnitDistance("target"), nil, "position fallback: a different map is unknown")
+
+    -- 8d. Missing target position -> unknown.
+    sb.unit_position = { player = { x = 0, y = 0, z = 0, map = 1 } }
+    eq(api.UnitDistance("target"), nil, "position fallback: a missing target position is unknown")
+
+    -- 8e. Same position is a real zero, not unknown.
+    sb.unit_position = {
+        player = { x = 10, y = 20, z = 0, map = 1 },
+        target = { x = 10, y = 20, z = 0, map = 1 },
+    }
+    near(api.UnitDistance("target"), 0, "position fallback: the same position is zero yd")
+
+    -- 8f. No other family may reach UnitPosition; the old unknown answer is preserved.
+    local nb = build({ project = 11, interface = 38002, engine = "vendored" })
+    nb.sb.target_yards = nil
+    nb.sb.unit_position = {
+        player = { x = 0, y = 0, z = 0, map = 1 },
+        target = { x = 3, y = 4, z = 0, map = 1 },
+    }
+    eq(nb.st.api.UnitDistance("target"), nil,
+        "position fallback: a non-Forever client stays unknown")
+    eq(nb.sb.unit_position_calls or 0, 0,
+        "position fallback: a non-Forever client never calls UnitPosition")
 end
 
 if failures == 0 then

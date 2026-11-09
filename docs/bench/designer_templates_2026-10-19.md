@@ -1,0 +1,35 @@
+# bench/designer_templates_2026-10-19 — designer + HUD templates per-class audit + fixes
+
+Desk: designer-templates. Date: 2026-10-19. Scope: design.lua, designmode.lua, hud.lua, config_presets.lua, option_tables.lua, tests/hud_templates_state.lua, tests/hud_state.lua, tests/bars_state.lua (design pins only), classes/*.lua (designer hooks only).
+
+Evidence bar: CONFIRMED = read on disk with line cite. UNCONFIRMED in caps.
+
+## 1. Audit per class (CONFIRMED)
+
+- Designer entry points (shared registry, per-class frames): designmode.lua registers bar_mainhand/offhand/ranged (designmode.lua:622-624 via ST:get_anchor_frame), Cooldown HUD (designmode.lua:628-651 via st.hud.frame, save through hud_x/y + st.hud.apply_settings), Rotation label (656-689), Next Action Guide (693-716), Practice panel/rotation/timeline (723-738, 802-803). DM.refresh shows only frames that exist + are shown (designmode.lua:542-563); lock override/restore is per-element seam (854-876). Pinned by tests/designmode_state.lua (7 real elements, enter/exit/drag/reset/teardown) + tests/bars_state.lua §1 (construction all six classes) + tests/hud_state.lua §17 (all five non-paladin post_init hud.init + on_bar_update; paladin §12).
+- Bars per class: ST.class_hands per class (main.lua:88-101), anchor frames built per iter_hands (bars.lua:59-100), design save via LibWindow (designmode.lua:591-598). All six classes construct (bars_state §1).
+- HUD slots per class: paladin 7 (classes/paladin.lua:3277), warrior family sets 8 each (classes/warrior.lua:2867-2901 + resolve_guide_slots 2875-2909), hunter 9 TBC / 6 Era (classes/hunter.lua:1521 + Era filter 1534-1541), druid 10 (classes/druid.lua:1898), shaman 8 (classes/shaman.lua:2979), rogue 13 (classes/rogue.lua:971-989 + coldblood). Providers + creation pinned by tests/hud_state.lua §§1/13/13b/14/15/16/19.
+- Cooldown frame: the Next Action Guide frame (designmode.lua:693-716, nextaction_ui) + HUD row both register; per-class guide providers wired (hud_state §17 get_rotation_key pin).
+- Preview sample coverage (hud.lua:1025-1063): scripted samples ONLY for cs, consecration, exorcism, wings + trinkets (both slots). Every other slot key returns nil -> caller renders live state (hud.lua:1085-1094). So: paladin previews scripted loop for 4/5 ability slots + trinkets; hunter/warrior/druid/shaman/rogue preview LIVE state (plus scripted trinkets). CONFIRMED by reading hud.lua:1047-1062 + hud_state §9 pins (cs sample, trinket2 sample, unknown -> nil).
+- Template tables present + applying: ST.<TOKEN>.HUD_TEMPLATES 18 templates (config_presets.lua: PALADIN 678-706, WARRIOR 1199-1230, HUNTER 474-505, DRUID 328-359, SHAMAN 1008-1039, ROGUE 882-913) + hud_template = nil per class (6 defaults). Widget hud_template_widget order 8.02, nil-safe get/set, Custom fallback, unknown-hides, dirty-detect-as-derived-state (option_tables.lua:1256-1348 + 6 insertions 2273/3295/3744/4292/4687/5120). Applying writes full slot set + 4 geometry keys then stores id; HUD tick picks it up via layout_changed -> apply_settings (hud.lua:1157-1164). Pinned by tests/hud_templates_state.lua (827 checks) + tests/options_load_state.lua §12.
+- Geometry keys honored: LAYOUT_KEYS hud.lua:125-129 (hud_x/y/scale/icon_size/match/spacing/orientation/border/font/text/outline/locked). Templates write icon_size/spacing/orientation/match only. Location via drag (designmode save -> hud_x/y) + hud_x/y inputs; size via icon_size/scale; spacing via spacing; orientation/match via selects/toggles. All six panels carry them: paladin inline (option_tables.lua:2309-2387), others via hud_rotation_widgets builder (option_tables.lua:858-939). Live via on_update/layout_changed (hud.lua:1146-1172) + HUD.on_bar_update hook per class (all six classes/*.lua).
+- Persistence round-trips: hud_template id + slot/geometry in profile db (AceDB); get returns stored id only while db matches template else custom (option_tables.lua:1296-1312); picking Custom stores nil writes nothing; unknown stores nil leaves others (hud_templates_state §3 pins).
+
+## 2. Fixes built (this lane)
+
+- F1 rogue coldblood missing from templates (BROKEN: apply left stale, dirty-detect ignored it; defaults + widget already shipped): added coldblood to all 3 rogue templates (config_presets.lua: core false, full_cds true, pvp_utility false) + suite rogue slots 12->13 (tests/hud_templates_state.lua:103-106). Zero default-visible change (nil template = Custom writes nothing; explicit pick only).
+- F2 warrior hamstring missing from templates + defaults (BROKEN: base set has hamstring slot classes/warrior.lua:2852/2871 but union omitted it; no default so nil = wanted shows with no UI to hide): added hud_show_hamstring = true default (config_presets.lua: warrior defaults) + hamstring to all 3 warrior templates (fury_core false, full_trinkets true, arms_sod false) + suite warrior slots 13->14. Zero default-visible change (nil wanted showed; true shows; HUD master still off by default).
+- Pins: hud_templates_state 813->827 checks green; full harness 38/0; luacheck 2/0 floor (0/0 on touched files); endings preserved (presets CRLF, tests LF); no trailing WS.
+- Mutations on /tmp/opencode copies (all kill): M1 drop rogue coldblood from template -> 2 FAILs (coverage + explicit); M2 drop warrior hamstring from template -> 2 FAILs; M3 drop hamstring default -> 1 FAIL. Copies removed.
+
+## 3. Gaps filed (not built)
+
+- G1 warrior hamstring toggle widget missing (options-contract): config_presets default + template writes exist, but option_tables.lua has no hud_show_hamstring slot toggle (cf. rogue coldblood has widget option_tables.lua:5083). User cannot toggle manually except via template or /run. Needs options slot-toggle widget; do NOT invent widget API here. File: config_presets.lua (default ships), classes/warrior.lua:2852 (slot), option_tables.lua (widget absent).
+- G2 preview samples beyond paladin (UNCONFIRMED, beyond current contract): hud.lua:1025-1063 returns nil for all non-paladin ability keys, so 5 classes preview live state only. Extending preview_state to demo-loop all classes would change the frozen contract (hud_state §9 pins unknown -> nil) + in-client readability UNCONFIRMED throughout. Optional per design §8; filed, not built.
+- G3 snap-template row rhythms for Full match-width rows (optional, deferrable per design §8): DM.register_template exists (designmode.lua:813-847) but no HUD row rhythm is registered. Mark beyond hud.lua contract UNCONFIRMED; filed, not built.
+- G4 template positions (design question): templates write only 4 geometry keys (size/spacing/orientation/match); hud_x/y/scale persist separately via drag/inputs. If templates should also place rows, that is a contract change (new keys in template tables + apply). Filed as question; not built (current behavior: drag to place, double-click resets position only).
+
+## 4. Validation
+
+- Harness: bash tests/run.sh 38/0 (verified in-tree). Luacheck: 2/0 floor. Mutations: 3/3 kill on /tmp/opencode copies.
+- Validation owner: orchestrator.

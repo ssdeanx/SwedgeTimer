@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T19:39:23Z",
+  "run_id": "bars-perf-fix-2026-11-06",
+  "agent_name": "bars-perf-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Red-first pins written against the fixture's own call counters (clock reads, per-texture deco writes, fill writes) before any fix: 20/1305 failed exactly as intended, then green. Each of the four optimizations has a mutation that re-introduces the removed work and kills only its own pins (M1 10 fails, M2 2, M3 4, M4 4, M4b 4) on fresh /tmp source copies. A3 used the dispatch's permitted restructure variant (single fill write at the end, no dirty flag), which kept the 2026-10-28 correctness pins 12c2/12c3 untouched and green.",
+    "what_was_hard": "The dispatch's cited audit sections (bench/bars_perf_audit_2026-11-06.md §2/§3/§8/§9.1) were not on disk - a rogue read-only desk had overwritten the file with a 17-line stub and wrongly bumped version fields; worked from the dispatch + the audit desk's journal instead. Full-tree green was impossible to certify: main.lua/swing_source.lua/hunter_ui.lua were being edited by the other fix desks throughout the pass, so tests/run.sh oscillated 1-3 failures, all in suites that do not load the changed files.",
+    "skill_gap": "None specific; the one judgement call (restructure vs dirty flag for A3) is documented in the bench report with the reason the pins forced it."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Lead re-runs bash tests/run.sh after display-fix and powerbar-fix land, and restores the version fields (2.2.0 rogue state -> 2.1.8)."
+  }
+}

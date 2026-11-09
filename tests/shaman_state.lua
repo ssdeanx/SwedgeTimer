@@ -3814,6 +3814,65 @@ do
     end
 end
 
+--=========================================================================================
+-- 40) Secret-restricted reads (2026-11-06 H1/H2/H4): unknown, never 0/"absent"
+--=========================================================================================
+-- Wow Forever restricted reads: a secret cooldown timing, the power pair and target
+-- aura rows come back opaque. The gather must publish inputs_unknown (the display's
+-- suppression path, nextaction_ui.lua:638) and never a 0 = "ready" or a missing
+-- debuff. The suite's sentinel is the string "SECRET": the captured classic cooldown
+-- global reads it through the same `cooldowns` fixture, and env.issecretvalue flags it.
+do
+    local storm_key, shock_key = 17364, 8050
+    cooldowns[storm_key] = { start = "SECRET", duration = "SECRET" }
+    cooldowns[shock_key] = { start = "SECRET", duration = "SECRET" }
+    local prev_secrets = rawget(_G, "C_Secrets")
+    _G.C_Secrets = {
+        ShouldCooldownsBeSecret = function() return true end,
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+        ShouldUnitPowerBeSecret = function() return true end,
+        ShouldUnitHealthMaxBeSecret = function() return true end,
+    }
+    ST.weave_fs_duration, ST.weave_fs_expires = nil, nil
+    local g = ST.SHAMAN.gather_guide_inputs(ST, {})
+    _G.C_Secrets = prev_secrets
+    cooldowns[storm_key], cooldowns[shock_key] = nil, nil
+
+    eq(g.inputs_unknown, true,
+        "secret gather: a restricted tick is marked unknown (the display suppression path)")
+    -- H2: a restricted cooldown is UNKNOWN, never 0 = "ready".
+    eq(g.stormstrike_remaining, nil,
+        "secret H2: a restricted Stormstrike cooldown is nil, not 0 (ready)")
+    eq(g.shock_remaining, nil, "secret H2: the restricted shock cooldown is nil, not 0")
+    -- H1: an unreadable power pair is unknown, never 0 %.
+    eq(g.mana_fraction, nil, "secret H1: a restricted mana read is nil, not 0 %")
+    -- H4: a hidden target-aura row is unknown, never "Flame Shock is absent".
+    eq(g.flameshock_remaining, nil, "secret H4: a hidden Flame Shock row reads nil (not absent)")
+
+    -- Control: the same profile with readable values keeps the old shapes.
+    ST.weave_fs_duration, ST.weave_fs_expires = nil, nil
+    local plain = ST.SHAMAN.gather_guide_inputs(ST, {})
+    check(plain.inputs_unknown ~= true,
+        "control: an unrestricted gather keeps inputs_unknown clear")
+    eq(plain.stormstrike_remaining, 0,
+        "control: a readable idle cooldown is 0 = ready (unchanged)")
+
+    -- H4 on its own: only the target-aura list is restricted, so the missing Flame
+    -- Shock timing is the ONLY unknown source (a dropped aura probe clears the bit).
+    local prev_aura_secrets = rawget(_G, "C_Secrets")
+    _G.C_Secrets = {
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+    }
+    ST.weave_fs_duration, ST.weave_fs_expires = nil, nil
+    local ag = ST.SHAMAN.gather_guide_inputs(ST, {})
+    _G.C_Secrets = prev_aura_secrets
+    eq(ag.flameshock_remaining, nil, "aura-only H4: the hidden Flame Shock read stays nil")
+    eq(ag.inputs_unknown, true,
+        "aura-only H4: the hidden Flame Shock row is the shaman tick's unknown source")
+end
+
 if failures == 0 then
     print("PASS  shaman_state.lua (" .. tostring(checks) .. " checks)")
 else

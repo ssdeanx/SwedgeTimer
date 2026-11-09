@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T19:07:44Z",
+  "run_id": "release-version-2026-11-06",
+  "agent_name": "release-version",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 5,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Verifying the tree before editing caught the one thing that would have made the dispatch's acceptance criterion look failed: the tree was NOT clean at open (desks/journal.md carried the orchestrator's own 38-line dispatch entry, mtime 14:01:42, before this session), so unfiltered git diff --stat reports 9 files / 46 insertions instead of the required 8/8/8. Scoping the proof to the eight owned paths (git diff --stat/-U0 -- <8 paths>) shows exactly 8 files, 8 insertions, 8 deletions and exactly 16 paired lines = 8 version pairs. Also confirmed toc_check has ZERO version references before editing, so the expected 1104/0 after the bump was predictable rather than a surprise.",
+    "what_was_hard": "Nothing hard in the edit itself (one unique occurrence per file, exact-match replace). The only trap was the pre-dirtied tree versus the dispatch's clean-tree acceptance criterion, and the README/CHANGELOG still carrying 2.1.7 while being explicitly out of scope — both stated in the journal and to the Lead rather than silently fixed or silently ignored.",
+    "skill_gap": "No durable pin guards version-field sync (tests/toc_check.lua has no ## Version assertion), so this lane's proof is one-off grep/diff evidence; filed, not closed, because tests/ is outside this lane's write scope."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Reconcile the 8 files (no commit; operator owns git). Owed by the docs owner: README.md :37/:40/:63 and a ## [2.1.8] CHANGELOG section. Optional follow-up: a toc_check.lua assertion that all seven TOCs + main.lua carry the same version string."
+  }
+}

@@ -225,6 +225,8 @@ local function build(opts)
         GCD_STARTED = "GCD_STARTED",
         GCD_OVER = "GCD_OVER",
         GCD_DURATIONS_UPDATED = "GCD_DURATIONS_UPDATED",
+        GCD_OBJECT_STARTED = "GCD_OBJECT_STARTED",
+        GCD_OBJECT_OVER = "GCD_OBJECT_OVER",
         RegisterCallback = function(_, event, fn) sb.lgc_cb[event] = fn end,
     }
     sb.LRC, sb.LLM, sb.LGC = LRC, LLM, LGC
@@ -844,6 +846,16 @@ do
     eq(T.gcd.expires, nil, "GCD_OVER clears the expiry")
     check(touched_since(b, touches, "gcd_bar:Hide"), "GCD_OVER hides the gcd bar through the visuals frame")
 
+    -- Forever object channel: the opaque handle and plain isOnGCD flag feed the HUD
+    -- provider; the over event clears both. A stale numeric branch is untouched.
+    local gcd_object = {}
+    F.lgc_cb["GCD_OBJECT_STARTED"]("GCD_OBJECT_STARTED", gcd_object, true)
+    eq(T.gcd.gcd_object, gcd_object, "GCD_OBJECT_STARTED stores the opaque handle")
+    eq(T.gcd.gcd_on_gcd, true, "GCD_OBJECT_STARTED stores the plain on-GCD flag")
+    F.lgc_cb["GCD_OBJECT_OVER"]("GCD_OBJECT_OVER")
+    eq(T.gcd.gcd_object, nil, "GCD_OBJECT_OVER clears the handle")
+    eq(T.gcd.gcd_on_gcd, nil, "GCD_OBJECT_OVER clears the on-GCD flag")
+
     -- LibLatencyMonitor: the calibrated latencies and the marker rebuild.
     local latency_before = F.counts.latency_update
     F.llm_cb[F.LLM.LATENCY_CHANGED]("LATENCY_CHANGED", 60, 150)
@@ -1306,6 +1318,7 @@ do
     eq(#F.notices, 0, "the retry path prints nothing yet")
     eq(#F.after, timers_before + 1, "the first throw arms a backoff retry")
     eq(F.after[#F.after].delay, 0.05, "the first retry uses the base interval")
+    eq(#F.touches, touches_before, "the transient retry path touches no frames")
 
     -- Second consecutive throw: longer backoff, still no disable.
     F.after[#F.after].cb()
@@ -1313,7 +1326,10 @@ do
     eq(T.rf_failure_count, 2, "the second throw is counted")
     eq(F.after[#F.after].delay, 0.1, "the retry backs off exponentially (0.1 s)")
 
-    -- Third consecutive throw: the bounded retry exhausts and disables the session.
+    -- Third consecutive throw: the bounded retry exhausts and disables the session -
+    -- but A-2/R1 (2026-11-06) changed the terminal path: the heartbeat keeps a timer
+    -- armed and the visibility pass still runs, so the bars can never freeze for the
+    -- session just because the range probe died.
     F.after[#F.after].cb()
     eq(T.rf_disabled, true, "the third consecutive throw disables range checking")
     eq(T.rf_failure_count, 3, "the exhausted retry keeps its count")
@@ -1321,16 +1337,62 @@ do
     eq(#F.notices, 1, "the exhausted retry prints exactly one notice")
     eq(F.notices[1], "Range checking is unavailable on this client; the range display is disabled.",
         "the retry-exhaustion notice is the range-checking disable")
-    eq(#F.after, timers_before + 2, "the terminal failure does not arm another retry")
-    eq(#F.touches, touches_before, "the retry path touches no frames")
+    eq(#F.after, timers_before + 3, "A-2: the terminal failure still arms the heartbeat")
+    eq(F.after[#F.after].delay, 0.05, "A-2: the heartbeat runs at the base poll interval")
 
-    -- Every later poll stops immediately: no probe, no second notice.
+    -- A disabled poll is NOT a dead poll: no probe, but visibility AND the out-of-range
+    -- alpha still run, and the next heartbeat is always armed.
     local probes = F.unit_distance_calls
+    local vis_calls, oor_calls = 0, 0
+    local real_vis, real_oor = T.set_bar_visibilities, T.handle_oor
+    T.set_bar_visibilities = function(self)
+        vis_calls = vis_calls + 1
+        return real_vis(self)
+    end
+    T.handle_oor = function(self)
+        oor_calls = oor_calls + 1
+        return real_oor(self)
+    end
     ok = pcall(T.rf_update, T)
     check(ok, "a poll after the disable still does not error")
     eq(F.unit_distance_calls, probes, "a disabled poll never probes")
-    eq(#F.after, timers_before + 2, "a disabled poll never reschedules")
+    eq(#F.after, timers_before + 4, "A-2: a disabled poll re-arms the heartbeat")
+    eq(F.after[#F.after].delay, 0.05, "A-2: the disabled heartbeat keeps the poll cadence")
+    eq(vis_calls, 1, "A-2: a disabled poll still runs the visibility pass")
+    eq(oor_calls, 1, "A-2: a disabled poll still runs the out-of-range alpha pass")
     eq(#F.notices, 1, "the notice stays one-time")
+
+    -- A throw inside the visibility pass must not stop the heartbeat and must not take
+    -- the alpha pass with it: the two live in their own guarded units.
+    local hb_before = #F.after
+    T.set_bar_visibilities = function() error("visibility exploded") end
+    local ok_vis, err_vis = pcall(T.rf_update, T)
+    check(ok_vis, "A-2: a throwing visibility pass never escapes the heartbeat ("
+        .. tostring(err_vis) .. ")")
+    eq(#F.after, hb_before + 1, "A-2: a throwing visibility pass still re-arms the heartbeat")
+    eq(oor_calls, 2, "A-2: the alpha pass runs even when the visibility pass throws")
+    eq(T.rf_heartbeat_errors, 1, "A-2: the isolated heartbeat throw is counted")
+    T.set_bar_visibilities, T.handle_oor = real_vis, real_oor
+
+    -- A throw in the ALPHA pass is the mirror image: visibility still runs, heartbeat
+    -- still arms, and the error is counted rather than printed per poll.
+    hb_before = #F.after
+    local alpha_vis_calls = 0
+    T.set_bar_visibilities = function(self)
+        alpha_vis_calls = alpha_vis_calls + 1
+        return real_vis(self)
+    end
+    T.handle_oor = function() error("alpha exploded") end
+    local ok_alpha, err_alpha = pcall(T.rf_update, T)
+    check(ok_alpha, "A-2: a throwing alpha pass never escapes the heartbeat ("
+        .. tostring(err_alpha) .. ")")
+    eq(#F.after, hb_before + 1, "A-2: a throwing alpha pass still re-arms the heartbeat")
+    eq(alpha_vis_calls, 1, "A-2: the visibility pass runs even when the alpha pass throws")
+    eq(T.rf_heartbeat_errors, 2, "A-2: the alpha throw is counted too")
+    T.handle_oor = real_oor
+    T.set_bar_visibilities = real_vis
+
+    -- The success path of the same heartbeat (before the disable) also runs both passes.
     b.st.api.UnitDistance = healthy_probe
 end
 do
@@ -2500,6 +2562,201 @@ do
         "LATENT L3 bar_full_delay uses rawget")
     check(src:find('local bar_full_delay = db_shared and db_shared.bar_full_delay', 1, true) == nil,
         "LATENT L3 no plain metatable-triggering bar_full_delay read remains")
+end
+
+--=========================================================================================
+-- 21) 2026-11-06 display-fix wave: weapon probes, ranged activity, weave init + diag
+--=========================================================================================
+-- A-3/A-4: has_weapon means "no weapon", never "unknown". A restricted stat read keeps
+-- the last value; a readable 0 still clears it. The engine's own ranged/offhand START is
+-- proof of a weapon and re-opens the lazy build.
+do
+    local b = boot({ class = "WARRIOR" })
+    local T = b.ST
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    local real_attack, real_ranged = b.st.api.UnitAttackSpeed, b.st.api.UnitRangedDamage
+
+    -- Unknown (restricted/absent) read: keep the previous answer on both hands.
+    T.offhand.has_weapon = true
+    T.ranged.has_weapon = true
+    b.st.api.UnitAttackSpeed = function() return nil end
+    b.st.api.UnitRangedDamage = function() return nil end
+    T:check_weapons()
+    eq(T.offhand.has_weapon, true, "A-3: an unreadable offhand read keeps the known weapon")
+    eq(T.ranged.has_weapon, true, "A-3: an unreadable ranged read keeps the known weapon")
+    eq(T.has_oh, true, "A-3: has_oh follows the kept offhand value")
+
+    -- A readable zero is a real "no weapon" and still clears the flag (a genuine unequip).
+    b.st.api.UnitAttackSpeed = function() return 3.6, 0 end
+    b.st.api.UnitRangedDamage = function() return 0 end
+    T:check_weapons()
+    eq(T.offhand.has_weapon, false, "A-3: a readable zero offhand clears the flag")
+    eq(T.ranged.has_weapon, false, "A-3: a readable zero ranged clears the flag")
+    eq(T.has_oh, false, "A-3: has_oh follows the readable zero")
+
+    -- A readable weapon restores it, then a restricted read keeps the restored value.
+    b.st.api.UnitAttackSpeed = function() return 3.6, 1.5 end
+    b.st.api.UnitRangedDamage = function() return 2.4 end
+    T:check_weapons()
+    eq(T.offhand.has_weapon, true, "A-3: a readable offhand speed sets the flag")
+    eq(T.ranged.has_weapon, true, "A-3: a readable ranged speed sets the flag")
+    b.st.api.UnitAttackSpeed = function() return nil end
+    b.st.api.UnitRangedDamage = function() return nil end
+    T:check_weapons()
+    eq(T.offhand.has_weapon, true, "A-3: a restricted read after a weapon keeps it")
+    eq(T.ranged.has_weapon, true, "A-3: a restricted ranged read after a weapon keeps it")
+
+    -- PLAYER_ENTERING_WORLD re-probes the weapons (the reliable read point).
+    local probes = 0
+    local real_check = T.check_weapons
+    T.check_weapons = function(self)
+        probes = probes + 1
+        return real_check(self)
+    end
+    T:PLAYER_ENTERING_WORLD("PLAYER_ENTERING_WORLD", false, false)
+    eq(probes, 1, "A-3: world entry re-probes the equipped weapons once")
+    b.st.api.UnitAttackSpeed = real_attack
+    b.st.api.UnitRangedDamage = real_ranged
+    T.check_weapons = real_check
+end
+
+-- A-4: the Forever engine's ranged/offhand START proves the hand has a weapon, opens the
+-- bar in the same event, and the activity receipt is written there (A-2).
+do
+    local b = boot({ engine = "forever", project = 18, interface = 16001, class = "WARRIOR" })
+    local T, F = b.ST, b.sb
+    fire_source_ready(b)
+    fire_lrc_checkers(b)
+    eq(T.swing_engine, "forever-source", "A-4: the fixture runs the Forever engine")
+
+    local vis_calls = {}
+    local real_vis = T.handle_bar_visibility
+    T.handle_bar_visibility = function(self, hand)
+        vis_calls[#vis_calls + 1] = hand
+        return real_vis(self, hand)
+    end
+    local ensured = {}
+    T.ensure_bar = function(self, hand)
+        ensured[#ensured + 1] = hand
+        return true
+    end
+    T.ranged.has_weapon = false
+    T:SWING_TIMER_START("SWING_TIMER_START", 2.8, F.clock + 2.8, "ranged")
+    eq(T.ranged.has_activity, true, "A-2: a Forever ranged START is an activity receipt")
+    eq(vis_calls[#vis_calls], "ranged",
+        "A-2: the ranged START opens the bar in the same event (no poll wait)")
+    eq(T.ranged.has_weapon, true, "A-4: the engine START proves the ranged weapon")
+    eq(ensured[#ensured], "ranged", "A-4: the proven hand is built lazily in the same event")
+
+    vis_calls = {}
+    T:SWING_TIMER_UPDATE("SWING_TIMER_UPDATE", 2.8, F.clock + 2.8, "ranged")
+    eq(vis_calls[#vis_calls], "ranged",
+        "A-2: the ranged UPDATE refreshes the receipt and opens the bar at once")
+    eq(T.ranged.has_activity, true, "A-2: the ranged UPDATE is a receipt too")
+
+    vis_calls = {}
+    T:UNIT_SPELLCAST_SUCCEEDED("UNIT_SPELLCAST_SUCCEEDED", "player", nil, 75)
+    eq(vis_calls[#vis_calls], "ranged",
+        "A-2: a completed Auto Shot receipt opens the bar in the same event")
+
+    -- The vendored engine's UPDATE is NOT a receipt (it also re-times reset cycles).
+    local vendored = boot({ class = "WARRIOR" })
+    fire_stl_ready(vendored)
+    fire_lrc_checkers(vendored)
+    vendored.ST.ranged.has_activity = false
+    vendored.ST:SWING_TIMER_UPDATE("SWING_TIMER_UPDATE", 2.6, vendored.sb.clock + 2.6, "ranged")
+    eq(vendored.ST.ranged.has_activity, false,
+        "A-2: the classic library's UPDATE is not promoted to an activity receipt")
+    T.handle_bar_visibility = real_vis
+end
+
+do
+    -- Hunter Auto Shot arming/stopping re-evaluates the bar in the same event (A-4).
+    local b = boot({ engine = "forever", project = 18, interface = 16001, class = "HUNTER" })
+    local T = b.ST
+    fire_source_ready(b)
+    fire_lrc_checkers(b)
+    local vis_calls = {}
+    local real_vis = T.handle_bar_visibility
+    T.handle_bar_visibility = function(self, hand)
+        vis_calls[#vis_calls + 1] = hand
+        return real_vis(self, hand)
+    end
+    T:START_AUTOREPEAT_SPELL("START_AUTOREPEAT_SPELL")
+    eq(vis_calls[#vis_calls], "ranged", "A-4: arming Auto Shot opens the bar once")
+    vis_calls = {}
+    T:STOP_AUTOREPEAT_SPELL("STOP_AUTOREPEAT_SPELL")
+    eq(vis_calls[#vis_calls], "ranged", "A-4: stopping Auto Shot re-evaluates the bar once")
+    T.handle_bar_visibility = real_vis
+end
+
+-- A-3: the ranged activity window covers at least one full known cycle.
+do
+    local b = boot()
+    local T = b.ST
+    fire_stl_ready(b)
+    fire_lrc_checkers(b)
+    T.ranged.speed = 2.8
+    near(T:hand_activity_window("ranged"), 5.6, "A-3: two known cycles keep the ranged window")
+    T.ranged.speed = nil
+    T.ranged.synced_duration = 2.5
+    near(T:hand_activity_window("ranged"), 5.0,
+        "A-3: before an engine stamp the hunter sync's cycle covers the window")
+    T.ranged.synced_duration = nil
+    near(T:hand_activity_window("ranged"), 1.5, "A-3: no cycle known keeps the documented floor")
+    T.ranged.speed = 9
+    near(T:hand_activity_window("ranged"), 8, "A-3: the documented ceiling still clamps")
+end
+
+-- B-1: weave_range init is a guarded, retry-once seam; B-7: its diag token is rendered.
+do
+    local b = boot()
+    local T, F = b.ST, b.sb
+    local attempts = 0
+    local frame = {}
+    b.st.weave_range = {
+        init = function()
+            attempts = attempts + 1
+            error("weave init exploded")
+        end,
+    }
+    fire_stl_ready(b)
+    fire_lrc_checkers(b) -- init_libs -> post_init: must not abort on the throwing weave init
+    eq(attempts, 1, "B-1: post_init attempts the weave init")
+    eq(T.interfaces_are_initialised, true, "B-1: a throwing weave init cannot abort init")
+    check(#F.notices >= 1 and tostring(F.notices[#F.notices]):find("distance bar", 1, true) ~= nil,
+        "B-1: the isolated weave init failure is announced")
+    eq(F.hooks.post_init, 1, "B-1: the steps after the weave init still ran")
+
+    -- A later successful init from PLAYER_ENTERING_WORLD creates the frame; the retry is
+    -- used exactly once, and a second world entry is a no-op.
+    b.st.weave_range.init = function()
+        attempts = attempts + 1
+        b.st.weave_range.frame = frame
+        return true
+    end
+    T:PLAYER_ENTERING_WORLD("PLAYER_ENTERING_WORLD", false, false)
+    eq(attempts, 2, "B-1: world entry retries the failed weave init once")
+    eq(b.st.weave_range.frame, frame, "B-1: the retry creates the missing bar frame")
+    T:PLAYER_ENTERING_WORLD("PLAYER_ENTERING_WORLD", false, false)
+    eq(attempts, 2, "B-1: the world-entry retry is used exactly once")
+    eq(T:init_weave_range(), true, "B-1: the seam reports the live frame without re-initing")
+    eq(attempts, 2, "B-1: an already-initialised bar is never re-inited")
+
+    -- B-7: the diag runtime line carries the weave token.
+    b.st.weave_range.diagnostic_text = function()
+        return "weave=on:yes:shown:12yd:in_range:fail=0:q=no"
+    end
+    T:print_runtime_diag()
+    contains(F.notices[#F.notices], "weave=on:yes:shown:12yd:in_range",
+        "B-7: the runtime diag line carries the range bar's receipt")
+    b.st.weave_range.diagnostic_text = function()
+        error("diag exploded")
+    end
+    T:print_runtime_diag()
+    contains(F.notices[#F.notices], "diag runtime",
+        "B-7: a throwing weave diag never takes the runtime line down")
 end
 
 if failures == 0 then

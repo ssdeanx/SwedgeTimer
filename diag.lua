@@ -801,8 +801,10 @@ end
 --                  none), from pb.last_state (written only by pb.update)
 --   anchor_shown - whether that owning row is on screen right now
 --   shown / width / height - the bar frame itself
---   type / token / value / fraction - the LIVE primary-power reading (st.api, the same
---                  calls the bar paints from; unknown when the client restricts it)
+--   type / token / value / fraction - the LIVE primary-power reading through the raw
+--                  reader (st.api.GetPlayerPower, the same values the bar paints). A
+--                  restricted (secret) read renders value=restricted fraction=? and is
+--                  never tostring'd or divided: that is the case the bar now PAINTS.
 --   why          - the last refresh's hide token (pb.resolve), "-" while painted
 local POWER_WHY = {
     ["no-frame"] = true,
@@ -821,6 +823,7 @@ local function power_live_text(pb)
         return "unknown", "unknown", "unknown", "?"
     end
     local type_fn = read(api_table, "UnitPowerType")
+    local raw_fn = read(api_table, "GetPlayerPower")
     local value_fn = read(api_table, "UnitPower")
     local max_fn = read(api_table, "UnitPowerMax")
     local power_type, token = nil, nil
@@ -839,16 +842,37 @@ local function power_live_text(pb)
         return "unknown", "unknown", "unknown", "?"
     end
     local value, max_value = nil, nil
-    if type(value_fn) == "function" then
-        local ok, reading = pcall(value_fn, "player", power_type)
-        if ok and type(reading) == "number" then
-            value = reading
+    if type(raw_fn) == "function" then
+        -- The secret-SAFE reader: it hands back the raw client values plus a restricted
+        -- flag. A restricted reading is opaque (comparison/arithmetic/format raises on the
+        -- real client), so it must never reach tostring or the fraction maths below: the
+        -- line names the unknown state and stops, exactly like the bar paints its "?".
+        local ok, raw_value, raw_max, restricted = pcall(raw_fn, power_type)
+        if ok then
+            if restricted == true then
+                return tostring(power_type), token or "?", "restricted", "?"
+            end
+            if type(raw_value) == "number" then
+                value = raw_value
+            end
+            if type(raw_max) == "number" then
+                max_value = raw_max
+            end
         end
-    end
-    if type(max_fn) == "function" then
-        local ok, reading = pcall(max_fn, "player", power_type)
-        if ok and type(reading) == "number" then
-            max_value = reading
+    else
+        -- Older st.api shapes (and the diag fixtures) may only provide the nil-on-secret
+        -- pair: a restricted read is simply unknown there, never a fake zero.
+        if type(value_fn) == "function" then
+            local ok, reading = pcall(value_fn, "player", power_type)
+            if ok and type(reading) == "number" then
+                value = reading
+            end
+        end
+        if type(max_fn) == "function" then
+            local ok, reading = pcall(max_fn, "player", power_type)
+            if ok and type(reading) == "number" then
+                max_value = reading
+            end
         end
     end
     local type_text = tostring(power_type)

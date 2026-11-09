@@ -448,11 +448,7 @@ local function toc_entries(path)
     return entries
 end
 
-local TOCS = {
-    "SwedgeTimer.toc", "SwedgeTimer_Vanilla.toc", "SwedgeTimer_TBC.toc",
-    "SwedgeTimer_Wrath.toc", "SwedgeTimer_Mainline.toc", "SwedgeTimer_Cata.toc",
-    "SwedgeTimer_Mists.toc",
-}
+local TOCS = { "SwedgeTimer.toc" }
 for _, toc in ipairs(TOCS) do
     local entries = toc_entries(toc)
     local index = {}

@@ -39,6 +39,18 @@ local function read(path)
     return s
 end
 
+-- Secret-value fixtures (2026-11-06 secret-guide lane): issecretvalue is the only
+-- probe that sees a restricted value (type() does not), so the sandbox flags ordinary
+-- numbers in a side table exactly like compat's suite does.
+local SECRETS = {}
+local function secret(value)
+    SECRETS[value] = true
+    return value
+end
+local function is_secret(value)
+    return SECRETS[value] == true
+end
+
 --=========================================================================================
 -- Stub widgets (the frame/texture/fontstring/line surface the paladin module touches)
 --=========================================================================================
@@ -206,6 +218,19 @@ local function build(opts)
     env.max = math.max
     env.min = math.min
     env.GetBuildInfo = function() return "0.0.0", "00000", "today", opts.interface or 20506 end
+    -- A restricted (Wow Forever secret-regime) client: the probe and the C_Secrets
+    -- predicates must exist BEFORE compat.lua loads (it captures the probe at load).
+    local restricted = opts.restricted == true
+    if restricted then
+        env.issecretvalue = function(value) return is_secret(value) end
+        env.C_Secrets = {
+            ShouldCooldownsBeSecret = function() return true end,
+            ShouldAurasBeSecret = function() return true end,
+            ShouldSpellAuraBeSecret = function() return true end,
+            ShouldUnitPowerBeSecret = function() return true end,
+            ShouldUnitHealthMaxBeSecret = function() return true end,
+        }
+    end
     env.GetLocale = function() return "enUS" end
     env.STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
     env.UIParent = make_frame("UIParent")
@@ -235,6 +260,50 @@ local function build(opts)
             return cd.start or 0, cd.duration or 0, 1, 0
         end
         return 0, 0, 0, 0
+    end
+    if restricted then
+        -- Every spell cooldown is restricted: the wrapper normalises to 0,0,0,0 + the
+        -- fifth true, the exact shape a secret timing produces in play.
+        env.GetSpellCooldown = function(spell)
+            cooldown_queries[#cooldown_queries + 1] = spell
+            return secret(900100), secret(900101), secret(900102), secret(900103)
+        end
+    end
+    -- Aura-only restriction (H4 pin): the target-aura list may be hidden while the
+    -- power/cooldown reads answer normally. C_Secrets is installed before load (the
+    -- probe is read dynamically, so a later swap also works).
+    if opts.restricted_auras_only == true then
+        env.issecretvalue = function(value) return is_secret(value) end
+        env.C_Secrets = {
+            ShouldAurasBeSecret = function() return true end,
+            ShouldSpellAuraBeSecret = function() return true end,
+        }
+    end
+    -- Compat-surface fixtures (2026-11-06 secret-guide lane): the item-cooldown fourth
+    -- return and the health-max secrecy probe are pinned against the REAL wrappers.
+    if opts.compat_contract == true then
+        env.issecretvalue = function(value) return is_secret(value) end
+        env.compat_item_cd = { start = 5, duration = 1.5, enabled = 1 }
+        env.GetInventoryItemCooldown = function(unit, slot)
+            local cd = env.compat_item_cd
+            if cd.table_shape == true then
+                return { startTime = cd.startTime, duration = cd.duration,
+                    isEnabled = cd.isEnabled }
+            end
+            return cd.start, cd.duration, cd.enabled
+        end
+        env.C_Secrets = {
+            ShouldUnitHealthMaxBeSecret = function(unit)
+                local answer = env.compat_health_probe
+                if answer == "throw" then
+                    error("restricted")
+                end
+                if answer == nil then
+                    return nil
+                end
+                return answer
+            end,
+        }
     end
     env.GetSpellBaseCooldown = function() return 15000, 0 end
     env.IsSpellKnown = function(spell)
@@ -4138,6 +4207,136 @@ do
     eq(legacy_out.hold_text, "HOLD",
         "non-forever passthrough: the legacy HOLD text is unchanged")
     tbc.st.nextaction.evaluate = real_na
+end
+
+--=========================================================================================
+-- 20) Secret-restricted reads (2026-11-06 H1/H2/H4/M2): unknown, never 0/"ready"/absent
+--=========================================================================================
+-- Wow Forever restricted reads: UnitPower/UnitPowerMax/UnitHealthMax/UnitAura and the
+-- spell cooldowns come back opaque. A class gather must publish inputs_unknown (the
+-- display's suppression path) and never a 0 = "ready" or a missing-field "absent"
+-- claim. This build flags the values so compat's own wrappers degrade exactly as in the
+-- client; the C_Secrets predicates answer true.
+do
+    local sec = build({ project = 18, interface = 16001, restricted = true })
+    local S2, P2 = sec.ST, sec.ST.PALADIN
+    check(sec.st.family == "FOREVER", "secret: the restricted profile is Forever")
+    P2.post_init(S2)
+    sec.set_target_exists(true)
+    sec.known_spells[35395] = true -- Crusader Strike known: the cooldown helper is reached
+    local sinputs = P2.gather_guide_inputs(S2, {})
+    eq(sinputs.inputs_unknown, true,
+        "secret gather: a restricted tick is marked unknown (the display suppression path)")
+    -- H2: a restricted cooldown is UNKNOWN, never 0 = "ready".
+    eq(sinputs.cs_remaining, nil,
+        "secret H2: a known spell's restricted cooldown is nil, not 0 (ready)")
+    eq(sinputs.judge_remaining, 999,
+        "secret H2: Judgement keeps the class never-ready sentinel, not 0")
+    -- H1: an unreadable power pair is unknown, never 0 %.
+    eq(sinputs.mana_pct, nil, "secret H1: a restricted power read is nil, not 0 %")
+    -- H4: a hidden target-aura row is unknown, never "absent".
+    eq(sinputs.jotc_remaining, nil, "secret H4: a hidden JotC row reads nil (not absent)")
+    -- M2: restricted target health is unknown, not a 100 % default.
+    eq(sinputs.target_health_pct, nil, "secret M2: restricted target health reads nil")
+
+    -- Control: the same fixture without the regime keeps numbers and no unknown bit.
+    local plain = build({ project = 18, interface = 16001 })
+    local S3, P3 = plain.ST, plain.ST.PALADIN
+    P3.post_init(S3)
+    plain.set_target_exists(true)
+    plain.known_spells[35395] = true
+    local pinputs = P3.gather_guide_inputs(S3, {})
+    check(pinputs.inputs_unknown ~= true,
+        "control: an unrestricted gather keeps inputs_unknown clear")
+    check(type(pinputs.mana_pct) == "number",
+        "control: an unrestricted power read still resolves a percentage")
+end
+
+--=========================================================================================
+-- 21) Compat-surface pins for the two additive helpers (2026-11-06 secret-guide lane)
+--=========================================================================================
+-- (a) api.GetInventoryItemCooldown's additive fourth `restricted` return: a restricted
+-- read is the idle shape + true, a readable read keeps the classic three values and omits
+-- the fourth. (b) api.health_max_may_be_secret(unit): C_Secrets' exact predicate with the
+-- strict answer contract (true/false only for a boolean; absent/throwing/non-boolean/
+-- non-string unit -> nil, never "no"). Both run against the real compat.lua.
+do
+    local b = build({ compat_contract = true })
+    local api = b.st.api
+
+    -- (a) readable: the classic three-value shape, no fourth.
+    local start_time, duration, enabled, restricted =
+        api.GetInventoryItemCooldown(13)
+    eq(start_time, 5, "item cooldown control: start passes through")
+    eq(duration, 1.5, "item cooldown control: duration passes through")
+    eq(enabled, 1, "item cooldown control: enabled passes through")
+    eq(restricted, nil, "item cooldown control: no restricted fourth")
+    eq(select("#", api.GetInventoryItemCooldown(13)), 3,
+        "item cooldown control: exactly the classic three values")
+
+    -- (a) restricted: idle zeros + true (never a secret value, never a ready claim).
+    b.env.compat_item_cd.start = secret(900201)
+    start_time, duration, enabled, restricted = api.GetInventoryItemCooldown(13)
+    eq(start_time, 0, "item cooldown restricted start: idle zero")
+    eq(duration, 0, "item cooldown restricted duration: idle zero")
+    eq(enabled, 0, "item cooldown restricted enabled: idle zero")
+    eq(restricted, true, "item cooldown restricted: the fourth return flags the unknown read")
+
+    -- (a) the SpellCooldownInfo table shape is unfolded the same way.
+    b.env.compat_item_cd = { table_shape = true, startTime = 5, duration = 1.5,
+        isEnabled = true }
+    start_time, duration, enabled, restricted = api.GetInventoryItemCooldown(13)
+    eq(start_time, 5, "item cooldown info-table: start passes through")
+    eq(duration, 1.5, "item cooldown info-table: duration passes through")
+    eq(enabled, 1, "item cooldown info-table: isEnabled becomes 1")
+    eq(restricted, nil, "item cooldown info-table: no restricted fourth")
+    b.env.compat_item_cd.isEnabled = secret(900202)
+    start_time, duration, enabled, restricted = api.GetInventoryItemCooldown(13)
+    eq(start_time, 0, "item cooldown info-table secret field: the idle start degrades")
+    eq(duration, 0, "item cooldown info-table secret field: the idle duration degrades")
+    eq(enabled, 0, "item cooldown info-table secret field: the idle enabled degrades")
+    eq(restricted, true, "item cooldown info-table secret field: the unknown read is flagged")
+
+    -- (a) a client without the global keeps the historical idle shape (no fourth).
+    -- A fresh sandbox: compat captures the global at load, so an after-load nil cannot
+    -- model the absent client.
+    local absent = build({})
+    eq(select("#", absent.st.api.GetInventoryItemCooldown(13)), 3,
+        "item cooldown absent client: the classic three-value shape")
+    local absent_start, absent_duration, absent_enabled =
+        absent.st.api.GetInventoryItemCooldown(13)
+    check(absent_start == 0 and absent_duration == 0 and absent_enabled == 0,
+        "item cooldown absent client: the historical idle zeros")
+
+    -- (b) the health-max predictor: exact boolean answers only.
+    b.env.compat_health_probe = true
+    eq(api.health_max_may_be_secret("target"), true, "health probe: true passes through")
+    b.env.compat_health_probe = false
+    eq(api.health_max_may_be_secret("target"), false, "health probe: false passes through")
+    b.env.compat_health_probe = nil
+    eq(api.health_max_may_be_secret("target"), nil, "health probe: nil answer is unknown")
+    b.env.compat_health_probe = "throw"
+    eq(api.health_max_may_be_secret("target"), nil, "health probe: a throw is unknown")
+    b.env.compat_health_probe = 1
+    eq(api.health_max_may_be_secret("target"), nil, "health probe: a non-boolean is unknown")
+    b.env.compat_health_probe = true
+    eq(api.health_max_may_be_secret(42), nil, "health probe: a non-string unit is unknown")
+    eq(api.health_max_may_be_secret(""), nil, "health probe: an empty unit is unknown")
+    b.env.C_Secrets = nil
+    eq(api.health_max_may_be_secret("target"), nil, "health probe: no C_Secrets is unknown")
+end
+
+-- H4 on its own: only the target-aura list is restricted. The JotC miss is then the
+-- ONLY unknown source, so a dropped aura probe clears the bit (mutation-pinned).
+do
+    local auras = build({ project = 18, interface = 16001, restricted_auras_only = true })
+    local A = auras.ST
+    A.PALADIN.post_init(A)
+    auras.set_target_exists(true)
+    local ainputs = A.PALADIN.gather_guide_inputs(A, {})
+    eq(ainputs.inputs_unknown, true,
+        "aura-only H4: a hidden JotC row is the unknown source (no cooldown/power help)")
+    eq(ainputs.jotc_remaining, nil, "aura-only H4: the hidden JotC read stays nil")
 end
 
 if failures == 0 then

@@ -324,11 +324,10 @@ local LSM = LibStub("LibSharedMedia-3.0")
 local is_secret = issecretvalue or function()
     return false
 end
--- Target identity for the D4 time-to-die baseline: UnitGUID exists on every supported
--- client and is not wrapped by compat.lua (the hud.lua capture pattern). nil (or a
--- non-string) reads as "no readable target", so the sampler resets instead of diffing
--- across targets.
-local unit_guid = UnitGUID
+-- Target identity for the D4 time-to-die baseline (SEC-1/SEC-5, 2026-11-06): identity
+-- is secret-capable on Mainline-code clients (a restricted GUID passes type() and raises
+-- on the first comparison), so the sampler reads it through compat's api.UnitGUID
+-- (nil-on-secret) at the use site - never a raw local alias captured at load.
 -- The rage cap the D6 badge reads (100 on every classic family). Declared here so the
 -- badge sampler below captures it as an upvalue.
 local DRUID_RAGE_CAP = 100
@@ -2181,8 +2180,56 @@ end
 -- One debuff's remaining seconds from the merged tracker scan, in the frozen input
 -- names' shape: nil when the target does not carry it (or the scan has not answered),
 -- else the display remaining plus the bar's total span (the slot swipe's length).
+-- H2/H4 (2026-11-06): per-tick restricted-read flag. A restricted cooldown or a
+-- target-aura miss under the restricted-aura regime records itself here; the gather
+-- tail publishes inputs_unknown (the display's suppression path). Returning nil alone
+-- would still read as "ready"/"absent" - forever_guide.is_ready(nil) is true and a
+-- missing debuff means "re-cue it".
+local guide_reads_unknown = false
+
+-- "Could this debuff's target-aura row be hidden by the restricted-aura regime?"
+-- Specific rank probes answer first; the list-wide predicate is the fallback. Anything
+-- but an explicit true keeps the historical absent meaning (classic clients: no probes).
+local function debuff_aura_may_be_secret(key)
+    local specific = api.spell_aura_may_be_secret
+    if type(specific) == "function" then
+        for i = 1, #druid_debuff_defs do
+            local def = druid_debuff_defs[i]
+            if def.key == key then
+                local any_true, any_nil = false, false
+                for id in pairs(def.ids) do
+                    local answer = specific(id)
+                    if answer == true then
+                        any_true = true
+                    elseif answer == nil then
+                        any_nil = true
+                    end
+                end
+                if any_true then
+                    return true
+                end
+                if not any_nil then
+                    return false
+                end
+                break
+            end
+        end
+    end
+    local list_probe = api.auras_may_be_secret
+    if type(list_probe) == "function" then
+        return list_probe() == true
+    end
+    return false
+end
+
 local function get_guide_debuff_remaining(key, now)
     if druid_debuff_found[key] ~= true or not druid_energy then
+        -- H4 (2026-11-06): the scan found no row. Under the restricted-aura regime
+        -- that is UNKNOWN, not "the debuff is absent" - the engine must not re-cue an
+        -- upkeep the client may be hiding. The gather publishes the unknown bit.
+        if druid_debuff_found[key] ~= true and debuff_aura_may_be_secret(key) then
+            guide_reads_unknown = true
+        end
         return nil, nil
     end
     return druid_energy.get_debuff_remaining(druid_debuff_duration[key],
@@ -2242,13 +2289,16 @@ end
 -- these abilities' cooldowns). 0 means ready-or-filtered; unreadable (nil)
 -- readings degrade to 0 too, so callers must gate on spell knowledge first.
 local function guide_cooldown_remaining(query, now)
-    local start_time, duration = api.GetSpellCooldown(query)
-    if type(start_time) == "number" and type(duration) == "number"
-        and duration > 1.51 then
-        local remaining = start_time + duration - now
-        if remaining > 0 then
-            return remaining
-        end
+    -- H2 (2026-11-06): a restricted (secret) timing is UNKNOWN, never 0 = "ready".
+    -- The flag makes this tick's advice unknown (the display suppression path).
+    local remaining, duration, restricted = api.get_cooldown_remaining(query)
+    if restricted == true then
+        guide_reads_unknown = true
+        return nil
+    end
+    if type(remaining) == "number" and type(duration) == "number"
+        and duration > 1.51 and remaining > 0 then
+        return remaining
     end
     return 0
 end
@@ -2386,10 +2436,11 @@ sample_target_time_to_die = function(self, now)
     if not druid_energy then
         return nil
     end
-    local guid = unit_guid and unit_guid("target")
-    if type(guid) ~= "string" then
-        -- No target (or a client that cannot answer its identity): drop the
-        -- baseline so the next target starts clean.
+    local guid = api.UnitGUID("target")
+    if guid == nil then
+        -- No target, or a client that cannot answer its identity (a restricted GUID
+        -- degrades to nil in compat): drop the baseline so the next target starts
+        -- clean. Never compare an unknown/opaque identity.
         self.druid_ttd_guid = nil
         self.druid_ttd_hp = nil
         self.druid_ttd_at = nil
@@ -2495,6 +2546,8 @@ end
 -- between ticks; nil means "the client did not answer".
 function ST.DRUID.gather_guide_inputs(self, out)
     local inputs = out or ST.DRUID.guide_inputs
+    -- H1/H2/H4 (2026-11-06): fresh per-tick restricted-read flag (the tail publishes it).
+    guide_reads_unknown = false
     local now = api.get_time()
     local d = self.mainhand
     local gcd = self.gcd
@@ -2519,11 +2572,22 @@ function ST.DRUID.gather_guide_inputs(self, out)
     local form = self.form_index
     inputs.form_index = form
     local value
+    -- H1 (2026-11-06): an unreadable pool is UNKNOWN when the regime says that power
+    -- type may be secret - never 0, so no rage/energy-gated rule decides on it.
+    local power_probe = api.power_may_be_secret
+    local function note_secret_pool(power_type)
+        if type(power_type) == "number" and type(power_probe) == "function"
+            and power_probe(power_type) == true then
+            guide_reads_unknown = true
+        end
+    end
     inputs.rage = nil
     if form == 1 then
         value = api.UnitPower("player", 1)
         if type(value) == "number" then
             inputs.rage = value
+        else
+            note_secret_pool(1)
         end
     end
     inputs.energy = nil
@@ -2531,6 +2595,8 @@ function ST.DRUID.gather_guide_inputs(self, out)
         value = api.UnitPower("player", 3)
         if type(value) == "number" then
             inputs.energy = value
+        else
+            note_secret_pool(3)
         end
     end
     inputs.combo_points = nil
@@ -2538,6 +2604,8 @@ function ST.DRUID.gather_guide_inputs(self, out)
         value = api.UnitPower("player", 4)
         if type(value) == "number" then
             inputs.combo_points = value
+        else
+            note_secret_pool(4)
         end
     end
 
@@ -2585,6 +2653,14 @@ function ST.DRUID.gather_guide_inputs(self, out)
     -- correction and is deliberately NOT applied here. A client that has not
     -- measured yet reads nil and the line degrades to the GCD remainder alone.
     inputs.time_to_die = sample_target_time_to_die(self, now)
+    -- M2 (2026-11-06): the execute/TTD signal vanished. If the target-health read is
+    -- restricted, that is UNKNOWN (the phase is undecidable), not "no estimate".
+    if inputs.time_to_die == nil then
+        local hp_probe = api.health_max_may_be_secret
+        if type(hp_probe) == "function" and hp_probe("target") == true then
+            guide_reads_unknown = true
+        end
+    end
     inputs.target_short_lived = nil
     inputs.can_powershift = nil
     -- wolfshead_equipped: the Wolfshead Helm half of the powershift basis,
@@ -2980,6 +3056,11 @@ function ST.DRUID.gather_guide_inputs(self, out)
             end
             i = i + 1
         end
+    end
+    -- Belt and braces (H1/H2/H4/M2): any restricted read this tick makes the advice
+    -- unknown instead of silently degrading (the display suppresses on the bit).
+    if guide_reads_unknown == true then
+        inputs.inputs_unknown = true
     end
     return inputs
 end

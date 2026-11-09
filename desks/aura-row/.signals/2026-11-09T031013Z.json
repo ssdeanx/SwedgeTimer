@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-09T03:10:13Z",
+  "agent_name": "aura-row",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the t2 port map end to end before opening an editor, then re-verifying the three load-bearing API claims against origin/forever (Blizzard_AuraContainer load flags + securecopy sort enums, AddAuraGroup securecopy/validation, secretwrap container sizing) removed the two traps the report warned about: the load-time gate is safe because the addon is not LoadOnDemand, and the fixed-band anchor is required because container geometry can be secret. Writing the suite first (red on the missing module) made every API decision testable before it existed, and the 12-mutation run proved the checks are not vacuous - it also caught a real fixture weakness (a table-shaped 'secret' made a type guard look like a secret guard) which is now a numeric secret sentinel.",
+    "what_was_hard": "The biggest judgement call was combat: the brief says native creation must never happen in lockdown, but without a class-file hook the module had no retry path. Creating only the plain driver Frame during lockdown (never an AuraContainer) and documenting/testing that split was the honest resolution. Second: the duration text above debuff icons needs vertical clearance, so the reserved band is size + 16 px (the reference's DEBUFF_TEXT_CLEARANCE), not just the icon height - an easy off-by-a-band in a layout that can never be measured.",
+    "skill_gap": "No offline way to prove taint behaviour of SetPoint/Show on a container with the UntrustedLayoutScriptExecution aspect, or that tainted creation of the template works: those stay UNCONFIRMED with exact /run probes. Also the option-table widget set could only be exercised by loading option_tables.lua in a sandbox (the real AceConfig render is untested offline)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -692,9 +692,7 @@ do
 end
 
 do
-    local tocs = { "SwedgeTimer.toc", "SwedgeTimer_Vanilla.toc", "SwedgeTimer_TBC.toc",
-        "SwedgeTimer_Wrath.toc", "SwedgeTimer_Cata.toc", "SwedgeTimer_Mists.toc",
-        "SwedgeTimer_Mainline.toc" }
+    local tocs = { "SwedgeTimer.toc" }
     for i = 1, #tocs do
         local text = read(tocs[i])
         local function pos(needle)

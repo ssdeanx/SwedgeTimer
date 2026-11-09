@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T21:26:24Z",
+  "agent_name": "secret-consumers-audit",
+  "self_assessment": { "intent": 5, "confidence": 4, "accuracy": 4, "completeness": 4 },
+  "patterns": {
+    "what_worked": "Read the compat contracts first, then enumerated every consumer site by API (aura/cooldown/power/health/guid/totem/speed/direct-call/gating) and verified each with a targeted read; offline loadfile probes of forever_guide proved the wrong-advice output deterministically (raw-zero vs absent field).",
+    "what_was_hard": "Distinguishing which cooldown consumers actually feed the Forever guide from the Forever-gated providers; the class gathers are restriction-blind while the Forever guide bridge is restriction-aware, so the bypass is a data-shape problem, not a missing fifth-return read in one place. Also separating secret-capable direct reads from safe player-only identity reads (enemy_swing is classic-gated, main CLEU target branch unreachable on mainline).",
+    "skill_gap": "No in-client access to a real secret value; every trigger (cooldown/power/aura/identity/health restriction contexts) stays UNVERIFIED with an explicit probe listed."
+  },
+  "escalation": { "reason": null, "blocked_on": null, "recommendation": null },
+  "artifacts": ["bench/secret_consumers_audit_2026-11-06.md", "desks/secret-consumers-audit/journal.md"],
+  "top_findings": [
+    "H2 HIGH wrong advice: restricted cooldown -> class cooldown helpers return 0 -> Forever guide bridge trusts the gathered field over its own restricted-aware live_cooldown; proven offline (paladin cues Judgement, hunter cues Arcane) with inputs_unknown=false.",
+    "H1 HIGH wrong advice/feature loss: restricted player power (operator-confirmed regime) becomes 0/0%/100% in class gathers -> warrior guide stalls on HOLD, paladin loses all mana-gated fillers, druid bear mis-cues Enrage; no unknown marker.",
+    "H4 HIGH: restricted target-aura row read as debuff absent -> warrior re-cues Rend, druid Rip/Rake, shaman Flame Shock; paladin JotC bar hides; those paths lack the auras_may_be_secret gate rogue/shaman already use.",
+    "H3 HIGH: Forever Hunter's Mark unknown branch is dead code (result is always boolean) -> HM re-cued every tick under restricted target auras, proven offline.",
+    "H5 HIGH known lead confirmed: hunter_ui:1276/1408/1761 still break on a restricted aura row; Rapid Fire bar (default ON) and aspect icon (default ON) disappear.",
+    "H6 HIGH would-throw: direct UnitGUID('target') comparison in the per-frame hunter queue tint (hunter.lua:1375, stored :1582/:1589) raises on a secret identity; class hook quarantines after 25 throws.",
+    "M1 MED would-throw: direct UnitIsUnit return comparison (hunter.lua:1624); M2 restricted target health silently removes execute-phase advice; M3 display cold reads; M4 practice scenario ctx inherits restricted 0; M5 Retail residual (restricted-aware providers are Forever-gated).",
+    "Verified clean: class-module aura walks (R2), Forever HUD restricted paint, guide M6 suppression/ellipsis, power bar pass-through, range unknown face, LibGlobalCooldown, enemy_swing gating, C_Secrets/is_mainline gating, check_weapons, and all health/power/guid/totem/speed type guards."
+  ]
+}

@@ -30,6 +30,20 @@ local function near(got, want, tol, label)
     end
 end
 
+-- Secret-value fixtures (SEC-10, 2026-11-06 secret-hud lane): `issecretvalue` is the only
+-- question compat asks about a client value. Marking the RAW fixture returns as secret
+-- makes the REAL compat wrapper perform its degrade (idle 0,0,0) and add its fourth
+-- `restricted` return, so the HUD tests exercise the shipped wrapper, not a mock of it.
+-- Sentinels are unique numbers (paladin_state's pattern) so no unrelated value is flagged.
+local SECRETS = {}
+local function secret(value)
+    SECRETS[value] = true
+    return value
+end
+local function is_secret(value)
+    return SECRETS[value] == true
+end
+
 --=========================================================================================
 -- Fixtures (reset per sandbox build; the env stubs read them at call time)
 --=========================================================================================
@@ -56,6 +70,23 @@ local cleu_impl = nil
 local lcg_starts, lcg_stops = 0, 0
 local created_frames = 0
 local class_db = nil
+-- Forever native pass-through fixtures (SEC-13, 2026-11-08): the opaque duration object,
+-- the two NeverSecret state fields, the native text binding and the colour curve. Every
+-- fixture is reset per sandbox build and read at call time.
+local duration_object_reads = 0
+local duration_object_token, duration_object_ignore_gcd = nil, nil
+local duration_object_fixture = nil
+local duration_object_throws = false
+local cooldown_info_calls = 0
+local cooldown_on_gcd, cooldown_active = nil, nil
+local cooldown_state_throws = false
+local cooldown_secrecy_answer = nil
+local cooldown_sink_calls, cooldown_sink_object, cooldown_sink_clear = 0, nil, nil
+local binding_set_duration_calls, binding_enabled_calls = 0, 0
+local binding_disable_calls = 0
+local binding_instance = nil
+local formatter_instance = nil
+local lib_fired, lib_registered, lib_timers = {}, {}, {}
 
 local SPELL_INFOS = {
     [35395] = { name = "Crusader Strike", icon = "icon_cs" },
@@ -131,6 +162,12 @@ local function make_fontstring()
         if f.font == nil then
             error("Font not set", 2)
         end
+        -- SEC-14: a FontString that has received the client's secret Text aspect
+        -- (DurationTextBinding:SetFontString) refuses a tainted SetText. This models
+        -- RequiresFontStringTextAccess so a binding aimed at the wrong string fails.
+        if f.secret_text_aspect then
+            error("secret Text aspect: SetText refused", 2)
+        end
         f.text = text
     end
     function f:SetTextColor(r, g, b, a) f.color = { r, g, b, a } end
@@ -199,6 +236,17 @@ local function make_frame(name)
     function f:SetHideCountdownNumbers(flag) f.hide_numbers = flag end
     function f:SetDrawEdge(flag) f.draw_edge = flag end
     function f:SetAllPoints() end
+    -- Forever native swipe sink: records the opaque handle. The handle in these fixtures
+    -- raises on every numeric getter, so a read would fail the suite loudly.
+    function f:SetCooldownFromDurationObject(object, clear_if_zero)
+        cooldown_sink_calls = cooldown_sink_calls + 1
+        cooldown_sink_object = object
+        cooldown_sink_clear = clear_if_zero
+        f.cd_from_object = object
+        f.cd_clear_if_zero = clear_if_zero
+    end
+    function f:RegisterUnitEvent(event) f.events = f.events or {}; f.events[event] = true end
+    function f:UnregisterEvent(event) if f.events then f.events[event] = nil end end
     return f
 end
 
@@ -212,6 +260,9 @@ local function build(opts)
     clock = 0
     aura_list = {}
     cooldowns = {}
+    -- A secret marker is per-build state: never leak one sandbox's flagged values into
+    -- the next (the is_secret probe is global to the sandbox env).
+    SECRETS = {}
     -- The spellbook the knowledge probe reads. opts.known_spells REPLACES the
     -- shared table (the hunter census uses it: the SoD build of the Era client
     -- knows the Chimera Shot rune). The default path is unchanged. The default
@@ -240,6 +291,17 @@ local function build(opts)
     cleu_impl = nil
     lcg_starts, lcg_stops = 0, 0
     created_frames = 0
+    duration_object_reads = 0
+    duration_object_token, duration_object_ignore_gcd = nil, nil
+    duration_object_fixture, duration_object_throws = nil, false
+    cooldown_info_calls = 0
+    cooldown_on_gcd, cooldown_active, cooldown_state_throws = nil, nil, false
+    cooldown_secrecy_answer = nil
+    cooldown_sink_calls, cooldown_sink_object, cooldown_sink_clear = 0, nil, nil
+    binding_set_duration_calls, binding_enabled_calls = 0, 0
+    binding_disable_calls = 0
+    binding_instance, formatter_instance = nil, nil
+    lib_fired, lib_registered, lib_timers = {}, {}, {}
 
     class_db = {
         class_enabled = true,
@@ -287,6 +349,9 @@ local function build(opts)
     env.WOW_PROJECT_FOREVER = 18
     env.GetTimePreciseSec = function() return clock end
     env.GetTime = function() return clock end
+    -- compat captures this global at load time (is_secret); the fixture marks raw secret
+    -- returns with secret() so the wrapper's degrade + fourth return are the real ones.
+    env.issecretvalue = function(value) return is_secret(value) end
     env.STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
     if opts.no_std_font then
         env.STANDARD_TEXT_FONT = nil
@@ -339,6 +404,137 @@ local function build(opts)
     env.UnitHealthMax = function() return target_health_max end
     env.UnitGUID = function() return "Player-1" end
     env.InCombatLockdown = function() return lockdown end
+    env.UnitClass = function() return "Paladin", "PALADIN" end
+    env.C_Timer = {
+        After = function(delay, fn) lib_timers[#lib_timers + 1] = { delay = delay, fire = fn } end,
+    }
+    if opts.c_spell then
+        -- The Forever C_Spell surface: the opaque duration reader plus the plain state
+        -- fields. The returned SpellCooldownInfo carries no readable timing (secret in the
+        -- restricted moment); only isOnGCD/isActive are meaningful here.
+        env.C_Spell = {
+            GetSpellCooldown = function(spell)
+                cooldown_info_calls = cooldown_info_calls + 1
+                if cooldown_state_throws then
+                    error("restricted state")
+                end
+                return {
+                    startTime = 0, duration = 0, isEnabled = true, modRate = 1,
+                    isOnGCD = cooldown_on_gcd, isActive = cooldown_active,
+                }
+            end,
+            GetSpellCooldownDuration = function(spell, ignore_gcd)
+                duration_object_reads = duration_object_reads + 1
+                duration_object_token = spell
+                duration_object_ignore_gcd = ignore_gcd
+                if duration_object_throws then
+                    error("restricted")
+                end
+                return duration_object_fixture
+            end,
+            IsSpellUsable = function() return true, false end,
+        }
+    end
+    if opts.c_secrets then
+        env.C_Secrets = {
+            HasSecretRestrictions = function() return true end,
+            ShouldCooldownsBeSecret = function() return true end,
+            ShouldSpellCooldownBeSecret = function()
+                return cooldown_secrecy_answer
+            end,
+        }
+    end
+    if opts.duration_surface then
+        -- The native duration-text surface: the binding formats the opaque object itself;
+        -- the fixture binding writes the string to prove the CLIENT owns the text (the HUD
+        -- never calls SetText on the object path).
+        env.Enum = {
+            SecondsFormatterAbbreviation = { None = 0, Truncate = 1, OneLetter = 2 },
+            SecondsFormatterInterval = { Seconds = 0, Minutes = 1, Hours = 2, Days = 3 },
+            SecondsFormatterRounding = { RoundUp = 0, Truncate = 1 },
+            DurationTextBindingProperty = { RemainingDuration = 0, RemainingPercent = 1 },
+        }
+        env.C_StringUtil = {
+            CreateSecondsFormatter = function()
+                local formatter = { calls = {} }
+                local function setter(name)
+                    return function(_, value) formatter.calls[name] = value end
+                end
+                formatter.SetDefaultAbbreviation = setter("SetDefaultAbbreviation")
+                formatter.SetMinInterval = setter("SetMinInterval")
+                formatter.SetMaxInterval = setter("SetMaxInterval")
+                formatter.SetRounding = setter("SetRounding")
+                formatter.SetDesiredUnitCount = setter("SetDesiredUnitCount")
+                formatter.SetCanRoundUpLastUnit = setter("SetCanRoundUpLastUnit")
+                formatter.SetMillisecondsThreshold = setter("SetMillisecondsThreshold")
+                formatter_instance = formatter
+                return formatter
+            end,
+            CreateNumericRuleFormatter = function()
+                local formatter = { calls = {} }
+                formatter.AddBreakpoint = function(_, breakpoint)
+                    formatter.breakpoint = breakpoint
+                    formatter.calls.AddBreakpoint = true
+                end
+                formatter.Format = function(_, value) return tostring(math.floor(value)) end
+                formatter_instance = formatter
+                return formatter
+            end,
+        }
+        env.C_CurveUtil = {
+            CreateColorCurve = function()
+                local curve = { points = {} }
+                function curve:AddPoint(x, color)
+                    curve.points[#curve.points + 1] = { x = x, color = color }
+                end
+                return curve
+            end,
+        }
+        env.C_DurationUtil = {
+            CreateDurationTextBinding = function()
+                local b = { enabled = false }
+                function b:SetFontString(fs)
+                    b.font_string = fs
+                    -- The client attaches the secret Text aspect to the inbound string.
+                    if fs then
+                        fs.secret_text_aspect = true
+                    end
+                end
+                function b:SetFormatter(f) b.formatter = f end
+                function b:SetTextFormat(fmt, components)
+                    b.text_format = fmt
+                    b.text_format_components = components
+                end
+                function b:SetUpdateInterval(v) b.update_interval = v end
+                function b:SetZeroDurationText(t) b.zero_text = t end
+                function b:SetExpiredText(t) b.expired_text = t end
+                function b:SetDuration(object)
+                    b.duration = object
+                    binding_set_duration_calls = binding_set_duration_calls + 1
+                end
+                function b:SetEnabled(value)
+                    b.enabled = value and true or false
+                    binding_enabled_calls = binding_enabled_calls + 1
+                    if b.enabled and b.font_string and b.duration then
+                        -- The client formats; the addon handed it the opaque object only.
+                        -- The client-side writer bypasses the tainted-caller SetText guard.
+                        b.font_string.text = "4"
+                    end
+                end
+                function b:Enable() b:SetEnabled(true) end
+                function b:Disable()
+                    b.enabled = false
+                    binding_disable_calls = binding_disable_calls + 1
+                end
+                function b:SetTextColorCurve(curve, property)
+                    b.curve, b.curve_property = curve, property
+                end
+                function b:HasSecretValues() return false end
+                binding_instance = b
+                return b
+            end,
+        }
+    end
     env.IsSpellInRange = function(name, unit)
         range_reads = range_reads + 1
         if range_impl then return range_impl(name, unit) end
@@ -351,6 +547,12 @@ local function build(opts)
             local cd = item_cooldowns[slot]
             if not cd then
                 return 0, 0, 0
+            end
+            if cd.restricted then
+                -- A secret-timing read (SEC-10): the raw client hands secret numbers;
+                -- compat degrades them to the idle shape plus the fourth `restricted`
+                -- return, and that is what the HUD must consume.
+                return secret(900301), secret(900302), secret(900303)
             end
             if cd.table_shape then
                 -- Mainline SpellCooldownInfo shape: the compat wrapper must unfold it.
@@ -413,22 +615,49 @@ local function build(opts)
         end
     end
     function LSM.HashTable() return {} end
-    env.LibStub = function(major)
-        if major == "AceAddon-3.0" then
-            return { GetAddon = function() return ST end }
-        elseif major == "LibCustomGlow-1.0" then
-            return LCG
-        elseif major == "LibSharedMedia-3.0" then
-            if opts.no_lsm then
-                return nil
+    local libraries = {}
+    env.LibStub = setmetatable({
+        -- Real modules (LibGlobalCooldown) register themselves through LibStub:NewLibrary.
+        NewLibrary = function(_, major)
+            libraries[major] = libraries[major] or {}
+            return libraries[major]
+        end,
+    }, {
+        __call = function(_, major)
+            if major == "AceAddon-3.0" then
+                return { GetAddon = function() return ST end }
+            elseif major == "LibCustomGlow-1.0" then
+                return LCG
+            elseif major == "LibSharedMedia-3.0" then
+                if opts.no_lsm then
+                    return nil
+                end
+                return LSM
+            elseif major == "CallbackHandler-1.0" then
+                return {
+                    New = function()
+                        local cb = {}
+                        function cb:Fire(event, ...)
+                            lib_fired[#lib_fired + 1] = { event = event, args = { ... } }
+                            local fn = lib_registered[event]
+                            if fn then fn(event, ...) end
+                        end
+                        function cb:RegisterCallback(event, fn)
+                            lib_registered[event] = fn
+                        end
+                        return cb
+                    end,
+                }
             end
-            return LSM
-        end
-        return nil
-    end
+            return nil
+        end,
+    })
 
     local st = {}
     local modules = { "compat.lua", "utils.lua", "guard.lua", "nextaction.lua", "hud.lua", "classes/paladin.lua" }
+    if opts.lib_gcd then
+        modules[#modules + 1] = "LibGlobalCooldown.lua"
+    end
     -- opts.class: build the sandbox for another class instead (player_class + its
     -- module). The paladin module always loads first so the shared-provider
     -- sections above keep their fixtures; the class module under test loads last.
@@ -1658,9 +1887,7 @@ do
             "classes/paladin.lua reaches " .. usability_globals[i] .. " through compat, not rawget")
     end
 
-    local tocs = { "SwedgeTimer.toc", "SwedgeTimer_Vanilla.toc", "SwedgeTimer_TBC.toc",
-        "SwedgeTimer_Wrath.toc", "SwedgeTimer_Cata.toc", "SwedgeTimer_Mists.toc",
-        "SwedgeTimer_Mainline.toc" }
+    local tocs = { "SwedgeTimer.toc" }
     for i = 1, #tocs do
         local text = read(tocs[i])
         local hud_at = text:find("\nhud%.lua")
@@ -2830,6 +3057,150 @@ do
 end
 
 --=========================================================================================
+-- 20b) SEC-10 (2026-11-06 secret-hud lane): a restricted item-cooldown read is UNKNOWN,
+-- not passive. compat's api.GetInventoryItemCooldown returns its idle shape (0,0,0) plus
+-- a fourth `restricted = true` when the client hid any raw field. The old gate read
+-- `use_enable == 1` -> false and an equipped on-use trinket's HUD slot silently
+-- disappeared on Forever. The slot must stay visible in the restricted face (grey, no
+-- swipe, no fabricated countdown) while a READABLE passive still hides and a readable
+-- on-use still shows exactly as before.
+--=========================================================================================
+do
+    local r = build()
+    local rHUD, rST = r.st.hud, r.ST
+    rHUD.init(rST)
+    local notices = {}
+    r.st.utils.print_msg = function(msg) notices[#notices + 1] = tostring(msg) end
+    local tslot = nil
+    for i = 1, #rST.PALADIN.HUD_SLOTS do
+        if rST.PALADIN.HUD_SLOTS[i].key == "trinket1" then
+            tslot = rST.PALADIN.HUD_SLOTS[i]
+        end
+    end
+    check(tslot ~= nil, "SEC-10: the trinket1 descriptor exists")
+    clock = 2000
+
+    -- An equipped on-use trinket whose cooldown timing the client hides.
+    item_ids[13] = 99999
+    item_textures[13] = "tex_use"
+    item_cooldowns[13] = { restricted = true }
+    aura_list = {}
+    rHUD.read_trinket(13)
+
+    -- The real compat wrapper's contract (the HUD consumes this, not a mock): idle
+    -- zeros + the additive fourth return.
+    local start_time, duration, enabled, restricted = r.st.api.GetInventoryItemCooldown(13)
+    eq(start_time, 0, "SEC-10: a restricted start degrades to the idle zero")
+    eq(duration, 0, "SEC-10: a restricted duration degrades to the idle zero")
+    eq(enabled, 0, "SEC-10: a restricted enabled degrades to the idle zero")
+    eq(restricted, true, "SEC-10: the wrapper flags the restricted read (fourth return)")
+
+    -- (a) tri-state helpers: unknown keeps the slot, never hides it.
+    eq(rHUD.trinket_usable(rHUD.trinkets[13], 13), nil,
+        "SEC-10: a restricted on-use probe is unknown (nil), not passive (false)")
+    eq(rHUD.icon_should_show(rST, rHUD.icons[5], false), true,
+        "SEC-10: a restricted on-use trinket keeps its HUD slot visible")
+    local s = rHUD.trinket_state(rST, tslot, clock)
+    eq(s.hidden, nil, "SEC-10: the restricted slot is not hidden")
+    eq(s.restricted, true, "SEC-10: the state carries restricted = true")
+    eq(s.remaining, nil, "SEC-10: no countdown value is invented")
+    eq(s.duration, nil, "SEC-10: no swipe duration is invented")
+    eq(s.text_remaining, nil, "SEC-10: no countdown text is invented")
+    eq(#notices, 1, "SEC-10: the first restricted trinket paints one chat notice")
+    check((notices[1] or ""):find("restricted", 1, true) ~= nil,
+        "SEC-10: the notice names the restricted read")
+    rHUD.trinket_state(rST, tslot, clock)
+    rHUD.trinket_state(rST, tslot, clock)
+    eq(#notices, 1, "SEC-10: the notice is once per session, never per tick")
+
+    -- (a2) end to end through the real display driver: the slot is shown, no swipe and
+    -- no text (the existing restricted paint face). refresh_layout_cache is the driver's
+    -- live occupancy pass (the trinket was equipped after init, so wanted flips here).
+    rHUD.refresh_layout_cache(rST)
+    rHUD.update_display(rST)
+    check(rHUD.icons[5]:IsShown(), "SEC-10 tick: the trinket slot stays shown on the restricted read")
+    local cd = rHUD.icons[5].cooldown
+    check(cd.cooldown_duration == nil or cd.cooldown_duration == 0,
+        "SEC-10 tick: the tick paints no cooldown swipe for the unknown read")
+    eq(rHUD.icons[5].text.hidden, true, "SEC-10 tick: the tick paints no countdown text")
+    eq(rHUD.icons[5].texture.desaturated, true, "SEC-10 tick: the unknown face is greyed")
+
+    -- The restricted flag owns the visual even over a state that carries timing: the
+    -- swipe is cleared (never replaced) and the text stays hidden.
+    clock = 2001
+    local icon = rHUD.icons[5]
+    rHUD.paint(rST, icon, { remaining = 5, duration = 6, text_remaining = 5, desaturate = true }, clock)
+    eq(icon.cooldown.cooldown_sets, 1, "SEC-10 paint control: a readable state starts a swipe")
+    eq(icon.text.hidden, false, "SEC-10 paint control: a readable state shows its text")
+    clock = 2002
+    rHUD.paint(rST, icon, { restricted = true, remaining = 5, duration = 6, text_remaining = 5 }, clock)
+    eq(icon.cooldown.cooldown_duration, 0, "SEC-10 paint: the restricted state clears the swipe")
+    check(icon.cooldown.shown == false, "SEC-10 paint: the cooldown frame hides")
+    eq(icon.text.hidden, true, "SEC-10 paint: the restricted state paints no countdown text")
+    eq(icon.texture.desaturated, true, "SEC-10 paint: the restricted state is greyed")
+    -- A FRESH icon (no prior swipe) gets no SetCooldown call at all.
+    local fresh = rHUD.icons[6]
+    rHUD.paint(rST, fresh, { restricted = true, remaining = 5, duration = 6 }, clock)
+    check(fresh.cooldown.cooldown_sets == nil,
+        "SEC-10 paint: a fresh restricted icon issues no SetCooldown")
+    check(not fresh.cooldown.shown, "SEC-10 paint: a fresh restricted icon shows no cooldown frame")
+
+    -- (a3) SEC-12 (2026-11-07): defence in depth. A provider that forgets
+    -- restricted=true and hands the paint a SECRET number must still land on the
+    -- grey-unknown face - the first comparison would otherwise raise on the real client
+    -- and take the whole HUD tick down. The sentinels are unique (see secret()).
+    clock = 2003
+    local leaky = rHUD.icons[5]
+    rHUD.paint(rST, leaky, {
+        remaining = secret(424242), duration = 424243,
+        text_remaining = secret(424244),
+    }, clock)
+    eq(leaky.cooldown.cooldown_duration, 0,
+        "SEC-12: a leaked secret state clears the swipe")
+    check(leaky.cooldown.shown == false,
+        "SEC-12: a leaked secret state hides the cooldown frame")
+    eq(leaky.text.hidden, true, "SEC-12: a leaked secret state paints no countdown text")
+    eq(leaky.texture.desaturated, true, "SEC-12: a leaked secret state is greyed")
+
+    -- (b) a READABLE passive stat stick still hides (the fourth return is absent/nil).
+    item_ids[13] = 77777
+    item_textures[13] = "tex_stat"
+    item_cooldowns[13] = { start = 0, duration = 0, enable = 0 }
+    rHUD.read_trinket(13)
+    eq(rHUD.trinket_usable(rHUD.trinkets[13], 13), false,
+        "SEC-10 control: a readable passive probe is false")
+    eq(rHUD.icon_should_show(rST, rHUD.icons[5], false), false,
+        "SEC-10 control: a readable passive trinket still hides")
+    s = rHUD.trinket_state(rST, tslot, clock)
+    eq(s.hidden, true, "SEC-10 control: the readable passive reports hidden")
+    eq(s.restricted, nil, "SEC-10 control: a readable passive is not marked restricted")
+
+    -- (c) a READABLE on-use trinket shows as today (the restricted flag must not latch).
+    item_ids[13] = 99999
+    item_cooldowns[13] = { start = 0, duration = 0, enable = 1 }
+    rHUD.read_trinket(13)
+    eq(rHUD.trinket_usable(rHUD.trinkets[13], 13), true,
+        "SEC-10 control: a readable on-use probe stays true")
+    eq(rHUD.icon_should_show(rST, rHUD.icons[5], false), true,
+        "SEC-10 control: a readable on-use trinket shows as today")
+    s = rHUD.trinket_state(rST, tslot, clock)
+    eq(s.hidden, nil, "SEC-10 control: a readable on-use is not hidden")
+    eq(s.restricted, nil, "SEC-10 control: the restricted flag does not latch on a readable read")
+
+    -- A known proc buff is readable evidence and still wins over an unknown cooldown.
+    item_ids[13] = 28830
+    item_textures[13] = "tex_dst"
+    item_cooldowns[13] = { restricted = true }
+    rHUD.read_trinket(13)
+    eq(rHUD.trinket_usable(rHUD.trinkets[13], 13), true,
+        "SEC-10: a known proc buff stays usable even when the cooldown read is restricted")
+
+    item_ids[13] = nil
+    item_cooldowns[13] = nil
+    aura_list = {}
+end
+
+--=========================================================================================
 -- N2: per-icon isolation - a throwing provider costs only its own icon, never the row.
 -- First throw prints once, every throw counts in ST.bar_hook_errors (the /st diag
 -- counter), the site quarantines after 25. Degrade hides the failed icon.
@@ -3026,6 +3397,530 @@ do
     check(h3ok, "NILSWEEP H3 on_bar_update tolerates a missing class row (error: " .. tostring(h3err) .. ")")
     eq(HUD.frame:IsShown(), true, "NILSWEEP H3 on_bar_update leaves the row alone (no layout pass)")
     ST.get_class_table = saved
+end
+
+
+--=========================================================================================
+-- SEC-13 (2026-11-08, team swedge-forever-hud t3): Forever secret-safe cooldown/GCD.
+--
+-- While a WoW Forever client hides cooldown timing (combat, encounter, challenge mode, PvP)
+-- C_Spell.GetSpellCooldown returns secret fields and the provider flags the slot
+-- `restricted`. T1 (bench/forever_hud_api_2026-11-08.md §4-§7) proves the sanctioned
+-- readable source is the opaque LuaDurationObject from C_Spell.GetSpellCooldownDuration,
+-- fed to CooldownFrame:SetCooldownFromDurationObject and a C_DurationUtil text binding - the
+-- addon must never read a number out of it. These legs pin the whole path, the GCD case,
+-- the untouched non-Forever numeric path, the missing-API faces and the cache hygiene.
+--=========================================================================================
+
+-- A duration object whose every numeric getter RAISES: the client owns the values, so any
+-- read the addon performs fails this suite loudly instead of passing silently.
+local function duration_object_stub(has_secret)
+    local object = { has_secret_values = has_secret }
+    function object:HasSecretValues() return self.has_secret_values end
+    function object:GetRemainingDuration() error("the addon read a duration object value") end
+    function object:GetTotalDuration() error("the addon read a duration object value") end
+    function object:GetStartTime() error("the addon read a duration object value") end
+    function object:IsZero() error("the addon read a duration object value") end
+    function object:IsActive() error("the addon read a duration object value") end
+    return object
+end
+
+local function lib_fire_count(event)
+    local n = 0
+    for i = 1, #lib_fired do
+        if lib_fired[i].event == event then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+--=========================================================================================
+-- 23) Forever restricted ability cooldown: the native duration-object pass-through
+--=========================================================================================
+do
+    local b = build({ c_spell = true, c_secrets = true, duration_surface = true })
+    b.st.family = "FOREVER"
+    local BH, BST = b.st.hud, b.ST
+    BH.init(BST)
+    check(BH.frame ~= nil, "forever object: the HUD builds")
+    local icon = BH.icons[1]
+    eq(icon.slot.spell, 35395, "forever object: icon 1 is the paladin Crusader Strike slot")
+    clock = 100
+
+    local object = duration_object_stub(true)
+    duration_object_fixture = object
+    cooldown_on_gcd, cooldown_active = false, true
+
+    -- (a) restricted ability cooldown on a Forever client.
+    local state = { restricted = true }
+    local ok = pcall(BH.paint, BST, icon, state, clock)
+    check(ok, "forever object: painting a restricted state does not throw")
+    eq(duration_object_reads, 1, "forever object: the duration object is acquired once")
+    eq(duration_object_token, 35395, "forever object: the slot's own spell is queried")
+    eq(duration_object_ignore_gcd, false,
+        "forever object: ignoreGCD=false (the GCD rides the same object)")
+    eq(cooldown_sink_calls, 1, "forever object: the native swipe sink is used")
+    eq(cooldown_sink_object, object, "forever object: the opaque handle reaches the sink")
+    eq(cooldown_sink_clear, true, "forever object: clearIfZero=true clears an ended cooldown")
+    eq(icon.cd_object, object, "forever object: the icon keeps the handle, never a number")
+    eq(icon.cooldown.cooldown_sets, nil,
+        "forever object: no numeric SetCooldown is fabricated from the unknown read")
+    eq(icon.cooldown.shown, true, "forever object: the native swipe is shown")
+    eq(icon.texture.desaturated, true, "forever object: an active cooldown greys the icon")
+    -- The native text binding owns a DEDICATED string: the fixture binding writes it,
+    -- the HUD never formats or reads the object's value, and the custom string stays
+    -- untainted (it never receives the client's secret Text aspect).
+    check(icon.text_binding ~= nil, "forever object: the native text binding is created")
+    check(icon.native_text ~= nil, "forever object: the dedicated native string exists")
+    check(binding_instance ~= nil and binding_instance.font_string == icon.native_text,
+        "forever object: the binding targets the dedicated native string")
+    eq(binding_set_duration_calls, 1, "forever object: the binding is fed the opaque object")
+    check(binding_instance ~= nil and binding_instance.enabled == true,
+        "forever object: the binding is enabled")
+    eq(icon.native_text.text, "4", "forever object: the client writes the unitless countdown")
+    eq(icon.native_text.hidden, false, "forever object: the native string is shown")
+    check(icon.native_text.secret_text_aspect == true,
+        "forever object: the client aspect is attached to the native string")
+    check(icon.text.secret_text_aspect ~= true,
+        "forever object: the custom string never receives the secret Text aspect")
+    eq(icon.text_hidden, true, "forever object: the custom string is hidden")
+    check(binding_instance ~= nil and binding_instance.curve_property == 0,
+        "forever object: the warn colour curve evaluates from the remaining duration")
+    check(formatter_instance ~= nil, "forever object: the native number formatter is configured")
+    check(formatter_instance ~= nil and formatter_instance.calls.AddBreakpoint == true,
+        "forever object: the integer rule is added to the formatter")
+    check(formatter_instance ~= nil and formatter_instance.breakpoint.step == 1,
+        "forever object: the rule steps to whole seconds")
+    check(formatter_instance ~= nil and formatter_instance.breakpoint.rounding == 2,
+        "forever object: the rule truncates down")
+    check(formatter_instance ~= nil and formatter_instance.breakpoint.format == "%.0f",
+        "forever object: the rule formats an integer")
+    check(binding_instance ~= nil and binding_instance.formatter == formatter_instance,
+        "forever object: the binding is fed the integer numeric formatter")
+
+    -- Every restricted tick re-acquires the handle so the native frame always tracks the
+    -- live cooldown (the object is opaque; its values are never inspected).
+    local ok_next = pcall(BH.paint, BST, icon, state, clock)
+    check(ok_next, "forever object: a second restricted tick does not throw")
+    eq(duration_object_reads, 2, "forever object: each restricted tick re-acquires the handle")
+    eq(cooldown_sink_calls, 2, "forever object: the sink is re-fed with the fresh object")
+
+    -- (b) Forever plain cooldown: the existing numeric path and exact visuals are unchanged.
+    duration_object_reads, cooldown_sink_calls = 0, 0
+    local plain = { remaining = 5, duration = 10, start = 95, text_remaining = 5, desaturate = true }
+    BH.paint(BST, icon, plain, clock)
+    eq(duration_object_reads, 0, "forever plain: no duration object is touched")
+    eq(cooldown_sink_calls, 0, "forever plain: the native sink is not used")
+    eq(icon.cooldown.cooldown_sets, 1, "forever plain: the numeric SetCooldown path runs")
+    eq(icon.cooldown.cooldown_start, 95, "forever plain: the numeric start is exact")
+    eq(icon.cooldown.cooldown_duration, 10, "forever plain: the numeric duration is exact")
+    eq(icon.text.text, "5", "forever plain: the custom text face is unchanged")
+    check(icon.text.secret_text_aspect ~= true,
+        "forever plain: the custom string stayed untainted through the object path")
+    eq(icon.texture.desaturated, true, "forever plain: the provider's desaturate is unchanged")
+    check(binding_instance ~= nil and binding_instance.enabled == false,
+        "forever plain: the native binding is released when the numeric path owns the text")
+    check(binding_disable_calls >= 1, "forever plain: the binding is disabled, not left running")
+
+    -- (c) Forever GCD: the per-spell object carries the global cooldown (ignoreGCD=false)
+    -- and the plain NeverSecret isOnGCD suppresses the countdown text (the 2 s rule).
+    duration_object_reads, cooldown_sink_calls, binding_set_duration_calls = 0, 0, 0
+    local gcd_object = duration_object_stub(true)
+    duration_object_fixture = gcd_object
+    cooldown_on_gcd, cooldown_active = true, true
+    BH.paint(BST, icon, { restricted = true }, clock + 0.1)
+    eq(duration_object_reads, 1, "forever GCD: the object is acquired")
+    eq(duration_object_ignore_gcd, false, "forever GCD: ignoreGCD=false carries the GCD")
+    eq(cooldown_sink_calls, 1, "forever GCD: the native swipe is painted on the icon")
+    eq(cooldown_sink_object, gcd_object, "forever GCD: the GCD object reaches the sink")
+    eq(binding_set_duration_calls, 0, "forever GCD: no countdown text is set for the GCD")
+    eq(icon.text_hidden, true, "forever GCD: the 2 s GCD text rule holds (no text)")
+    eq(icon.texture.desaturated, true, "forever GCD: the icon is greyed like a cooldown")
+
+    -- (d) GCD end / cooldown end: the same object sink clears the swipe through
+    -- clearIfZero, and the plain state stops the grey - the end observation is exact
+    -- without ever reading the opaque value.
+    cooldown_on_gcd, cooldown_active = false, false
+    BH.paint(BST, icon, { restricted = true }, clock + 0.2)
+    eq(cooldown_sink_calls, 2, "forever GCD end: the sink is re-fed (clearIfZero clears)")
+    eq(cooldown_sink_clear, true, "forever GCD end: clearIfZero stays the contract")
+    eq(icon.texture.desaturated, false,
+        "forever GCD end: the object's zero state is ready, not the unknown grey")
+
+    -- (c2) Provider-supplied LGC GCD handle: a ready slot shows the GCD without a
+    -- per-slot re-query. The handle is opaque; the sink and text rule are identical.
+    duration_object_reads, cooldown_sink_calls = 0, 0
+    local supplied_gcd = duration_object_stub(true)
+    duration_object_fixture = supplied_gcd
+    cooldown_on_gcd, cooldown_active = true, true
+    BH.paint(BST, icon, { cooldown_object = supplied_gcd, on_gcd = true }, clock + 0.3)
+    eq(duration_object_reads, 0, "provider GCD: no per-slot re-query")
+    eq(cooldown_sink_calls, 1, "provider GCD: the supplied handle reaches the sink")
+    eq(cooldown_sink_object, supplied_gcd, "provider GCD: the exact handle reaches the sink")
+    eq(icon.text_hidden, true, "provider GCD: the 2 s text rule holds")
+    eq(icon.texture.desaturated, true, "provider GCD: the icon is greyed")
+
+    -- (d2) The client's own secrecy predicate overrides a numeric provider face: when the
+    -- client says this spell's cooldown is secret right now, the object path is the only
+    -- trusted face (a checkable plain answer, never a secret).
+    duration_object_reads, cooldown_sink_calls = 0, 0
+    cooldown_secrecy_answer = true
+    BH.paint(BST, icon, { remaining = 5, duration = 10, start = 95, text_remaining = 5 },
+        clock + 0.25)
+    eq(duration_object_reads, 1,
+        "forever secrecy: the client predicate forces the duration-object path")
+    eq(cooldown_sink_calls, 1, "forever secrecy: the native swipe wins over the numeric face")
+    cooldown_secrecy_answer = nil
+
+    -- (e) A poison-tripwire: a provider state carrying a SECRET numeric field must take the
+    -- same object path (never a comparison), and the object's getters still stay unread.
+    duration_object_reads, cooldown_sink_calls = 0, 0
+    local secret_state = { remaining = secret(980001), duration = secret(980002), start = secret(980003) }
+    local ok_third = pcall(BH.paint, BST, icon, secret_state, clock + 0.3)
+    check(ok_third, "forever object: a secret-carrying state does not throw")
+    eq(duration_object_reads, 1, "forever object: the secret-carrying state takes the object path")
+    eq(cooldown_sink_calls, 1, "forever object: the real swipe is painted, not a fabricated ready")
+end
+
+--=========================================================================================
+-- 24) Non-Forever clients: zero duration-object calls, exact numeric sequence preserved
+--=========================================================================================
+do
+    local b = build({ c_spell = true, c_secrets = true, duration_surface = true })
+    eq(b.st.family, "TBC", "non-forever: the sandbox runs the TBC family")
+    local NH, NST = b.st.hud, b.ST
+    NH.init(NST)
+    local icon = NH.icons[1]
+    clock = 300
+    duration_object_fixture = duration_object_stub(true)
+
+    -- A hostile restricted state (this client has no secret regime): the documented grey
+    -- unknown face, never the Forever object path.
+    local ok = pcall(NH.paint, NST, icon, { restricted = true }, clock)
+    check(ok, "non-forever: a restricted state never throws")
+    eq(duration_object_reads, 0, "non-forever: the duration-object API is never called")
+    eq(cooldown_sink_calls, 0, "non-forever: the native duration-object sink is never used")
+    eq(binding_set_duration_calls, 0, "non-forever: no native binding is ever fed")
+    eq(icon.texture.desaturated, true, "non-forever: the grey unknown face holds")
+
+    -- The readable cooldown keeps the exact old sequence, including set-once.
+    local state = { remaining = 5, duration = 10, start = 295, text_remaining = 5, desaturate = true }
+    NH.paint(NST, icon, state, clock)
+    eq(icon.cooldown.cooldown_sets, 1, "non-forever: one numeric SetCooldown on appearance")
+    eq(icon.cooldown.cooldown_start, 295, "non-forever: the numeric start is exact")
+    eq(icon.cooldown.cooldown_duration, 10, "non-forever: the numeric duration is exact")
+    eq(icon.text.text, "5", "non-forever: the custom text is exact")
+    NH.paint(NST, icon, { remaining = 4.95, duration = 10, start = 295, text_remaining = 4.95,
+        desaturate = true }, clock + 0.05)
+    eq(icon.cooldown.cooldown_sets, 1, "non-forever: set-once is preserved across ticks")
+    eq(duration_object_reads, 0, "non-forever: still zero duration-object calls")
+end
+
+--=========================================================================================
+-- 25) Missing-API Forever faces: silent fallback, no throw, no fabricated numbers
+--=========================================================================================
+do
+    -- Forever without C_Spell at all: the provider's restricted flag keeps the grey face.
+    local b = build({ duration_surface = true })
+    b.st.family = "FOREVER"
+    local BH, BST = b.st.hud, b.ST
+    BH.init(BST)
+    local icon = BH.icons[1]
+    local ok = pcall(BH.paint, BST, icon, { restricted = true }, 400)
+    check(ok, "missing API: a Forever client without C_Spell never throws")
+    eq(duration_object_reads, 0, "missing API: the absent reader is never called")
+    eq(cooldown_sink_calls, 0, "missing API: the native sink is never reached")
+    eq(icon.texture.desaturated, true, "missing API: the documented grey unknown face holds")
+    eq(icon.text_hidden, true, "missing API: no text is fabricated")
+    check(icon.text_binding == nil, "missing API: no text binding is built without an object")
+
+    -- Forever with the object surface but without the native text surface: the swipe is
+    -- still real; the text is simply absent (never a fabricated countdown).
+    local sb = build({ c_spell = true })
+    sb.st.family = "FOREVER"
+    local SH, SST = sb.st.hud, sb.ST
+    SH.init(SST)
+    local sicon = SH.icons[1]
+    duration_object_fixture = duration_object_stub(true)
+    cooldown_on_gcd, cooldown_active = false, true
+    local ok_next = pcall(SH.paint, SST, sicon, { restricted = true }, 500)
+    check(ok_next, "missing text surface: painting does not throw")
+    eq(cooldown_sink_calls, 1, "missing text surface: the native swipe is still painted")
+    eq(sicon.text_hidden, true, "missing text surface: the text stays hidden (no fabrication)")
+    check(sicon.text_binding == nil, "missing text surface: no binding is latched")
+
+    -- Forever with the object reader throwing: the grey face, no propagated error.
+    local tb = build({ c_spell = true, duration_surface = true })
+    tb.st.family = "FOREVER"
+    local TH, TST = tb.st.hud, tb.ST
+    TH.init(TST)
+    local ticon = TH.icons[1]
+    duration_object_throws = true
+    local ok_third = pcall(TH.paint, TST, ticon, { restricted = true }, 600)
+    check(ok_third, "throwing reader: painting does not throw")
+    eq(cooldown_sink_calls, 0, "throwing reader: the sink is never reached")
+    eq(ticon.texture.desaturated, true, "throwing reader: the grey unknown face holds")
+
+    -- Forever with a throwing isOnGCD read: the state fields decline, the object still
+    -- paints (unknown GCD state -> no text suppression, the native text is the truth).
+    local pb = build({ c_spell = true, duration_surface = true })
+    pb.st.family = "FOREVER"
+    local PH, PST = pb.st.hud, pb.ST
+    PH.init(PST)
+    local picon = PH.icons[1]
+    duration_object_throws = false
+    duration_object_fixture = duration_object_stub(true)
+    cooldown_state_throws = true
+    local ok_fourth = pcall(PH.paint, PST, picon, { restricted = true }, 700)
+    check(ok_fourth, "throwing state: painting does not throw")
+    eq(cooldown_sink_calls, 1, "throwing state: the real swipe is still painted")
+end
+
+--=========================================================================================
+-- 26) Cache hygiene: no secret in known_names / known_cache / trinkets / a state hand-off
+--=========================================================================================
+do
+    -- known_names: a secret spell id may not become a cache key, a secret name may not
+    -- become a cached value. The fixture's GetSpellInfo answers for both ids, so the
+    -- pre-guard tree WOULD cache them (this is the red-first bite).
+    local spells = {
+        [950001] = { name = "Secret Key Spell", icon = "icon_sk" },
+        [950002] = { name = "Secret Name", icon = "icon_sv" },
+    }
+    local b = build({ spells = spells })
+    -- Flagged AFTER build(): each sandbox build resets the SECRETS registry, so a
+    -- sentinel created in the build arguments would be a plain value again.
+    spells[950002].name = secret("Secret Name")
+    local secret_spell = secret(950001)
+    local BH = b.st.hud
+    BH.invalidate_known_cache()
+    local key_slot = { key = "sk", kind = "spell", spell = secret_spell }
+    eq(BH.spell_known_allows(key_slot), true,
+        "known_names: a secret spell id stays fail-visible")
+    eq(BH.known_names[950001], nil,
+        "known_names: a secret spell id is never a cache key")
+    local value_slot = { key = "sv", kind = "spell", spell = 950002 }
+    eq(BH.spell_known_allows(value_slot), true,
+        "known_names: a secret name keeps the fail-visible face")
+    eq(BH.known_names[950002], nil,
+        "known_names: a secret spell name is never a cached value")
+
+    -- known_cache: a poisoned entry that a later tick WOULD consume (a plain TTL time and
+    -- a secret value) must be dropped and recomputed - a cached entry is proven plain
+    -- before it is read, never trusted because an earlier tick wrote it.
+    local slot = { key = "poisoned", kind = "spell", spell = 35395 }
+    BH.invalidate_known_cache()
+    BH.known_cache[slot] = { at = clock, value = secret(950011) }
+    local ok = pcall(BH.spell_known_allows, slot)
+    check(ok, "known_cache: a poisoned entry is never consumed unchecked")
+    local answer = BH.spell_known_allows(slot)
+    eq(b.st.api.is_secret(answer), false,
+        "known_cache: a secret cached value is never returned to the tick")
+    local entry = BH.known_cache[slot]
+    check(type(entry) == "table", "known_cache: the entry is rewritten after the poison")
+    eq(b.st.api.is_secret(entry.at), false, "known_cache: the rewritten time is plain")
+    eq(b.st.api.is_secret(entry.value), false, "known_cache: the rewritten value is plain")
+    eq(type(entry.value), "boolean", "known_cache: the rewritten value is a plain boolean")
+
+    -- A poisoned entry whose TIME is secret never reaches the TTL comparison either.
+    BH.invalidate_known_cache()
+    BH.known_cache[slot] = { at = secret(950012), value = false }
+    local ok_next = pcall(BH.spell_known_allows, slot)
+    check(ok_next, "known_cache: a secret time is never compared")
+    entry = BH.known_cache[slot]
+    eq(b.st.api.is_secret(entry.at), false, "known_cache: the time is rewritten plain")
+
+    -- Trinkets: a poisoned tracker record is dropped before any field is compared, and
+    -- the record is re-read from the client's (plain) wrappers.
+    local tb = build()
+    local TH, TST = tb.st.hud, tb.ST
+    TH.init(TST)
+    clock = 800
+    local t = TH.trinkets[13]
+    t.item = secret(950020)
+    t.proc_expires = secret(950021)
+    t.proc_duration = secret(950022)
+    t.icd_expires = secret(950023)
+    local tslot = nil
+    for i = 1, #TST.PALADIN.HUD_SLOTS do
+        if TST.PALADIN.HUD_SLOTS[i].key == "trinket1" then
+            tslot = TST.PALADIN.HUD_SLOTS[i]
+        end
+    end
+    local ok_third = pcall(TH.trinket_state, TST, tslot, clock)
+    check(ok_third, "trinkets: a poisoned tracker record is never compared")
+    eq(tb.st.api.is_secret(t.item), false, "trinkets: the poisoned item id is dropped")
+    eq(tb.st.api.is_secret(t.proc_expires), false, "trinkets: the poisoned proc stamp is dropped")
+    eq(tb.st.api.is_secret(t.icd_expires), false, "trinkets: the poisoned ICD stamp is dropped")
+
+    -- The SEC-10 tri-state is unchanged by the new guards: a restricted on-use read keeps
+    -- the slot visible as the unknown face; a readable passive still hides it.
+    local rb = build()
+    local RH, RST = rb.st.hud, rb.ST
+    RH.init(RST)
+    item_ids[13] = 99999
+    item_textures[13] = "tex_use"
+    item_cooldowns[13] = { restricted = true }
+    aura_list = {}
+    RH.read_trinket(13)
+    eq(RH.trinket_usable(RH.trinkets[13], 13), nil,
+        "trinket tri-state: a restricted read is unknown (nil), not passive")
+    eq(RH.icon_should_show(RST, RH.icons[5], false), true,
+        "trinket tri-state: a restricted on-use trinket keeps its slot")
+    local state = RH.trinket_state(RST, tslot, clock)
+    eq(state.restricted, true, "trinket tri-state: the unknown face is flagged")
+    eq(state.remaining, nil, "trinket tri-state: no fabricated countdown")
+    item_cooldowns[13] = nil
+    item_ids[13] = 77777
+    item_textures[13] = "tex_stat"
+    RH.read_trinket(13)
+    eq(RH.trinket_usable(RH.trinkets[13], 13), false,
+        "trinket tri-state: a readable passive is still not usable")
+    eq(RH.icon_should_show(RST, RH.icons[5], false), false,
+        "trinket tri-state: a readable passive still hides")
+end
+
+--=========================================================================================
+-- 27) Poisoned provider state is rejected at the paint boundary (boolean fields too)
+--=========================================================================================
+do
+    local b = build()
+    b.st.family = "FOREVER"
+    local BH, BST = b.st.hud, b.ST
+    BH.init(BST)
+    local icon = BH.icons[1]
+    clock = 900
+
+    -- A secret boolean cue must land on the unknown/no-cue face, never reach `== false`
+    -- (a comparison on a secret raises). The numeric timing stays plain here.
+    local state = {
+        remaining = 5, duration = 10, start = 895, text_remaining = 5,
+        usable = secret(990001), in_range = secret(990002), glow = secret(990003),
+        desaturate = secret(990004),
+    }
+    local ok = pcall(BH.paint, BST, icon, state, clock)
+    check(ok, "poisoned state: secret boolean cues never reach a comparison")
+    check(icon.tint[1] == 1 and icon.tint[2] == 1 and icon.tint[3] == 1,
+        "poisoned state: no mana/range tint is invented")
+    eq(icon.glowing, false, "poisoned state: no glow is invented")
+    eq(icon.cooldown.cooldown_sets, 1, "poisoned state: the plain numeric swipe still paints")
+
+    -- A secret `hidden` cannot be branched on: the module's degrade is to draw nothing.
+    local hidden_state = { hidden = secret(990005), remaining = 1, duration = 5, start = 899 }
+    local ok_next = pcall(BH.paint, BST, icon, hidden_state, clock)
+    check(ok_next, "poisoned state: a secret hidden never reaches a branch")
+
+    -- A secret `texture` may not be handed to SetTexture.
+    local tex_state = { remaining = 1, duration = 5, start = 899, texture = secret("SECRET_TEX") }
+    local ok_third = pcall(BH.paint, BST, icon, tex_state, clock)
+    check(ok_third, "poisoned state: a secret texture is never handed to SetTexture")
+    check(icon.texture.texture ~= "SECRET_TEX", "poisoned state: the default texture is kept")
+
+    -- The full per-frame path (update_display) normalises a poisoned provider state before
+    -- any branch: the provider is the Forever guide stub here, and the tick must not throw.
+    local nb = build({ c_spell = true, duration_surface = true })
+    nb.st.family = "FOREVER"
+    local NH, NST = nb.st.hud, nb.ST
+    NH.init(NST)
+    nb.st.forever_guide = {
+        get_hud_state = function()
+            return {
+                remaining = secret(990010), duration = secret(990011), start = secret(990012),
+                restricted = secret(990013), usable = secret(990014), glow = secret(990015),
+            }
+        end,
+    }
+    duration_object_fixture = duration_object_stub(true)
+    cooldown_on_gcd, cooldown_active = false, false
+    local ok_fourth = pcall(NH.update_display, NST)
+    check(ok_fourth, "poisoned provider: the per-frame tick normalises the state and does not throw")
+    -- The two empty trinket slots hide, so the twelve ability slots paint; every one of
+    -- them takes the object path instead of branching on a secret.
+    eq(duration_object_reads, #NH.icons - 2,
+        "poisoned provider: every painted ability slot takes the object path")
+end
+
+--=========================================================================================
+-- 28) LibGlobalCooldown on Forever: the object channel and the restricted cache rule
+--=========================================================================================
+do
+    local b = build({ project = 18, lib_gcd = true, c_spell = true })
+    local lib = b.env.LibStub.NewLibrary(nil, "LibGlobalCooldown")
+    check(type(lib) == "table" and type(lib.poll_gcd) == "function",
+        "LGC forever: the real library loads over the Forever sandbox")
+    clock = 100
+
+    -- Control: a readable numeric GCD still arms the numeric lock exactly as before.
+    cooldowns[61304] = { start = 100, duration = 1.5, enable = 1 }
+    lib:poll_gcd()
+    eq(lib.gcd_duration, 1.5, "LGC control: the readable GCD locks the numeric duration")
+    eq(lib.gcd_object, nil, "LGC control: no object channel on a readable client")
+    check(lib_fire_count("GCD_STARTED") == 1, "LGC control: GCD_STARTED fires as before")
+
+    -- Restricted: the plain NeverSecret state carries the GCD; the object is stored and
+    -- announced, and NO number is derived from it.
+    lib.gcd_duration, lib.gcd_started, lib.gcd_expires = nil, nil, nil
+    lib_fired = {}
+    cooldowns[61304] = { start = secret(970001), duration = secret(970002), enable = 1 }
+    cooldown_on_gcd, cooldown_active = true, true
+    local object = duration_object_stub(true)
+    duration_object_fixture = object
+    lib:poll_gcd()
+    eq(lib.gcd_object, object, "LGC forever: the opaque GCD object is stored")
+    eq(lib.gcd_on_gcd, true, "LGC forever: the plain isOnGCD field is stored")
+    eq(lib.gcd_duration, nil, "LGC forever: no numeric duration is derived from the object")
+    eq(lib.gcd_expires, nil, "LGC forever: no expiry is computed from the object")
+    eq(duration_object_token, 61304, "LGC forever: the Forever GCD probe spell is queried")
+    eq(duration_object_ignore_gcd, false, "LGC forever: ignoreGCD=false carries the GCD")
+    check(lib_fire_count("GCD_OBJECT_STARTED") == 1,
+        "LGC forever: GCD_OBJECT_STARTED fires with the handle")
+    local started_event
+    for i = 1, #lib_fired do
+        if lib_fired[i].event == "GCD_OBJECT_STARTED" then
+            started_event = lib_fired[i]
+        end
+    end
+    check(started_event ~= nil and started_event.args[1] == object,
+        "LGC forever: the event carries the opaque handle")
+    check(started_event ~= nil and started_event.args[2] == true,
+        "LGC forever: the event carries the plain on-GCD flag")
+
+    -- A second poll while carrying refreshes the handle but does not re-announce the start.
+    local refreshed = duration_object_stub(true)
+    duration_object_fixture = refreshed
+    lib:poll_gcd()
+    eq(lib.gcd_object, refreshed, "LGC forever: the handle is refreshed while carrying")
+    check(lib_fire_count("GCD_OBJECT_STARTED") == 1,
+        "LGC forever: one start per object-reported GCD")
+
+    -- The client says the GCD ended: the channel clears and the over event fires once.
+    cooldown_on_gcd, cooldown_active = false, false
+    lib:poll_gcd()
+    eq(lib.gcd_object, nil, "LGC forever: the ended GCD clears the stored handle")
+    eq(lib.gcd_on_gcd, nil, "LGC forever: the on-GCD flag clears with it")
+    check(lib_fire_count("GCD_OBJECT_OVER") == 1, "LGC forever: GCD_OBJECT_OVER fires once")
+    lib:poll_gcd()
+    check(lib_fire_count("GCD_OBJECT_OVER") == 1,
+        "LGC forever: a repeated idle poll does not re-fire the over event")
+
+    -- A restricted numeric read with no object surface: the timing cache is never fed a
+    -- partial number from the degraded idle shape.
+    local rb = build({ project = 18, lib_gcd = true })
+    local rlib = rb.env.LibStub.NewLibrary(nil, "LibGlobalCooldown")
+    clock = 200
+    cooldowns[61304] = { start = secret(970003), duration = secret(970004), enable = 1 }
+    rlib.gcd_duration, rlib.gcd_started, rlib.gcd_expires = nil, 195, 196.5
+    rlib.gcd_object, rlib.gcd_on_gcd = {}, true
+    lib_fired = {}
+    local ok = pcall(rlib.poll_gcd, rlib)
+    check(ok, "LGC restricted: polling a hidden read does not throw")
+    eq(rlib.gcd_duration, nil, "LGC restricted: no partial numeric duration is stored")
+    check(rlib.gcd_started == 195 and rlib.gcd_expires == 196.5,
+        "LGC restricted: the timing fields are left untouched, never overwritten with zeros")
+    eq(rlib.gcd_object, nil, "LGC restricted: a stale object channel is cleared")
+    eq(rlib.gcd_on_gcd, nil, "LGC restricted: the stale on-GCD flag is cleared")
+    eq(lib_fire_count("GCD_STARTED"), 0, "LGC restricted: no numeric GCD_STARTED is invented")
 end
 
 if failures == 0 then

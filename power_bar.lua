@@ -8,10 +8,30 @@
 -- bar depending on if its being used" and "power bar should be like 14-15".
 --
 -- WHY IT IS GENERIC: the type comes from UnitPowerType("player") and the values from
--- UnitPower/UnitPowerMax. No class switch and no id table, so the same code paints
--- mana for hunter/paladin/shaman, rage for warrior/bear, energy for rogue/cat and
+-- st.api.GetPlayerPower (compat.lua). No class switch and no id table, so the same code
+-- paints mana for hunter/paladin/shaman, rage for warrior/bear, energy for rogue/cat and
 -- focus wherever that is the primary power. Druid forms repaint through
 -- UNIT_DISPLAYPOWER / UPDATE_SHAPESHIFT_FORM; nothing caches the type.
+--
+-- WHY THE FILL IS A REAL StatusBar (WoW Forever / Mainline-code secret fix): on the
+-- Mainline clients UnitPower/UnitPowerMax are SecretWhenUnitPowerRestricted /
+-- SecretWhenUnitPowerMaxRestricted (origin/forever
+-- Blizzard_APIDocumentationGenerated/UnitDocumentation.lua:2732-2747, :2801-2824), so a
+-- restricted combat read is an opaque value that raises on comparison/arithmetic. The old
+-- fill was a plain texture whose width this module computed with Lua arithmetic, and
+-- compat's nil-on-secret wrappers turned the read into nil, so the bar hid (the operator's
+-- "being blocked becuz its secret"). A StatusBar may RECEIVE a restricted value:
+-- SetMinMaxValues (SimpleStatusBarAPIDocumentation.lua:229-236) and SetValue (:354-361)
+-- are SecretArguments = "AllowedWhenTainted" with SecretArgumentsAddAspect =
+-- { Enum.SecretAspect.BarValue }, and Blizzard's own mana bar feeds the raw UnitPower /
+-- UnitPowerMax straight into them without arithmetic
+-- (Blizzard_UnitFrame/Mainline/UnitFrame.lua:948-970, origin/forever). So the fill is
+-- CreateFrame("StatusBar", ...) and the raw pair goes to SetMinMaxValues/SetValue; while
+-- the read is restricted nothing compares, divides or formats it - the value text passes
+-- the same raw number straight to FontString:SetText (AllowedWhenTainted, Text aspect:
+-- Blizzard's own unit frames do statusText:SetText(UnitHealth(unit))), or hides with the
+-- text option, and the bar is still painted. On classic clients there are no secret
+-- values, so the same path is a plain render.
 --
 -- PLACEMENT: in the slot directly below the bottom-most melee bar ROW - the offhand row
 -- when the class uses an offhand, else the mainhand row (operator order 2026-10-28:
@@ -23,8 +43,8 @@
 -- height defaults to 14 px (operator range 10-30). Anchored to the bar frame itself, so
 -- it follows the hunter melee stack (which pins MH/OH under the ranged bar) and any drag
 -- (a rect change re-points it; frame identity alone is not the trigger).
--- If no melee bar is visible, or the power read is unknown/secret/zero-max, the bar
--- hides instead of painting a guess.
+-- If no melee bar is visible, or the power read is unknown (no API/type/value), the bar
+-- hides instead of painting a guess. A restricted read is NOT unknown: it is painted.
 --
 -- DEFAULT: ON. The operator request is the explicit gate for a default-visible
 -- change; an explicit false hides it (class table key power_bar_enabled), and the
@@ -33,20 +53,23 @@
 -- EVENTS: UNIT_POWER_FREQUENT / UNIT_POWER_UPDATE / UNIT_DISPLAYPOWER /
 -- UPDATE_SHAPESHIFT_FORM / PLAYER_ENTERING_WORLD / PLAYER_EQUIPMENT_CHANGED. The
 -- 0.25 s driver is the layout/failsafe paint (it also catches a melee bar being
--- shown/hidden between power events). Every read goes through st.api (compat.lua),
--- so a secret Mainline value degrades to nil and the bar hides.
+-- shown/hidden between power events). Every read goes through st.api (compat.lua):
+-- GetPlayerPower returns the raw values + the restricted flag, and only a genuinely
+-- unknown read degrades to nil (then the bar hides).
 --
 -- CROSS-CLIENT: UnitPower / UnitPowerMax / UnitPowerType are documented on
 -- classic_era, classic_anniversary, classic_titan, origin/forever and live (see
 -- compat.lua's wrappers); the six events are documented on all five branches. No
--- protected call, no taint risk: the frame is insecure and only SetPoint/SetWidth/
--- SetHeight/SetFrameLevel are used.
+-- protected call, no taint risk: the frame is insecure and only SetPoint/SetSize/
+-- SetHeight/SetFrameLevel on the container plus the StatusBar widget methods
+-- (SetStatusBarTexture/SetMinMaxValues/SetValue/SetStatusBarColor) are used.
 --
 -- DIAGNOSTICS: every refresh resolves through pb.resolve (read-only) and stores the
 -- result in pb.last_state - why the bar hides this tick (or nil when painted), the
--- owning hand, the power reading and the fraction. The verbose /st diag power line
--- reads that receipt instead of re-deriving the decision, so the report and the bar
--- cannot disagree. Nothing on that path writes a frame or a profile key.
+-- owning hand, the power reading, the fraction (readable reads only) and the restricted
+-- flag. The verbose /st diag power line reads that receipt instead of re-deriving the
+-- decision, so the report and the bar cannot disagree. Nothing on that path writes a
+-- frame or a profile key.
 --=========================================================================================
 local addon_name, st = ...
 
@@ -60,6 +83,11 @@ pb.GAP = 2
 pb.BAR_PADDING = 1
 pb.PAINT_INTERVAL = 0.25
 pb.QUARANTINE_ROWS = 25
+
+-- The flat white texture the StatusBar track tints with the power colour (the old fill
+-- was a flat-coloured texture). LibSharedMedia lists it as the "Solid" statusbar texture
+-- on every client family, so it is the client-canonical flat asset.
+pb.STATUS_BAR_TEXTURE = "Interface\\Buttons\\WHITE8X8"
 
 -- PowerType constants (Enum.PowerType values; the raw numbers are the stable API,
 -- Enum is not present on every classic client).
@@ -165,6 +193,25 @@ function pb.height_for(class_db)
     return height
 end
 
+-- Size of the StatusBar track inside the bar frame: the old hand-painted fill's 1 px
+-- inset on every side, clamped so a tiny configured height still yields a paintable
+-- track. Keeping the inset means the fraction the StatusBar paints is
+-- fraction * (width - 2 * BAR_PADDING) - exactly the pixel width the old SetWidth path
+-- computed - so the visible geometry does not change with the secret-safe widget.
+function pb.fill_dimensions(width, height)
+    local track_width = tonumber(width) or 200
+    local track_height = tonumber(height) or pb.DEFAULT_HEIGHT
+    track_width = track_width - (pb.BAR_PADDING * 2)
+    track_height = track_height - (pb.BAR_PADDING * 2)
+    if track_width < 1 then
+        track_width = 1
+    end
+    if track_height < 1 then
+        track_height = 1
+    end
+    return track_width, track_height
+end
+
 --=========================================================================================
 -- Frame driver
 --=========================================================================================
@@ -249,7 +296,10 @@ local function hide()
     pb.last_bottom = nil
     pb.last_width = nil
     pb.last_height = nil
-    pb.last_fraction = nil
+    pb.last_fill_width = nil
+    pb.last_fill_height = nil
+    pb.last_value = nil
+    pb.last_max_value = nil
     pb.last_text = nil
     pb.last_color = nil
 end
@@ -287,19 +337,20 @@ local function layout(ST, anchor, now)
     if pb.last_width ~= width then
         pb.last_width = width
         frame:SetWidth(width)
-        pb.last_fraction = nil
     end
     if pb.last_height ~= height then
         pb.last_height = height
         frame:SetHeight(height)
-        local fill_height = height - (pb.BAR_PADDING * 2)
-        if fill_height < 1 then
-            fill_height = 1
+    end
+    -- The StatusBar track keeps the old fill's 1 px inset, so the widget paints exactly
+    -- the pixel width the previous SetWidth path computed. Resizing the track does not
+    -- touch the value: the bar repaints itself.
+    local fill_width, fill_height = pb.fill_dimensions(width, height)
+    if pb.last_fill_width ~= fill_width or pb.last_fill_height ~= fill_height then
+        pb.last_fill_width, pb.last_fill_height = fill_width, fill_height
+        if frame.fill and type(frame.fill.SetSize) == "function" then
+            frame.fill:SetSize(fill_width, fill_height)
         end
-        if frame.fill and type(frame.fill.SetHeight) == "function" then
-            frame.fill:SetHeight(fill_height)
-        end
-        pb.last_fraction = nil
     end
     local left, bottom = anchor_rect(anchor)
     local moved = pb.last_anchor ~= anchor
@@ -330,42 +381,74 @@ local function layout(ST, anchor, now)
     end
 end
 
-local function paint(class_db, power_type, value, max_value)
+-- Paint one resolved state (pb.resolve) through the StatusBar track. A readable state is
+-- handed to the widget as value/max (it clamps exactly like pb.fraction did); a
+-- RESTRICTED state hands the raw secret reading straight through and never compares,
+-- divides or formats it - that is what the sanctioned sinks accept (SetMinMaxValues/
+-- SetValue: AllowedWhenTainted, BarValue aspect; SetText: AllowedWhenTainted, Text
+-- aspect). The colour is a constant palette entry keyed by the (non-secret) power type.
+local function paint(state)
     local frame = pb.frame
-    local fraction = pb.fraction(value, max_value)
-    if fraction == nil then
+    if frame == nil then
         return false
     end
-    local width = frame:GetWidth() or pb.last_width or 200
-    local inner = width - (pb.BAR_PADDING * 2)
-    if inner < 1 then
-        inner = 1
-    end
-    local fill_width = fraction * inner
-    if fill_width < 1 then
-        fill_width = 1
-    end
-    if pb.last_fraction ~= fraction then
-        pb.last_fraction = fraction
-        frame.fill:SetWidth(fill_width)
-    end
-    local color = pb.color_for(power_type)
+    local color = pb.color_for(state.power_type)
     if pb.last_color ~= color then
         pb.last_color = color
-        frame.fill:SetColorTexture(color[1], color[2], color[3], color[4])
+        frame.fill:SetStatusBarColor(color[1], color[2], color[3], color[4])
     end
-    local text_on = class_db == nil or class_db.power_bar_text_enabled ~= false
-    local label = pb.format_value(value)
-    if text_on and label ~= nil then
-        if pb.last_text ~= label then
-            pb.last_text = label
-            frame.text:SetText(label)
+    if state.restricted then
+        -- Raw pass-through. Both calls are repeated every restricted tick on purpose: the
+        -- values are opaque, so there is nothing safe to compare them with.
+        frame.fill:SetMinMaxValues(0, state.max_value)
+        frame.fill:SetValue(state.value)
+        pb.last_value, pb.last_max_value = nil, nil
+    else
+        if pb.last_max_value ~= state.max_value then
+            frame.fill:SetMinMaxValues(0, state.max_value)
         end
-        if not frame.text:IsShown() then
-            frame.text:Show()
+        if pb.last_value ~= state.value then
+            frame.fill:SetValue(state.value)
         end
-    elseif frame.text:IsShown() then
-        frame.text:Hide()
+        pb.last_value, pb.last_max_value = state.value, state.max_value
+    end
+    local text_on = state.class_db == nil or state.class_db.power_bar_text_enabled ~= false
+    if state.restricted then
+        -- SEC-11 (2026-11-07, operator in-client): pass the RAW restricted reading to
+        -- the font string. FontString:SetText is `SecretArguments = AllowedWhenTainted`
+        -- with the Text aspect on WoW Forever (wow-ui-source origin/forever,
+        -- SimpleFontStringAPIDocumentation.lua, Name = "SetText"), and Blizzard's own
+        -- unit frames hand it a raw number
+        -- (CompactUnitFrame_UpdateStatusText: statusText:SetText(UnitHealth(unit))).
+        -- The client renders the number; this code never reads, formats, compares or
+        -- divides it. There is deliberately no latch: a secret cannot be compared, so
+        -- the write repeats every restricted tick (the same shape as the StatusBar
+        -- pass-through above).
+        if text_on then
+            frame.text:SetText(state.value)
+            if not frame.text:IsShown() then
+                frame.text:Show()
+            end
+        elseif frame.text:IsShown() then
+            frame.text:Hide()
+        end
+        pb.last_text = nil
+    else
+        local label = text_on and pb.format_value(state.value) or nil
+        if label ~= nil then
+            if pb.last_text ~= label then
+                pb.last_text = label
+                frame.text:SetText(label)
+            end
+            if not frame.text:IsShown() then
+                frame.text:Show()
+            end
+        else
+            pb.last_text = nil
+            if frame.text:IsShown() then
+                frame.text:Hide()
+            end
+        end
     end
     if not frame:IsShown() then
         frame:Show()
@@ -379,6 +462,9 @@ end
 -- line (diag.lua) reports the SAME decision the driver just made instead of re-deriving
 -- it. `why` is the reason this tick hides the bar; nil means "painted".
 --   no-frame / no-addon / off / no-anchor / no-api / no-type / no-value / no-fraction
+-- A restricted (secret) reading is a PAINTED state: restricted=true, the raw values, and
+-- why=nil. It is never compared, divided or formatted - only handed to the StatusBar and
+-- the font string, whose bindings do the rendering.
 function pb.resolve(ST)
     local state = { why = nil }
     if pb.frame == nil then
@@ -405,7 +491,7 @@ function pb.resolve(ST)
     state.anchor_hand = anchor_hand
     local api = st.api
     if type(api) ~= "table" or type(api.UnitPowerType) ~= "function"
-        or type(api.UnitPower) ~= "function" or type(api.UnitPowerMax) ~= "function" then
+        or type(api.GetPlayerPower) ~= "function" then
         state.why = "no-api"
         return state
     end
@@ -415,8 +501,21 @@ function pb.resolve(ST)
         return state
     end
     state.power_type = power_type
-    local value = api.UnitPower("player", power_type)
-    local max_value = api.UnitPowerMax("player", power_type)
+    local value, max_value, restricted = api.GetPlayerPower(power_type)
+    -- The restricted branch may only use type(): type() is safe on a secret and rejects an
+    -- unreadable shape, while a comparison, arithmetic or format would raise on the real
+    -- client. Anything else about the two values is left to the StatusBar.
+    if restricted == true then
+        if type(value) ~= "number" or type(max_value) ~= "number" then
+            state.why = "no-value"
+            return state
+        end
+        state.restricted = true
+        state.value = value
+        state.max_value = max_value
+        return state
+    end
+    state.restricted = false
     if type(value) ~= "number" or type(max_value) ~= "number" or max_value <= 0 then
         state.why = "no-value"
         return state
@@ -433,7 +532,8 @@ function pb.resolve(ST)
 end
 
 -- One refresh: gate settings, pick the owning bar, read the primary power through
--- compat, then lay out and paint. Every unknown path hides.
+-- compat, then lay out and paint. Every genuinely unknown path hides; a restricted read
+-- is painted.
 function pb.update(ST, now)
     if pb.frame == nil then
         return
@@ -446,7 +546,7 @@ function pb.update(ST, now)
         return
     end
     layout(ST, state.anchor, now)
-    if not paint(state.class_db, state.power_type, state.value, state.max_value) then
+    if not paint(state) then
         hide()
         return
     end
@@ -458,7 +558,8 @@ function pb.refresh(ST)
     if pb.frame == nil then
         return false
     end
-    pb.last_fraction = nil
+    pb.last_value = nil
+    pb.last_max_value = nil
     pb.last_height = nil
     pb.update(ST)
     return true
@@ -538,12 +639,25 @@ function pb.init(ST)
     frame.bg = frame:CreateTexture(nil, "BACKGROUND")
     frame.bg:SetAllPoints(frame)
     frame.bg:SetColorTexture(pb.BG_COLOR[1], pb.BG_COLOR[2], pb.BG_COLOR[3], pb.BG_COLOR[4])
-    frame.fill = frame:CreateTexture(nil, "ARTWORK")
+    -- The track is a REAL StatusBar: a restricted power reading may only be rendered
+    -- through the widget's SetMinMaxValues/SetValue (AllowedWhenTainted, BarValue aspect),
+    -- and the widget paints the fraction itself - no Lua arithmetic, no texture width.
+    -- The 1 px inset is the old hand-computed fill geometry, kept so the pixels match.
+    local fill_width, fill_height = pb.fill_dimensions(200, pb.DEFAULT_HEIGHT)
+    frame.fill = CreateFrame("StatusBar", addon_name .. "PowerBarFill", frame)
     frame.fill:SetPoint("LEFT", frame, "LEFT", pb.BAR_PADDING, 0)
-    frame.fill:SetHeight(pb.DEFAULT_HEIGHT - (pb.BAR_PADDING * 2))
-    frame.fill:SetWidth(1)
-    frame.fill:SetColorTexture(pb.COLOR_MANA[1], pb.COLOR_MANA[2], pb.COLOR_MANA[3], pb.COLOR_MANA[4])
-    frame.text = frame:CreateFontString(nil, "OVERLAY")
+    frame.fill:SetSize(fill_width, fill_height)
+    frame.fill:SetStatusBarTexture(pb.STATUS_BAR_TEXTURE)
+    frame.fill:SetStatusBarColor(pb.COLOR_MANA[1], pb.COLOR_MANA[2], pb.COLOR_MANA[3],
+        pb.COLOR_MANA[4])
+    -- A sane range before the first paint: a restricted reading replaces both raw, and a
+    -- readable one overwrites them on the same tick.
+    frame.fill:SetMinMaxValues(0, 1)
+    frame.fill:SetValue(0)
+    frame.fill:EnableMouse(false)
+    -- The text is parented to the StatusBar: a child FRAME always draws above its
+    -- parent's own regions, so a font string on the container would sit behind the track.
+    frame.text = frame.fill:CreateFontString(nil, "OVERLAY")
     if frame.text.SetFontObject then
         pcall(frame.text.SetFontObject, frame.text, nil)
     end

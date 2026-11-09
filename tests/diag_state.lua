@@ -1167,9 +1167,7 @@ do
     check(diag_code:find("SavedVariables") == nil, "diag.lua never names SavedVariables in code")
     check(diag_code:find("DEFAULT_CHAT_FRAME") == nil, "diag.lua never touches the chat frame directly")
 
-    local tocs = { "SwedgeTimer.toc", "SwedgeTimer_Vanilla.toc", "SwedgeTimer_TBC.toc",
-        "SwedgeTimer_Wrath.toc", "SwedgeTimer_Cata.toc", "SwedgeTimer_Mists.toc",
-        "SwedgeTimer_Mainline.toc" }
+    local tocs = { "SwedgeTimer.toc" }
     for i = 1, #tocs do
         local text = read(tocs[i])
         local diag_at = text:find("\ndiag.lua", 1, true)
@@ -1178,12 +1176,18 @@ do
             tocs[i] .. " lists diag.lua after hud.lua (with the UI modules)")
     end
 
-    -- The Cata/Mists TOCs must not ship LibClassicSwingTimerAPI: those flavors leave the
-    -- library's spell tables nil (indexing errors), and main.lua falls back to the inert
-    -- stand-in when the library is absent.
-    for _, toc in ipairs({ "SwedgeTimer_Cata.toc", "SwedgeTimer_Mists.toc" }) do
-        check(read(toc):find("LibClassicSwingTimerAPI") == nil,
-            toc .. " does not ship the bits-y LibClassicSwingTimerAPI")
+    -- Single-TOC release (2026-11-07): the one TOC ships LibClassicSwingTimerAPI for the
+    -- classic line; swing_lib_gate.lua neutralises it on Cata/Mists and the Mainline
+    -- clients (where the library's spell tables are incomplete or it would displace the
+    -- native engine). The gate line must load before the library line.
+    do
+        local text = read("SwedgeTimer.toc")
+        check(text:find("LibClassicSwingTimerAPI", 1, true) ~= nil,
+            "the single TOC ships LibClassicSwingTimerAPI for the classic line")
+        local gate_at = text:find("\nswing_lib_gate.lua", 1, true)
+        local lib_at = text:find("Libs\\LibClassicSwingTimerAPI\\", 1, true)
+        check(gate_at ~= nil and lib_at ~= nil and gate_at < lib_at,
+            "swing_lib_gate.lua loads before LibClassicSwingTimerAPI")
     end
 end
 

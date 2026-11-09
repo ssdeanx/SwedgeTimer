@@ -131,6 +131,19 @@ ST.class_defaults = {
     power_bar_height = 14,
     power_bar_text_enabled = true,
 
+    -- Aura icon row (aura_icons.lua): WoW FOREVER ONLY. The module's gate answers false
+    -- on every other family before a frame exists, so these values are unreachable
+    -- there and no classic-client default or behaviour changes. Nil-safe: the module
+    -- hides on == false and treats nil as the shipped default, so a profile written
+    -- before the keys existed reads exactly like a fresh one. The module's own DEFAULTS
+    -- table carries the same values as the runtime fallback; tests/aura_icons_state.lua
+    -- pins the two sources against each other so they cannot drift.
+    aura_icons_enabled = true, -- operator order 2026-11-08: the Forever row ships ON
+    aura_icons_show_debuffs = true, -- own-caster target debuffs ("HARMFUL|PLAYER")
+    aura_icons_size = 27, -- square icon edge, px (operator +5 on 2026-11-09)
+    aura_icons_spacing = 3, -- px between icons (reference elementSpacing = 3)
+    aura_icons_grow = "right", -- "right" | "left": the row's internal growth direction
+
     -- Melee pair height (bars.lua: ST:melee_pair_height, hand_bar_size). Operator order
     -- 2026-10-28: "off hand should always be same width as main hand. maybe have it so u
     -- can adjust the height for both". ONE class-level key that sizes the mainhand AND

@@ -1553,7 +1553,9 @@ do
         check(enumbers > 0, "Era: the knowledge probe ran by id")
     end
 
-    -- Auto Shot sync + repeat: TBC asks by name, Era by id.
+    -- Auto Shot sync + repeat: the cooldown read is name-based on TBC / id on Era; the
+    -- auto-repeat probe is ALWAYS the numeric id (A-4, 2026-11-06: the client's own
+    -- IsAutoRepeatSpell form - compat's name->id fallback only fires for numeric tokens).
     do
         local cd_tokens, repeat_tokens = {}, {}
         local tbc = build({ project = 5, GetSpellInfo = tbc_spell_lookup,
@@ -1569,10 +1571,13 @@ do
         tbc.ST.HUNTER.on_cooldown_update(tbc.ST)
         eq(#cd_tokens, 1, "TBC: the Auto sync spends one cooldown read")
         eq(cd_tokens[1], "Auto Shot", "TBC: the Auto sync reads by name")
+        eq(#repeat_tokens, 1, "A-4: the cooldown path probes auto-repeat once")
+        eq(repeat_tokens[1], 75, "A-4: the repeat probe always uses the numeric id")
+        eq(tbc.ST.ranged.auto_repeat_active, true,
+            "TBC: the repeat reading lands from the cooldown path")
         tbc.ST.HUNTER.on_autorrepeat_event(tbc.ST, false)
-        eq(#repeat_tokens, 1, "TBC: the repeat probe runs once")
-        eq(repeat_tokens[1], "Auto Shot", "TBC: the repeat probe reads by name")
-        eq(tbc.ST.ranged.auto_repeat_active, true, "TBC: the repeat reading lands")
+        eq(#repeat_tokens, 2, "TBC: the autorrepeat event probes once more")
+        eq(repeat_tokens[2], 75, "A-4: the autorrepeat probe uses the numeric id too")
         local era_cd, era_repeat = {}, {}
         local era = build({ project = 2,
             GetSpellCooldown = function(spell)
@@ -1586,8 +1591,10 @@ do
         era.ST.ranged = { start = 90, speed = 3.0 }
         era.ST.HUNTER.on_cooldown_update(era.ST)
         eq(era_cd[1], 75, "Era: the Auto sync reads by id")
+        eq(era_repeat[1], 75, "Era: the cooldown path probes the numeric repeat id")
         era.ST.HUNTER.on_autorrepeat_event(era.ST, false)
-        eq(era_repeat[1], 75, "Era: the repeat probe reads by id")
+        eq(#era_repeat, 2, "Era: the autorrepeat event probes once more")
+        eq(era_repeat[2], 75, "Era: the autorrepeat probe reads the numeric id")
     end
 
     -- Gather cooldown + range reads: TBC by name, Era by id.
@@ -2006,6 +2013,9 @@ do
             in_combat = opts.in_combat == true,
             ranged_available = opts.ranged_available ~= false,
             regions = {},
+            -- SEC wave (2026-11-06): the one value the sandbox treats as a restricted
+            -- (secret) read. Mutable after build; every other value reads honest.
+            secret_marker = nil,
         }
 
         local env = setmetatable({}, { __index = _G })
@@ -2026,6 +2036,10 @@ do
         env.InCombatLockdown = function() return sb.in_combat end
         env.GetTime = function() return sb.now end
         env.GetTimePreciseSec = function() return sb.now end
+        -- Restricted-read marker for the compat wrappers loaded below (SEC wave).
+        env.issecretvalue = function(value)
+            return sb.secret_marker ~= nil and value == sb.secret_marker
+        end
         -- The client's own standard font. The shared chain (utils.lua) reads it as
         -- the middle step: the LSM path, then STANDARD_TEXT_FONT, then the classic
         -- client font. A distinctive value proves which step carried the label.
@@ -4920,13 +4934,22 @@ do
     end
     local impl = read("classes/hunter.lua") .. read("hunter_guide.lua")
         .. read("hunter_ui.lua")
-    check(impl:find("IsItemInRange") == nil,
+    -- Comment-blind: the scope's own prose names the client API it routes through
+    -- compat (A-4 names the numeric IsAutoRepeatSpell form); only real code counts.
+    local impl_code = {}
+    for line in impl:gmatch("[^\r\n]+") do
+        if not line:match("^%s*%-%-") then
+            impl_code[#impl_code + 1] = line
+        end
+    end
+    local impl_exec = table.concat(impl_code, "\n")
+    check(impl_exec:find("IsItemInRange") == nil,
         "filed: no IsItemInRange probe in the hunter scope (lib owns 8149)")
-    check(impl:find("item:8149") == nil,
+    check(impl_exec:find("item:8149") == nil,
         'filed: no "item:8149" query in the hunter scope (lib owns 8149)')
-    check(impl:find("C_Spell") == nil,
+    check(impl_exec:find("C_Spell") == nil,
         "filed: no C_Spell call in the hunter scope (TBC addon paths stay name-based)")
-    check(impl:find("COMBAT_LOG_EVENT_UNFILTERED") == nil,
+    check(impl_exec:find("COMBAT_LOG_EVENT_UNFILTERED") == nil,
         "filed: no CLEU registration in the hunter scope (trap active-phase stays filed)")
 end
 
@@ -6757,6 +6780,442 @@ do
     era.ST.HUNTER.post_init(era.ST)
     eq(era.ST.HUNTER.gather_guide_inputs(era.ST, {}).mana_frac, nil,
         "non-forever mana: a family without an aspect row still skips the read")
+end
+
+--=========================================================================================
+-- W) 2026-11-06 display-fix: red-zone display-only contract + Auto Shot armed refresh
+--=========================================================================================
+-- Operator ruling (2026-11-06): the Auto Shot red zone is a DISPLAY-ONLY indicator. Its
+-- absence, its disable and a throwing zone updater must never hide, gate, quarantine or
+-- short-circuit the ranged bar, the ranged swing state, or the hunter tick host. The
+-- module previously verified PASS structurally (forever_display_audit §8); this pins it.
+do
+    -- Enabled + a live ranged cycle: the zone draws, and nothing it writes touches the
+    -- bar frame or the swing state.
+    local sb = build_ui({ ranged_start = -1.6, ranged_speed = 2 })
+    sb.class_db.hunter_cast_zone_enabled = true
+    sb.ST.HUNTER.post_init(sb.ST)
+    sb.ranged_bar_frame.shown = true
+    local start_before, speed_before = sb.ST.ranged.start, sb.ST.ranged.speed
+    sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+    local ui = sb.st.hunter_ui
+    eq(ui.cast_zone.shown, true, "red zone: it draws inside a live ranged cycle")
+    eq(sb.ranged_bar_frame.shown, true, "red zone: the ranged bar is untouched")
+    eq(sb.ST.ranged.start, start_before, "red zone: it never rewrites the swing anchor")
+    eq(sb.ST.ranged.speed, speed_before, "red zone: it never rewrites the swing speed")
+
+    -- Disabled: the zone hides and the bar/state/tick host are still untouched.
+    sb.class_db.hunter_cast_zone_enabled = false
+    sb.ranged_bar_frame.shown = true
+    sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+    eq(ui.cast_zone.shown, false, "red zone: a disabled zone is hidden")
+    eq(sb.ranged_bar_frame.shown, true, "red zone: disabling it never hides the ranged bar")
+    eq(sb.ST.ranged.start, start_before, "red zone: a disabled zone leaves the swing state")
+    eq(ui.cast_frame.shown, true, "red zone: the rest of the hunter set still paints")
+
+    -- Absent (degenerate build): the tick never throws and never hides the bar.
+    ui.cast_zone, ui.cast_zone_marker = nil, nil
+    sb.ranged_bar_frame.shown = true
+    local ok_absent, err_absent = pcall(sb.ST.HUNTER.on_bar_update, sb.ST, "ranged")
+    check(ok_absent, "red zone: an absent zone never throws out of the tick ("
+        .. tostring(err_absent) .. ")")
+    eq(sb.ranged_bar_frame.shown, true, "red zone: an absent zone never hides the ranged bar")
+
+    -- Throwing zone updater: isolated to its own guard site, and the rest of the set
+    -- (including the cast bar) keeps running in the same tick.
+    local saved_zone = sb.st.hunter_ui.update_cast_zone
+    sb.st.hunter_ui.update_cast_zone = function() error("zone updater exploded") end
+    sb.st.hunter_ui.cast_frame:Hide()
+    sb.ranged_bar_frame.shown = true
+    local ok_throw, err_throw = pcall(sb.ST.HUNTER.on_bar_update, sb.ST, "ranged")
+    check(ok_throw, "red zone: a throwing zone updater never escapes the tick ("
+        .. tostring(err_throw) .. ")")
+    eq(sb.ranged_bar_frame.shown, true, "red zone: a throwing zone never hides the bar")
+    eq(sb.st.hunter_ui.cast_frame.shown, true,
+        "red zone: the cast bar still paints when the zone updater throws")
+    sb.st.hunter_ui.update_cast_zone = saved_zone
+end
+
+-- A-4: the shared Auto Shot armed-state probe uses the numeric id and is throttled on
+-- the tick path while the event path forces it.
+do
+    local probes = {}
+    local repeat_state = true
+    local sb = build({ project = 18,
+        IsAutoRepeatSpell = function(spell)
+            probes[#probes + 1] = spell
+            return repeat_state
+        end })
+    local T = sb.ST
+    T.ranged = { start = 0, speed = 2.5 }
+
+    T.HUNTER.on_cooldown_update(T)
+    eq(#probes, 1, "A-4: the cooldown path forces one auto-repeat probe")
+    eq(probes[1], 75, "A-4: the probe uses the numeric Auto Shot id")
+    eq(T.ranged.auto_repeat_active, true, "A-4: the armed reading lands from the cooldown path")
+
+    -- The tick path is throttled: no second probe inside the interval.
+    sb.clock = 0.1
+    eq(T.HUNTER.refresh_auto_repeat(T, false), nil, "A-4: the tick probe is throttled")
+    eq(#probes, 1, "A-4: a throttled probe reads nothing")
+
+    -- After the interval it probes again, and a changed reading is reported so the caller
+    -- can open/close the bar in the same tick.
+    sb.clock = 0.3
+    repeat_state = false
+    eq(T.HUNTER.refresh_auto_repeat(T, false), true,
+        "A-4: the tick probe reports a changed armed state")
+    eq(#probes, 2, "A-4: the post-interval probe runs")
+    eq(T.ranged.auto_repeat_active, false, "A-4: the disarmed reading lands")
+
+    -- A clock rewind (a reload/zone transition) forces the probe instead of stalling the
+    -- cache behind a future stamp.
+    sb.clock = 0.05
+    repeat_state = true
+    eq(T.HUNTER.refresh_auto_repeat(T, false), true,
+        "A-4: a rewound clock re-probes instead of trusting the old stamp")
+    eq(#probes, 3, "A-4: the rewound-clock probe runs")
+
+    -- The event path stays forced: an autorrepeat event is exact and never throttled.
+    T.HUNTER.on_autorrepeat_event(T, false)
+    eq(#probes, 4, "A-4: the autorrepeat event forces its own probe")
+    eq(T.ranged.auto_repeat_active, true, "A-4: the event updates the cache")
+
+    -- The class tick carries the throttled backstop (a missed START/STOP event would
+    -- otherwise leave the activity gate without its designed armed backstop).
+    sb.clock = 10.0
+    local probes_before_tick = #probes
+    T.HUNTER.on_bar_update(T, "ranged")
+    eq(#probes, probes_before_tick + 1,
+        "A-4: the class tick runs the throttled armed-state backstop")
+    eq(probes[#probes], 75, "A-4: the tick backstop uses the numeric id too")
+end
+
+--=========================================================================================
+-- Y) 2026-11-06 secret-core: raw secret comparisons, ToT pass-through, aura-scan walk
+--=========================================================================================
+-- The Forever secret regime returns opaque values that pass type() and raise on the first
+-- comparison. Plain Lua cannot create a real secret, so the fixture builds a table with a
+-- raising __eq (only two tables invoke __eq) and marks it as the sandbox's restricted
+-- value; the raw comparison then raises exactly like the client.
+local RAISING_EQ = { __eq = function() error("restricted value compared") end }
+local function restricted_table()
+    return setmetatable({}, RAISING_EQ)
+end
+
+do
+    -- SEC-1/H6: the hunter queue tint must route target identity through api.UnitGUID.
+    local sb = build({ unit_guid = "target-a" })
+    local ST = sb.ST
+    ST.interfaces_are_initialised = true
+    arm_melee_cycle(sb)
+    ST.raptor_strike_queued = true
+    eq(ST.HUNTER.set_bar_color(ST, "mainhand"), true,
+        "SEC-1: fixture: the tint paints against a readable target")
+    eq(ST.hunter_tint_target, "target-a", "SEC-1: the readable identity is snapshotted")
+
+    -- Readable identity change still clears (the existing contract, kept).
+    sb.target_guid = "target-b"
+    sb.bar_color_calls = 0
+    ST.HUNTER.on_bar_update(ST, "ranged")
+    eq(ST.raptor_strike_queued, false, "SEC-1: a readable target change still clears the tint")
+    eq(sb.bar_color_calls, 1, "SEC-1: the readable target change repaints")
+
+    -- Restricted identity: the raw `~=` would raise on the opaque pair. The wrapper
+    -- answers nil, so the tick keeps the tint (identity unknown: no false clear) and
+    -- never throws; the cycle-end backstop still ends it.
+    arm_melee_cycle(sb)
+    ST.raptor_strike_queued = true
+    eq(ST.HUNTER.set_bar_color(ST, "mainhand"), true, "SEC-1: fixture: tint painted")
+    local secret_guid = restricted_table()
+    local other_secret = restricted_table()
+    sb.secret_marker = secret_guid
+    sb.target_guid = secret_guid
+    ST.hunter_tint_target = other_secret
+    sb.bar_color_calls = 0
+    local ok_tick, err_tick = pcall(ST.HUNTER.on_bar_update, ST, "ranged")
+    check(ok_tick, "SEC-1: a restricted target identity never throws out of the tick ("
+        .. tostring(err_tick) .. ")")
+    eq(ST.raptor_strike_queued, true,
+        "SEC-1: an unreadable identity keeps the tint (no comparison, no false clear)")
+    eq(sb.bar_color_calls, 0, "SEC-1: an unreadable identity repaints nothing")
+    ST.mainhand.is_full = true
+    ST.HUNTER.on_bar_update(ST, "ranged")
+    eq(ST.raptor_strike_queued, false,
+        "SEC-1: the cycle-end backstop still clears a tint kept across an unreadable identity")
+
+    -- SEC-1 (store side): arming the tint under a restricted identity stores nil, never
+    -- the opaque value (nothing gets baselined/compared later).
+    arm_melee_cycle(sb)
+    ST.raptor_strike_queued = true
+    ST.hunter_tint_target = "stale"
+    eq(ST.HUNTER.set_bar_color(ST, "mainhand"), true, "SEC-1: fixture: tint paints again")
+    eq(ST.hunter_tint_target, nil,
+        "SEC-1: a restricted identity is never stored as the tint target")
+
+    -- A client with no UnitGUID at all: no compare, tint kept, no throw.
+    local nb = build()
+    local NST = nb.ST
+    NST.interfaces_are_initialised = true
+    arm_melee_cycle(nb)
+    NST.raptor_strike_queued = true
+    eq(NST.HUNTER.set_bar_color(NST, "mainhand"), true, "SEC-1: fixture: no-GUID tint paints")
+    eq(NST.hunter_tint_target, nil, "SEC-1: no identity is stored without a UnitGUID probe")
+    local ok_none = pcall(NST.HUNTER.on_bar_update, NST, "ranged")
+    check(ok_none, "SEC-1: a client without UnitGUID never throws out of the tick")
+    eq(NST.raptor_strike_queued, true,
+        "SEC-1: no identity source keeps the tint (no false clear)")
+end
+
+do
+    -- SEC-2/M1: UnitIsUnit is secret-capable. The class hook returns (warn, restricted):
+    -- an opaque comparison is passed through for the alpha sink, never compared/nilled.
+    local secret_bool = restricted_table()
+    local sb = build({
+        unit_exists = function(unit) return unit == "target" or unit == "targettarget" end,
+        unit_is_unit = function() return secret_bool end,
+    })
+    sb.secret_marker = secret_bool
+    local warn, restricted = sb.ST.HUNTER.get_target_warning(sb.ST)
+    eq(warn, secret_bool, "SEC-2: the opaque comparison is passed through to the caller")
+    eq(restricted, true, "SEC-2: the restricted flag is raised for the alpha sink")
+
+    -- Readable shapes keep exactly the pre-existing behaviour.
+    local tb = build({
+        unit_exists = function(unit) return unit == "target" or unit == "targettarget" end,
+        unit_is_unit = function() return true end,
+    })
+    local w, r = tb.ST.HUNTER.get_target_warning(tb.ST)
+    eq(w, true, "SEC-2 control: a readable true keeps its boolean")
+    eq(r, false, "SEC-2 control: a readable true is not restricted")
+    local fb = build({
+        unit_exists = function(unit) return unit == "target" or unit == "targettarget" end,
+        unit_is_unit = function() return false end,
+    })
+    w, r = fb.ST.HUNTER.get_target_warning(fb.ST)
+    eq(w, false, "SEC-2 control: a readable false keeps its boolean")
+    eq(r, false, "SEC-2 control: a readable false is not restricted")
+    local nb = build({
+        unit_exists = function(unit) return unit == "target" end,
+        unit_is_unit = function() error("must not run without a ToT") end,
+    })
+    w, r = nb.ST.HUNTER.get_target_warning(nb.ST)
+    eq(w, false, "SEC-2: no ToT reads false")
+    eq(r, false, "SEC-2: no ToT is not restricted")
+end
+
+do
+    -- SEC-2/M1 (UI): the restricted opaque boolean reaches SetAlphaFromBoolean(x, 1, 0) -
+    -- the sanctioned secret-boolean sink - with the frame shown and no text/colour branch.
+    local secret_bool = restricted_table()
+    local sb = build_ui({
+        unit_exists = function(unit) return unit == "target" or unit == "targettarget" end,
+        unit_is_unit = function() return secret_bool end,
+        target_warning_enabled = true,
+    })
+    sb.secret_marker = secret_bool
+    sb.ST.HUNTER.post_init(sb.ST)
+    local label = sb.st.hunter_ui.target_warning
+    check(label ~= nil, "SEC-2: the target warning label exists")
+    local applied = {}
+    label.SetAlphaFromBoolean = function(_, value, true_alpha, false_alpha)
+        applied[#applied + 1] = { value = value, t = true_alpha, f = false_alpha }
+    end
+    local ok, err = pcall(sb.ST.HUNTER.on_bar_update, sb.ST, "ranged")
+    check(ok, "SEC-2: a restricted ToT never throws out of the tick (" .. tostring(err) .. ")")
+    eq(#applied, 1, "SEC-2: the opaque boolean is applied through SetAlphaFromBoolean once")
+    local first = applied[1] or {}
+    eq(first.value, secret_bool, "SEC-2: the secret boolean itself is passed through")
+    eq(first.t, 1, "SEC-2: the true alpha is 1")
+    eq(first.f, 0, "SEC-2: the false alpha is 0")
+    eq(label.shown, true, "SEC-2: the frame stays shown while the alpha carries the claim")
+
+    -- Readable control: the classic show/hide path is unchanged (no alpha sink).
+    local rb = build_ui({
+        unit_exists = function(unit) return unit == "target" or unit == "targettarget" end,
+        unit_is_unit = function() return true end,
+        target_warning_enabled = true,
+    })
+    rb.ST.HUNTER.post_init(rb.ST)
+    local rlabel = rb.st.hunter_ui.target_warning
+    local sink_calls = 0
+    rlabel.SetAlphaFromBoolean = function() sink_calls = sink_calls + 1 end
+    rb.ST.HUNTER.on_bar_update(rb.ST, "ranged")
+    eq(rlabel.shown, true, "SEC-2 control: a readable true shows the label")
+    eq(sink_calls, 0, "SEC-2 control: the readable path never uses the alpha sink")
+
+    -- No sink on the client: fall back to hiding (never branch on the secret).
+    local xb = build_ui({
+        unit_exists = function(unit) return unit == "target" or unit == "targettarget" end,
+        unit_is_unit = function() return secret_bool end,
+        target_warning_enabled = true,
+    })
+    xb.secret_marker = secret_bool
+    xb.ST.HUNTER.post_init(xb.ST)
+    local xlabel = xb.st.hunter_ui.target_warning
+    xlabel.SetAlphaFromBoolean = false
+    local ok_fb, err_fb = pcall(xb.ST.HUNTER.on_bar_update, xb.ST, "ranged")
+    check(ok_fb, "SEC-2: an absent alpha sink never throws (" .. tostring(err_fb) .. ")")
+    eq(xlabel.shown, false,
+        "SEC-2: without the sink the restricted warning hides (honest fallback)")
+end
+
+do
+    -- SEC-7/H5: a restricted aura row (api.UnitAura -> nil) must not truncate the scan.
+    -- The three scans walk to the 40-row cap, so a tracked aura below the restricted row
+    -- is still found (the pre-2026-11-06 loops broke on the first nil).
+    local rapid = { name = "Rapid Fire", spell_id = 3045, duration = 15, expiration = 15 }
+    local frenzy = { name = "Frenzy Effect", spell_id = 19615, count = 2, duration = 8, expiration = 8 }
+    local aspect = { name = "Aspect of the Hawk", spell_id = 13165, duration = 60, expiration = 60 }
+    local sb = build_ui({
+        auras = { [3] = rapid, [5] = aspect },   -- [1]/[2]/[4] are restricted/absent rows
+        pet_auras = { [3] = frenzy },
+    })
+    sb.class_db.hunter_frenzy_stacks_enabled = true
+    sb.now = 50
+    sb.ST.HUNTER.post_init(sb.ST)
+    sb.ST.HUNTER.on_bar_update(sb.ST, "ranged")
+    local ui = sb.st.hunter_ui
+    eq(ui.rapid_fire_bar.shown, true, "SEC-7: the RF bar survives a restricted row above it")
+    eq(ui.frenzy_badge.shown, true, "SEC-7: the Frenzy badge survives a restricted row above it")
+    eq(ui.aspect_icon.shown, true, "SEC-7: the aspect icon survives a restricted row above it")
+end
+
+do
+    -- Source-shape pins (plain Lua cannot raise on a secret string/boolean): the raw
+    -- calls must be gone and the wrapped calls present.
+    local function read(rel)
+        local fh = assert(io.open(ROOT .. rel, "r"))
+        local text = fh:read("*a")
+        fh:close()
+        return text
+    end
+    local function code_only(text)
+        local out = {}
+        for line in text:gmatch("[^\r\n]+") do
+            if not line:match("^%s*%-%-") then
+                out[#out + 1] = line
+            end
+        end
+        return table.concat(out, "\n")
+    end
+    local hsrc = code_only(read("classes/hunter.lua"))
+    local function has_raw_call(code, name)
+        local raw_pattern = name .. "%("
+        local api_pattern = "api%." .. name .. "%("
+        for line in code:gmatch("[^\r\n]+") do
+            local _, all_count = line:gsub(raw_pattern, "")
+            local _, api_count = line:gsub(api_pattern, "")
+            if all_count > api_count then
+                return true
+            end
+        end
+        return false
+    end
+    check(not has_raw_call(hsrc, "UnitGUID"),
+        "SEC-1: classes/hunter.lua has no raw UnitGUID call")
+    check(not has_raw_call(hsrc, "UnitIsUnit"),
+        "SEC-2: classes/hunter.lua has no raw UnitIsUnit call")
+    check(hsrc:find("api%.UnitGUID%(") ~= nil,
+        "SEC-1: classes/hunter.lua routes identity through api.UnitGUID")
+    check(hsrc:find("api%.UnitIsUnit%(") ~= nil,
+        "SEC-2: classes/hunter.lua routes the comparison through api.UnitIsUnit")
+    local usize = code_only(read("hunter_ui.lua"))
+    check(usize:find("if not name then%s*break") == nil,
+        "SEC-7: hunter_ui.lua has no break-on-nil aura scan left")
+    check(usize:find("for index = 1, AURA_SCAN_LIMIT") ~= nil,
+        "SEC-7: the capped aura scans are still present")
+end
+
+--=========================================================================================
+-- SEC (2026-11-06 H1/H2/H4/M2): restricted reads are UNKNOWN, never 0/"absent"
+--=========================================================================================
+-- Wow Forever restricted reads: the spell cooldowns, the power pair, the target aura
+-- rows and the target health max come back opaque. The gather must publish
+-- inputs_unknown (nextaction_ui.lua:638 suppresses every advice target on it) and never
+-- hand the engine a 0 = "ready" or a missing-debuff "absent" claim. The marker value is
+-- the only one the sandbox's issecretvalue flags, exactly like compat's suite.
+do
+    local SECRET_MARKER = "<secret spell data>"
+    local forever_spells = {
+        [14287] = "Arcane Shot", [20904] = "Aimed Shot", [2643] = "Multi-Shot",
+        [14266] = "Raptor Strike", [1978] = "Serpent Sting",
+    }
+    local function spell_info(id)
+        local name = forever_spells[id]
+        if name then
+            return name, nil, "icon_" .. id, 0, 0, 0, id
+        end
+        return nil
+    end
+    local function restricted_cooldown()
+        return SECRET_MARKER, SECRET_MARKER, SECRET_MARKER, SECRET_MARKER
+    end
+    local sb = build({
+        project = 18,
+        interface = 16001,
+        GetSpellInfo = spell_info,
+        known_spells = { [14287] = true, [20904] = true, [2643] = true, [14266] = true },
+        GetSpellCooldown = restricted_cooldown,
+        unit_exists = function(unit) return unit == "target" end,
+    })
+    local S = sb.ST
+    sb.target_auras = {}
+    local prev_secrets = rawget(_G, "C_Secrets")
+    _G.C_Secrets = {
+        ShouldCooldownsBeSecret = function() return true end,
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+        ShouldUnitPowerBeSecret = function() return true end,
+        ShouldUnitHealthMaxBeSecret = function() return true end,
+    }
+    S.HUNTER.post_init(S)
+    local gathered = S.HUNTER.gather_guide_inputs(S, {})
+    _G.C_Secrets = prev_secrets
+
+    eq(gathered.inputs_unknown, true,
+        "secret gather: a restricted tick is marked unknown (the display suppression path)")
+    -- H2: a restricted cooldown is UNKNOWN, never 0 = "ready".
+    eq(gathered.arcane_remaining_cd, nil,
+        "secret H2: a restricted Arcane Shot cooldown is nil, not 0 (ready)")
+    eq(gathered.multi_remaining_cd, nil,
+        "secret H2: every resolved gather cooldown degrades to nil, never a ready 0")
+    -- H1: an unreadable power pair is unknown, never 0/100 %.
+    eq(gathered.mana_frac, nil, "secret H1: a restricted mana read is nil, not 0 %")
+    -- H4: a hidden target-aura row is unknown, never "the sting is absent".
+    eq(gathered.serpent_active, nil,
+        "secret H4: a hidden Serpent Sting row is nil (unknown), not false (absent)")
+
+    -- Control: the same fixture without the regime keeps the readable shapes.
+    local plain = build({
+        project = 18,
+        interface = 16001,
+        GetSpellInfo = spell_info,
+        known_spells = { [14287] = true, [20904] = true, [2643] = true, [14266] = true,
+            [1978] = true },
+        unit_exists = function(unit) return unit == "target" end,
+    })
+    plain.target_auras = {}
+    plain.ST.HUNTER.post_init(plain.ST)
+    local plain_inputs = plain.ST.HUNTER.gather_guide_inputs(plain.ST, {})
+    check(plain_inputs.inputs_unknown ~= true,
+        "control: an unrestricted gather keeps inputs_unknown clear")
+    eq(plain_inputs.arcane_remaining_cd, 0,
+        "control: a readable idle cooldown is 0 = ready (unchanged)")
+
+    -- H4 on its own: only the target-aura list is restricted (cooldowns/power readable),
+    -- so the hidden Serpent Sting miss is the ONLY unknown source.
+    local prev_aura_secrets = rawget(_G, "C_Secrets")
+    _G.C_Secrets = {
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+    }
+    local aura_inputs = plain.ST.HUNTER.gather_guide_inputs(plain.ST, {})
+    _G.C_Secrets = prev_aura_secrets
+    eq(aura_inputs.serpent_active, nil,
+        "aura-only H4: a hidden Serpent Sting row reads nil, not false")
+    eq(aura_inputs.inputs_unknown, true,
+        "aura-only H4: the hidden aura row is the unknown source")
 end
 
 if failures == 0 then

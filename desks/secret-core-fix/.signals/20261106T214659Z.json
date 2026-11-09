@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T21:46:59Z",
+  "run_id": "secret-core-fix-2026-11-06",
+  "agent_name": "secret-core-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Audit-driven core fixes with red-first pins: UnitGUID/UnitIsUnit/UnitCreatureType routed through compat, ToT secret-boolean pass-through via SetAlphaFromBoolean, hunter aura-scan breaks removed, classic UnitAura pcall+precheck mirrored, ratings guarded, Hunter's Mark unknown branch made real, and the three additive helpers; 12/12 mutations killed; full gate 57/0, luacheck 2/0.",
+    "what_was_hard": "Plain Lua cannot raise on a secret string/boolean, so the identity rails needed raising-__eq sentinels for table-shaped comparables plus comment-blind source pins for the string/boolean shapes; one existing compat pin (forever_secret_compat_state \u00a72) encoded the pre-SEC-4 contract and needed a Lead-authorised re-cut.",
+    "skill_gap": "None blocking."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

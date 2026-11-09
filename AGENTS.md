@@ -4,11 +4,11 @@ WoW addon (Lua) shipping one universal build for the classic-line and Mainline c
 
 ## Layout
 
-- Active addon is the repo root; `SwedgeTimer.toc` (base) plus the flavor variants (`SwedgeTimer_Vanilla/_TBC/_Wrath/_Mainline/_Cata/_Mists.toc`) are the authoritative load orders. The client picks one by flavor dispatch: game-type suffix > family suffix > base.
+- Active addon is the repo root; `SwedgeTimer.toc` is the ONE authoritative load order for every client (single-TOC release 2026-11-07). Per-client differences are runtime branches in `compat.lua` plus the swing-library load gate (`swing_lib_gate.lua` / `swing_lib_gate_release.lua`), never extra TOC files.
 - `main.lua`: addon object, WoW/lib event wiring, swing-timer/range/GCD orchestration.
 - `bars.lua`: frame construction, layout, `OnUpdate`, textures/texts. `configure_bar_size_and_positions(hand, width_override?)` accepts a per-pass width for the hunter melee stack without writing the saved `bar_width`.
 - `power_bar.lua`: the primary-resource bar (mana/rage/energy/focus via `UnitPowerType`) under the bottom-most visible melee bar. Default 14 px; class keys `power_bar_enabled` / `power_bar_height` / `power_bar_text_enabled`; initialised from `main.lua` post_init.
-- `weave_range.lua`: the standalone ranged-distance bar (hunter default on), exact yards via `st.api.UnitDistance`.
+- `weave_range.lua`: the standalone ranged-distance bar (hunter default on). Two exact tiers: `st.api.UnitDistance` (yards) when the client answers, else the client's native band via `st.api.is_target_in_swing_range` (`<=5 yd` / `5-35 yd` / `>35 yd`), else the explicit `--` unknown face.
 - `config_presets.lua`: AceDB defaults (`ST.class_defaults`, `ST.bar_defaults`, per-class `ST.<CLASS>.defaults`).
 - `config.lua`: wraps the above into `ST.defaults`.
 - `option_tables.lua` + `option_table_presets.lua`: AceConfig settings UI.
@@ -33,10 +33,10 @@ WoW addon (Lua) shipping one universal build for the classic-line and Mainline c
 - Expose handlers as `ST:Name` or `ST.CLASS.Name`.
 - Events and lib callbacks are dispatched by `ST.callback_event_handler` to `ST[event]`, so handlers must be named exactly after the event/callback.
 - AceEvent dispatches handlers as `(event, ...)`. Any handler that forwards to another module must pass the event name along (see the twist CLEU chain); dropping it shifts every argument.
-- Add any new addon `.lua`/`.xml` file to every load-order TOC (base + all flavor variants) in dependency order (libs first); toc paths use backslashes. The only intended divergence between flavor tocs is `_Mainline` omitting `LibClassicSwingTimerAPI`.
+- Add any new addon `.lua`/`.xml` file to the single `SwedgeTimer.toc` in dependency order (libs first); toc paths use backslashes. There are no flavor TOCs.
 - Keep vendored `Libs/` untouched (update from upstream rather than patching locally); `LibClassicSwingTimerAPI` is the swing-engine dependency (classic-line clients only).
-- Update `## Version` in every toc variant and `main.lua` (`version`) when releasing.
-- Class modules must be listed in every flavor toc or they will not load on that client.
+- Update `## Version` in `SwedgeTimer.toc` and `main.lua` (`version`) when releasing.
+- Class modules must be listed in `SwedgeTimer.toc` or they will not load.
 
 ## Gotchas
 
@@ -47,11 +47,11 @@ WoW addon (Lua) shipping one universal build for the classic-line and Mainline c
 
 ## Cross-engine (universal single build)
 
-- Goal: one addon build runs on every WoW engine family with no per-client download. Do not create client-specific file trees; the only per-flavor artifacts are the toc variants (which files load), everything else branches in Lua at runtime. Target matrix: Classic Era / SoD 1.15.9 → `_Vanilla` (11509); TBC Anniversary 2.5.6 → `_TBC` (20506); WotLK Titanforge 3.80.2 → `_Wrath` (38002); Retail 12.1.x (12.1.0/12.1.5) and WoW Forever 1.60.1 → `_Mainline` (120100, 120105, 16001); the base `SwedgeTimer.toc` is the classic-line fallback (11509, 20506, 38002) — it ships `LibClassicSwingTimerAPI`, whose file-scope combat-log `RegisterEvent` throws on mainline-code clients, so it must not advertise a mainline interface (audit F6, 2026-10-19).
+- Goal: one addon build runs on every WoW engine family with no per-client download and ONE `SwedgeTimer.toc` (single-TOC release 2026-11-07). The TOC lists every module and advertises `## Interface: 11509, 20506, 38002, 40402, 50500, 120100, 120105, 16001`; per-client behaviour branches in Lua at runtime. `LibClassicSwingTimerAPI` stays listed for the classic line and is neutralised on every other client at load time: `swing_lib_gate.lua` pre-registers a tagged LibStub stub above the vendored minor (the library returns at its `NewLibrary` guard) and `swing_lib_gate_release.lua` removes the stub again right after the library line; `main.lua` treats a tagged stub as absent. `tests/swing_gate_state.lua` pins both directions and `tests/toc_check.lua` pins the single-TOC contract.
 - `## Interface` can be a comma-separated list of target Interface numbers; supported references and game-type gating live in `/home/sam/wow-ui-source` (see SKILL.md § 10).
 - Detect family/API with `WOW_PROJECT_ID` constants — including `WOW_PROJECT_CAMELOT` = 18 on WoW Forever — and feature probes (`C_Spell`, `C_Container`, `C_ClassTalents`, `UnitClass` return arity) rather than hard-coded version strings.
-- Mainline-code clients (Retail, WoW Forever) have no classic combat log. WoW Forever instead exposes the native `PLAYER_SWING` event family: `swing_source.lua` provides a `LibClassicSwingTimerAPI`-compatible engine there (Forever only, probe-gated via `C_EventUtils.IsEventValid`). Retail keeps the inert stand-in: `_Mainline.toc` ships no `LibClassicSwingTimerAPI`, and `main.lua` substitutes the stand-in so `init_libs`/options/range/GCD stay alive and the user gets a one-time notice. `main.lua` also arms a 5s post-init deadline: if a library never reports ready (e.g. `LibRangeCheck` on an incompatible client), init proceeds anyway with that feature disabled for the session and a one-time notice.
-- `LibClassicSwingTimerAPI` only initializes spell tables for Classic/BCC/Wrath (plus its own Retail path); Cata, Mists, and other families leave tables like `reset_swing_spells` nil, causing indexing errors — do not ship the lib to those flavors until that is fixed.
+- Mainline-code clients (Retail, WoW Forever) have no classic combat log. WoW Forever instead exposes the native `PLAYER_SWING` event family: `swing_source.lua` provides a `LibClassicSwingTimerAPI`-compatible engine there (Forever only, probe-gated via `C_EventUtils.IsEventValid`). Retail keeps the inert stand-in: the swing gate neutralises `LibClassicSwingTimerAPI` there, and `main.lua` substitutes the stand-in so `init_libs`/options/range/GCD stay alive and the user gets a one-time notice. `main.lua` also arms a 5s post-init deadline: if a library never reports ready (e.g. `LibRangeCheck` on an incompatible client), init proceeds anyway with that feature disabled for the session and a one-time notice.
+- `LibClassicSwingTimerAPI` only initializes spell tables for Classic/BCC/Wrath (plus its own Retail path); Cata, Mists, and other families leave tables like `reset_swing_spells` nil, causing indexing errors — the single TOC ships the file but the swing gate keeps it from running there.
 - API shims implemented in `compat.lua`: classic `GetSpellInfo`/`GetSpellCooldown`/`GetSpellPowerCost` vs `C_Spell.*`; classic `GetTalentInfo`/`GetActiveTalentGroup` vs `C_SpecializationInfo`; `PLAYER_TARGET_SET_ATTACKING` registration gated via `C_EventUtils.IsEventValid` (it does not exist on Mainline). Still to watch: secret-value restrictions in Midnight. When `WOW_PROJECT_ID` is missing, `compat.lua` maps interface `>= 16000` (WoW Forever 1.60.x) to `FOREVER` before the `major == 1` bucket can mislabel it as Era.
 - Taint rules still apply, especially show/hide and secure calls during combat; bars are non-secure frames but keep frame strata/parent changes out of combat.
 - Hunter melee stack: `hunter_ui.apply_melee_stack` pins the thin MH/OH bars under the ranged bar at its width (`hunter_melee_stack`, default on). It anchors to the ranged bar frame, never the cast bar, and `restore_melee_layout` restores each hand's own width/position when switched off.

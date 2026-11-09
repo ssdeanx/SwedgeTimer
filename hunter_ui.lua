@@ -1043,6 +1043,15 @@ end
 --            window opened) and red while still moving through it or after a late stop.
 -- Option-gated: hunter_cast_zone_enabled shows it (ships on), and a disabled zone
 -- performs no reads at all.
+--
+-- DISPLAY-ONLY CONTRACT (operator ruling 2026-11-06, audit §8): this updater is a pure
+-- overlay painter. It touches only ui.cast_zone / ui.cast_zone_marker / the ui.zone_*
+-- latches - it never shows, hides, gates or quarantines the ranged bar, the ranged
+-- START/UPDATE state, the shot receipt, or the hunter tick host, and an absent zone
+-- (nil texture) is a no-op. The zone draws only while a live ranged cycle exists:
+-- `ranged.start` + `synced_duration or speed` bounds it, otherwise it hides itself.
+-- Pinned in tests/hunter_state.lua section W (disabled / absent / throwing zone never
+-- changes the bar frame or the swing state).
 function ui.update_cast_zone(self, db, now)
     local zone = ui.cast_zone
     if not zone then
@@ -1128,11 +1137,43 @@ function ui.update_target_warning(self, db)
         end
         return
     end
-    local warn
+    -- SEC-2/M1 (2026-11-06): get_target_warning returns (warn, restricted). A restricted
+    -- comparison cannot be branched on; the sanctioned sink for a secret boolean is
+    -- ScriptRegion:SetAlphaFromBoolean(secret_bool, 1, 0) (AllowedWhenTainted, Alpha
+    -- aspect; Blizzard's own UnitFrameUtil.lua:487). Pass the opaque value straight
+    -- through, keep the frame shown and skip every text/colour branch. Readable answers
+    -- keep the pre-existing show/hide path exactly.
+    local warn, restricted
     if self.HUNTER and self.HUNTER.get_target_warning then
-        warn = self.HUNTER.get_target_warning(self)
+        warn, restricted = self.HUNTER.get_target_warning(self)
+    end
+    if restricted == true then
+        local apply_alpha = label.SetAlphaFromBoolean
+        if type(apply_alpha) == "function" then
+            if not label:IsShown() then
+                label:Show()
+            end
+            apply_alpha(label, warn, 1, 0)
+            return
+        end
+        -- No sanctioned sink on this client (an ancient/pre-1.60 frame): hiding is the
+        -- only honest option - never compare or guess the opaque boolean. Say so once.
+        if not ui.target_warning_sink_notice then
+            ui.target_warning_sink_notice = true
+            if st.utils and type(st.utils.print_msg) == "function" then
+                pcall(st.utils.print_msg,
+                    "This client cannot display the restricted target-of-target warning; "
+                    .. "the warning stays hidden.")
+            end
+        end
+        if label:IsShown() then
+            label:Hide()
+        end
+        return
     end
     if warn == true then
+        -- The readable path owns alpha again after a restricted spell.
+        label:SetAlpha(1)
         if not label:IsShown() then
             label:Show()
         end
@@ -1160,9 +1201,51 @@ local function probe_in_range(token, fallback_id)
     return answer
 end
 
+-- Direct band for the horizontal distance bar from the LEFT indicator's own computed
+-- state. The left strip is the proven working indicator; its helper_state is a plain
+-- string (melee / sweet_spot / ranged / out_of_range) set by update_range_helper.
+function ui.range_band()
+    local state = ui.helper_state
+    if state == "melee" then
+        return "melee"
+    end
+    if state == "sweet_spot" or state == "ranged" then
+        return "in_range"
+    end
+    if state == "out_of_range" then
+        return "out"
+    end
+    return nil
+end
+
+-- Public bridge for the horizontal distance bar: the EXACT same probes and numeric-ID
+-- fallbacks the left range helper uses. The duplicate name-only probe returned nil in an
+-- instance while this bridge follows the working helper. Returns a band key or nil.
+function ui.spell_range_band()
+    local melee = probe_in_range(ui.wing_clip_token, WING_CLIP_ID)
+    if melee == nil then
+        melee = probe_in_range(ui.raptor_token, RAPTOR_STRIKE_ID)
+    end
+    local ranged = probe_in_range(ui.auto_shot_token, AUTO_SHOT_ID)
+    if melee == true then
+        return "melee"
+    end
+    if ranged == true then
+        return "in_range"
+    end
+    if melee == false and ranged == false then
+        return "out"
+    end
+    if melee == false or ranged == false then
+        return "out_melee"
+    end
+    return nil
+end
+
 function ui.update_range_helper(self, db)
     local helper = ui.range_helper
     if db.hunter_range_helper_enabled == false then
+        ui.helper_state = nil
         if helper:IsShown() then
             helper:Hide()
         end
@@ -1187,6 +1270,7 @@ function ui.update_range_helper(self, db)
     -- The reference hides the strip without an attackable target, and when every probe
     -- is answerless (nil): a real 0 still reports out_of_range, an unknown one hides.
     if not self.has_attackable_target then
+        ui.helper_state = nil
         if helper:IsShown() then
             helper:Hide()
         end
@@ -1206,6 +1290,7 @@ function ui.update_range_helper(self, db)
     end
     local ranged = probe_in_range(ui.auto_shot_token, AUTO_SHOT_ID)
     if melee == nil and sweet == nil and ranged == nil then
+        ui.helper_state = nil
         if helper:IsShown() then
             helper:Hide()
         end
@@ -1260,14 +1345,15 @@ function ui.update_rapid_fire(self, db, now)
     end
 
     -- Scan the player's helpful auras for the Rapid Fire buff.
+    -- SEC-7/H5 (2026-11-06): no early break on a nil row. api.UnitAura answers nil for a
+    -- restricted row as well as for the end of the list, so breaking truncated the walk
+    -- and hid a buff that sat below it. The 40-row cap bounds the cost, exactly like the
+    -- shared player/unit scans (compat.lua:812-833).
     local duration, expiration
     for index = 1, AURA_SCAN_LIMIT do
         local name, _, _, _, aura_duration, aura_expiration, _, _, _, aura_spell_id =
             api.UnitAura("player", index, "HELPFUL")
-        if not name then
-            break
-        end
-        if aura_spell_id == RAPID_FIRE_SPELL_ID or name == ui.rapid_fire_name then
+        if name ~= nil and (aura_spell_id == RAPID_FIRE_SPELL_ID or name == ui.rapid_fire_name) then
             duration, expiration = aura_duration, aura_expiration
             break
         end
@@ -1393,14 +1479,12 @@ local function update_frenzy_badge()
     end
     local found = false
     local count
+    -- SEC-7/H5: walk past nil/restricted rows to the cap (see the Rapid Fire scan above).
     for index = 1, AURA_SCAN_LIMIT do
         local name, _, aura_count, _, _, _, _, _, _, aura_spell_id =
             api.UnitAura("pet", index, "HELPFUL")
-        if not name then
-            break
-        end
-        if aura_spell_id == FRENZY_EFFECT_ID
-            or (ui.frenzy_name ~= nil and name == ui.frenzy_name) then
+        if name ~= nil and (aura_spell_id == FRENZY_EFFECT_ID
+            or (ui.frenzy_name ~= nil and name == ui.frenzy_name)) then
             found = true
             count = aura_count
             break
@@ -1746,19 +1830,19 @@ function ui.update_aspect_icon(self, db, now)
     end
     ui.aspect_scan_at = now + ASPECT_SCAN_INTERVAL
     local aspect_id
+    -- SEC-7/H5: walk past nil/restricted rows to the cap (see the Rapid Fire scan above).
     for index = 1, AURA_SCAN_LIMIT do
         local name, _, _, _, _, _, _, _, _, aura_spell_id =
             api.UnitAura("player", index, "HELPFUL")
-        if not name then
-            break
-        end
-        if type(aura_spell_id) == "number" and ASPECT_SPELL_IDS[aura_spell_id] then
-            aspect_id = aura_spell_id
-            break
-        end
-        aspect_id = ui.aspect_names[name]
-        if aspect_id then
-            break
+        if name ~= nil then
+            if type(aura_spell_id) == "number" and ASPECT_SPELL_IDS[aura_spell_id] then
+                aspect_id = aura_spell_id
+            else
+                aspect_id = ui.aspect_names[name]
+            end
+            if aspect_id then
+                break
+            end
         end
     end
     local texture = aspect_id and ui.aspect_textures[aspect_id]

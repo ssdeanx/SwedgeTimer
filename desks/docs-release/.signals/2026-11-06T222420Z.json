@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T22:24:20Z",
+  "agent_name": "docs-release",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading all five secret-wave reports (matrix, consumers audit, three fix reports) before writing meant every sentence traced to a named evidence line; the final gate numbers came from the fix reports' own runs (57/0, luacheck 2/0) rather than being inferred from the dispatch. The existing 2.1.8 section already had the right skeleton (verification status + Fixed/Changed), so the extension slotted in as a `Hardening` subsection matching the file's historical usage.",
+    "what_was_hard": "Compressing five reports into one compact block without dropping the user-visible outcomes: the internal helper names are numerous, so the README kept outcomes and the CHANGELOG kept the API surface in a single compat bullet. Also had to keep the earlier power-bar StatusBar bullet intact while making the hardening block non-duplicative.",
+    "skill_gap": "No doc-claim tracer: the claim map is hand-written report-to-sentence links, so the next docs session must re-read the reports. A generated table would help, but it is outside a prose lane's write scope."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

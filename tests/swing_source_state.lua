@@ -107,6 +107,11 @@ env.C_Timer = {
 env.Enum = { PlayerSwingType = { MainHand = 0, OffHand = 1, Ranged = 2 } }
 env.UnitAttackSpeed = function() return 2.6, nil, nil end
 env.GetTime = function() return clock end
+-- A-1 restricted-value sentinel: a secret number passes every type() check and raises on
+-- the first comparison, so the fixture can hand the engine a real secret-shaped payload.
+-- Every other value is not secret (the module's probe reads this stub at load).
+local SECRET = {}
+env.issecretvalue = function(value) return value == SECRET end
 
 local notices = {}
 local st = {
@@ -203,12 +208,29 @@ eq(last_event().a[3], "offhand", "swing type 1 maps to offhand")
 fire("PLAYER_SWING", 2.0, 2)
 eq(last_event().a[3], "ranged", "swing type 2 maps to ranged")
 local before = #fired
+local notices_before_first_reject = #notices
 fire("PLAYER_SWING", 2.0, 9)
 eq(#fired, before, "unknown swing type is ignored")
+-- A-1 (2026-11-06 HIGH): one rejected payload used to be completely silent (the chat
+-- notice only fired after 5 s of sustained rejects in combat), so a single dropped shot
+-- looked exactly like "the shot was consumed". The FIRST reject is now announced once
+-- per session, and the counters stay in /st diag.
+eq(#notices, notices_before_first_reject + 1,
+    "A-1: the first rejected payload is announced once per session")
+check(type(notices[#notices]) == "string" and notices[#notices]:find("rejected", 1, true) ~= nil,
+    "A-1: the first-reject notice names the rejection")
+eq(src.stats.first_reject_notice_shown, true, "A-1: the first-reject notice is latched")
+-- A malformed duration on a KNOWN hand is not dropped any more: the cycle is recovered
+-- from the equipped speed (the payload only repeats what the client already reports).
+env.UnitAttackSpeed = function() return 2.6, nil, nil end -- the equipped mainhand speed
 fire("PLAYER_SWING", 0, 0)
-eq(#fired, before, "zero duration is ignored")
+eq(#fired, before + 1, "A-1: zero duration recovers the cycle instead of dropping the shot")
+eq(last_event().a[1], 2.6, "A-1: the recovered cycle uses the equipped mainhand speed")
 fire("PLAYER_SWING", "x", 0)
-eq(#fired, before, "non-numeric duration is ignored")
+eq(#fired, before + 2, "A-1: a non-numeric duration recovers too")
+eq(last_event().a[1], 2.6, "A-1: the non-numeric recovery keeps the equipped speed")
+fire("PLAYER_SWING", 0, 9)
+eq(#fired, before + 2, "A-1: an unknown type has no hand to recover, so it is still dropped")
 
 -- 7) Event probe gating ------------------------------------------------------------------
 -- swing_source.lua gates itself on C_EventUtils.IsEventValid (falling back to the FOREVER
@@ -446,20 +468,24 @@ do
 end
 
 -- 12) H5 observability: reject/speed-read counters + the one-time sustained notice -----
--- The reject paths keep their existing behaviour (ignore the payload, keep the old
--- cycle); these counters are the new, observable part, plus the /st diag text.
+-- The recoverable path is counted separately (speed_fallbacks); a payload with no
+-- readable fallback speed keeps the pre-2026-11-06 behaviour (dropped, counted).
 do
     local stats = src.stats
     check(type(stats) == "table", "H5: the engine exposes its session counters")
     local rejects_before = stats.payload_rejects
     local unknown_before = stats.unknown_swing_type
     local malformed_before = stats.malformed_duration
+    -- No readable equipped speed: these payloads really cannot be timed and are dropped.
+    env.UnitAttackSpeed = function() return nil end
+    env.UnitRangedDamage = nil
     fire("PLAYER_SWING", 2.0, 9)
     fire("PLAYER_SWING", 0, 0)
     fire("PLAYER_SWING", "x", 0)
     eq(stats.payload_rejects, rejects_before + 3, "H5: every rejected payload is counted")
     eq(stats.unknown_swing_type, unknown_before + 1, "H5: unknown swing types are attributed")
     eq(stats.malformed_duration, malformed_before + 2, "H5: malformed durations are attributed")
+    env.UnitAttackSpeed = function() return 2.6, nil, nil end
 
     -- Sustained rejects in combat, with no valid swing for 5+ s: one chat notice ever.
     fire("PLAYER_IN_COMBAT_CHANGED", true)
@@ -469,9 +495,14 @@ do
     eq(#notices, notices_before + 1, "H5: sustained combat rejects print one notice")
     check(notices[#notices]:find("rejected PLAYER_SWING", 1, true) ~= nil,
         "H5: the notice names the rejecting feed")
+    env.UnitAttackSpeed = function() return nil end
+    local rejects_after_sustained = stats.payload_rejects
     fire("PLAYER_SWING", 0, 0)
     eq(#notices, notices_before + 1, "H5: the sustained-reject notice is one-time")
+    eq(stats.payload_rejects, rejects_after_sustained + 1,
+        "H5: a later unrecoverable payload is still counted")
     eq(stats.reject_notice_shown, true, "H5: the notice state is recorded")
+    env.UnitAttackSpeed = function() return 2.6, nil, nil end
 
     -- Speed-read keeps are counted, and the old cycle keeps its schedule.
     local keeps_before = stats.speed_read_keeps
@@ -489,6 +520,8 @@ do
         and text:find("speed_read_keeps=", 1, true) ~= nil
         and text:find("valid_swings=", 1, true) ~= nil,
         "H5: /st diag text reports payload, speed and valid-swing counters")
+    check(text:find("speed_fallbacks=", 1, true) ~= nil,
+        "A-1: /st diag reports the recovered-cycle counter too")
 end
 
 -- 13) B1 idle nil-shape ------------------------------------------------------------
@@ -629,6 +662,91 @@ do
     eq(count_event("SWING_TIMER_UPDATE"), updates_before + 2,
         "B3: a unit-less call still re-times (direct-call shape)")
     fire("PLAYER_IN_COMBAT_CHANGED", false) -- drain
+    env.UnitAttackSpeed = function() return 2.6, nil, nil end -- restore
+end
+
+-- 16) A-1 payload resolution: restricted/malformed duration no longer drops the cycle -
+-- The Forever client can hand PLAYER_SWING restricted (secret) values: type() answers,
+-- every comparison raises. Before this fix a secret duration threw out of the OnEvent
+-- handler (uncounted) and one shot was lost. A malformed duration on a known hand is
+-- recovered from the equipped speed, because the payload only repeats what the client
+-- already reports for that hand.
+--
+-- NOTE ON SIMULATION: plain Lua has no secret values, so a "secret" here is an ordinary
+-- value the issecretvalue stub answers for - it cannot raise on comparison. The guards
+-- are therefore pinned two ways: behaviourally (no throw / no invented cycle) AND at
+-- source level (the is_restricted/usable_duration calls must exist), because deleting a
+-- guard is invisible to behaviour in this sandbox but is exactly the defect.
+do
+    local fh = io.open(ROOT .. "swing_source.lua", "r")
+    local source = fh and fh:read("*a") or ""
+    if fh then fh:close() end
+    check(source:find("if is_restricted(swing_type) then", 1, true) ~= nil,
+        "A-1: the restricted swing-type guard exists before the enum mapping")
+    check(source:find("local duration = usable_duration(swing_duration)", 1, true) ~= nil,
+        "A-1: the payload duration is normalised through usable_duration")
+    check(source:find("if is_secret(value) then", 1, true) ~= nil,
+        "A-1: usable_duration refuses a restricted value before any comparison")
+    check(source:find("local function read_equipped_speed(hand)", 1, true) ~= nil,
+        "A-1: the equipped-speed recovery helper exists")
+    check(source:find("stats.speed_fallbacks = stats.speed_fallbacks + 1", 1, true) ~= nil,
+        "A-1: the recovered cycle is counted")
+end
+do
+    fire("PLAYER_IN_COMBAT_CHANGED", false) -- start idle
+    env.UnitAttackSpeed = function() return 2.6, 1.8, 2.9 end
+    env.UnitRangedDamage = nil
+    local stats = src.stats
+    local fallbacks_before = stats.speed_fallbacks
+    local malformed_at_start = stats.malformed_duration
+
+    -- a) A restricted duration: no throw, cycle recovered from the equipped mainhand.
+    local starts_before = count_event("SWING_TIMER_START")
+    local ok_secret = pcall(fire, "PLAYER_SWING", SECRET, 0)
+    check(ok_secret, "A-1: a secret duration never throws out of the engine")
+    eq(count_event("SWING_TIMER_START"), starts_before + 1,
+        "A-1: a secret duration still starts the cycle")
+    eq(last_event().event, "SWING_TIMER_START", "A-1: the recovered payload fires a START")
+    eq(last_event().a[1], 2.6, "A-1: the recovered cycle uses the equipped mainhand speed")
+    eq(last_event().a[3], "mainhand", "A-1: the recovered cycle keeps its hand")
+    eq(stats.speed_fallbacks, fallbacks_before + 1,
+        "A-1: the recovered cycle is counted as a fallback")
+    eq(stats.malformed_duration, malformed_at_start,
+        "A-1: a recovered payload is not counted as an unrecoverable malformed one")
+
+    -- b) Ranged: UnitAttackSpeed's third return first, UnitRangedDamage second.
+    starts_before = count_event("SWING_TIMER_START")
+    env.UnitAttackSpeed = function() return 2.6, 1.8, nil end
+    env.UnitRangedDamage = function() return 2.9 end
+    fire("PLAYER_SWING", 0, 2)
+    eq(count_event("SWING_TIMER_START"), starts_before + 1,
+        "A-1: a malformed ranged duration recovers")
+    eq(last_event().a[1], 2.9, "A-1: ranged falls back to UnitRangedDamage")
+    eq(last_event().a[3], "ranged", "A-1: the recovered ranged cycle keeps its hand")
+
+    -- c) A restricted swing type cannot be mapped: counted, never thrown.
+    local fired_before = #fired
+    local unknown_before = stats.unknown_swing_type
+    local ok_type = pcall(fire, "PLAYER_SWING", 2.0, SECRET)
+    check(ok_type, "A-1: a secret swing type never throws")
+    eq(#fired, fired_before, "A-1: a secret swing type starts nothing")
+    eq(stats.unknown_swing_type, unknown_before + 1,
+        "A-1: a secret swing type is attributed as unknown")
+
+    -- d) No readable fallback speed: dropped, counted, never invented.
+    env.UnitAttackSpeed = function() return nil end
+    env.UnitRangedDamage = nil
+    local malformed_before = stats.malformed_duration
+    fired_before = #fired
+    fire("PLAYER_SWING", 0, 0)
+    eq(#fired, fired_before, "A-1: no readable fallback speed means no invented cycle")
+    eq(stats.malformed_duration, malformed_before + 1,
+        "A-1: the unrecoverable payload is counted")
+
+    -- e) A throwing speed reader must not turn into a throw from PLAYER_SWING.
+    env.UnitAttackSpeed = function() error("speed reader threw") end
+    ok_secret = pcall(fire, "PLAYER_SWING", SECRET, 0)
+    check(ok_secret, "A-1: a throwing fallback reader never throws out of the engine")
     env.UnitAttackSpeed = function() return 2.6, nil, nil end -- restore
 end
 

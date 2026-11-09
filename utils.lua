@@ -18,9 +18,21 @@ st.utils.print_msg = function(msg)
     DEFAULT_CHAT_FRAME:AddMessage(chat_msg)
 end
 
--- Rounds down, e.g. if step=0.1 will round down to 1dp.
+-- Rounds to the NEAREST step (half away from zero), e.g. step=0.1 gives one decimal place.
+--
+-- WHY not floor(num/step)*step: that truncates. In binary floating point most one-decimal
+-- numbers are not exact multiples of 0.1, so the quotient sits a hair below the integer
+-- and floor() dropped a whole tenth. Of the 28 one-decimal weapon speeds, 8 displayed a
+-- tenth low: 1.4 -> "1.3", 1.9 -> "1.8", 2.3, 2.4, 2.8 -> "2.7", 2.9, 3.3, 3.8 (verified
+-- against the shipped function; the bar attack-speed/timer texts are the only callers).
+-- The tiny epsilon keeps a true half case from rounding DOWN because of that same
+-- representation error (1.95 s -> 2.0, not 1.9), while a value a hair under a half (e.g.
+-- 3.4999999999999996 tenths for 0.35 s) rounds up to 0.4 as intended.
+--
+-- `floor` is the client's own global (Blizzard_SharedXMLBase/Compat.lua sets it to
+-- math.floor); the offline harness sets env.floor. Do not localize it to math.floor.
 st.utils.simple_round = function(num, step)
-    return floor(num / step) * step
+    return floor(num / step + 0.5 + 1e-9) * step
 end
 
 st.utils.table_printer = function(table)

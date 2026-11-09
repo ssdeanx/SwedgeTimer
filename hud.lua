@@ -286,10 +286,26 @@ end
 --=========================================================================================
 -- Trinket tracker (archive 143-184)
 --=========================================================================================
+-- SEC-13: the tracker is a plain table shared across ticks. A secret left in it by a
+-- poisoned wrapper/state is dropped before any field is compared (a secret raises on
+-- comparison); the record is then re-read from the client.
+local function trinket_record_is_poisoned(t)
+    local probe = api.is_secret
+    if type(probe) ~= "function" then
+        return false
+    end
+    return probe(t.item) or probe(t.buff) or probe(t.icd) or probe(t.texture)
+        or probe(t.proc_expires) or probe(t.proc_duration) or probe(t.icd_expires)
+end
+
 function HUD.read_trinket(inv_slot)
     local t = HUD.trinkets[inv_slot]
     if not t then
         return
+    end
+    if trinket_record_is_poisoned(t) then
+        t.item, t.buff, t.icd, t.texture = nil, nil, nil, nil
+        t.icd_expires, t.proc_expires, t.proc_duration = nil, nil, nil
     end
     local item = api.GetInventoryItemID(inv_slot)
     if item ~= t.item then
@@ -318,10 +334,25 @@ local function scan_trinket_proc(t)
     if not t.buff then
         return
     end
+    local probe = api.is_secret
+    if type(probe) == "function" and probe(t.buff) then
+        t.buff = nil
+        return
+    end
     for i = 1, AURA_SCAN_LIMIT do
         local name, _, _, _, duration, expires, _, _, _, spell_id = api.UnitAura("player", i, "HELPFUL")
         if name ~= nil then
+            if type(probe) == "function" and probe(spell_id) then
+                -- A secret id cannot be compared; the scan row is unknown, not a match.
+                return
+            end
             if spell_id == t.buff then
+                -- api.UnitAura already nils any secret field; re-prove at the cache-write
+                -- boundary so a foreign/poisoned reader cannot land a secret in the
+                -- tracker where a later tick would compare it.
+                if type(probe) == "function" and (probe(expires) or probe(duration)) then
+                    return
+                end
                 t.proc_expires, t.proc_duration = expires, duration
                 return
             end
@@ -332,29 +363,55 @@ end
 -- Usable-only gate (operator order): a trinket shows only when it has a usable
 -- effect. A known proc (TRINKET_DATA buff) or a live proc/ICD stamp is usable;
 -- otherwise the slot probes the live item cooldown: an on-use trinket reports
--- enabled even while ready, a passive stat stick reports disabled. Unknown =
--- hide (never guess). Nil-safe: a missing cooldown reader reports disabled.
+-- enabled even while ready, a passive stat stick reports disabled.
+-- TRI-STATE (SEC-10, 2026-11-06): compat's fourth `restricted` return means the client
+-- hid the timing - UNKNOWN, not passive. Reading the idle 0 as "disabled" made an
+-- equipped on-use trinket's HUD slot silently disappear on Forever. nil = unknown (keep
+-- the slot in the restricted face); true = readable on-use; false = readable passive.
+-- A client with no cooldown reader at all keeps the historical false (inert, not unknown).
 local function trinket_has_on_use(inv_slot)
     if type(api.GetInventoryItemCooldown) ~= "function" then
         return false
     end
-    local _, _, use_enable = api.GetInventoryItemCooldown(inv_slot)
+    local _, _, use_enable, restricted = api.GetInventoryItemCooldown(inv_slot)
+    local probe = api.is_secret
+    if type(probe) == "function" and (probe(restricted) or probe(use_enable)) then
+        return nil
+    end
+    if restricted == true then
+        return nil
+    end
     return use_enable == 1 or use_enable == true
 end
 
 -- True when the tracked trinket is usable: a known proc buff, a live proc/ICD
--- stamp, or a live on-use flag. Empty slots (no item) are never usable. The
--- optional use_enable reuses the tick's cooldown read so trinket_state makes
--- one live call per tick; icon_should_show probes on its own (layout only).
-function HUD.trinket_usable(t, inv_slot, use_enable)
+-- stamp, or a live on-use flag. Empty slots (no item) are never usable. TRI-STATE
+-- (SEC-10): nil = the on-use probe was restricted (unknown) and the caller must KEEP
+-- the slot visible as the restricted face, never hide it. The optional use_enable
+-- reuses the tick's cooldown read so trinket_state makes one live call per tick;
+-- icon_should_show probes on its own (layout only). use_restricted is that same read's
+-- fourth return; a readable proc/ICD stamp wins over an unknown on-use timing.
+function HUD.trinket_usable(t, inv_slot, use_enable, use_restricted)
     if type(t) ~= "table" or t.item == nil then
         return false
+    end
+    -- SEC-13: a secret field cannot be branched on. Unknown -> nil (keep the restricted
+    -- face), never a hide or a ready claim.
+    local probe = api.is_secret
+    if type(probe) == "function" then
+        if probe(t.item) or probe(t.buff) or probe(t.proc_expires) or probe(t.icd_expires)
+            or probe(use_enable) or probe(use_restricted) then
+            return nil
+        end
     end
     if t.buff ~= nil then
         return true
     end
     if t.proc_expires ~= nil or t.icd_expires ~= nil then
         return true
+    end
+    if use_restricted == true then
+        return nil
     end
     if use_enable == nil then
         return trinket_has_on_use(inv_slot)
@@ -365,6 +422,11 @@ end
 -- CLEU: the proc landing starts the trinket's internal cooldown (archive 174-184).
 -- Strictly optional: see the header.
 function HUD.on_aura_applied(self, dest_guid, spell_id, now)
+    local probe = api.is_secret
+    if type(probe) == "function" and (probe(dest_guid) or probe(spell_id)) then
+        -- A secret identity cannot be compared: the event is unknown, never a match.
+        return
+    end
     local me = self.player_guid or (unit_guid and unit_guid("player"))
     if me == nil or dest_guid ~= me then
         return
@@ -372,8 +434,13 @@ function HUD.on_aura_applied(self, dest_guid, spell_id, now)
     now = now or api.get_time()
     for i = 1, #TRINKET_SLOTS do
         local t = HUD.trinkets[TRINKET_SLOTS[i]]
-        if t and t.buff and spell_id == t.buff and t.icd then
-            t.icd_expires = now + t.icd
+        if t then
+            local buff, icd = t.buff, t.icd
+            if type(probe) == "function" and (probe(buff) or probe(icd)) then
+                t.buff, t.icd = nil, nil
+            elseif buff and spell_id == buff and icd then
+                t.icd_expires = now + icd
+            end
         end
     end
 end
@@ -395,19 +462,61 @@ function HUD.trinket_state(self, slot, now)
     local s = TRINKET_STATE
     s.remaining, s.duration, s.start, s.reverse = nil, nil, nil, nil
     s.text_remaining, s.desaturate, s.usable, s.in_range = nil, nil, nil, nil
-    s.glow, s.count, s.texture, s.hidden = nil, nil, nil, nil
+    s.glow, s.count, s.texture, s.hidden, s.restricted = nil, nil, nil, nil, nil
     local t = HUD.trinkets[slot.inv_slot]
     if not t then
         return nil
     end
+    -- SEC-13: a poisoned tracker field may not be compared. Drop the record and re-read.
+    if trinket_record_is_poisoned(t) then
+        t.item, t.buff, t.icd, t.texture = nil, nil, nil, nil
+        t.icd_expires, t.proc_expires, t.proc_duration = nil, nil, nil
+    end
+    local probe = api.is_secret
+    local has_probe = type(probe) == "function"
     s.texture = t.texture
     scan_trinket_proc(t)
-    local use_start, use_duration, use_enable = api.GetInventoryItemCooldown(slot.inv_slot)
-    if not HUD.trinket_usable(t, slot.inv_slot, use_enable) then
+    local use_start, use_duration, use_enable, use_restricted =
+        api.GetInventoryItemCooldown(slot.inv_slot)
+    if has_probe and (probe(use_start) or probe(use_duration) or probe(use_enable)
+            or probe(use_restricted)) then
+        -- Unreachable through the shipped compat wrapper (a secret read degrades to the
+        -- idle shape + restricted); a foreign reader lands on the unknown face instead of
+        -- comparing a secret.
+        use_start, use_duration, use_enable, use_restricted = nil, nil, nil, true
+    end
+    -- Tri-state (SEC-10): false = readable and not usable (hide); nil = the client hid
+    -- the timing (KEEP the slot in the restricted face); true = readable usable.
+    local usable = HUD.trinket_usable(t, slot.inv_slot, use_enable, use_restricted)
+    if usable == false then
         s.hidden = true
         return s
     end
-    local on_use_cd = (use_enable == 1 or use_enable == true)
+    if usable == nil then
+        -- SEC-10: an equipped on-use trinket whose cooldown read was restricted must not
+        -- disappear (the pre-fix idle 0 looked passive). Paint the existing unknown face:
+        -- greyed, no swipe, no fabricated countdown (HUD.paint reads s.restricted).
+        s.restricted = true
+        if HUD.trinket_restricted_notified ~= true then
+            HUD.trinket_restricted_notified = true
+            if st.utils and type(st.utils.print_msg) == "function" then
+                pcall(st.utils.print_msg,
+                    "trinket HUD slot " .. tostring(slot.inv_slot) ..
+                    " is shown grey: this client hides item cooldown timing (a restricted " ..
+                    "read), so no timer is painted. This notice appears once per session.")
+            end
+        end
+    end
+    -- The tracked stamps are copied to locals only after the poison sweep above, and are
+    -- re-proven plain: the arithmetic below never sees a secret.
+    local proc_expires, proc_duration = t.proc_expires, t.proc_duration
+    local icd_expires, icd = t.icd_expires, t.icd
+    if has_probe and (probe(proc_expires) or probe(proc_duration) or probe(icd_expires)
+            or probe(icd)) then
+        t.proc_expires, t.proc_duration, t.icd_expires = nil, nil, nil
+        proc_expires, proc_duration, icd_expires, icd = nil, nil, nil, nil
+    end
+    local on_use_cd = not s.restricted and (use_enable == 1 or use_enable == true)
         and (use_duration or 0) > 1.5
         and ((use_start or 0) + (use_duration or 0)) > now
     if on_use_cd then
@@ -415,18 +524,18 @@ function HUD.trinket_state(self, slot, now)
         s.remaining = use_start + use_duration - now
         s.text_remaining = s.remaining
         s.desaturate = true
-    elseif t.proc_expires and t.proc_expires > now then
-        s.duration = t.proc_duration or 0
-        s.start = t.proc_expires - s.duration
-        s.remaining = t.proc_expires - now
+    elseif proc_expires and proc_expires > now then
+        s.duration = proc_duration or 0
+        s.start = proc_expires - s.duration
+        s.remaining = proc_expires - now
         s.text_remaining = s.remaining
-    elseif t.icd_expires and t.icd_expires > now then
-        s.duration = t.icd
-        s.start = t.icd_expires - t.icd
-        s.remaining = t.icd_expires - now
+    elseif icd_expires and icd_expires > now then
+        s.duration = icd
+        s.start = icd_expires - icd
+        s.remaining = icd_expires - now
         s.text_remaining = s.remaining
         s.reverse = true
-    elseif t.icd_expires and t.icd_expires <= now then
+    elseif icd_expires and icd_expires <= now then
         t.icd_expires = nil
     end
     -- No self is read on this path (the tracker is module state); kept in the signature
@@ -534,7 +643,34 @@ local function create_icon(parent, slot, index, db)
     f.text:SetShadowOffset(0, 0)
     f.text:SetText("")
 
+    -- SEC-14 (2026-11-09): the client's DurationTextBinding attaches a secret Text aspect
+    -- to the FontString it owns. If that string were the custom countdown text, every later
+    -- tainted SetText on it would be refused (RequiresFontStringTextAccess) - the read would
+    -- silently lose its number. The native binding gets its own FontString; the custom text
+    -- string never receives the aspect and stays writable from addon code. Forever only:
+    -- every other client keeps exactly the old single-string allocation.
+    if st.family == "FOREVER" then
+        f.native_text = f.text_frame:CreateFontString(nil, "OVERLAY")
+        apply_font(f.native_text, db)
+        f.native_text:SetPoint("CENTER", 0, 0)
+        f.native_text:SetJustifyH("CENTER")
+        f.native_text:SetShadowColor(0, 0, 0, 1)
+        f.native_text:SetShadowOffset(0, 0)
+        f.native_text:Hide()
+    end
+
     f.cd_key = nil -- what the swipe currently shows, to call SetCooldown once
+    -- Forever native pass-through state (bench/forever_hud_api_2026-11-08.md §4-§6):
+    -- cd_object is the client's opaque LuaDurationObject currently handed to the native
+    -- sink (a non-secret handle - no number is ever read out of it), text_binding is the
+    -- native countdown binding that owns icon.text while the object path is active, and
+    -- text_curve_key remembers the db colours the curve was built from. None of these is
+    -- a secret value; the object path only runs while the provider flags `restricted`.
+    f.cd_object = nil
+    f.text_binding = nil
+    f.text_binding_failed = false
+    f.text_binding_owned = false
+    f.text_curve_key = nil
     f.glowing = false
     f.desaturated = false
     f.tint = COLOR_WHITE
@@ -806,7 +942,9 @@ function HUD.icon_should_show(self, icon, designing)
     local slot = icon.slot
     if slot.inv_slot and not designing then
         local t = HUD.trinkets[slot.inv_slot]
-        return HUD.trinket_usable(t, slot.inv_slot)
+        -- SEC-10 tri-state: only a CONFIRMED "not usable" hides the slot. A restricted
+        -- on-use probe (nil = unknown) keeps it visible as the grey unknown face.
+        return HUD.trinket_usable(t, slot.inv_slot) ~= false
     end
     return true
 end
@@ -834,15 +972,32 @@ local function hud_known_query(slot)
     if spell == nil then
         return nil, nil
     end
+    -- SEC-13 cache hygiene (2026-11-08): a secret spell id may not be a cache key nor a
+    -- client query ("secret keys in tables make all accesses into that table produce
+    -- secrets" - Blizzard's own aura-association rule). Unknown -> no query, and the
+    -- caller stays fail-visible.
+    local probe = api.is_secret
+    local has_probe = type(probe) == "function"
+    if has_probe and probe(spell) then
+        return nil, nil
+    end
     if st.family == "ERA" then
         return type(spell) == "number" and spell or nil, nil
     end
     local name = slot.spell_name
+    if has_probe and probe(name) then
+        name = nil
+    end
     if type(name) ~= "string" and type(spell) == "number" then
         name = HUD.known_names[spell]
+        if has_probe and probe(name) then
+            -- A poisoned entry (never written through this path) is dropped, not trusted.
+            HUD.known_names[spell] = nil
+            name = nil
+        end
         if name == nil then
             local ok, n = pcall(api.GetSpellInfo, spell)
-            if ok and type(n) == "string" then
+            if ok and type(n) == "string" and not (has_probe and probe(n)) then
                 HUD.known_names[spell] = n
                 name = n
             end
@@ -902,8 +1057,12 @@ end
 -- HUD asks once per slot per tick (up to ~20 slots at 20 Hz, each walking every rank
 -- id). Cache the answer per slot for a short TTL: a freshly learned spell appears
 -- within KNOWN_CACHE_TTL seconds, and HUD.invalidate_known_cache() drops it at once.
+-- SEC-13: exposed as HUD.known_cache so the cache can be audited/poisoned in tests; the
+-- fields are only ever PLAIN values (a cached entry is re-proven before it is read, and a
+-- secret answer is never written).
 local KNOWN_CACHE_TTL = 1.0
 local known_cache = setmetatable({}, { __mode = "k" })
+HUD.known_cache = known_cache
 
 function HUD.invalidate_known_cache()
     for slot in pairs(known_cache) do
@@ -915,13 +1074,35 @@ function HUD.spell_known_allows(slot)
     if slot == nil or slot.inv_slot ~= nil then
         return true
     end
+    local probe = api.is_secret
+    local has_probe = type(probe) == "function"
     local now = api.get_time and api.get_time() or nil
+    local plain_time = type(now) == "number" and not (has_probe and probe(now))
     local entry = known_cache[slot]
-    if entry and type(now) == "number" and now >= entry.at and now - entry.at < KNOWN_CACHE_TTL then
+    if entry ~= nil then
+        -- A cached entry is proven plain before it is read: a secret time/value (a poisoned
+        -- cache, a client contract break since the write) drops the entry instead of being
+        -- consumed because a previous tick wrote it.
+        local entry_ok = type(entry) == "table" and type(entry.value) == "boolean"
+            and type(entry.at) == "number"
+        if entry_ok and has_probe then
+            entry_ok = not (probe(entry.value) or probe(entry.at))
+        end
+        if not entry_ok then
+            known_cache[slot] = nil
+            entry = nil
+        end
+    end
+    if entry and plain_time and now >= entry.at and now - entry.at < KNOWN_CACHE_TTL then
         return entry.value
     end
     local value = compute_spell_known(slot)
-    if type(now) == "number" then
+    if has_probe and (probe(value) or probe(now)) then
+        -- A secret answer is never cached and is never compared: the fail-visible face.
+        known_cache[slot] = nil
+        return true
+    end
+    if plain_time then
         if entry then
             entry.at, entry.value = now, value
         else
@@ -1046,6 +1227,9 @@ function HUD.apply_settings(self)
             icon.border_frame:Hide()
         end
         apply_font(icon.text, db)
+        if icon.native_text then
+            apply_font(icon.native_text, db)
+        end
     end
     HUD.refresh_layout_cache(self)
     if HUD.should_show(self) then
@@ -1201,20 +1385,257 @@ function HUD.format_time(r)
     return string.format("%d", math.floor(r + 0.5))
 end
 
+--=========================================================================================
+-- Forever native cooldown pass-through (bench/forever_hud_api_2026-11-08.md §4-§7)
+--=========================================================================================
+-- While a Forever client hides cooldown timing (combat, encounter, challenge mode, PvP) the
+-- provider flags the state `restricted`: the numeric reads are unknown, not ready. The
+-- client's own opaque LuaDurationObject is the sanctioned readable source - it is handed to
+-- the native sinks and NO number is read out of it. Every helper below is Forever-gated and
+-- probe-gated (family FOREVER plus api.get_spell_cooldown_duration); on every other client
+-- it answers nil and the existing numeric path runs byte-identically.
+
+-- The spell a slot's cooldown belongs to: the descriptor's optional override first (frozen
+-- slot contract), then the slot's own spell. Trinket slots have no duration-object API on
+-- this client (bench/forever_hud_api_2026-11-08.md §7) and are never object-painted.
+function HUD.cooldown_spell(icon)
+    local slot = icon and icon.slot
+    if type(slot) ~= "table" or slot.inv_slot ~= nil then
+        return nil
+    end
+    local spell = slot.cooldown_spell
+    if spell == nil then
+        spell = slot.spell
+    end
+    if type(spell) ~= "number" and type(spell) ~= "string" then
+        return nil
+    end
+    return spell
+end
+
+-- The Forever native pass-through is available: family + exact API probe. Never
+-- st.is_mainline alone (Retail must not take this path; its cooldown regime is unproven).
+local function forever_native_enabled()
+    return st.family == "FOREVER" and type(api.get_spell_cooldown_duration) == "function"
+end
+
+-- Acquire the opaque duration object for an icon plus the two PLAIN state fields. Returns
+-- (object, on_gcd, active); the state fields are nil when the client cannot answer. Only the
+-- non-secret handle and the NeverSecret isOnGCD/isActive fields leave the client - the
+-- object's own values are never read.
+local function acquire_cooldown_object(icon)
+    local spell = HUD.cooldown_spell(icon)
+    if spell == nil then
+        return nil
+    end
+    local ok, object = pcall(api.get_spell_cooldown_duration, spell, false)
+    if not ok or object == nil then
+        return nil
+    end
+    local on_gcd, active
+    if type(api.get_spell_cooldown_state) == "function" then
+        local state_ok, got_on_gcd, got_active = pcall(api.get_spell_cooldown_state, spell)
+        if state_ok then
+            on_gcd, active = got_on_gcd, got_active
+        end
+    end
+    return object, on_gcd, active
+end
+
+-- Lazily build the native countdown binding for an icon. Failure is latched: a client that
+-- cannot build it keeps the object swipe and simply shows no fabricated text.
+local function prepare_text_binding(icon)
+    if icon.text_binding ~= nil then
+        return icon.text_binding
+    end
+    if icon.text_binding_failed then
+        return nil
+    end
+    local binding
+    local ok = pcall(function()
+        binding = api.create_duration_text_binding()
+    end)
+    if not ok or binding == nil then
+        icon.text_binding_failed = true
+        return nil
+    end
+    local formatter
+    local fmt_ok = pcall(function()
+        formatter = api.create_duration_number_formatter()
+    end)
+    if not fmt_ok or formatter == nil then
+        icon.text_binding_failed = true
+        return nil
+    end
+    local configured = pcall(function()
+        binding:SetFontString(icon.native_text or icon.text)
+        -- Unitless integer face: the NumericRuleFormatter truncates to whole seconds
+        -- ("4", "2"), never the SecondsFormatter's "4 Seconds" or raw "2.518".
+        binding:SetFormatter(formatter)
+        -- The HUD ticks at TICK; the binding updates the font string itself, never Lua.
+        binding:SetUpdateInterval(TICK)
+        binding:SetZeroDurationText("")
+        binding:SetExpiredText("")
+    end)
+    if not configured then
+        icon.text_binding_failed = true
+        return nil
+    end
+    icon.text_binding = binding
+    return binding
+end
+
+-- The warn colour without reading the number: the binding evaluates this curve against the
+-- (possibly secret-valued) remaining duration natively. Rebuilt only when the db colours
+-- change; a build that cannot create the curve keeps the plain text colour.
+local function update_text_color_curve(self, icon, db, binding)
+    if type(api.create_duration_text_color_curve) ~= "function" then
+        return
+    end
+    local warn_color = color_or(db.hud_text_warn_color, TEXT_WARN_COLOR_FALLBACK)
+    local normal_color = color_or(db.hud_text_color, TEXT_COLOR_FALLBACK)
+    local key = icon.text_curve_key
+    if key ~= nil and key[1] == warn_color and key[2] == normal_color then
+        return
+    end
+    local wr, wg, wb, wa = self:convert_color(warn_color)
+    local nr, ng, nb, na = self:convert_color(normal_color)
+    local ok, curve, property = pcall(api.create_duration_text_color_curve, WARN_SECONDS,
+        { r = wr, g = wg, b = wb, a = wa or 1 }, { r = nr, g = ng, b = nb, a = na or 1 })
+    if not ok or curve == nil then
+        return
+    end
+    local applied = pcall(function()
+        binding:SetTextColorCurve(curve, property)
+    end)
+    if applied then
+        icon.text_curve_key = { warn_color, normal_color }
+    end
+end
+
+-- Give the countdown text back to the numeric path: disable the native updates and drop the
+-- cached text state so the numeric branch re-applies its own string and colour.
+local function release_text_binding(icon)
+    if icon.text_binding ~= nil and icon.text_binding_owned then
+        pcall(icon.text_binding.Disable, icon.text_binding)
+        icon.text_binding_owned = false
+        icon.text_value = nil
+        icon.text_color = nil
+    end
+    if icon.native_text ~= nil then
+        icon.native_text:Hide()
+    end
+end
+
 function HUD.paint(self, icon, s, now)
+    -- SEC-13 (2026-11-08): a secret value may not be branched on - even `== true` raises.
+    -- api.is_secret (issecretvalue) is the only legal question, and it is an exact no-op on
+    -- every classic client. A secret `hidden` lands on the module's documented degrade
+    -- (draw nothing); the remaining fields are normalised below.
+    local probe = api.is_secret
+    local has_probe = type(probe) == "function"
+    if has_probe and probe(s.hidden) then
+        return
+    end
     if s.hidden then
         return
     end
     now = now or api.get_time()
     local db = self:get_class_table()
     -- A restricted cooldown read is unknown, not ready: the provider keeps
-    -- remaining/duration at 0 (never inventing a swipe) and flags the state. Paint it
-    -- as a distinct unknown state below - greyed, with no fabricated text or swipe.
-    local restricted = s.restricted == true
+    -- remaining/duration at 0 (never inventing a swipe) and flags the state.
+    -- SEC-12 (2026-11-07) defence in depth: a provider that forgets (or a poisoned cache)
+    -- would hand this paint a secret number, and the first comparison below would raise.
+    local restricted
+    if has_probe then
+        restricted = probe(s.restricted) and true or (s.restricted == true)
+        if not restricted and (probe(s.remaining) or probe(s.duration)
+                or probe(s.text_remaining) or probe(s.start)) then
+            restricted = true
+        end
+    else
+        restricted = s.restricted == true
+    end
+    -- SEC-13: the boolean cues are guarded too - a secret boolean must land on the
+    -- unknown/no-cue face, never reach `== false`.
+    local usable_unknown = has_probe and probe(s.usable) or false
+    local range_unknown = has_probe and probe(s.in_range) or false
+    local glow_unknown = has_probe and probe(s.glow) or false
+    local desat_unknown = has_probe and probe(s.desaturate) or false
+    local reverse_secret = has_probe and probe(s.reverse) or false
+
+    -- The client's own documented predicate is the last authority: if it says this spell's
+    -- cooldown is secret right now, a provider's numeric face cannot be trusted even when it
+    -- looks readable. The answer is a plain boolean (never a secret) and the helper only
+    -- exists on Forever - every other client answers nil here.
+    if not restricted and type(api.get_spell_cooldown_secrecy) == "function" then
+        local secrecy_spell = HUD.cooldown_spell(icon)
+        if secrecy_spell ~= nil then
+            local secrecy_ok, secrecy = pcall(api.get_spell_cooldown_secrecy, secrecy_spell)
+            if secrecy_ok and secrecy == true then
+                restricted = true
+            end
+        end
+    end
+
+    -- Forever native pass-through: while the client hides the timing, a restricted state
+    -- selects the opaque duration object instead of the grey unknown face. The object goes
+    -- straight into the native frame - the numbers inside it are never read.
+    local object, object_on_gcd, object_active
+    local object_mode = false
+    -- A provider may hand over the GCD handle directly (Forever guide → the LGC object
+    -- channel). It is a plain handle, not a secret; a poisoned/secret value is ignored.
+    local supplied_object = s.cooldown_object
+    if has_probe and supplied_object ~= nil and probe(supplied_object) then
+        supplied_object = nil
+    end
+    local supplied_on_gcd = s.on_gcd
+    if has_probe and probe(supplied_on_gcd) then
+        supplied_on_gcd = nil
+    end
+    if (restricted or supplied_object ~= nil) and forever_native_enabled() then
+        if supplied_object ~= nil then
+            object = supplied_object
+            object_on_gcd = supplied_on_gcd == true
+        else
+            object, object_on_gcd, object_active = acquire_cooldown_object(icon)
+        end
+        if object ~= nil and type(icon.cooldown.SetCooldownFromDurationObject) == "function" then
+            -- clearIfZero=true: a zero duration (ready, or the GCD ended) clears the swipe
+            -- rather than leaving the last one painted.
+            local sink_ok = pcall(icon.cooldown.SetCooldownFromDurationObject,
+                icon.cooldown, object, true)
+            if sink_ok then
+                object_mode = true
+                icon.cd_key = true
+                icon.cd_object = object
+                icon.cd_start, icon.cd_duration, icon.cd_reverse = nil, nil, nil
+                -- The same external-addon suppression flags the numeric path re-asserts:
+                -- native numbers stay hidden so no second countdown is drawn over the swipe.
+                if icon.cooldown.SetHideCountdownNumbers then
+                    icon.cooldown:SetHideCountdownNumbers(true)
+                end
+                icon.cooldown.noCooldownCount = true
+                icon.cooldown.noOCC = true
+                icon.cooldown.hideText = true
+                icon.noCooldownCount = true
+                icon.noOCC = true
+                icon.hideText = true
+                icon.cooldown:Show()
+            end
+        end
+    end
+    -- The grey unknown face is for a restricted read with NO native object; once the
+    -- object paints the real swipe the icon is not unknown any more.
+    local unknown_face = restricted and not object_mode
 
     -- texture: the static default from creation, or the state's per-tick override
     -- (a trinket swaps its texture with the equipped item)
-    local texture = s.texture or icon.default_texture
+    local texture = s.texture
+    if has_probe and probe(texture) then
+        texture = nil
+    end
+    texture = texture or icon.default_texture
     if texture ~= nil and texture ~= icon.texture_key then
         icon.texture_key = texture
         icon.texture:SetTexture(texture)
@@ -1224,15 +1645,19 @@ function HUD.paint(self, icon, s, now)
     -- cooldown is constant (end - duration), so the comparison re-sets only when a
     -- cooldown appears, restarts or changes shape - the archive's string-key rule
     -- without the per-tick string.
-    if not restricted and s.duration and s.duration > 0 and (s.remaining or 0) > 0 then
+    -- object_mode: the native duration-object sink above already painted the swipe, so the
+    -- numeric branch is skipped entirely (its numbers are unknown by definition here).
+    if not object_mode and not restricted and s.duration and s.duration > 0
+        and (s.remaining or 0) > 0 then
         local start = s.start or (now - (s.duration - s.remaining))
-        local reverse = s.reverse and true or false
+        local reverse = (not reverse_secret) and s.reverse and true or false
         if not icon.cd_key
             or math.abs((icon.cd_start or 0) - start) > 0.05
             or icon.cd_duration ~= s.duration
             or icon.cd_reverse ~= reverse then
             icon.cd_key = true
             icon.cd_start, icon.cd_duration, icon.cd_reverse = start, s.duration, reverse
+            icon.cd_object = nil
             -- Re-asserted with every new swipe: ensure countdown suppression flags are set
             -- before SetCooldown triggers external addon hooks or native engine numbers.
             if icon.cooldown.SetHideCountdownNumbers then
@@ -1248,9 +1673,10 @@ function HUD.paint(self, icon, s, now)
             icon.cooldown:SetCooldown(start, s.duration)
             icon.cooldown:Show()
         end
-    elseif icon.cd_key then
+    elseif not object_mode and icon.cd_key then
         icon.cd_key = nil
         icon.cd_start, icon.cd_duration, icon.cd_reverse = nil, nil, nil
+        icon.cd_object = nil
         if icon.cooldown.SetHideCountdownNumbers then
             icon.cooldown:SetHideCountdownNumbers(true)
         end
@@ -1264,49 +1690,108 @@ function HUD.paint(self, icon, s, now)
     -- Remaining time text. The quantised value gates the string rebuild, so no string
     -- work runs on a tick whose displayed value is unchanged. Swipes shorter than 2 s
     -- (the GCD) never carry text (archive 393-401 + 430-433).
-    local text_remaining = s.text_remaining
-    if text_remaining == nil then
-        text_remaining = s.remaining
-    end
-    if not restricted and db.hud_show_text ~= false and text_remaining and text_remaining > 0
-        and not (s.duration and s.duration < GCD_TEXT_HIDE) then
-        local rounded
-        if text_remaining < WARN_SECONDS then
-            rounded = math.floor(text_remaining * 10 + 0.5) / 10
-        else
-            rounded = math.floor(text_remaining + 0.5)
+    if object_mode then
+        -- Native countdown text: the binding formats the opaque object itself, so the
+        -- addon never formats, rounds or concatenates a (possibly secret) number. The GCD
+        -- keeps its no-text rule through the plain NeverSecret isOnGCD field.
+        local binding
+        if db.hud_show_text ~= false and object_on_gcd ~= true then
+            binding = prepare_text_binding(icon)
         end
-        if rounded ~= icon.text_value then
-            icon.text_value = rounded
-            icon.text:SetText(HUD.format_time(text_remaining))
+        local text_ok = false
+        if binding ~= nil then
+            update_text_color_curve(self, icon, db, binding)
+            text_ok = pcall(function()
+                binding:SetDuration(object)
+                binding:SetEnabled(true)
+            end)
         end
-        local color = (text_remaining < WARN_SECONDS)
-            and color_or(db.hud_text_warn_color, TEXT_WARN_COLOR_FALLBACK)
-            or color_or(db.hud_text_color, TEXT_COLOR_FALLBACK)
-        if color ~= icon.text_color then
-            icon.text_color = color
-            local r, g, b, a = self:convert_color(color)
-            icon.text:SetTextColor(r, g, b, a or 1)
-        end
-        if icon.text_hidden then
-            icon.text_hidden = false
+        if text_ok then
+            icon.text_binding_owned = true
+            -- The binding owns the dedicated native string now; drop the numeric cache so
+            -- the next numeric tick rebuilds instead of trusting a stale value. The custom
+            -- string stays hidden and untainted (it never receives the secret Text aspect).
+            icon.text_value = nil
+            if icon.native_text then
+                icon.native_text:Show()
+            end
+            if icon.text then
+                icon.text:Hide()
+            end
+            icon.text_hidden = true
             if icon.text_frame and icon.cooldown then
                 icon.text_frame:SetFrameLevel(icon.cooldown:GetFrameLevel() + 5)
             end
             if icon.text_frame then
                 icon.text_frame:Show()
             end
-            icon.text:Show()
+        else
+            -- GCD text suppression / no usable binding: never a fabricated number.
+            release_text_binding(icon)
+            if icon.native_text then
+                icon.native_text:Hide()
+            end
+            if not icon.text_hidden then
+                icon.text_hidden = true
+                icon.text_value = nil
+                icon.text:Hide()
+            end
         end
-    elseif not icon.text_hidden then
-        icon.text_hidden = true
-        icon.text_value = nil
-        icon.text:Hide()
+    else
+        release_text_binding(icon)
+        local text_remaining = s.text_remaining
+        if text_remaining == nil then
+            text_remaining = s.remaining
+        end
+        if not restricted and db.hud_show_text ~= false and text_remaining and text_remaining > 0
+            and not (s.duration and s.duration < GCD_TEXT_HIDE) then
+            local rounded
+            if text_remaining < WARN_SECONDS then
+                rounded = math.floor(text_remaining * 10 + 0.5) / 10
+            else
+                rounded = math.floor(text_remaining + 0.5)
+            end
+            if rounded ~= icon.text_value then
+                icon.text_value = rounded
+                icon.text:SetText(HUD.format_time(text_remaining))
+            end
+            local color = (text_remaining < WARN_SECONDS)
+                and color_or(db.hud_text_warn_color, TEXT_WARN_COLOR_FALLBACK)
+                or color_or(db.hud_text_color, TEXT_COLOR_FALLBACK)
+            if color ~= icon.text_color then
+                icon.text_color = color
+                local r, g, b, a = self:convert_color(color)
+                icon.text:SetTextColor(r, g, b, a or 1)
+            end
+            if icon.text_hidden then
+                icon.text_hidden = false
+                if icon.text_frame and icon.cooldown then
+                    icon.text_frame:SetFrameLevel(icon.cooldown:GetFrameLevel() + 5)
+                end
+                if icon.text_frame then
+                    icon.text_frame:Show()
+                end
+                icon.text:Show()
+            end
+        elseif not icon.text_hidden then
+            icon.text_hidden = true
+            icon.text_value = nil
+            icon.text:Hide()
+        end
     end
 
     -- desaturate while on cooldown (or when the provider asks for it, or when the
     -- client hid the timing: an unknown cooldown must not read as ready)
-    local desaturate = ((db.hud_desaturate and s.desaturate) or restricted) and true or false
+    local desaturate
+    if object_mode then
+        -- The object's values are opaque; the plain NeverSecret fields say whether a
+        -- cooldown/GCD is running. Unknown state -> no grey: the native swipe is the truth.
+        desaturate = (db.hud_desaturate and (object_on_gcd == true or object_active == true))
+            and true or false
+    else
+        desaturate = ((db.hud_desaturate and not desat_unknown and s.desaturate)
+            or unknown_face) and true or false
+    end
     if desaturate ~= icon.desaturated then
         icon.desaturated = desaturate
         icon.texture:SetDesaturated(desaturate)
@@ -1314,9 +1799,9 @@ function HUD.paint(self, icon, s, now)
 
     -- no-mana (blue) and out-of-range (red) tints, mana first (archive 436-439)
     local tint
-    if s.usable == false and db.hud_mana_tint then
+    if not usable_unknown and s.usable == false and db.hud_mana_tint then
         tint = COLOR_NO_MANA
-    elseif s.in_range == false and db.hud_range_tint then
+    elseif not range_unknown and s.in_range == false and db.hud_range_tint then
         tint = COLOR_OUT_OF_RANGE
     end
     tint = tint or COLOR_WHITE
@@ -1326,7 +1811,7 @@ function HUD.paint(self, icon, s, now)
     end
 
     -- proc glow
-    local want_glow = (db.hud_glow_enabled and s.glow) and true or false
+    local want_glow = (db.hud_glow_enabled and not glow_unknown and s.glow) and true or false
     if want_glow ~= icon.glowing then
         icon.glowing = want_glow
         if want_glow then
@@ -1349,6 +1834,7 @@ function HUD.preview_state(self, slot, now)
     s.remaining, s.duration, s.start, s.reverse = nil, nil, nil, nil
     s.text_remaining, s.desaturate, s.usable, s.in_range = nil, nil, nil, nil
     s.glow, s.count, s.texture, s.hidden = nil, nil, nil, nil
+    s.restricted = nil
     if slot.inv_slot then
         local t = HUD.trinkets[slot.inv_slot]
         s.texture = (t and t.texture) or TRINKET_FALLBACK_ICON[slot.inv_slot]
@@ -1382,6 +1868,78 @@ function HUD.preview_state(self, slot, now)
         return nil
     end
     return s
+end
+
+--=========================================================================================
+-- Secret-value scrub at the state hand-off (SEC-13, 2026-11-08)
+--=========================================================================================
+-- The provider contract hands the HUD a plain state table, but a provider bug or a poisoned
+-- cache must never let a secret value reach a branch: a secret cannot be compared, so one
+-- leaked field would throw out of the HUD tick. This module reads a fixed set of state
+-- fields, so the scrub normalises exactly those before any branch: a secret numeric timing
+-- drops to the restricted/unknown face, a secret boolean/string cue drops to nil (unknown,
+-- no cue) and a secret `hidden` hides the slot. Returns `s` itself when nothing is secret -
+-- the only path every client without secret values ever takes.
+local STATE_NUMBER_FIELDS = { "remaining", "duration", "start", "text_remaining" }
+local STATE_CUE_FIELDS = { "reverse", "desaturate", "restricted", "usable", "in_range",
+    "glow", "count", "texture" }
+local SAFE_STATE = {}
+
+local function scrub_secret_state(s)
+    local probe = api.is_secret
+    if type(probe) ~= "function" or type(s) ~= "table" then
+        return s
+    end
+    local dirty = probe(s.hidden) and true or false
+    if not dirty then
+        for i = 1, #STATE_NUMBER_FIELDS do
+            if probe(s[STATE_NUMBER_FIELDS[i]]) then
+                dirty = true
+                break
+            end
+        end
+    end
+    if not dirty then
+        for i = 1, #STATE_CUE_FIELDS do
+            if probe(s[STATE_CUE_FIELDS[i]]) then
+                dirty = true
+                break
+            end
+        end
+    end
+    if not dirty then
+        return s
+    end
+    local out = SAFE_STATE
+    out.remaining, out.duration, out.start, out.text_remaining = nil, nil, nil, nil
+    out.reverse, out.desaturate, out.restricted, out.usable = nil, nil, nil, nil
+    out.in_range, out.glow, out.count, out.texture, out.hidden = nil, nil, nil, nil, nil
+    local poisoned_timing = false
+    for i = 1, #STATE_NUMBER_FIELDS do
+        local field = STATE_NUMBER_FIELDS[i]
+        if probe(s[field]) then
+            poisoned_timing = true
+        else
+            out[field] = s[field]
+        end
+    end
+    for i = 1, #STATE_CUE_FIELDS do
+        local field = STATE_CUE_FIELDS[i]
+        if not probe(s[field]) then
+            out[field] = s[field]
+        end
+    end
+    if poisoned_timing then
+        out.remaining, out.duration, out.start, out.text_remaining = nil, nil, nil, nil
+        out.restricted = true
+    end
+    if probe(s.restricted) then
+        out.restricted = true
+    end
+    if probe(s.hidden) then
+        out.hidden = true
+    end
+    return out
 end
 
 --=========================================================================================
@@ -1425,6 +1983,10 @@ function HUD.update_display(self)
                     end
                 end
             end
+            -- SEC-13: normalise a poisoned provider/cache state BEFORE any branch below
+            -- compares it. Exact no-op when nothing is secret (every client without the
+            -- secret regime).
+            s = scrub_secret_state(s)
             if s and not s.hidden and not preview
                 and not HUD.spell_known_allows(icon.slot) then
                 -- The leveling gate: a spell the player has not learned draws
@@ -1438,6 +2000,7 @@ function HUD.update_display(self)
                 s.remaining, s.duration, s.start, s.reverse = nil, nil, nil, nil
                 s.text_remaining, s.desaturate, s.usable, s.in_range = nil, nil, nil, nil
                 s.glow, s.count, s.texture, s.hidden = nil, nil, nil, nil
+                s.restricted = nil
                 local k = tostring(icon.slot.key or "")
                 local loop = (now + (k:byte(1) or 0)) % 10
                 if loop < 4 then

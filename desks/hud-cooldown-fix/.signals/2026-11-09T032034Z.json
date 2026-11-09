@@ -1,0 +1,34 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-09T03:20:34Z",
+  "run_id": "hud-cooldown-fix-2026-11-08",
+  "agent_name": "hud-cooldown-implementer",
+  "task": "t3",
+  "attempt_id": "979874ee-8826-4232-b937-1fd8ec9b7cb4",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Following the T1 annotation-shape verdict instead of the superseded prior: reading C_Spell.GetSpellCooldownDuration as a non-secret opaque handle and only passing it to the two documented sinks (CooldownFrame:SetCooldownFromDurationObject, DurationTextBinding:SetDuration) removed every secret-value read from the HUD's restricted path in one design step. Gating the object path on the provider's `restricted` flag keeps the readable numeric face byte-identical everywhere (including Forever out of combat), which makes the non-Forever invariant almost free. The mutation table found the real weak test: the first known_cache poison leg did not bite (the poisoned TTL time made the entry look expired); switching the sentinel to a plain time + secret value made it fail correctly. Server-side: a bash call gets a private /tmp here, so mutation copies must live inside one call (same trap T1 recorded).",
+    "what_was_hard": "The runtime boundary is still not in the tree: whether the engine accepts a secret-valued LuaDurationObject from a tainted caller (U3) and whether it renders (U5) are client-only; everything is pcall-guarded with the grey unknown face as fallback. The SEC-13 state scrub could not be mutation-proven offline because Lua 5.1 cannot emulate raise-on-comparison for flagged primitives: M5 survives and is reported honestly rather than papered over with a vacuous test. Also gotcha: the test fixture resets the SECRETS sentinel registry per build, so a sentinel created inside a build argument is plain again before the test runs (caught as a failing assertion and fixed by flagging after build).",
+    "skill_gap": "None for the lane. Two traps for the next writer: (1) T1's trinket §7 claim assumes compat reads the client's fourth GetInventoryItemCooldown return; it reads three and the fourth is compat's own SEC-10 flag - verify before 'fixing' it, and the brief forbids changing the wrapper contract anyway; (2) a restricted read still releases the numeric GCD lock in UNIT_SPELLCAST_INTERRUPTED because a cross-lane suite pins that shape - the object channel is the real release path, not a pin re-cut."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Verifier (t5): re-run bash tests/run.sh + the two touched suites, spot-check the mutation table, and push the operator to run probes P4/P5 (and P3/P7) in one restricted Forever moment - those two close the only runtime unknowns left (secret-valued object accepted by the native sinks; native countdown renders). Watch the cross-lane /tmp lesson and do not re-cut tests/secret_guard_state.lua without Lead approval."
+  },
+  "artifacts": [
+    "hud.lua",
+    "compat.lua",
+    "LibGlobalCooldown.lua",
+    "tests/hud_state.lua",
+    "tests/forever_secret_compat_state.lua",
+    "bench/hud_forever_cooldown_2026-11-08.md",
+    "desks/hud-cooldown-fix/journal.md"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-09T02:41:30Z",
+  "run_id": "forever-hud-api-2026-11-08",
+  "agent_name": "forever-hud-api",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Reading the prior secret bench reports first (bench/secret_api_matrix_2026-11-06.md, bench/secret_hud_fix_2026-11-06.md) and then going back to the generated API docs instead of trusting them: the pass-through question was answered by comparing the annotation SHAPE across sibling functions (SetCooldown vs SetCooldownFromDurationObject differ only by SecretArgumentsAddAspect + SecretArguments, and the numeric ones add the Cooldown aspect). Enumerating every LuaDurationObject returner in the whole branch (one git grep) settled the trinket question outright. Blizzard's own prose at UnitFrameUtil.lua:487 is the authoritative definition of AllowedWhenUntainted and replaced inference with a quote. Diffing Blizzard's Forever call sites (CustomAuraButton:603, AuraButton:167 secretwrap, CooldownViewer:1017 four-return GetInventoryItemCooldown) turned three 'probably' areas into citations.",
+    "what_was_hard": "The runtime boundary is not in the source tree: nothing in origin/forever says whether a tainted caller actually receives an error or a swipe when passing a secret-valued duration object (no call site is tainted), nor whether the LuaDurationObject getters return secrets (no ConditionalSecret marker is declared on them). Those are marked UNCONFIRMED with single-line /run probes rather than guessed. Also: a bash call runs in a fresh sandbox with a private /tmp, so dumped reference files did not persist between calls -- every read had to be a single `git show ... | nl -ba | sed -n` pipeline, and line numbers were re-verified with `git grep -n` before citing.",
+    "skill_gap": "None for this lane. Two traps worth recording: (1) `AllowedWhenUntainted` was mis-read by two earlier bench reports as 'addons may not call this' -- it constrains secret ARGUMENTS only, and the duration-object path is the sanctioned route; (2) the fourth return of GetInventoryItemCooldown is isOnGCD on this client, not a restricted flag, and the addon reads it as restricted."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Implementer: run probes P1-P11 from bench/forever_hud_api_2026-11-08.md §10 in one Forever session before wiring the restricted face; the design is fixed by documentation, the visible behaviour is not. Fix the trinket fourth-return mis-read (compat.lua:1565-1584 + hud.lua:341-350,418-431) independently of the cooldown work: it is a live wrong face today."
+  }
+}

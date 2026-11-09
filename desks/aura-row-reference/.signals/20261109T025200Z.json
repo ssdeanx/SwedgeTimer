@@ -1,0 +1,24 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-09T02:52:00Z",
+  "run_id": "aura-row-reference-2026-11-08",
+  "agent_name": "aura-row-reference",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Loading the reference file in bare lua5.1 with an empty namespace table (ns.isForever=false so its guarded frame blocks never run) turned the six per-class lists into an exact, script-verified inventory instead of a transcription, and it surfaced the candidate double-merge (18 ids, every candidate, in both rows) that the prose had hidden. On the API side, reading the AuraContainer implementation rather than the docs found the two facts the port depends on: templates are declared allowUntaintedCreation and the container sizes itself through secretwrap (Blizzard_CustomAuraContainer.lua:800), and includeSpellIDs identity matching is privilege-gated (friendly targets reject everything).",
+    "what_was_hard": "The reference's own documentation contradicts its code in four places (WIRING.md 0.25 s vs the 0.15 s constant, a ns.foreverAuraPending that does not exist, 'classic updaters are NOT wrapped' while WrapLegacyIconUpdaters runs at init and per tick, and 'native row shown only while IsAuraDataSecret' which the code never checks); each had to be settled against the source before writing a port plan, and the report now lists them so the impl lane does not inherit them. Provenance is genuinely weak for most ids: the reference carries no marker for classic-era ranks, and the only client dump on disk is 1.15.9, so it cannot gate anything (the reference's own Bloodlust/Heroism ids are absent from it).",
+    "skill_gap": "No Forever client was run: the whole native-container path (tainted creation of CustomAuraContainerTemplate, secret-safe behaviour in combat/instances, container geometry secrecy, own-caster filtering in a group) is source-backed but runtime-UNCONFIRMED, and is filed as U1-U13 with exact /run probes for the operator's session."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Impl lane T3 can proceed from bench/aura_row_reference_2026-11-08.md without opening the reference addon. The two design points that must not be 'improved' without a client check are the HARMFUL|PLAYER own-caster filter and the fixed reserved band for the buff row (never measure an aura container)."
+  },
+  "journal_marker": "desks/aura-row-reference/journal.md § 2026-11-08 Reference extraction + port map (task t2)"
+}

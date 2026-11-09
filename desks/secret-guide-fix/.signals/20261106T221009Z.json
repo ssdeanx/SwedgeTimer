@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T22:10:09Z",
+  "run_id": "secret-guide-fix-2026-11-06-final",
+  "agent_name": "secret-guide-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "The Lead-authorised re-cut of the three stale secret_guard_state pins went green immediately and exposed a real latent crash the old 0-mana default had masked: the paladin filler mirror compared a now-nilable mana value at four sites. Gating them on mana_known fixed a defect that would have thrown on a restricted Forever/Era tick in-client. Mutation M10 and a secret_guard baseline were added, taking the proof to 10/10 and the final full harness to 57 steps / 0 failed.",
+    "what_was_hard": "The stale pins encoded the pre-fix behaviour, so re-cutting them required installing the client's C_Secrets predicates and UnitPowerType answer into that suite's fixture to exercise the real H1 probe path rather than weakening the assertion.",
+    "skill_gap": "None blocking."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

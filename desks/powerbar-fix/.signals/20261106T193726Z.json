@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T19:37:26Z",
+  "run_id": "powerbar-fix-2026-11-06",
+  "agent_name": "powerbar-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Verified the origin/forever API truth before editing (UnitPower/UnitPowerMax SecretWhen*, StatusBar SetMinMaxValues/SetValue AllowedWhenTainted with the BarValue aspect, Blizzard's own raw mana-bar pass-through), then red-first tests before the additive api.GetPlayerPower reader and the StatusBar fill. Mutation proofs (6/6) plus an A/B crossfire control isolated this desk's changes from the concurrently edited main.lua/swing_source.lua lanes.",
+    "what_was_hard": "Real secrets cannot be simulated in plain Lua: the suites model the restricted flag with unique sentinels and spy on the fraction/format seams, and the opaque-max case (a restricted max that looks empty) catches any comparison of a secret. The diag restricted pin belongs to tests/diag_state.lua, outside this desk's exact write scope, so it is proven ad-hoc and filed.",
+    "skill_gap": "None blocking; the mutation script had to be written to keep every case in one shell invocation because /tmp is not shared between tool calls in this harness."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

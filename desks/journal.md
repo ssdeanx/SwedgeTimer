@@ -1806,3 +1806,514 @@ Closes the remaining filed AceDB `**` trap reads (paladin `play_twist_sound`, `g
   - Added `tests/forever_hud_gate_state.lua` (45 checks passing) covering HUD slot creation for all 6 classes on Forever, leveling gate progression, multi-rank ID fallback, provider cooldown/range/mana states, and Next Action evaluation.
   - Full test suite: `bash tests/run.sh` -> **55 steps, 0 failed** (100% green).
 
+
+## Dispatch (2026-11-06, orchestrator): WoW Forever display + bars perf wave
+
+Operator request (verbatim intent): audit the current addon; fix (a) hunter Auto Shot
+sometimes not displayed ("normally works but sometimes gets consumed by something else"),
+(b) the horizontal range indicator that worked then stopped displaying, (c) bars taking a
+lot of resources / buggy on WoW Forever, (d) power bar not showing on WoW Forever (operator:
+"being blocked because it's secret ... pass the secret data through"), (e) bump to the next
+minor version in all TOCs and any Lua that mentions it. Focus is WoW Forever (Camelot
+1.60.1 / Interface 16001), not classic.
+
+Baseline verified 2026-11-06: git clean at 7207f80 (v2.1.7); all 7 TOCs + main.lua:5 at
+2.1.7; `bash tests/run.sh` = 57 steps / 0 failed; luacheck 2 warnings / 0 errors in 100
+files. Version target: 2.1.8 (next increment; the operator's "next minor version" is read
+as the next 2.1.x release, matching every prior bump).
+
+Read-only audit desks dispatched (no write scope):
+| forever-audit | Forever display pipeline: auto shot, weave_range bar, power bar; origin/forever API truth | running | — |
+| perf-audit | current per-frame cost of the swing bars + minimal optimization plan | running | — |
+
+Operator clarifications recorded:
+- Power bar: operator says the secret power read is what blocks it and the secret data must
+  be passed through. Verified on origin/forever: `StatusBar:SetMinMaxValues` and `SetValue`
+  are `SecretArguments = "AllowedWhenTainted"` with `SecretArgumentsAddAspect =
+  { Enum.SecretAspect.BarValue }`, and Blizzard's `Blizzard_UnitFrame/Mainline/UnitFrame.lua`
+  (mana bar update) passes raw UnitPower/UnitPowerMax into those methods. Fix direction:
+  compat returns raw power + restricted flag; power_bar paints through a real StatusBar;
+  text/fraction skipped or unknown while restricted. The desk must verify the exact calls.
+- Auto Shot: normally works; sometimes one shot is not displayed and feels "consumed".
+  Audit consumers: activity gate/window, rf_update/set_bar_visibilities dead-man, class-hook
+  guard quarantine (25 throws), pcall isolation, hunter_ui tick host, and any early return
+  that can swallow a ranged START/UPDATE.
+
+Fix desks wait for the audits; write scopes will be disjoint (display fix owns main.lua +
+hunter_ui.lua + weave_range.lua + classes/hunter.lua + tests; power-bar fix owns
+power_bar.lua + compat.lua + tests; bars-perf fix owns bars.lua + tests). The version/docs
+desk runs last and owns the 7 TOCs + main.lua:5 + README/CHANGELOG. No git commit: the
+operator owns git.
+
+## Dispatch (2026-11-06, orchestrator): three fix desks, disjoint scopes
+
+After the perf audit (bench/bars_perf_audit_2026-11-06.md) and the partial Forever
+display audit, the wave is split by file so there is one writer per file:
+| display-fix | main.lua, hunter_ui.lua, weave_range.lua, classes/hunter.lua, tests/main_init_state.lua, tests/range_source_state.lua, tests/weave_bar_state.lua, tests/hunter_state.lua | running |
+| powerbar-fix | power_bar.lua, compat.lua, diag.lua (power line only), tests/power_bar_state.lua, tests/forever_secret_compat_state.lua | running |
+| bars-perf-fix | bars.lua, utils.lua, tests/bars_state.lua | running |
+
+Verified inputs:
+- R1 still live: main.lua:rf_update returns before set_bar_visibilities on rf_disabled and
+  the visibility/alpha calls sit outside the pcall whose C_Timer.After re-arm is last
+  (main.lua:2793-2828). Bars freeze for the session after a throw or 3 range-probe
+  failures. display-fix owns the fix.
+- Auto Shot display: the ranged bar is activity-gated; on Forever auto_repeat_active is
+  refreshed only by the (possibly unregistered) START/STOP_AUTOREPEAT_SPELL events plus
+  shot receipts, and visibility only updates on the 20 Hz poll. display-fix makes a ranged
+  START/UPDATE/shot show the bar immediately, refreshes the auto-repeat reading from the
+  cooldown path, and makes the ranged window at least one cycle + margin.
+- Red zone is display-only per operator: no zone/window branch may gate the bar.
+- Range bar: weave_range driver quarantines after 25 cumulative throws; UnitDistance nil
+  hides the bar. display-fix adds consecutive-failure handling, an explicit unknown state,
+  and a weave= diag line.
+- Power bar: operator says the secret power read blocks it; origin/forever proves
+  StatusBar:SetMinMaxValues/SetValue accept secret args from tainted code and Blizzard's
+  own mana bar passes raw UnitPower/UnitPowerMax. powerbar-fix adds a raw power reader +
+  restricted flag, a real StatusBar paint, restricted text suppression, and tests.
+- Bars perf: A1 pass the tick clock, A2 spark decoration cache, A3 one fill write, plus the
+  verified simple_round truncation (1.4 -> "1.3" etc.). bars-perf-fix owns these.
+
+Version: operator confirmed 2.1.8; release-version desk landed the 8 fields (7 TOCs +
+main.lua:5), toc_check 1104/0. README/CHANGELOG [2.1.8] are owed by a docs desk after the
+fixes land. No git commit.
+
+## Reconcile (2026-11-06): three fix desks landed; gate green before version restore
+
+| desk | result | evidence |
+|---|---|---|
+| display-fix | DONE | `bash tests/run.sh` 57/0, luacheck 2/0; 17/17 mutations; report `bench/display_fix_2026-11-06.md` |
+| powerbar-fix | DONE | power_bar_state 220, forever_secret_compat 170; 6/6 mutations; report `bench/powerbar_secret_2026-11-06.md` |
+| bars-perf-fix | DONE | bars_state 1305 (baseline 1261); 5 mutation families; report `bench/bars_perf_fix_2026-11-06.md` |
+
+Landed contracts (verified by the Lead against the diffs):
+- R1: `main.lua` heartbeat re-arms unconditionally on every path; `run_bar_visibility_pass`
+  pcalls visibility+alpha separately and still runs while range checking is disabled;
+  `rf_heartbeat_errors` in the runtime diag line.
+- Auto Shot: a ranged START/UPDATE (Forever engine), a completed-shot receipt and the
+  autorepeat events call `handle_bar_visibility("ranged")` in the same event; a
+  secret/malformed PLAYER_SWING duration falls back to the equipped speed (UnitAttackSpeed
+  per-hand / UnitRangedDamage for ranged) instead of dropping the cycle; a restricted
+  weapon-stat read no longer flips `has_weapon` false; `check_weapons` re-probes at world
+  entry; auto-repeat is probed with numeric 75. The red zone stays display-only (pinned).
+- Range bar: unknown distance renders an explicit dim `--` face (stays visible); driver
+  quarantine is recoverable (consecutive throws, backoff, last paint kept); init is guarded
+  and retried once at world entry; `weave=` receipt in the diag runtime line.
+- Power bar: additive `api.GetPlayerPower` returns raw values + restricted; the bar is a
+  real StatusBar and passes restricted values through SetMinMaxValues/SetValue; text is
+  `?` while restricted; diag renders `value=restricted`.
+- Bars perf: `set_bar_texts(hand, now)` reuses the tick clock; spark decoration cached;
+  one fill write per tick (restructure variant keeps 12c2/12c3 untouched); `simple_round`
+  now rounds to nearest (1.4/1.9/2.3/2.4/2.8/2.9/3.3/3.8 no longer truncate).
+
+Crossfire closed: `tests/engine_matrix_state.lua` re-cut to the new fallback contract
+(110 checks), `tests/wiring_check.lua` stale accepted rows deleted (905/0, 1 accepted STOP).
+
+INCIDENT: a rogue read-only desk (the resumed `perf-audit` turn) overwrote
+`bench/bars_perf_audit_2026-11-06.md` with a 17-line stub and wrote 2.2.0 into the 7 TOCs +
+main.lua:5 at 14:11. The operator-approved target is 2.1.8; release-version is restoring it.
+The full 29 KB perf census was lost from disk; the key findings survive in the dispatch and
+`desks/perf-audit/journal.md`; the fix desk's report is the durable artifact. No product
+code beyond the version fields was touched by the rogue turn.
+
+## Final gate (2026-11-06): 2.1.8 wave green, version restored, docs written
+
+- `bash tests/run.sh` → **57 steps, 0 failed** (final tree, after all desks and docs).
+- `luacheck .` → **2 warnings / 0 errors in 100 files** (the pre-existing
+  `hunter_ui.lua` CAST_ZONE_SAFE/CAST_ZONE_UNSAFE floor pair; no new warning).
+- Version: **2.1.8** in all 7 TOCs line 6 + `main.lua:5`; no live 2.1.7/2.2.0 in Lua/TOC
+  (CHANGELOG `[2.1.7]` history stays). The rogue 2.2.0 write was restored by
+  release-version with a hash proof that only the version line changed.
+- Docs: `CHANGELOG.md` new `## [2.1.8]` (offline-only/UNCONFIRMED, 7 fixed bullets,
+  Version 2.1.8) and `README.md` What's New → v2.1.8 + the 4-bullet display/range/power/
+  bar-text subsection; range-bar wording corrected (unknown face only when target present
+  and attackable; no target/not attackable still hides). `toc_check` 1104/0 after the docs.
+- New durable artifacts: `bench/forever_display_audit_2026-11-06.md` (630-line audit),
+  `bench/display_fix_2026-11-06.md`, `bench/powerbar_secret_2026-11-06.md`,
+  `bench/bars_perf_fix_2026-11-06.md`, `bench/docs_release_2026-11-06.md`; six new desk
+  trails under `desks/`.
+- `bench/bars_perf_audit_2026-11-06.md` and `bench/swedge_addon_audit_forever_display_2026-11-06.md`
+  are VOID (rogue/shallow drafts); the deep audit and the fix reports supersede them.
+
+Follow-ups filed, not done in this wave:
+1. **In-client Forever pass (HU-41)** — the only close for the three operator symptoms and
+   every UNCONFIRMED item. `/st diag` now carries the receipts: `swing_<hand>=s/u/p`,
+   `swing_last`, `rf_heartbeat_errors`, `weave=...`, `swing source ... speed_fallbacks`,
+   verbose power `value=restricted fraction=? why=-`.
+2. **A-5** — `swing_source.on_combat_changed` clears every in-flight cycle on combat exit,
+   diverging from the vendored lib and Blizzard's timer (shortened animation on a combat
+   flap); pinned by `tests/swing_source_state.lua:187-193`. Needs an operator ruling.
+3. **A-7** — `PLAYER_TARGET_CHANGED` is not registered; the target flag is only written by
+   `UNIT_TARGET("player")`. Low, but a target swap can leave `has_attackable_target` stale.
+4. **Version-sync pin** — `tests/toc_check.lua` has no `## Version` assertion; the rogue
+   2.2.0 write is exactly what such a pin would catch. Add in a future tests pass.
+5. **HUD/nextaction/hunter range-helper perf** — the bar tick wins landed; the remaining
+   per-frame consumers (HUD layout poll per bar tick, next-action double driver, hunter
+   `update_range_helper` re-probing `UnitDistance`/3× `IsSpellInRange` per frame) are
+   documented in `bench/bars_perf_fix_2026-11-06.md` follow-ups.
+6. **`bars_state` hide-reason behavioural pin** (ui-truth-diag P4 follow-up) still owed;
+   `bars_state.lua` is the bars-perf desk's file, not re-cut in this wave.
+
+No git commit: the operator owns git and the publish decision. The tree is 2.1.8, offline
+green, with the in-client pass outstanding.
+
+## Dispatch (2026-11-06, orchestrator): secret-API / pass-through audit wave
+
+Operator order (verbatim intent): one more enterprise-grade pass; verify everything is fully
+functional and gated; "check and get all secret apis, and check make sure ur pass secret data
+through and make sure we arent missing functionality of anything because of it."
+
+Current gate: 57/0, luacheck 2/0, version 2.1.8. The power bar already passes a restricted
+read through a real StatusBar (2.1.8). This wave audits every other secret-capable API the
+addon touches and every consumer that silently loses an input.
+
+Complete predicate map extracted from origin/forever docs (for the audit):
+- UnitPower/UnitPowerMax/UnitPartialPower/UnitPowerMissing/GetComboPoints -> power secrecy.
+- UnitAura/GetAuraDataByIndex/GetPlayerAuraBySpellID/... -> UnitAura restricted.
+- UNIT_AURA event -> AurasRestricted.
+- GetSpellCooldown/GetSpellCharges/GetSpellBookItemCooldown/... -> CooldownsRestricted.
+- UnitCastingInfo/UnitChannelInfo/UNIT_SPELLCAST_* -> non-player cast restricted.
+- UnitHealthMax -> non-player-controlled only.
+- UnitGUID/UnitClass/UnitName/UnitFullName/... -> identity restricted.
+- UnitAttackSpeed/UnitRangedDamage/UnitStat/UnitArmor/UnitAttackPower/GetHaste/GetUnitSpeed/... -> stats restricted.
+- UnitThreatSituation/UnitDetailedThreatSituation -> threat.
+- GetTotemInfo/GetTotemTimeLeft -> totem slot.
+- UnitIsUnit -> comparison.
+- UnitIsCharmed/UnitIsPossessed -> possession.
+- GetActiveLossOfControlData/... -> LoC.
+- Frame GetWidth/GetHeight/GetPoint/... -> anchoring secret (addon does not pass secret anchors).
+- UnitHealthPercent/UnitPowerPercent -> curve secret (addon not using).
+- GetSpellInfo/IsSpellUsable/GetSpellPowerCost/GetItemCooldown/GetWeaponEnchantInfo/GetItemCount -> no SecretWhen on returns (readable); arguments may be secret only.
+
+Known leads already verified:
+- hunter_ui.lua:1266/1398/1751 hand-rolled aura scans `break` on `not name`; api.UnitAura
+  returns nil for a restricted row, so a secret row above the tracked aura truncates the
+  scan and the badge disappears (the shared scan_player_aura deliberately walks past it).
+- classes/hunter.lua:1624 calls UnitIsUnit directly (secret-capable comparison; not through
+  compat, no secret guard).
+- GetSpellCooldown returns 0/0/0/0 + restricted=true; ~70 call sites unpack 2 values and may
+  read "ready" when restricted (class modules; Forever guide/HUD handle it).
+- GetTotemInfo nil on secret; shaman callers must not read nil as "no totem".
+- UnitHealthMax for non-player units is secret; target TTD/HP% may lose the max.
+- UnitGUID/UnitName/UnitClass for non-player units are secret; target keys/labels may nil.
+
+Read-only desks dispatched:
+| forever-audit (follow-up) | complete secret API matrix + pass-through sink audit + minimal fix proposals | running |
+| secret-consumers-audit | consumer-side loss/wrong-advice audit (classes, HUD, guide, hunter_ui, main) | running |
+
+Fix desk follows the audits; no product edits until then. No commit.
+
+## Reconcile (2026-11-06): secret audits landed — two reports, fix wave dispatched
+
+Read-only audits:
+- `bench/secret_api_matrix_2026-11-06.md` (forever-audit): 40-row API matrix, pass-through
+  sink matrix, direct-call audit. HIGH: hunter raw UnitGUID (SEC-1), hunter direct
+  UnitIsUnit (SEC-2), forever_guide UnitCreatureType (SEC-3), latent classic UnitAura
+  branch (SEC-4); MED: 26/28 cooldown reads ignore the restricted fifth (SEC-6), hunter_ui
+  break-on-nil (SEC-7), totem/mana/trinket nil guesses (SEC-8/9/10).
+- `bench/secret_consumers_audit_2026-11-06.md` (secret-consumers-audit): consumer-side
+  wrong-advice proof. HIGH: H1 restricted power consumed as 0/0%/100% in class gathers;
+  H2 class cooldown helpers turn restricted into 0 and the Forever bridge trusts the
+  gathered field before its own safe read (paladin Judgement / hunter Arcane cues proven
+  offline); H4 restricted target-aura rows read as "debuff absent" (Rend/Rip/Rake/Flame
+  Shock re-cue); H3 Forever Hunter's Mark unknown branch dead code; H5 hunter_ui
+  break-on-nil; H6 raw UnitGUID comparisons throw. MED: direct UnitIsUnit/UnitCreatureType,
+  restricted target health removes execute advice, display cold reads, practice context,
+  Retail residual. LOW: direct player identity, swing_source stat route, raw ratings,
+  missing diag receipts, HUD grey without marker.
+- Verified clean: class aura walks (except hunter_ui), Forever HUD restricted paint,
+  guide M6/ellipsis, power bar pass-through, range unknown face, LGC, enemy_swing classic
+  gate, gating. SetFormattedText("%d", secret) is NOT supported (single cstring) — keep
+  the "?" fallback.
+
+Fix wave (one writer per file, sequenced):
+| secret-core-fix | compat.lua, hunter_ui.lua, classes/hunter.lua, classes/druid.lua, forever_guide.lua (UnitCreatureType/H3), tests/secret_guard_state.lua, tests/hunter_state.lua, tests/druid_state.lua, tests/forever_guide_state.lua | running |
+| secret-guide-fix (after core) | classes/paladin.lua, classes/shaman.lua, classes/warrior.lua, classes/rogue.lua, classes/hunter.lua, classes/druid.lua, forever_guide.lua, tests/* | queued |
+| secret-hud-fix (after core) | hud.lua, tests/hud_state.lua | queued |
+
+Core scope: add api.UnitIsUnit (raw+restricted), api.UnitCreatureType, api.get_cooldown_remaining,
+api.spell_aura_may_be_secret/power_may_be_secret; harden classic UnitAura branch and
+GetCombatRating; remove the three hunter_ui breaks; route hunter/druid target GUID through
+api.UnitGUID; use SetAlphaFromBoolean for a restricted ToT bool (pass-through); fix the
+Hunter's Mark dead branch. No version fields, no git.
+
+## Reconcile (2026-11-06): secret-core-fix DONE — guide/hud lanes queued
+
+secret-core-fix (display-fix desk, reused): 57/0, luacheck 2/0, 12/12 mutations.
+Landed: api.UnitIsUnit (raw bool + restricted) with the hunter ToT restricted boolean
+passed through `SetAlphaFromBoolean` (display-only, no text/colour branch); hunter/druid
+target GUID via api.UnitGUID; api.UnitCreatureType guard (forever_guide Exorcism glow);
+Hunter's Mark unknown branch fixed via spell_aura_may_be_secret; hunter_ui three breaks
+removed; classic UnitAura branch precheck+pcall; GetCombatRating guards; shared helpers
+get_cooldown_remaining/spell_aura_may_be_secret/power_may_be_secret. Test §2 of
+forever_secret_compat_state re-cut under Lead authorisation (177/0). Report
+bench/secret_core_fix_2026-11-06.md.
+
+Queued (one writer per file):
+| secret-guide-fix | compat.lua (only health_max_may_be_secret + GetInventoryItemCooldown restricted return), classes/paladin|hunter|shaman|druid|warrior|rogue.lua, forever_guide.lua, class/FG tests | running |
+| secret-hud-fix | hud.lua, tests/hud_state.lua (after guide's compat flag) | queued |
+
+Guide scope: H1 restricted power -> inputs_unknown (not 0/100); H2 class cooldown helpers
+use api.get_cooldown_remaining, restricted -> nil + inputs_unknown, bridge must not trust
+gathered 0; H4 restricted target-aura rows -> inputs_unknown (Rend/Rip/Rake/Flame Shock/JotC);
+M2 restricted target health -> inputs_unknown (no execute default); M3 display cold reads
+where cheap; M4 practice context only if low-risk. No version fields, no git.
+
+## Reconcile (2026-11-06): secret-guide-fix DONE; hud lane running
+
+secret-guide-fix: 57/0, luacheck 2/0, 10/10 mutations; 15 files changed. Restricted
+cooldown/power/target-aura/target-health reads now produce nil + `inputs.inputs_unknown`
+instead of 0/0%/100%/"absent"; the Forever bridge falls through to its safe live read.
+The 3 stale pins in tests/secret_guard_state.lua were re-cut under Lead authorisation
+(524/0). It exposed and fixed a real latent paladin crash: four `inputs.mana_pct >
+threshold` compares (classes/paladin.lua:3656-3672) would raise on a legitimately nil
+restricted mana read; all four now gate on `mana_known` (mutation M10). Report
+bench/secret_guide_fix_2026-11-06.md.
+
+| secret-hud-fix | hud.lua, tests/hud_state.lua | running |
+Scope: SEC-10 trinket face — a restricted item-cooldown read (0,0,0,true) must keep an
+equipped on-use trinket slot visible with the existing restricted grey face (no swipe/
+text), not hide it; readable passive still hides, readable on-use still shows. Consumes
+the new `api.GetInventoryItemCooldown` fourth return. Then final gate + docs + mnemon.
+
+## Final secret-wave reconcile (2026-11-06): all three secret fix lanes DONE
+
+Final gate (Lead-run, after all writers): `bash tests/run.sh` = 57 steps / 0 failed;
+`luacheck .` = 2 warnings / 0 errors in 100 files; version 2.1.8 in 7 TOCs + main.lua.
+
+Landed:
+- secret-core-fix: api.UnitIsUnit (raw+restricted) with the hunter ToT restricted bool
+  passed through SetAlphaFromBoolean; hunter/druid target GUID via api.UnitGUID;
+  api.UnitCreatureType guard; Hunter's Mark unknown branch; hunter_ui 3 aura-scan breaks
+  removed; classic UnitAura precheck+pcall; GetCombatRating guards; helpers
+  get_cooldown_remaining/spell_aura_may_be_secret/power_may_be_secret. 12/12 mutations.
+- secret-guide-fix: restricted cooldown/power/target-aura/target-health -> nil +
+  inputs_unknown across all six class gathers; the Forever bridge falls through to its
+  safe live read; fixed a latent paladin nil-mana compare crash (four filler gates).
+  10/10 mutations; 15 files; 57/0.
+- secret-hud-fix: trinket_has_on_use tri-state reads the new fourth restricted return;
+  an equipped on-use trinket stays visible with the existing grey unknown face (no swipe/
+  text) instead of disappearing; readable passive still hides; once-per-session notice.
+  3/3 mutations; 57/0.
+- Docs: README/CHANGELOG extended with the secret-value hardening block (offline-only/
+  UNCONFIRMED disclaimer kept).
+
+Remaining follow-ups (not done): M3 display cold reads (paladin CD row, shaman badges/
+WF-hold wash, hunter window sync), H4 paladin JotC bar, M4 practice context, L4 /st diag
+restricted receipt, L5 '?' marker on the HUD grey face, M5 Retail residual, A-5/A-7 from
+the earlier wave, version-sync pin in toc_check. In-client Forever pass remains the only
+close for every UNCONFIRMED item (HU-41). No git commit; operator owns git/publish.
+
+## Ultimate gate (2026-11-06, Lead): secret wave + docs green
+
+`bash tests/run.sh` = **57 steps / 0 failed** (run after the secret-core, secret-guide,
+secret-hud and docs lanes all landed); `luacheck .` = **2 warnings / 0 errors in 100
+files**; version **2.1.8** in all 7 TOCs + main.lua:5; CHANGELOG `[2.1.8]` + README v2.1.8
+now include the secret-value hardening block. No live 2.1.7/2.2.0 in Lua/TOC. No git
+commit (operator owns git/publish). In-client Forever pass remains the only close for the
+UNCONFIRMED items (HU-41); the secret follow-ups are HU-42.
+
+## 2026-11-07 — Forever range band, power text, HUD secret defence, single TOC (Lead)
+
+Operator report: the range bar is visible but grey with no distance; the power-bar text was
+not passed correctly; audit the HUD's secret data; ship one TOC for every client.
+
+- range-band: `UnitDistanceSquared` is group-only and `#noinstance` (Warcraft Wiki
+  `API:UnitDistanceSquared`, Forever 1.60.1 row; `origin/forever` UnitDocumentation +
+  CompactUnitFrame:1069), so an attackable enemy always read unknown. `weave_range.lua` gained
+  a second exact tier through the client's own `C_SwingTimer.IsTargetWithinSwingRange`
+  (`api.is_target_in_swing_range`, already used by the ranged bar): `<=5 yd  MELEE`,
+  `5-35 yd  IN RANGE`, `>35 yd  OUT`; the fill is a band marker, never a fabricated yard
+  count; tier 1 exact yards still wins; the `--` face only when both tiers are silent. The
+  `weave=` diag token gained `src=exact|swing|none`. Mutation-killed (melee read disabled).
+- power-text: `FontString:SetText` is `AllowedWhenTainted` + Text aspect on Forever
+  (SimpleFontStringAPIDocumentation.lua) and Blizzard's own `CompactUnitFrame_UpdateStatusText`
+  passes `UnitHealth(...)` (`SecretReturns = true`) straight in, so the restricted branch now
+  hands the raw number to `SetText` instead of printing `?`. StatusBar pass-through unchanged.
+  Mutation-killed (raw -> "?").
+- hud-secret: audit found the restricted faces already correct (trinket tri-state, class
+  providers, `api.UnitAura`, and `CooldownFrame:SetCooldown` being `IsProtectedFunction` +
+  `AllowedWhenUntainted`, so no secret swipe is possible). Added `api.is_secret` and a
+  paint-time re-check of the numeric state fields, so a provider that leaks a secret number
+  still lands on the grey unknown face. Mutation-killed (guard disabled).
+- single-toc: deleted the six flavor TOCs. `SwedgeTimer.toc` now advertises
+  `11509, 20506, 38002, 40402, 50500, 120100, 120105, 16001` and lists every module once.
+  `LibClassicSwingTimerAPI` is gated at load by `swing_lib_gate.lua` (tagged LibStub stub at
+  minor 1000000) and `swing_lib_gate_release.lua` (removes the stub right after the library);
+  `main.lua` ignores a tagged stub. `tests/toc_check.lua` + new `tests/swing_gate_state.lua`
+  pin it. Mutation-killed (gate minor lowered; TOC gate line removed).
+- Gate: `bash tests/run.sh` = **58 steps / 0 failed**; `luacheck .` = **2 warnings / 0 errors
+  in 103 files**; version 2.1.8 unchanged. Report:
+  `bench/forever_toc_range_power_2026-11-07.md`. No git commit; operator owns git/publish.
+
+## 2026-11-08 — Dispatch (Lead): approved AgentTeam `swedge-forever-hud` (Forever-only HUD)
+
+Operator approved the staged `swedge-forever-hud` plan; scheduler owns dispatch. No Lead
+product edits yet; tree baseline is the uncommitted 2.1.8 secret wave + 2026-11-07 range/
+power/single-TOC work (left untouched). Constraints in every lane: **WoW Forever only**
+(Camelot 1.60.1, `origin/forever` `1.60.1.70790`), zero behavior change on every other
+client, enterprise-grade evidence (red-first tests, mutation proofs, full harness).
+
+| task | lane | owner | write scope | deps | state |
+|---|---|---|---|---|---|
+| t1 | Forever cooldown/GCD/secret API contract (read-only) | forever-api-analyst | bench/forever_hud_api_2026-11-08.md + desk | — | running |
+| t2 | SuperSwingTimer aura reference + port map (read-only) | aura-reference-analyst | bench/aura_row_reference_2026-11-08.md + desk | — | running |
+| t3 | HUD cooldown/GCD + secret-cache hardening | hud-cooldown-implementer | hud.lua, compat.lua, LibGlobalCooldown.lua, tests/hud_state.lua, tests/forever_secret_compat_state.lua | t1 | pending |
+| t4 | Forever-only per-class aura icon row above top bars | aura-row-implementer | new aura_icons.lua + tests/aura_icons_state.lua, SwedgeTimer.toc, main.lua, config_presets.lua, option_tables.lua, option_table_presets.lua, tests/run.sh, tests/toc_check.lua | t2 | pending |
+| t5 | Independent verification + secret-flow audit (read-only) | verifier | bench/hud_forever_verification_2026-11-08.md + desk | t3,t4 | pending |
+
+Briefs: `bench/briefs/brief_forever_hud_api_2026-11-08.md`,
+`bench/briefs/brief_aura_row_reference_2026-11-08.md`,
+`bench/briefs/brief_hud_cooldown_impl_2026-11-08.md`,
+`bench/briefs/brief_aura_row_impl_2026-11-08.md`,
+`bench/briefs/brief_hud_forever_verify_2026-11-08.md`.
+
+Open question t1 must settle (not assumed): whether the `C_Spell.GetSpellCooldownDuration`
+opaque `LuaDurationObject` can be passed to `CooldownFrame:SetCooldownFromDurationObject`
+and `C_DurationUtil.CreateDurationTextBinding` from tainted addon code without reading a
+secret; if not, the lane must return the legal alternative and the HUD must never fake a
+restricted read as ready. t4 is explicitly inert on non-Forever clients. No git, no
+version bump; operator owns both.
+
+## 2026-11-08 — t1/t2 research landed (Lead review): prior "no secret swipe" conclusion corrected
+
+Both read-only research lanes completed; t3/t4 already dispatched and running. Lead
+verified the load-bearing citations against `origin/forever`; no product edits by Lead.
+
+- **t1** `bench/forever_hud_api_2026-11-08.md` (760 lines): **supersedes**
+  `bench/secret_api_matrix_2026-11-06.md:156` + `bench/secret_hud_fix_2026-11-06.md:17`
+  on one conclusion — a secret swipe IS achievable. `C_Spell.GetSpellCooldownDuration`
+  has no `SecretWhenCooldownsRestricted`; its `LuaDurationObject` is a non-secret handle
+  whose values may be secret. `CooldownFrame:SetCooldownFromDurationObject` has no
+  `SecretArgumentsAddAspect` (the numeric setters do), so the object is the sanctioned
+  pass-through; `AllowedWhenUntainted` refuses secret ARGUMENTS only (Blizzard prose,
+  `Blizzard_UnitFrame/Shared/UnitFrameUtil.lua:487`; verified). Countdown text has a
+  native no-Lua path (`C_DurationUtil.CreateDurationTextBinding` + `C_StringUtil.
+  CreateSecondsFormatter` + colour curve). GCD detection is plain via
+  `SpellCooldownInfo.isOnGCD` / `.isActive` (both `NeverSecret`) plus
+  `GetSpellCooldownDuration(probe, false)`; today's dark GCD root cause is
+  `LibGlobalCooldown.poll_gcd` reading compat's restricted `0,0,0,0,true`.
+  **Live trinket bug:** the 4th return of `GetInventoryItemCooldown` is `isOnGCD`
+  (Blizzard `CooldownViewer.lua:1017,1021`), but `compat.lua:1565-1584` + `hud.lua:
+  341-350,418-431` read it as `restricted`, so an on-use trinket greys and loses its
+  swipe for the whole GCD window. No item duration-object API exists; the legal item
+  faces are readable numeric swipe or grey unknown. Six cache groups mapped; the
+  secure `secretunwrap`/`settablesecurity` pattern is **unavailable to addons**
+  (`secretunwrap = nil`, EnvironmentCleanup), while `scrubsecretvalues`/`issecretvalue`
+  survive. Runtime-only: U3/U4 (does the engine accept a secret-valued object from
+  tainted code?) + P1–P11 `/run` probes.
+- **t2** `bench/aura_row_reference_2026-11-08.md` (869 lines): native
+  `AuraContainer`/`CustomAuraContainerTemplate` path, zero aura-data reads, no classic
+  fallback needed (`UnitAura` absent on Forever). Debuffs use the client filter
+  `HARMFUL|PLAYER` (own-caster; no CLEU) and are **empty on friendly targets by
+  design**. Per-class ported sets: buffs 26/17/9/12/22/11 = 97 ids; debuffs
+  29/19/19/30/19/44 = 160 after dropping TBC-only 27019; 18 candidate ids intentionally
+  in both rows; stance/seal/shield icons are a separate feature and must not leak into
+  the buff row. **Biggest port hazard:** the client writes container size through
+  `secretwrap`, so `GetHeight/GetTop` can be secret — never measure an aura container;
+  anchor from plain bar geometry + a reserved fixed band. Reference `WIRING.md` is stale
+  in 4 places (0.15 s constant, not 0.25 s; `foreverAuraPending` nonexistent; classic
+  updaters wrapped; "native row only while secret" not in code).
+- t3 (HUD secret-safe cooldown/GCD + cache hardening) and t4 (Forever-only aura row)
+  running; t5 verification queued. In-client P1–P11 remain the only close for the
+  runtime unknowns; operator action optional, not a blocker.
+
+## 2026-11-08 — t4 landed (Lead spot-check): Forever-only aura row shipped
+
+`aura_icons.lua` (1279 lines) + `tests/aura_icons_state.lua` (1582 lines) landed. Lead
+independently re-ran the new suite: **853 checks / 0 failures**, `luac5.1 -p` clean,
+scoped `luacheck` 0/0. TOC line 67 (after `hud.lua`), `tests/run.sh:77`,
+`tests/toc_check.lua:402`, `main.lua` guarded `ST:init_aura_icons()` seam
+(`main.lua:1059`, called at `:1138`), `config_presets.lua:141-145`, and the Forever-only
+options builder (`option_tables.lua:212`, merged at `:674`) all verified on disk.
+
+- Gate verified in source: `st.family == "FOREVER"` first, then `C_AuraContainerUtil`
+  + both sort enums, then the `CreateFrame` template probe; nothing is created at load.
+  Module loads on every client by design; on non-Forever clients the only delta is one
+  family compare. Options hidden by the same family/`options_visible()` check.
+- Two native rows: `HELPFUL`/`player` buffs (`maxDuration = 180`) and
+  `HARMFUL|PLAYER`/`target` own-caster debuffs (no CLEU; empty on friendly targets by
+  the client's identity filter). Zero aura-data reads. Per-class sets 97 buff ids /
+  160 debuff ids after dropping TBC-only 27019; shared/racial buff-only at creation;
+  stance ids never merged.
+- Placement: fixed reserved band above the topmost visible swing bar from the addon's
+  plain bar geometry (`iter_hands`/`get_bar_frame`, highest `GetTop`); never measures an
+  aura container (secret-geometry rule). Combat never creates native containers; a plain
+  retry driver is the only frame created then.
+- T4's full harness at its run: 59 steps / 0 failed; tree shared with t3, so the final
+  gate is t5's post-merge run. In-client U1-U15 remain (tainted template creation,
+  secret-safe combat updates, container setpoint/show in combat, topmost-bar visual
+  stack, friendly-target debuff emptiness, options).
+- t3 still running; t5 verification queued behind it. No version/git/docs edits; operator
+  owns release.
+
+## 2026-11-08 — t3 landed (Lead spot-check): HUD cooldown/GCD + cache hardening; T1 trinket claim retracted
+
+T3 delivered `hud.lua`, `compat.lua` (additive helpers only),
+`LibGlobalCooldown.lua`, `tests/hud_state.lua`, `tests/forever_secret_compat_state.lua`;
+report `bench/hud_forever_cooldown_2026-11-08.md`. Lead re-ran the changed suites:
+**hud_state 1024/0**, **forever_secret_compat 250/0**, **secret_guard 524/0**
+(cross-lane, unmodified), `luac5.1 -p` clean. T3's full harness: 59 steps / 0 failed;
+luacheck 2/0 in 105 files (pre-existing floor).
+
+- Forever path: while the provider flags `restricted`, `HUD.paint` acquires
+  `C_Spell.GetSpellCooldownDuration(slot spell, ignoreGCD=false)`, passes the opaque
+  handle to `CooldownFrame:SetCooldownFromDurationObject(obj, true)`, and uses a
+  `C_DurationUtil` binding + seconds formatter + warn colour curve for native text.
+  No object getter is read; `isOnGCD` is the plain NeverSecret field for the GCD text
+  rule; `LibGlobalCooldown` gains the additive object channel. Readable states (all
+  non-Forever clients and Forever out of restriction) keep the exact old numeric face.
+- Cache hardening: `HUD.known_names`, `known_cache`, `icon.cd_*`, `HUD.trinkets`,
+  `TRINKET_STATE`, `PREVIEW_STATE`, the provider→paint state and LGC numeric state are
+  scrubbed/re-proved; object handles are cached only as opaque handles, never as derived
+  numbers. SEC-13 state scrub + paint-boundary boolean/numeric re-checks.
+- **T1 §7 trinket claim retracted.** `compat.lua:1760` reads exactly three values
+  (`local start_time, duration, enabled = get_inventory_item_cooldown("player", slot)`)
+  and the fourth return is compat's own SEC-10 `restricted` flag, not the client's
+  `isOnGCD`; the client's fourth value is dropped. The HUD's on-use filter also requires
+  `duration > 1.5`, so a GCD cannot paint. No contract change is needed; T3 correctly kept
+  SEC-10 and recorded the four-value client shape for a future contract revision.
+- **Residual (honest):** mutation M5 (state-scrub removal) survives offline because
+  Lua 5.1 cannot make comparisons raise on a flagged primitive; its paint-boundary twins
+  M2/M7 do bite (41/1024 and 6/1024). P4/P5 in-client probes remain the only close for
+  the engine accepting a secret-valued object from tainted execution.
+- T3 also flagged two scope-respecting deviations: `UNIT_SPELLCAST_INTERRUPTED` keeps the
+  cross-lane-pinned release shape (object channel releases separately), and the GCD wiring
+  is split HUD-paint vs LGC-state because `main.lua` is out of its write scope.
+- t5 verifier is running; post-merge full harness + secret-flow/cache audit is the final
+  gate. No version/git/docs edits; operator owns release.
+
+## 2026-11-08 — t5 PASS + final gate (Lead): both lanes verified; low findings ruled
+
+T5 verdict: **both lanes PASS**, no blocker, no secret/taint defect, no non-Forever
+behaviour change. Report: `bench/hud_forever_verification_2026-11-08.md` (585 lines).
+Evidence: 59/0 harness; luacheck 2/0 in 105 (both pre-existing `hunter_ui.lua:135-136`);
+luac clean; counts `hud_state` 1024, `forever_secret_compat_state` 250,
+`aura_icons_state` 853, `secret_guard_state` 524 (unmodified), `toc_check` 360. All 20
+implementer mutants reproduced; the verifier's extra mutant of `compat.lua:398`
+(`HasSecretValues()` refusal) fails 4 checks; direct getter proof (all getters raising,
+`HasSecretValues()==true`) returns the handle without a getter call (259/0); 19-path gate
+audit; full cache table audited plain/re-proved; aura module inert on all six non-Forever
+families.
+
+Lead final gate on the post-merge tree: `bash tests/run.sh` **59 steps / 0 failed**;
+`luacheck .` **2/0 in 105 files**; `toc_check` **360/0**. Low findings ruled:
+- **F1 fixed:** `aura_icons.lua:4,11` comment typos (`WOW` / `HELPFUL`); post-edit aura
+  suite 853/0, luac clean, LF preserved.
+- **F2 fixed:** removed the stray untracked `luac.out` (verified `/home/sam/SwedgeTimer/
+  luac.out`, gitignored, not TOC-listed).
+- **F3** named-container retry hazard after a post-CreateFrame setup failure (trigger:
+  invalid `db.frame_strata`) — documented low residual, no code change.
+- **F4** resize-under-secrecy cosmetic mixed sizes — documented low residual.
+- **F5** T4 report says "6" hidden widget entries vs 7 — report-only discrepancy; the
+  verification report is authoritative.
+- **F6** benign extra per-tick pcall/family compare on classic — accepted, no behaviour
+  change.
+- **F7/F8** client-only: engine acceptance/rendering of a secret-valued `LuaDurationObject`
+  from tainted code, and the additive LGC probe spell 61304 (zero consumers; HUD GCD does
+  not depend on it).
+- **F9** disclosed M5 state-scrub survivor — scrub kept; paint-boundary twins M2/M7 bite.
+
+Operator action: run P4/P5 (plus P2/P3) in one restricted Forever moment — the only
+remaining closers. No code change. No git/version/docs edits; operator owns release.
+All team tasks complete; team archived with artifacts retained.

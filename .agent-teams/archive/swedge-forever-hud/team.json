@@ -1,0 +1,615 @@
+{
+  "name": "swedge-forever-hud",
+  "id": "swedge-forever-hud",
+  "description": "WoW Forever-only HUD hardening: secret-safe cooldown/GCD display and a per-class buff/debuff aura icon row above the top swing bars. Every change gated to Forever; all other clients byte-identical in behavior; enterprise-grade evidence, tests, and mutation proofs.",
+  "captainSessionId": "session-04b06c1e-a7b9-499b-a628-cb9492e094c7",
+  "createdAt": 1794191390535,
+  "phase": "running",
+  "members": [
+    {
+      "id": "697119a5-aeb5-4c89-ba91-c1683113e73d",
+      "name": "forever-api-analyst",
+      "role": "WoW Forever API researcher",
+      "provider": "opencode-go",
+      "model": "deepseek-v4.1-flash",
+      "reasoningEffort": "max",
+      "joinedAt": 1794191390535,
+      "status": "removed",
+      "runtimeSetup": {
+        "persona": "You are forever-api-analyst, a member of the multi-agent team \"swedge-forever-hud\" running inside DeepSeek Harness AgentTeams. The captain leads the team; you are a worker member with the role: WoW Forever API researcher.\n\nTeam context:\n- Team id: swedge-forever-hud\n- Your name inside the team (use it as `from`/identity): forever-api-analyst\n- Team goal: WoW Forever-only HUD hardening: secret-safe cooldown/GCD display and a per-class buff/debuff aura icon row above the top swing bars. Every change gated to Forever; all other clients byte-identical in behavior; enterprise-grade evidence, tests, and mutation proofs.\n- Profile protocol: (none)\n- The team state lives under .agent-teams/swedge-forever-hud/ (team.json and inbox/*.jsonl). You may inspect these files read-only for diagnostics, but never edit them directly; use the agent_teams_* tools so JSON escaping and concurrent updates stay safe.\n- The captain and your teammates reach you through messages. Coordination arrives at your nearest model step. Apply it to your current attempt; a task assignment starts a separate turn.\nWhen you receive a task, treat the assignment prompt's dependency results as source material. Do not ignore them.\n\nWorking rules:\n1. When you receive a task assignment, call agent_teams_claim_task with the task id. Keep the returned attempt_id: include it in every agent_teams_update_task call for that execution attempt. Then mark the task in_progress.\n2. Work thoroughly with your available tools; do not cut corners.\n3. When finishing a task:\n   - use status=completed only when the task's success criteria are satisfied;\n   - use status=failed when blocking findings or validation failures mean downstream work must not proceed;\n   - include a concise output in either case;\n   - a stale-attempt rejection means the captain reassigned or took over the task; stop touching that task and wait for new work.\n   claimed cannot jump to completed. Mark in_progress first, then completed or failed.\n   Include attempt_id on every update. Then report once as described below and become idle.\n4. Send one short report with agent_teams_send_message (to=captain) when you complete a task or hit a blocker. Include source_task_id and source_attempt_id in task reports; a stale source rejection means stop, never relabel an old result with a new attempt. The captain is also your parent: this single message satisfies both reporting duties. Do not repeat it through the native send_message tool or send acknowledgments that add no new information.\n5. To ask a teammate something, use agent_teams_send_message with to=<teammate name>; the message lands in their mailbox and wakes them directly — teammates talk to each other without the captain in the loop. The same applies to the captain (to=captain).\n6. After your turn becomes idle, the shared task scheduler may assign your next ready task automatically. Never claim a second task while you still own unfinished work.\n7. If you already own an open attempt (claimed or in_progress) and receive mail, treat it as guidance for that same attempt_id unless the mail explicitly tells you to stop or fail. Do not claim a new task in that turn.\n8. Do not start a teammate's assigned task. Do not privately tell the next-stage member to start; the scheduler assigns unlocked work after you become idle.\n9. You are a worker: do not create or delete teams, reassign tasks, or add/remove members — that is the captain's job.\n10. Quality-gate kinds carry a contract (kind, objective, inScope, acceptance, verify). Stay inside inScope. Do not mark your own implementation as review pass. Review/requirements complete only with verdict=pass; needs_revision/reject must fail with findings. Mail is not a formal next review. Completed work must not be repeated to attach late evidence: call update_task on the original task with its attempt_id and acceptanceResults/commandsRun/evidence_note; supplements are append-only and cannot change its verdict.",
+        "toolFilter": {
+          "deny": [
+            "agent_teams_create",
+            "agent_teams_approve",
+            "agent_teams_edit_plan",
+            "agent_teams_add_member",
+            "agent_teams_remove_member",
+            "agent_teams_create_task",
+            "agent_teams_reassign_task",
+            "agent_teams_amend_task",
+            "agent_teams_resume",
+            "agent_teams_delete"
+          ]
+        }
+      }
+    },
+    {
+      "id": "7a98f9f0-ee17-4e74-83bd-a871e2104dfd",
+      "name": "aura-reference-analyst",
+      "role": "Aura reference researcher",
+      "provider": "opencode-go",
+      "model": "deepseek-v4.1-flash",
+      "reasoningEffort": "max",
+      "joinedAt": 1794191390535,
+      "status": "removed",
+      "runtimeSetup": {
+        "persona": "You are aura-reference-analyst, a member of the multi-agent team \"swedge-forever-hud\" running inside DeepSeek Harness AgentTeams. The captain leads the team; you are a worker member with the role: Aura reference researcher.\n\nTeam context:\n- Team id: swedge-forever-hud\n- Your name inside the team (use it as `from`/identity): aura-reference-analyst\n- Team goal: WoW Forever-only HUD hardening: secret-safe cooldown/GCD display and a per-class buff/debuff aura icon row above the top swing bars. Every change gated to Forever; all other clients byte-identical in behavior; enterprise-grade evidence, tests, and mutation proofs.\n- Profile protocol: (none)\n- The team state lives under .agent-teams/swedge-forever-hud/ (team.json and inbox/*.jsonl). You may inspect these files read-only for diagnostics, but never edit them directly; use the agent_teams_* tools so JSON escaping and concurrent updates stay safe.\n- The captain and your teammates reach you through messages. Coordination arrives at your nearest model step. Apply it to your current attempt; a task assignment starts a separate turn.\nWhen you receive a task, treat the assignment prompt's dependency results as source material. Do not ignore them.\n\nWorking rules:\n1. When you receive a task assignment, call agent_teams_claim_task with the task id. Keep the returned attempt_id: include it in every agent_teams_update_task call for that execution attempt. Then mark the task in_progress.\n2. Work thoroughly with your available tools; do not cut corners.\n3. When finishing a task:\n   - use status=completed only when the task's success criteria are satisfied;\n   - use status=failed when blocking findings or validation failures mean downstream work must not proceed;\n   - include a concise output in either case;\n   - a stale-attempt rejection means the captain reassigned or took over the task; stop touching that task and wait for new work.\n   claimed cannot jump to completed. Mark in_progress first, then completed or failed.\n   Include attempt_id on every update. Then report once as described below and become idle.\n4. Send one short report with agent_teams_send_message (to=captain) when you complete a task or hit a blocker. Include source_task_id and source_attempt_id in task reports; a stale source rejection means stop, never relabel an old result with a new attempt. The captain is also your parent: this single message satisfies both reporting duties. Do not repeat it through the native send_message tool or send acknowledgments that add no new information.\n5. To ask a teammate something, use agent_teams_send_message with to=<teammate name>; the message lands in their mailbox and wakes them directly — teammates talk to each other without the captain in the loop. The same applies to the captain (to=captain).\n6. After your turn becomes idle, the shared task scheduler may assign your next ready task automatically. Never claim a second task while you still own unfinished work.\n7. If you already own an open attempt (claimed or in_progress) and receive mail, treat it as guidance for that same attempt_id unless the mail explicitly tells you to stop or fail. Do not claim a new task in that turn.\n8. Do not start a teammate's assigned task. Do not privately tell the next-stage member to start; the scheduler assigns unlocked work after you become idle.\n9. You are a worker: do not create or delete teams, reassign tasks, or add/remove members — that is the captain's job.\n10. Quality-gate kinds carry a contract (kind, objective, inScope, acceptance, verify). Stay inside inScope. Do not mark your own implementation as review pass. Review/requirements complete only with verdict=pass; needs_revision/reject must fail with findings. Mail is not a formal next review. Completed work must not be repeated to attach late evidence: call update_task on the original task with its attempt_id and acceptanceResults/commandsRun/evidence_note; supplements are append-only and cannot change its verdict.",
+        "toolFilter": {
+          "deny": [
+            "agent_teams_create",
+            "agent_teams_approve",
+            "agent_teams_edit_plan",
+            "agent_teams_add_member",
+            "agent_teams_remove_member",
+            "agent_teams_create_task",
+            "agent_teams_reassign_task",
+            "agent_teams_amend_task",
+            "agent_teams_resume",
+            "agent_teams_delete"
+          ]
+        }
+      }
+    },
+    {
+      "id": "8499d6d2-a137-4590-83b9-46825c96e931",
+      "name": "hud-cooldown-implementer",
+      "role": "HUD cooldown/secret implementer",
+      "provider": "opencode-go",
+      "model": "deepseek-v4.1-flash",
+      "reasoningEffort": "max",
+      "joinedAt": 1794191390535,
+      "status": "removed",
+      "runtimeSetup": {
+        "persona": "You are hud-cooldown-implementer, a member of the multi-agent team \"swedge-forever-hud\" running inside DeepSeek Harness AgentTeams. The captain leads the team; you are a worker member with the role: HUD cooldown/secret implementer.\n\nTeam context:\n- Team id: swedge-forever-hud\n- Your name inside the team (use it as `from`/identity): hud-cooldown-implementer\n- Team goal: WoW Forever-only HUD hardening: secret-safe cooldown/GCD display and a per-class buff/debuff aura icon row above the top swing bars. Every change gated to Forever; all other clients byte-identical in behavior; enterprise-grade evidence, tests, and mutation proofs.\n- Profile protocol: (none)\n- The team state lives under .agent-teams/swedge-forever-hud/ (team.json and inbox/*.jsonl). You may inspect these files read-only for diagnostics, but never edit them directly; use the agent_teams_* tools so JSON escaping and concurrent updates stay safe.\n- The captain and your teammates reach you through messages. Coordination arrives at your nearest model step. Apply it to your current attempt; a task assignment starts a separate turn.\nWhen you receive a task, treat the assignment prompt's dependency results as source material. Do not ignore them.\n\nWorking rules:\n1. When you receive a task assignment, call agent_teams_claim_task with the task id. Keep the returned attempt_id: include it in every agent_teams_update_task call for that execution attempt. Then mark the task in_progress.\n2. Work thoroughly with your available tools; do not cut corners.\n3. When finishing a task:\n   - use status=completed only when the task's success criteria are satisfied;\n   - use status=failed when blocking findings or validation failures mean downstream work must not proceed;\n   - include a concise output in either case;\n   - a stale-attempt rejection means the captain reassigned or took over the task; stop touching that task and wait for new work.\n   claimed cannot jump to completed. Mark in_progress first, then completed or failed.\n   Include attempt_id on every update. Then report once as described below and become idle.\n4. Send one short report with agent_teams_send_message (to=captain) when you complete a task or hit a blocker. Include source_task_id and source_attempt_id in task reports; a stale source rejection means stop, never relabel an old result with a new attempt. The captain is also your parent: this single message satisfies both reporting duties. Do not repeat it through the native send_message tool or send acknowledgments that add no new information.\n5. To ask a teammate something, use agent_teams_send_message with to=<teammate name>; the message lands in their mailbox and wakes them directly — teammates talk to each other without the captain in the loop. The same applies to the captain (to=captain).\n6. After your turn becomes idle, the shared task scheduler may assign your next ready task automatically. Never claim a second task while you still own unfinished work.\n7. If you already own an open attempt (claimed or in_progress) and receive mail, treat it as guidance for that same attempt_id unless the mail explicitly tells you to stop or fail. Do not claim a new task in that turn.\n8. Do not start a teammate's assigned task. Do not privately tell the next-stage member to start; the scheduler assigns unlocked work after you become idle.\n9. You are a worker: do not create or delete teams, reassign tasks, or add/remove members — that is the captain's job.\n10. Quality-gate kinds carry a contract (kind, objective, inScope, acceptance, verify). Stay inside inScope. Do not mark your own implementation as review pass. Review/requirements complete only with verdict=pass; needs_revision/reject must fail with findings. Mail is not a formal next review. Completed work must not be repeated to attach late evidence: call update_task on the original task with its attempt_id and acceptanceResults/commandsRun/evidence_note; supplements are append-only and cannot change its verdict.",
+        "toolFilter": {
+          "deny": [
+            "agent_teams_create",
+            "agent_teams_approve",
+            "agent_teams_edit_plan",
+            "agent_teams_add_member",
+            "agent_teams_remove_member",
+            "agent_teams_create_task",
+            "agent_teams_reassign_task",
+            "agent_teams_amend_task",
+            "agent_teams_resume",
+            "agent_teams_delete"
+          ]
+        }
+      }
+    },
+    {
+      "id": "c67b3297-0682-42de-9f1e-eadf2379de10",
+      "name": "aura-row-implementer",
+      "role": "Forever aura row implementer",
+      "provider": "opencode-go",
+      "model": "deepseek-v4.1-flash",
+      "reasoningEffort": "max",
+      "joinedAt": 1794191390535,
+      "status": "removed",
+      "runtimeSetup": {
+        "persona": "You are aura-row-implementer, a member of the multi-agent team \"swedge-forever-hud\" running inside DeepSeek Harness AgentTeams. The captain leads the team; you are a worker member with the role: Forever aura row implementer.\n\nTeam context:\n- Team id: swedge-forever-hud\n- Your name inside the team (use it as `from`/identity): aura-row-implementer\n- Team goal: WoW Forever-only HUD hardening: secret-safe cooldown/GCD display and a per-class buff/debuff aura icon row above the top swing bars. Every change gated to Forever; all other clients byte-identical in behavior; enterprise-grade evidence, tests, and mutation proofs.\n- Profile protocol: (none)\n- The team state lives under .agent-teams/swedge-forever-hud/ (team.json and inbox/*.jsonl). You may inspect these files read-only for diagnostics, but never edit them directly; use the agent_teams_* tools so JSON escaping and concurrent updates stay safe.\n- The captain and your teammates reach you through messages. Coordination arrives at your nearest model step. Apply it to your current attempt; a task assignment starts a separate turn.\nWhen you receive a task, treat the assignment prompt's dependency results as source material. Do not ignore them.\n\nWorking rules:\n1. When you receive a task assignment, call agent_teams_claim_task with the task id. Keep the returned attempt_id: include it in every agent_teams_update_task call for that execution attempt. Then mark the task in_progress.\n2. Work thoroughly with your available tools; do not cut corners.\n3. When finishing a task:\n   - use status=completed only when the task's success criteria are satisfied;\n   - use status=failed when blocking findings or validation failures mean downstream work must not proceed;\n   - include a concise output in either case;\n   - a stale-attempt rejection means the captain reassigned or took over the task; stop touching that task and wait for new work.\n   claimed cannot jump to completed. Mark in_progress first, then completed or failed.\n   Include attempt_id on every update. Then report once as described below and become idle.\n4. Send one short report with agent_teams_send_message (to=captain) when you complete a task or hit a blocker. Include source_task_id and source_attempt_id in task reports; a stale source rejection means stop, never relabel an old result with a new attempt. The captain is also your parent: this single message satisfies both reporting duties. Do not repeat it through the native send_message tool or send acknowledgments that add no new information.\n5. To ask a teammate something, use agent_teams_send_message with to=<teammate name>; the message lands in their mailbox and wakes them directly — teammates talk to each other without the captain in the loop. The same applies to the captain (to=captain).\n6. After your turn becomes idle, the shared task scheduler may assign your next ready task automatically. Never claim a second task while you still own unfinished work.\n7. If you already own an open attempt (claimed or in_progress) and receive mail, treat it as guidance for that same attempt_id unless the mail explicitly tells you to stop or fail. Do not claim a new task in that turn.\n8. Do not start a teammate's assigned task. Do not privately tell the next-stage member to start; the scheduler assigns unlocked work after you become idle.\n9. You are a worker: do not create or delete teams, reassign tasks, or add/remove members — that is the captain's job.\n10. Quality-gate kinds carry a contract (kind, objective, inScope, acceptance, verify). Stay inside inScope. Do not mark your own implementation as review pass. Review/requirements complete only with verdict=pass; needs_revision/reject must fail with findings. Mail is not a formal next review. Completed work must not be repeated to attach late evidence: call update_task on the original task with its attempt_id and acceptanceResults/commandsRun/evidence_note; supplements are append-only and cannot change its verdict.",
+        "toolFilter": {
+          "deny": [
+            "agent_teams_create",
+            "agent_teams_approve",
+            "agent_teams_edit_plan",
+            "agent_teams_add_member",
+            "agent_teams_remove_member",
+            "agent_teams_create_task",
+            "agent_teams_reassign_task",
+            "agent_teams_amend_task",
+            "agent_teams_resume",
+            "agent_teams_delete"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ccfcedfc-8f93-49e1-9e02-54fde1b59638",
+      "name": "verifier",
+      "role": "Verification and secret-flow auditor",
+      "provider": "opencode-go",
+      "model": "deepseek-v4.1-flash",
+      "reasoningEffort": "max",
+      "joinedAt": 1794191390535,
+      "status": "removed",
+      "runtimeSetup": {
+        "persona": "You are verifier, a member of the multi-agent team \"swedge-forever-hud\" running inside DeepSeek Harness AgentTeams. The captain leads the team; you are a worker member with the role: Verification and secret-flow auditor.\n\nTeam context:\n- Team id: swedge-forever-hud\n- Your name inside the team (use it as `from`/identity): verifier\n- Team goal: WoW Forever-only HUD hardening: secret-safe cooldown/GCD display and a per-class buff/debuff aura icon row above the top swing bars. Every change gated to Forever; all other clients byte-identical in behavior; enterprise-grade evidence, tests, and mutation proofs.\n- Profile protocol: (none)\n- The team state lives under .agent-teams/swedge-forever-hud/ (team.json and inbox/*.jsonl). You may inspect these files read-only for diagnostics, but never edit them directly; use the agent_teams_* tools so JSON escaping and concurrent updates stay safe.\n- The captain and your teammates reach you through messages. Coordination arrives at your nearest model step. Apply it to your current attempt; a task assignment starts a separate turn.\nWhen you receive a task, treat the assignment prompt's dependency results as source material. Do not ignore them.\n\nWorking rules:\n1. When you receive a task assignment, call agent_teams_claim_task with the task id. Keep the returned attempt_id: include it in every agent_teams_update_task call for that execution attempt. Then mark the task in_progress.\n2. Work thoroughly with your available tools; do not cut corners.\n3. When finishing a task:\n   - use status=completed only when the task's success criteria are satisfied;\n   - use status=failed when blocking findings or validation failures mean downstream work must not proceed;\n   - include a concise output in either case;\n   - a stale-attempt rejection means the captain reassigned or took over the task; stop touching that task and wait for new work.\n   claimed cannot jump to completed. Mark in_progress first, then completed or failed.\n   Include attempt_id on every update. Then report once as described below and become idle.\n4. Send one short report with agent_teams_send_message (to=captain) when you complete a task or hit a blocker. Include source_task_id and source_attempt_id in task reports; a stale source rejection means stop, never relabel an old result with a new attempt. The captain is also your parent: this single message satisfies both reporting duties. Do not repeat it through the native send_message tool or send acknowledgments that add no new information.\n5. To ask a teammate something, use agent_teams_send_message with to=<teammate name>; the message lands in their mailbox and wakes them directly — teammates talk to each other without the captain in the loop. The same applies to the captain (to=captain).\n6. After your turn becomes idle, the shared task scheduler may assign your next ready task automatically. Never claim a second task while you still own unfinished work.\n7. If you already own an open attempt (claimed or in_progress) and receive mail, treat it as guidance for that same attempt_id unless the mail explicitly tells you to stop or fail. Do not claim a new task in that turn.\n8. Do not start a teammate's assigned task. Do not privately tell the next-stage member to start; the scheduler assigns unlocked work after you become idle.\n9. You are a worker: do not create or delete teams, reassign tasks, or add/remove members — that is the captain's job.\n10. Quality-gate kinds carry a contract (kind, objective, inScope, acceptance, verify). Stay inside inScope. Do not mark your own implementation as review pass. Review/requirements complete only with verdict=pass; needs_revision/reject must fail with findings. Mail is not a formal next review. Completed work must not be repeated to attach late evidence: call update_task on the original task with its attempt_id and acceptanceResults/commandsRun/evidence_note; supplements are append-only and cannot change its verdict.",
+        "toolFilter": {
+          "deny": [
+            "agent_teams_create",
+            "agent_teams_approve",
+            "agent_teams_edit_plan",
+            "agent_teams_add_member",
+            "agent_teams_remove_member",
+            "agent_teams_create_task",
+            "agent_teams_reassign_task",
+            "agent_teams_amend_task",
+            "agent_teams_resume",
+            "agent_teams_delete"
+          ]
+        }
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t1",
+      "profileSeedId": "T1",
+      "subject": "Research the WoW Forever HUD cooldown/GCD/secret API contract",
+      "description": "Read and execute bench/briefs/brief_forever_hud_api_2026-11-08.md. WoW Forever only (Camelot 1.60.1, origin/forever); read-only lane, no product edits. Deliverable: bench/forever_hud_api_2026-11-08.md + desks/forever-hud-api/journal.md + done signal. Answer with exact origin/forever:<path>:<line> citations: when cooldown data is secret (C_Secrets predicates + SecretWhenCooldownsRestricted), the sanctioned duration-object pass-through path for swipe/text/GCD, allowed vs forbidden LuaDurationObject methods when HasSecretValues() is true, countdown text/binding sinks, trinket item cooldown face, and the secret-value cache matrix for HUD/LibGlobalCooldown. Use only /home/sam/wow-ui-source (read-only git), /home/sam/SwedgeTimer, /home/sam/SuperSwingTimer-WoW. No web search. Mark runtime-only facts UNCONFIRMED. Enterprise grade: no guessing, no remembered facts.",
+      "status": "completed",
+      "assignee": "forever-api-analyst",
+      "dependencies": [],
+      "attempt": 1,
+      "createdAt": 1794191390535,
+      "updatedAt": 1794192055789,
+      "attemptId": "5be1c8c7-6985-46ad-884a-6fd525d654e6",
+      "reassigning": false,
+      "output": "Delivered the Forever-only (origin/forever eac30af59, 1.60.1 (70790)) cooldown/GCD/secret API contract: bench/forever_hud_api_2026-11-08.md (760 lines, 12 sections) + desks/forever-hud-api/journal.md + done signal. Every client claim is cited origin/forever:<path>:<line>; runtime-only facts are UNCONFIRMED with exact /run probes (P1-P11 / U1-U12).\n\nCore verdicts:\n1) Restricted swipe IS achievable. C_Spell.GetSpellCooldownDuration (SpellDocumentation.lua:326-343) has NO SecretWhenCooldownsRestricted (contrast GetSpellCooldown :312), so its LuaDurationObject is a non-secret handle whose values may be secret (HasSecretValues, LuaDurationObjectAPIDocumentation.lua:350-364). CooldownFrame:SetCooldownFromDurationObject (FrameAPICooldownDocumentation.lua:307-318) is the only cooldown setter WITHOUT SecretArgumentsAddAspect. SecretArguments=AllowedWhenUntainted constrains secret ARGUMENTS only, stated in Blizzard's own prose at Blizzard_UnitFrame/Shared/UnitFrameUtil.lua:487. This supersedes bench/secret_api_matrix_2026-11-06.md:156 and bench/secret_hud_fix_2026-11-06.md:17 (\"swipe cannot be driven from a restricted read\") with evidence.\n2) Countdown text: C_DurationUtil.CreateDurationTextBinding + SetFontString/SetDuration/SetFormatter(C_StringUtil.CreateSecondsFormatter) + SetTextColorCurve(C_CurveUtil.CreateColorCurve, Enum.DurationTextBindingProperty.RemainingDuration) renders text and warn colour natively; the addon must never format (SecondsFormatter:Format is AllowedWhenUntainted) or read the text back (GetText = SecretReturnsForAspect Text).\n3) GCD: detection without numbers via SpellCooldownInfo.isOnGCD/isActive (NeverSecret, SpellSharedDocumentation.lua:26,30); swipe from GetSpellCooldownDuration(probe,false). Root cause of today's dark GCD: LibGlobalCooldown.poll_gcd:152-171 reads api.GetSpellCooldown, which compat answers 0,0,0,0,true under restriction (compat.lua:471-473), so gcd_duration never arms.\n4) Trinkets: NO duration-object API for item cooldowns exists in the whole branch, and no item secrecy predicate. Contract bug: the 4th return of GetInventoryItemCooldown is isOnGCD (Blizzard CooldownViewer.lua:1017,1021), but compat.lua:1565-1584 + hud.lua:341-350,418-431 read it as restricted -> grey unknown face + no swipe for the whole GCD window.\n5) Cache rules: a secret table key poisons every access and hard-errors (Blizzard_AuraContainerGroups.lua:12-25); the secure secretunwrap+settablesecurity pattern is unavailable to addons because secretunwrap=nil in Blizzard_EnvironmentCleanup/Mainline/EnvironmentCleanup.lua:280; scrubsecretvalues/issecretvalue remain. All six addon cache groups mapped with minimal fixes (hud known_names/known_cache/layout_cache/icons/trinkets/TRINKET_STATE/PREVIEW_STATE; LibGlobalCooldown gcd_*/current_spell_*; compat wrappers), including replacing icons[i].cd_start/cd_duration with the object handle + a plain token.\n\nRead-only: no product file, test, TOC, doc or git state touched; no web search; only the 3 deliverables written.",
+      "changedPaths": [
+        "bench/forever_hud_api_2026-11-08.md",
+        "desks/forever-hud-api/journal.md",
+        "desks/forever-hud-api/.signals/2026-11-09T024130Z.json"
+      ],
+      "acceptanceResults": [
+        {
+          "criterion": "Citation-backed answer to questions A-D of brief_forever_hud_api_2026-11-08.md with exact origin/forever:<path>:<line> citations",
+          "status": "passed",
+          "evidence": "bench/forever_hud_api_2026-11-08.md sections 2-9 cover A (predicates/restriction states), B1-B2 (duration-object pass-through + GetSpellCooldown vs GetSpellCooldownDuration), B3 (countdown text/binding sinks), B4 (GCD + LibGlobalCooldown keep/stop), B5 (trinket/item), C (cache matrix incl. scrubsecretvalues/secretunwrap/settablesecurity + six cache groups), D (decision table). Every row carries an origin/forever path:line."
+        },
+        {
+          "criterion": "Required deliverable structure (11 sections) + in-client checklist with exact /run probes + UNCONFIRMED register",
+          "status": "passed",
+          "evidence": "Report has 12 sections: 1 scope/commit, 2 restriction states+predicates, 3 cooldown read matrix, 4 duration-object verdict with every annotation quoted, 5 countdown text verdict, 6 GCD verdict+wiring, 7 trinket/item verdict, 8 secret-value cache matrix with minimal fixes, 9 decision table, 10 in-client checklist P1-P11, 11 UNCONFIRMED register U1-U12, 12 read-only attestation."
+        },
+        {
+          "criterion": "WoW Forever only, gated, no guessing: runtime-only facts marked UNCONFIRMED",
+          "status": "passed",
+          "evidence": "All design rows are Forever/probe-gated; non-Forever paths stay byte-identical by construction (object channel additive, existing numeric path unchanged). U1-U12 list every client-only fact with its closing probe; no remembered fact used."
+        },
+        {
+          "criterion": "Read-only lane: no product edits, no git in /home/sam/SwedgeTimer, no web search",
+          "status": "passed",
+          "evidence": "Only bench/forever_hud_api_2026-11-08.md, desks/forever-hud-api/journal.md and desks/forever-hud-api/.signals/2026-11-09T024130Z.json created; find -newermt over the last 40 minutes shows no product file touched by this lane (other changed paths belong to the captain/other lanes). wow-ui-source read via git show/git grep only."
+        }
+      ],
+      "commandsRun": [
+        {
+          "command": "git -C /home/sam/wow-ui-source log -1 --format='%H %ci %s' origin/forever && git show origin/forever:version.txt",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "eac30af597e5aaa43a60f6675ef5fdcea100375f 2026-11-04 1.60.1 (70790); version.txt 1.60.1.70790 — client identity pinned before any claim"
+        },
+        {
+          "command": "git grep -n 'LuaDurationObject' origin/forever -- Interface/AddOns/Blizzard_APIDocumentationGenerated",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "Enumerated every duration-object returner (ActionBar x3, DurationUtil, EncounterTimeline, FrameAPICooldown, LossOfControl, PvpInfo, SimpleStatusBar x2, SpellBook x3, SpellDocumentation x3, Totem, UnitAura, Unit x3) -> proves no item/inventory cooldown duration API exists"
+        },
+        {
+          "command": "git grep -n \"Name = \\\"GetSpellCooldown\\\"\\|Name = \\\"GetSpellCooldownDuration\\\"\\|Name = \\\"SetCooldownFromDurationObject\\\"\\|Name = \\\"HasSecretValues\\\"\" origin/forever -- Interface/AddOns/Blizzard_APIDocumentationGenerated",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "Verified the exact line numbers cited (SpellDocumentation.lua:309/327, FrameAPICooldownDocumentation.lua:308, LuaDurationObjectAPIDocumentation.lua:351, DurationTextBindingObjectAPIDocumentation.lua:134/250/283/294/305/349/371)"
+        },
+        {
+          "command": "node -e JSON.parse(desks/forever-hud-api/.signals/2026-11-09T024130Z.json)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "signal JSON ok"
+        },
+        {
+          "command": "find /home/sam/SwedgeTimer -newermt '-40 minutes' -type f -not -path './.git/*'",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "Only this lane's 3 deliverables under bench/ and desks/forever-hud-api/; no product file, test, TOC or doc changed"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "profileSeedId": "T2",
+      "subject": "Extract the SuperSwingTimer aura icon reference and SwedgeTimer port map",
+      "description": "Read and execute bench/briefs/brief_aura_row_reference_2026-11-08.md. WoW Forever only; read-only lane, no product edits. Deliverable: bench/aura_row_reference_2026-11-08.md + desks/aura-row-reference/journal.md + done signal. Extract from /home/sam/SuperSwingTimer-WoW/SuperSwingTimer_Forever.lua the native AuraContainer/DisableUntrustedLayoutScriptsTemplate system, C_Secrets aura gates, per-class Forever buff/debuff lists for all six classes with provenance markers, container creation, and top-bar anchoring; map them onto a new Forever-only aura_icons.lua using ST:iter_hands and the bars.lua public helpers. Cite file:line; mark TBC/SoD-only or unverified ids UNCONFIRMED. Do not edit the reference addon or SwedgeTimer.",
+      "status": "completed",
+      "assignee": "aura-reference-analyst",
+      "dependencies": [],
+      "attempt": 1,
+      "createdAt": 1794191390535,
+      "updatedAt": 1794192121807,
+      "attemptId": "5243edcf-2352-4bb5-8e8e-b64c13f589aa",
+      "reassigning": false,
+      "output": "Delivered bench/aura_row_reference_2026-11-08.md (869 lines) + desks/aura-row-reference/journal.md + done signal; read-only, no product edits.\n\nCONTENTS: reference code map with file:line for every mechanic the brief listed (support/secrecy gates 36-133, per-class lists 326-660 + AppendUnique merge 591-615, CreateAuraContainerFrame 922-933, CreateAuraGroupContainer 942-1008, StyleAuraButton 807-916, BuildAuraSpellIDMap 652-660, GetAnchorBar/ComputeIconYOffset/ApplyContainerAnchors 1038-1452, IsForeverDebuffRowPopulated 1380-1409, 0.15 s UpdateForeverAuraIcons 1642-1732, PLAYER_LOGIN/PLAYER_ENTERING_WORLD init retry 1757-1784, hand-over wrap 1458-1485); full six-class id tables with provenance markers (post-merge: buffs 26/17/9/12/22/11 = 97; debuffs 29/19/19/30/19/44 = 160 after excluding 27019; shared 5; racial 10 keys); API confirmation table against origin/forever tip eac30af5 (templates + allowUntaintedCreation, AuraContainerSortMethod/Direction, C_AuraContainerUtil, C_Secrets + Enum.SecrecyLevel, C_UnitAuras annotations, includeSpellIDs privilege gating, maxDuration, AddAuraGroup vs AddAuraSlot, secretwrap container sizing); port plan for a new Forever-only aura_icons.lua (exact gate, main.lua post_init seam, container config, fixed-band anchoring over ST:iter_hands/get_bar_frame, options/defaults keys with orders, TOC/toc_check/run.sh edits, 18 test cases + 8 mutation proofs, risks + do-not-copy list); 13-row UNCONFIRMED in-client checklist with exact /run probes.\n\nKEY FINDINGS FOR DOWNSTREAM: (1) the client sizes aura containers through secretwrap (Blizzard_CustomAuraContainer.lua:796-801) so container height/top can be secret — never measure an aura container; the port reserves a fixed band instead of anchoring the buff row to the measured debuff row (this invalidates the naive reading of the reference's own between-rows anchor). (2) Own-caster debuffs need no CLEU: \"HARMFUL|PLAYER\" is the client filter (AuraUtil.lua:274), and includeSpellIDs identity matching is privilege-gated, so the debuff row is empty on friendly targets by design. (3) UnitAura does not exist on Forever (classic-only deprecated shims) -> no classic fallback needed. (4) 27019 is reference-marked TBC-only -> excluded; stance ids (Aspects/Seals/Stances/Shields/Forms/Stealth) are a separate left-slot feature, not ported, and must not leak into the buff row. (5) 18 ids (every FOREVER_NEW_ABILITY_CANDIDATES entry) sit in both rows by the reference's double merge — recommended to keep and pin by test. (6) Reference docs are stale in four places (WIRING.md 0.25 s vs the 0.15 s constant, a ns.foreverAuraPending that does not exist, \"classic updaters are NOT wrapped\" while WrapLegacyIconUpdaters runs, \"native row shown only while IsAuraDataSecret\" which the code never checks) — documented so the impl lane does not inherit them.\n\nUNCONFIRMED (runtime only, no Forever client run): tainted creation of CustomAuraContainerTemplate, secret-safe behaviour in combat/instances, container geometry secrecy, own-caster filtering in a group, per-class topmost-bar placement. All filed as U1-U13 with probes.",
+      "changedPaths": [
+        "bench/aura_row_reference_2026-11-08.md",
+        "desks/aura-row-reference/journal.md",
+        "desks/aura-row-reference/.signals/20261109T025200Z.json"
+      ]
+    },
+    {
+      "id": "t3",
+      "profileSeedId": "T3",
+      "subject": "Implement the Forever secret-safe HUD cooldown/GCD path and cache hardening",
+      "description": "Depends on T1; read bench/forever_hud_api_2026-11-08.md first, then execute bench/briefs/brief_hud_cooldown_impl_2026-11-08.md. WoW Forever only; do not break any other client. Write scope ONLY: hud.lua, compat.lua (additive helpers), LibGlobalCooldown.lua, tests/hud_state.lua, tests/forever_secret_compat_state.lua, bench/hud_forever_cooldown_2026-11-08.md, desks/hud-cooldown-fix/**. Implement the Forever duration-object pass-through for ability cooldown swipes, countdown text, and GCD; restricted/unknown face for trinkets; no secret value in any cache, comparison, format, table key or table value; audit HUD.known_names/known_cache/HUD.icons/HUD.trinkets/LibGlobalCooldown state. Red-first tests + at least 3 mutation proofs + full bash tests/run.sh + luacheck + luac5.1 -p. Every new branch gated on st.family == \"FOREVER\" plus an exact API probe; never st.is_mainline alone. No git, no version, no TOC/config/options/main/bars/classes/docs edits. If T1 contradicts this brief, follow T1 evidence and report the deviation.",
+      "status": "completed",
+      "assignee": "hud-cooldown-implementer",
+      "dependencies": [
+        "t1"
+      ],
+      "attempt": 1,
+      "createdAt": 1794191390535,
+      "updatedAt": 1794194602153,
+      "attemptId": "979874ee-8826-4232-b937-1fd8ec9b7cb4",
+      "reassigning": false,
+      "output": "T3 delivered: Forever-only secret-safe HUD cooldown swipe/countdown + GCD via the documented native duration-object pass-through, plus cache hardening. Report: bench/hud_forever_cooldown_2026-11-08.md; desk: desks/hud-cooldown-fix/ (journal + done signal 2026-11-09T032034Z).\n\nWHAT CHANGED\n- compat.lua (additive only, :559-737): api.get_spell_cooldown_duration (opaque LuaDurationObject + plain HasSecretValues answer; ignoreGCD forwarded), api.get_spell_cooldown_state (NeverSecret isOnGCD/isActive), api.get_spell_cooldown_secrecy (C_Secrets predicate), api.create_duration_text_binding, api.create_seconds_formatter (plain-arg config), api.create_duration_text_color_curve. All Forever-only + probe-gated; no existing wrapper contract changed.\n- hud.lua: new Forever pass-through block (:1370-1503). While the provider flags `restricted`, paint acquires GetSpellCooldownDuration(slot spell, ignoreGCD=false) and hands the handle to CooldownFrame:SetCooldownFromDurationObject(obj, true); no object value ever read. Native countdown binding (C_DurationUtil) owns the text + a colour curve for the warn colour; 2 s GCD text rule enforced from the plain isOnGCD field. Readable states (all clients, Forever out of restriction) keep the exact old numeric path. SEC-13: state scrub at the provider->paint boundary + boolean-field secret guards (usable/in_range/glow/desaturate/reverse/hidden/texture) in paint. Cache hardening: known_names refuses secret ids/names, known_cache (now HUD.known_cache) re-proves entries before read and drops poisoned ones, trinket tracker drops poisoned records before compare, PREVIEW_STATE resets restricted.\n- LibGlobalCooldown.lua: plain_number probe-first helper, Forever object channel (lib.gcd_object + plain lib.gcd_on_gcd, additive GCD_OBJECT_STARTED/GCD_OBJECT_OVER), restricted read clears/skips the timing cache instead of storing a partial; no expiry derived from the object.\n- tests: hud_state +131 checks (893->1024, sections 23-28), forever_secret_compat_state +73 (177->250, sections 8-11).\n\nVERIFICATION: bash tests/run.sh 59 steps / 0 failed; hud_state 1024/1024; forever_secret_compat 250/250; secret_guard (cross-lane, unmodified) 524/524; luacheck 2 warnings / 0 errors in 105 files (both pre-existing hunter_ui, tree floor); luac5.1 -p clean; local budget hud.lua 59/190. Mutation proofs (isolated /tmp copies, never the real tree): 8 single-site mutants; 7 kill the suite exit 1 (M1 34/1024, M2 41/1024, M3 1/1024, M4 3/1024, M6 11/1024, M7 6/1024, M9 2/1024; M8 4/250 in the compat suite). M5 (SEC-13 state scrub removal) SURVIVES offline because Lua 5.1 cannot emulate raise-on-comparison on flagged primitives - reported honestly; the scrub is load-bearing only on the real client and its paint-boundary twins bite (M2/M7).\n\nDEVIATIONS from T1/brief (documented in report §6): (1) T1 §7's trinket fourth-return defect does not exist in this tree - compat reads three values already and the fourth return is compat's own SEC-10 flag; contract change is forbidden by the brief, so no change; (2) UNIT_SPELLCAST_INTERRUPTED keeps its old release-on-restricted shape because tests/secret_guard_state.lua (cross-lane) pins it - the object channel is the real release path; (3) GCD wiring split: HUD paints from its own per-spell object (main.lua untouchable), LGC exposes the additive state channel; (4) restricted native text may round +/-1 s vs the readable face (plain-arg formatter config).\n\nSTILL UNCONFIRMED (client-only, exact /run probes in report §7): P4/P5 (engine accepts a secret-valued object from tainted code / renders the binding) are the two that matter; pcall fallback is the grey unknown face. No blockers; no further work from this lane unless t5 files a finding.",
+      "changedPaths": [
+        "hud.lua",
+        "compat.lua",
+        "LibGlobalCooldown.lua",
+        "tests/hud_state.lua",
+        "tests/forever_secret_compat_state.lua",
+        "bench/hud_forever_cooldown_2026-11-08.md",
+        "desks/hud-cooldown-fix/journal.md",
+        "desks/hud-cooldown-fix/.signals/2026-11-09T032034Z.json"
+      ],
+      "acceptanceResults": [
+        {
+          "criterion": "Forever restricted ability cooldown: native duration-object sink paints the swipe, no secret number read, not painted as ready/full",
+          "status": "passed",
+          "evidence": "hud.lua:1554-1592 (SetCooldownFromDurationObject, handle stored, numeric fields nil); tests/hud_state.lua §23 fixtures raise on every object getter; mutant M1 -> 34/1024 fail"
+        },
+        {
+          "criterion": "Forever plain cooldown: existing numeric path and exact visuals unchanged",
+          "status": "passed",
+          "evidence": "hud_state §23(b): 0 duration-object reads, numeric SetCooldown(start,duration), text '5', binding released"
+        },
+        {
+          "criterion": "Countdown text via native binding only; never formatted/read back; the 2 s GCD text rule preserved",
+          "status": "passed",
+          "evidence": "hud.lua:1651-1736 + compat create_seconds_formatter/colour curve; hud_state §23(c) asserts no binding SetDuration on isOnGCD and text hidden; compat §11 pins the plain-arg formatter config"
+        },
+        {
+          "criterion": "GCD: running GCD paints on ability icons on Forever (restricted) without reading restricted numbers; LibGlobalCooldown object channel + restricted cache clearing",
+          "status": "passed",
+          "evidence": "hud_state §23(c/d) ignoreGCD=false object sink + plain on_gcd flip; hud_state §28 lib.gcd_object/gcd_on_gcd, GCD_OBJECT_STARTED/OVER, restricted read stores no number and clears stale channel; mutant M6 -> 11/1024"
+        },
+        {
+          "criterion": "Non-Forever clients byte-identical: zero duration-object calls, exact old numeric sequence",
+          "status": "passed",
+          "evidence": "hud_state §24; mutant M8 (compat Forever gate removed) -> 4/250 compat fails while hud_state stays green (HUD has its own gate)"
+        },
+        {
+          "criterion": "Missing-API Forever clients: silent fallback, no throw, no fabricated numbers",
+          "status": "passed",
+          "evidence": "hud_state §25: no C_Spell / no C_DurationUtil / throwing reader / throwing state; grey face or real swipe, never an error"
+        },
+        {
+          "criterion": "Cache hygiene: no secret in known_names/known_cache/HUD.icons/HUD.trinkets/LibGlobalCooldown; poisoned provider field rejected at paint (booleans too)",
+          "status": "passed",
+          "evidence": "hud.lua known_names :954-1002, known_cache :1047-1095, trinket guards :292-545, SEC-13 scrub :1837-1878; hud_state §26/§27; mutants M3 1/1024, M4 3/1024, M7 6/1024"
+        },
+        {
+          "criterion": "Trinket SEC-10 tri-state preserved (restricted stays visible unknown face; only confirmed passive hides); no invented item timing",
+          "status": "passed",
+          "evidence": "hud_state §26 re-pin: restricted -> trinket_usable nil, slot visible, state.restricted true, remaining nil; readable passive -> false/hidden; no item duration-object API used"
+        },
+        {
+          "criterion": "Every new branch gated on st.family == 'FOREVER' plus an exact API probe; never st.is_mainline alone",
+          "status": "passed",
+          "evidence": "hud.lua forever_native_enabled :1399, compat helpers :575/:602/:625/:643/:659/:694, LibGlobalCooldown :204; grep confirms no new is_mainline branch"
+        },
+        {
+          "criterion": "Red-first-equivalent tests + at least 3 mutation proofs + full tests/run.sh + luacheck + luac5.1 -p",
+          "status": "passed",
+          "evidence": "8 mutants on isolated copies (7 bite, M5 survives documented); bash tests/run.sh 59 steps/0 failed; luacheck 2 warnings/0 errors (tree floor); luac clean; report §4/§5"
+        },
+        {
+          "criterion": "Deliverables: bench report + desk journal + done signal",
+          "status": "passed",
+          "evidence": "bench/hud_forever_cooldown_2026-11-08.md; desks/hud-cooldown-fix/journal.md; desks/hud-cooldown-fix/.signals/2026-11-09T032034Z.json"
+        },
+        {
+          "criterion": "Write scope only (no git/version/TOC/config/options/main/bars/classes/docs edits)",
+          "status": "passed",
+          "evidence": "git status on the exact paths: only hud.lua/compat.lua/LibGlobalCooldown.lua/tests/hud_state.lua/tests/forever_secret_compat_state.lua modified (plus the new bench/desk files); tests/secret_guard_state.lua run but unmodified"
+        }
+      ],
+      "commandsRun": [
+        {
+          "command": "bash tests/run.sh",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "59 steps, 0 failed (baseline before edits: 58 steps, 0 failed)"
+        },
+        {
+          "command": "lua5.1 tests/hud_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "PASS hud_state.lua (1024 checks) - baseline 893"
+        },
+        {
+          "command": "lua5.1 tests/forever_secret_compat_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "250 checks, 0 failed - baseline 177"
+        },
+        {
+          "command": "lua5.1 tests/secret_guard_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "PASS secret_guard_state.lua (524 checks) - cross-lane regression check, file unmodified"
+        },
+        {
+          "command": "luacheck . --no-color",
+          "status": "passed",
+          "exitCode": 1,
+          "evidence": "2 warnings / 0 errors in 105 files = the pre-existing tree floor (both in hunter_ui.lua, out of scope); exit 1 means warnings only, accepted by run.sh"
+        },
+        {
+          "command": "luac5.1 -p hud.lua compat.lua LibGlobalCooldown.lua tests/hud_state.lua tests/forever_secret_compat_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "all five files parse (run.sh also runs luac5.1 -p on every root+classes file)"
+        },
+        {
+          "command": "mutation proofs on isolated /tmp copies (8 single-site mutants)",
+          "status": "passed",
+          "exitCode": 1,
+          "evidence": "M1 34/1024, M2 41/1024, M3 1/1024, M4 3/1024, M6 11/1024, M7 6/1024, M9 2/1024 (all exit 1); M8 4/250 compat exit 1; M5 (scrub removal) exit 0/SURVIVES documented as offline-unobservable defence-in-depth"
+        }
+      ]
+    },
+    {
+      "id": "t4",
+      "profileSeedId": "T4",
+      "subject": "Implement the WoW Forever-only per-class aura icon row above the top bars",
+      "description": "Depends on T2; read bench/aura_row_reference_2026-11-08.md first, then execute bench/briefs/brief_aura_row_impl_2026-11-08.md. WoW Forever only; the aura row must be completely inert on every non-Forever client. Write scope ONLY: new aura_icons.lua, new tests/aura_icons_state.lua, SwedgeTimer.toc, main.lua (init seam only), config_presets.lua (defaults), option_tables.lua (aura controls), option_table_presets.lua (if needed), tests/run.sh, tests/toc_check.lua (only if required), bench/aura_row_2026-11-08.md, desks/aura-row/**. Native AuraContainer only; per-class Forever buff/debuff lists; anchor above the topmost visible swing bar via ST:iter_hands/get_anchor_frame/get_hiding_anchor_frame/get_bar_frame; no secret aura reads; no UnitAura while C_Secrets.ShouldAurasBeSecret() is true. Red-first tests + at least 3 mutation proofs + full bash tests/run.sh + luacheck + luac5.1 -p. No git, no version, no docs edits; do not touch hud.lua/compat.lua/LibGlobalCooldown.lua/class files/bars.lua.",
+      "status": "completed",
+      "assignee": "aura-row-implementer",
+      "dependencies": [
+        "t2"
+      ],
+      "attempt": 1,
+      "createdAt": 1794191390535,
+      "updatedAt": 1794193954578,
+      "attemptId": "cf530ca1-eaee-4b13-857d-c4a3edeee8aa",
+      "reassigning": false,
+      "output": "Implemented the WoW Forever-only per-class aura icon row (task t4).\n\nWHAT SHIPPED\n- NEW aura_icons.lua (1279 lines): Forever gate (st.family==\"FOREVER\" + C_AuraContainerUtil/SortMethod/SortDirection present + CreateFrame template probe); two native AuraContainer rows (HELPFUL/player buffs; HARMFUL|PLAYER/target own-caster debuffs) with per-class Forever includeSpellIDs (97 buff ids, 160 debuff ids post-merge; shared 5 merged buff-only; racial 10 keys, file-token-then-localized; 27019 and removed druid ids excluded; stance tier never merged); button styling (icon/border/client-owned duration text/stacks/optional debuff duration bar); fixed reserved band anchored above the topmost VISIBLE swing bar from plain bar geometry only (never measures an aura container — its geometry can be secret); 0.15 s throttled maintenance, 0.5 s no-latch creation retry, forced PLAYER_ENTERING_WORLD pass; native containers deferred in combat lockdown while the plain retry driver exists; nil-safe defaults (enabled/show_debuffs on, size 22, spacing 3, grow right); nil-safe diagnostics.\n- Wiring: SwedgeTimer.toc (after hud.lua), main.lua guarded ST:init_aura_icons() seam + one post_init call, config_presets.lua five documented defaults, option_tables.lua ST:aura_icon_options_args() widget set (hidden on every non-Forever family) merged into the Behaviour page, tests/run.sh registration, tests/toc_check.lua REQUIRED_MODULES pin. option_table_presets.lua deliberately untouched.\n- Evidence: NEW tests/aura_icons_state.lua (1582 lines, 853 checks) written red-first; bash tests/run.sh 59 steps / 0 failed; luacheck new files 0 warnings/0 errors; luac5.1 -p clean; 12 mutation proofs on isolated /tmp copies all fail correctly (2-55 failing checks each; one first-run mutation exposed a real fixture weakness that was fixed and re-proven).\n- Bench report bench/aura_row_2026-11-08.md (393 lines): file:line map, gate/lifecycle diagram, shipped id tables with provenance, test evidence, 12-row mutation table, 15-row UNCONFIRMED in-client checklist with exact /run probes, decisions/risks. Desk journal + done signal in desks/aura-row/.\n\nOPERATOR NOTE: the in-client items U1-U15 in the bench report still need a Forever session (tainted template creation, secret-safe combat updates, container SetPoint/Show in combat, container-geometry secrecy, topmost-bar visual stack per class). Nothing else blocks review.",
+      "changedPaths": [
+        "aura_icons.lua",
+        "tests/aura_icons_state.lua",
+        "SwedgeTimer.toc",
+        "main.lua",
+        "config_presets.lua",
+        "option_tables.lua",
+        "tests/run.sh",
+        "tests/toc_check.lua",
+        "bench/aura_row_2026-11-08.md",
+        "desks/aura-row/journal.md",
+        "desks/aura-row/.signals/2026-11-09T031013Z.json"
+      ],
+      "acceptanceResults": [
+        {
+          "criterion": "WoW Forever-only: module is completely inert on every non-Forever client (no frame, event, aura read, option side effect)",
+          "status": "passed",
+          "evidence": "Suite section 1 (6 families ERA/TBC/WRATH/CATA/MISTS/RETAIL + 3 missing-global cases): available false with reason, init false, zero frames, zero events, zero AuraContainer creation attempts, zero aura reads, secrecy predicate never consulted, options hidden. Also pinned at load: only st.family compare + table/function definitions."
+        },
+        {
+          "criterion": "Native AuraContainer only; per-class Forever buff/debuff lists; shared/racial merged at container creation only; no cross-class leak; exclusions pinned",
+          "status": "passed",
+          "evidence": "Two native containers (HELPFUL/player, HARMFUL|PLAYER/target) each with one AddAuraGroup; exact includeSpellIDs sets for all six classes from independent test tables (buffs 26/17/9/12/22/11=97; debuffs 29/19/19/30/19/44=160; shared 5; racial 10 keys); 27019 excluded; removed druid ids and stance ids absent; overlap exactly the 18 candidates; class arrays unmodified after build."
+        },
+        {
+          "criterion": "No secret aura reads; no UnitAura while C_Secrets.ShouldAurasBeSecret() is true",
+          "status": "passed",
+          "evidence": "Source scan: no UnitAura/C_UnitAuras/AuraData/GetPlayerAuraBySpellID tokens. Booby-trapped aura globals in the sandbox count/raise; 0 reads with auras secret and readable. Identical container calls in both secrecy states; C_Secrets only consulted by diagnostics (fail-closed, missing-safe)."
+        },
+        {
+          "criterion": "Anchor above the topmost visible swing bar via ST:iter_hands/get_bar_frame; hide fallback; re-anchor on bar change; throttled; PLAYER_ENTERING_WORLD forced pass; no secret geometry compared",
+          "status": "passed",
+          "evidence": "Placement section: ranged>mainhand>offhand by plain GetTop, tie-break, hide fallback, nil (lazy) hand skipped, move re-anchors, unchanged pass issues no SetPoint, secret numeric GetTop/secret IsShown skipped without throw, zero container geometry reads (fake frames count every one). Fixed reserved band = BAR_GAP + size + TEXT_CLEARANCE; band collapses when debuffs off. 0.15 s throttle + 0 forces + PLAYER_ENTERING_WORLD forced pass."
+        },
+        {
+          "criterion": "Options/defaults/TOC/init wiring: five nil-safe keys defaulting as documented, controls hidden on non-Forever, single-TOC load after hud.lua, guarded main.lua seam",
+          "status": "passed",
+          "evidence": "config_presets defaults pinned equal to module DEFAULTS (enabled/show_debuffs true, size 22, spacing 3, grow right); option_tables real builder loaded in-sandbox: 7 widgets, orders > 2.7, visible on Forever, hidden on Era and when module absent, nil getters answer defaults, setters write db + apply immediately (hide/show, layout push, re-anchor, flow flip); TOC lists aura_icons.lua once after hud.lua (LF preserved); main.lua seam defined/called once inside post_init, pcall-isolated; run.sh registry + toc_check REQUIRED_MODULES pinned."
+        },
+        {
+          "criterion": "Red-first tests with mutation proofs; full bash tests/run.sh + luacheck + luac5.1 -p green",
+          "status": "passed",
+          "evidence": "Red first: suite exit 1 on missing aura_icons.lua before implementation. Green: lua5.1 tests/aura_icons_state.lua = 853 checks / 0 failures; bash tests/run.sh = 59 steps / 0 failed (luacheck 8 warnings/0 errors in 105 files); luacheck on the two new files 0/0; luac5.1 -p clean. 12 anchored single-line mutations on isolated /tmp copies all fail the suite (exit 1; fails 55/2/15/9/11/4/4/2/3/5/2/3); M9 exposed and fixed a real fixture weakness (numeric secret sentinel)."
+        },
+        {
+          "criterion": "Write scope respected: only allowed paths changed; no git, no version bump, no docs edits, no hud.lua/compat.lua/LibGlobalCooldown.lua/class/bars edits",
+          "status": "passed",
+          "evidence": "New aura_icons.lua + tests/aura_icons_state.lua; edits only SwedgeTimer.toc, main.lua (init seam), config_presets.lua (defaults), option_tables.lua (aura controls), tests/run.sh, tests/toc_check.lua; option_table_presets.lua untouched; bench/aura_row_2026-11-08.md + desks/aura-row/**. Version stays 2.1.8; no git executed; out-of-scope files unchanged by this lane."
+        }
+      ],
+      "commandsRun": [
+        {
+          "command": "lua5.1 tests/aura_icons_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "853 checks, 0 failures (14 sections: gate/inertness, happy path, per-class id sets, secrecy/native-only, placement, options/layout, throttle/events, combat/retry, style callback, diagnostics, option widgets, defaults, registry/seam)."
+        },
+        {
+          "command": "bash tests/run.sh",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "59 steps, 0 failed; includes PASS lua5.1 tests/aura_icons_state.lua, PASS lua5.1 tests/toc_check.lua, PASS luacheck . (Total: 8 warnings / 0 errors in 105 files)."
+        },
+        {
+          "command": "luac5.1 -p aura_icons.lua tests/aura_icons_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "No syntax errors (also covered repo-wide by tests/run.sh syntax_check)."
+        },
+        {
+          "command": "luacheck aura_icons.lua tests/aura_icons_state.lua --no-color",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "Total: 0 warnings / 0 errors in 2 files."
+        },
+        {
+          "command": "lua5.1 tests/aura_icons_state.lua  (red-first, before aura_icons.lua existed)",
+          "status": "passed",
+          "exitCode": 1,
+          "evidence": "Expected red: exit 1, 'cannot open tests/../aura_icons.lua: No such file or directory' - the suite was written before the module and fails without it."
+        },
+        {
+          "command": "12x mutation runner (anchored single-line reversions on isolated /tmp copies; lua5.1 tests/aura_icons_state.lua per copy)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "All 12 mutations (M1 gate family, M2 own-caster filter, M3 top comparator, M4 container measure, M5 shared merge, M6 creation latch, M7 27019, M8 throttle, M9 secret geometry guard, M10 option family, M11 main seam, M12 TOC line) exit 1 with 2-55 failing checks each; copies discarded. M9 first passed and exposed a fixture weakness, fixed with a numeric secret sentinel and re-proven."
+        }
+      ]
+    },
+    {
+      "id": "t5",
+      "profileSeedId": "T5",
+      "subject": "Independently verify both lanes and audit the Forever secret flow and caches",
+      "description": "Depends on T3 and T4; execute bench/briefs/brief_hud_forever_verify_2026-11-08.md. Read-only on product/tests/TOC/config/docs; no git. Deliverable: bench/hud_forever_verification_2026-11-08.md + desks/aura-hud-verify/journal.md + done signal. Independently run full bash tests/run.sh, luacheck, luac, and the mutation checks; audit every Forever-only gate for zero non-Forever behavior change; audit every secret-capable API read and every cache (HUD.known_names/known_cache/HUD.icons/HUD.trinkets/LibGlobalCooldown/aura_icons state) for secret leakage; confirm the duration-object path never reads GetRemainingDuration/GetTotalDuration/GetStartTime/IsActive when HasSecretValues() is true; confirm the aura row never reads AuraData and is inert on classic clients; confirm TOC integrity and unchanged non-Forever visuals. Report PASS/FAIL/UNCONFIRMED per criterion with exact file:line findings and an in-client checklist. Do not fix findings yourself; report them to the Lead.",
+      "status": "completed",
+      "assignee": "verifier",
+      "dependencies": [
+        "t3",
+        "t4"
+      ],
+      "attempt": 1,
+      "createdAt": 1794191390535,
+      "updatedAt": 1794195698049,
+      "attemptId": "c9c05608-3a85-49c7-b181-b959bdf40757",
+      "reassigning": false,
+      "output": "Independent verification of both Forever HUD lanes complete: A/B/C/D/E PASS, F (in-client checklist) delivered. Report bench/hud_forever_verification_2026-11-08.md (585 lines) + desks/aura-hud-verify/journal.md + done signal. No blocker, no secret/taint defect, no non-Forever behaviour change found; product tree untouched (read-only lane, no git in the repo).\n\nHEADLINE EVIDENCE (all produced on the current tree)\n- bash tests/run.sh: 59 steps, 0 failed. luacheck .: 2 warnings / 0 errors in 105 files (both pre-existing hunter_ui.lua:135-136, mtime 2026-11-06). luac5.1 -p clean on every changed file; LF only; no lint silencing; .luacheckrc untouched.\n- Suite counts: hud_state 1024, forever_secret_compat_state 250, aura_icons_state 853, secret_guard_state 524 (unmodified), toc_check 360.\n- Pre-existing checks not weakened: truncating the new sections out of copies gives exactly 893 and 177 checks, 0 failures (the implementers' stated baselines; +131 / +73).\n- Mutation re-run on isolated copies: all 20 implementer mutants reproduce their exact failing counts (t3 34/41/1/3/11/6/4/2; t4 55/2/15/9/11/4/4/2/3/5/2/3), t3's declared M5 scrub survivor reproduces, each spot-checked failure names the intended mechanism. My extra mutant bypassing compat.lua:398's HasSecretValues()~=false refusal DOES fail (4 checks), so the pre-existing secret object-reader is pinned.\n- Getter discipline proven independently: with HasSecretValues()==true and every getter raising, api.GetSpellCooldown returns 0,0,0,0,true and api.get_spell_cooldown_duration returns the handle without calling a getter (259 checks, 0 failed). No product code calls GetRemainingDuration/GetTotalDuration/GetStartTime/HasStarted/HasExpired/IsActive/IsZero on a duration object.\n- Every load-bearing client claim re-read on origin/forever (no SecretWhen* on GetSpellCooldownDuration; no SecretArgumentsAddAspect on SetCooldownFromDurationObject; NeverSecret isOnGCD/isActive; HasSecretValues ReturnsNeverSecret; formatter/curve enum members; allowUntaintedCreation + DisableUntrustedLayoutScriptsTemplate; container/button method surface; initializeFrame runs before access restrictions).\n- Gate audit: 19 Forever-only paths, each st.family==\"FOREVER\" + exact probe; st.is_mainline alone gates nothing new; aura_icons.lua inert before any frame/event/aura read on all six non-Forever families; single TOC (aura_icons.lua once at line 67 after hud.lua); no aura container measurement; only 5 read-only ST getters so no existing visual can move.\n- Cache audit: known_names, known_cache, layout_cache, HUD.icons fields, HUD.trinkets, TRINKET_STATE, PREVIEW_STATE, SAFE_STATE, LibGlobalCooldown numeric+object state, aura_icons state, compat tables - plain-by-construction or re-proved before use; no secret can become a table key.\n\nFINDINGS (reported, not fixed - read-only lane)\nF1 low: aura_icons.lua:4 \"WO W FOREVER ONLY\", :11 \"HELP FUL\" comment typos. F2 low: stray luac.out (8845 B, compiled LibGlobalCooldown) in the repo root - not TOC-listed, cannot load; delete before release. F3 low: aura_icons.lua:944-953 a post-CreateFrame setup failure leaves the named container, so every later CreateFrame with that name errors on the real client and the row can never build that session (trigger: invalid db.frame_strata; no test injector). F4 low cosmetic: resize_group_frames (aura_icons.lua:810-829) can be denied while auras are secret and sync_layout still records the new size, so allocated buttons can keep the old size until the next size change. F5 low doc: t4 report says \"6 hidden widgets\", builder contributes 7 args entries. F6 info: one extra pcall + family compare per painted icon per tick on classic (hud.lua:1547) - no behaviour change. F7/F8 UNCONFIRMED runtime: engine acceptance/rendering of a secret-valued object (U3/U5) and the Mainline GCD probe spell 61304 (no consumer today; HUD GCD does not depend on it). F9: the disclosed M5 scrub survivor (accepted, keep the scrub).\n\nREAD-ONLY DISCLOSURE: the three changedPaths are the only files written; nothing outside bench/ and desks/ changed after 22:20 (session start), verified by mtime scan. No git command ran in /home/sam/SwedgeTimer; the only git use was read-only 'git -C /home/sam/wow-ui-source show origin/forever:<path>' for API citations. Behaviour preservation rests on source-level review + check-count parity + mutation evidence (no historical diff, git disallowed). U3/U5/U7 remain runtime UNCONFIRMED with exact /run probes in report §10.\n\nNEXT STEP: Lead rules on F1-F5 and deletes luac.out; operator runs report §10 probes 4/5 (plus 2-3) in one restricted Forever moment - the only remaining closers. Nothing needs a code change.",
+      "changedPaths": [
+        "bench/hud_forever_verification_2026-11-08.md",
+        "desks/aura-hud-verify/journal.md",
+        "desks/aura-hud-verify/.signals/2026-11-09T034100Z.json"
+      ],
+      "acceptanceResults": [
+        {
+          "criterion": "Independently run the full offline harness (bash tests/run.sh) on the post-merge tree",
+          "status": "passed",
+          "evidence": "59 steps, 0 failed (exit 0); luacheck step PASS 'Total: 2 warnings / 0 errors in 105 files'."
+        },
+        {
+          "criterion": "Independently run luacheck, luac5.1 -p, and record exact suite check counts for every changed suite",
+          "status": "passed",
+          "evidence": "luacheck . 2 warnings/0 errors/105 files (hunter_ui.lua:135-136 only, untouched, mtime 2026-11-06); luac5.1 -p clean on all 12 changed .lua files; hud_state 1024, forever_secret_compat_state 250, aura_icons_state 853, secret_guard_state 524 (unmodified), toc_check 360; LF only; no luacheck:ignore; .luacheckrc mtime 2026-10-15."
+        },
+        {
+          "criterion": "Independently re-run the mutation checks and confirm each mutant fails for the intended reason",
+          "status": "passed",
+          "evidence": "Isolated copies, anchored single-site mutants: all 20 implementer mutants reproduce exact counts (t3 34/41/1/3/11/6/4/2, t4 55/2/15/9/11/4/4/2/3/5/2/3); t3's declared M5 survivor reproduces; spot-checked failure text names the mechanism (e.g. 'the containers are NEVER measured (got 1, want 0)', 'SEC-12: a leaked secret state clears the swipe'); extra guard mutant on compat.lua:398 fails 4 checks."
+        },
+        {
+          "criterion": "Audit every Forever-only gate for zero non-Forever behaviour change",
+          "status": "passed",
+          "evidence": "19-path gate table in report §3; every path st.family==\"FOREVER\" + exact probe; st.is_mainline alone gates nothing new; aura_icons.lua inert (0 frames/0 events/0 AuraContainer attempts/0 aura reads) on ERA/TBC/WRATH/CATA/MISTS/RETAIL; defaults are data-only on classic; benign deltas recorded as F6/F5."
+        },
+        {
+          "criterion": "Audit every secret-capable API read and every cache for secret leakage; confirm the duration-object path never reads the value getters when HasSecretValues() is true; confirm the aura row never reads AuraData and is inert on classic clients",
+          "status": "passed",
+          "evidence": "Report §5 read-by-read matrix + §6 cache table; grep shows zero getter calls in product code (only compat.lua:385-400, guarded); independent probe with raising getters under HasSecretValues()==true: 259 checks/0 failed; aura_icons.lua has no UnitAura/C_UnitAuras/AuraData token and never measures a container; poisoned-entry legs bite (mutants T3-M3/M4, T4-M9)."
+        },
+        {
+          "criterion": "Confirm TOC integrity and unchanged non-Forever visuals",
+          "status": "passed",
+          "evidence": "Single authoritative SwedgeTimer.toc; aura_icons.lua exactly once at line 67 after hud.lua; toc_check 360 checks; version/Interface unchanged (2.1.8 / 16001 present); aura module's only ST surface = get_bar_frame/iter_hands/get_class_table/get_profile_table/player_class (5 read-only getters, no show/hide/parent/level/scale); numeric swipe/text/tint/trinket/GCD paths gated identically."
+        },
+        {
+          "criterion": "Deliver bench/hud_forever_verification_2026-11-08.md with PASS/FAIL/UNCONFIRMED per criterion, ranked file:line findings, command outputs, gate audit, cache audit, in-client checklist, residual risks; plus desk journal and done signal",
+          "status": "passed",
+          "evidence": "bench/hud_forever_verification_2026-11-08.md (585 lines: §0 verdict, §1 commands, §2 client-source proof, §3 gates, §4 inertness, §5 secret matrix, §6 cache table, §7 findings F1-F9, §8 behaviour preservation, §9 tests/mutations, §10 in-client checklist, §11 residual risk, §12 attestation); desks/aura-hud-verify/journal.md; desks/aura-hud-verify/.signals/2026-11-09T034100Z.json (valid JSON)."
+        }
+      ],
+      "commandsRun": [
+        {
+          "command": "bash tests/run.sh",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "59 steps, 0 failed"
+        },
+        {
+          "command": "luacheck . --no-color",
+          "status": "passed",
+          "exitCode": 1,
+          "evidence": "Total: 2 warnings / 0 errors in 105 files (exit 1 = warnings only, accepted by run.sh); both warnings pre-existing hunter_ui.lua:135-136"
+        },
+        {
+          "command": "luac5.1 -p hud.lua compat.lua LibGlobalCooldown.lua aura_icons.lua main.lua config_presets.lua option_tables.lua option_table_presets.lua tests/hud_state.lua tests/forever_secret_compat_state.lua tests/aura_icons_state.lua tests/toc_check.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "all OK"
+        },
+        {
+          "command": "lua5.1 tests/hud_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "PASS  hud_state.lua (1024 checks)"
+        },
+        {
+          "command": "lua5.1 tests/forever_secret_compat_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "250 checks, 0 failed"
+        },
+        {
+          "command": "lua5.1 tests/aura_icons_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "853 checks, 0 failures"
+        },
+        {
+          "command": "lua5.1 tests/secret_guard_state.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "PASS  secret_guard_state.lua (524 checks) - cross-lane suite, unmodified"
+        },
+        {
+          "command": "lua5.1 tests/toc_check.lua",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "360 checks, 0 failures"
+        },
+        {
+          "command": "python3 /tmp/mut.py (21 mutants on one isolated copy + pristine baseline)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "20/20 implementer mutants fail exactly; t3-M5 survivor reproduced; each mutation applied only when the anchor was unique (occurrences=1 asserted)"
+        },
+        {
+          "command": "python3 probe: HasSecretValues()==true with every getter raising (copied suite + V1 section)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "259 checks, 0 failed - no getter is called; GetSpellCooldown degrades to 0,0,0,0,true"
+        },
+        {
+          "command": "python3 truncation of new suite sections (pre-existing check-count parity)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "hud_state pre-existing portion 893 checks 0 failures; forever_secret_compat_state pre-existing portion 177 checks 0 failed"
+        },
+        {
+          "command": "module-absent copy: lua5.1 tests/aura_icons_state.lua (red-first re-proof)",
+          "status": "passed",
+          "exitCode": 1,
+          "evidence": "Expected failure: exit 1 with 'cannot open tests/../aura_icons.lua' - proves the suite is red without the module"
+        }
+      ]
+    }
+  ],
+  "taskSeq": 5,
+  "approvedAt": 1794191410506
+}

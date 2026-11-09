@@ -305,6 +305,24 @@ local function build(opts)
     -- no-probe fallback, whose unknown reading renders as "no glow"/"no tint".
     env.IsSpellUsable = opts.usable
 
+    -- Secret-restricted client (2026-11-06 secret-guide lane): the probe and the
+    -- restricted fixtures exist BEFORE compat.lua loads (it captures the probe), so a
+    -- restricted read degrades exactly like Wow Forever. C_Secrets is installed by the
+    -- test around the gather (compat probes it dynamically on every call).
+    local SECRET_MARKER = "<secret>"
+    sb.secret_marker = SECRET_MARKER
+    if opts.restricted == true then
+        env.issecretvalue = function(value) return value == SECRET_MARKER end
+        env.UnitPower = function() return SECRET_MARKER end
+        env.GetSpellCooldown = function(spell)
+            sb.cooldown_queries = sb.cooldown_queries + 1
+            sb.last_cooldown_query = spell
+            return SECRET_MARKER, SECRET_MARKER, SECRET_MARKER, SECRET_MARKER
+        end
+        env.UnitHealth = function() return SECRET_MARKER end
+        env.UnitHealthMax = function() return SECRET_MARKER end
+    end
+
     -- compat.lua reads several legacy globals through _G (annotation-safe on
     -- Mainline-code clients); mirror EVERY sandbox stub for the duration of its load,
     -- then restore _G exactly. A hardcoded name list goes stale the moment compat adds
@@ -6320,6 +6338,75 @@ do
     sb.known[20243] = true
     local s_sunder_dev_known = ST.WARRIOR.get_hud_state(ST, { key = "sunder", title = "Sunder Armor", spell = 7386 }, 200)
     eq(s_sunder_dev_known.hidden, true, "HUD sunder slot hides for Prot warrior when Devastate is known and toggle off")
+end
+
+--=========================================================================================
+-- SEC (2026-11-06 H1/H2/H4/M2): restricted reads are UNKNOWN, never 0/"absent"/100 %
+--=========================================================================================
+-- Wow Forever restricted reads: the rage pool, the spell cooldowns, the target aura rows
+-- and the target health max come back opaque. The gather must publish inputs_unknown
+-- (the display suppression path, nextaction_ui.lua:638) and never a 0 = "ready", a
+-- missing Rend = "re-cue it", or a 100 % target health that hides the execute phase.
+do
+    local sec = build({ project = 11, restricted = true })
+    local S = sec.ST
+    sec.known[12294] = true -- Mortal Strike known: the arms branch freezes in
+    sec.known[772] = true  -- Rend known: its target-debuff read runs
+    S.WARRIOR.post_init(S)
+    local prev_secrets = rawget(_G, "C_Secrets")
+    _G.C_Secrets = {
+        ShouldCooldownsBeSecret = function() return true end,
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+        ShouldUnitPowerBeSecret = function() return true end,
+        ShouldUnitHealthMaxBeSecret = function() return true end,
+    }
+    local g = S.WARRIOR.gather_guide_inputs(S, {})
+    _G.C_Secrets = prev_secrets
+
+    eq(g.inputs_unknown, true,
+        "secret gather: a restricted tick is marked unknown (the display suppression path)")
+    -- H1: a restricted rage read is UNKNOWN, never 0 (every rule is rage-gated).
+    eq(g.rage, nil, "secret H1: a restricted rage read stays nil, never 0")
+    -- H2: a restricted cooldown is UNKNOWN, never 0 = "ready".
+    eq(g.op_remaining, nil, "secret H2: a restricted Overpower cooldown is nil, not 0")
+    eq(g.execute_remaining, nil, "secret H2: a restricted Execute cooldown is nil, not 0")
+    -- H4: a hidden Rend row is unknown, never "the debuff is absent" (no re-cue).
+    eq(g.rend_remaining, nil, "secret H4: a hidden Rend row reads nil (not absent)")
+    -- M2: a restricted target health read is UNKNOWN, never a 100 % default.
+    eq(g.target_health_pct, nil, "secret M2: restricted target health stays nil, never 100 %")
+
+    -- Control: the same profile with readable values keeps the old shapes.
+    local plain = build({ project = 11 })
+    local PS = plain.ST
+    plain.known[12294] = true
+    plain.known[772] = true
+    plain.power = 40
+    PS.WARRIOR.post_init(PS)
+    local pg = PS.WARRIOR.gather_guide_inputs(PS, {})
+    check(pg.inputs_unknown ~= true,
+        "control: an unrestricted gather keeps inputs_unknown clear")
+    eq(pg.rage, 40, "control: a readable rage pool passes through")
+    eq(pg.op_remaining, 0, "control: a readable idle cooldown is 0 = ready (unchanged)")
+
+    -- H4 on its own: only the target-aura list is restricted, so the hidden Rend miss is
+    -- the ONLY unknown source (a dropped aura probe clears the bit - mutation-pinned).
+    local ab = build({ project = 11 })
+    local AS = ab.ST
+    ab.known[12294] = true
+    ab.known[772] = true
+    ab.power = 40
+    AS.WARRIOR.post_init(AS)
+    local prev_aura_secrets = rawget(_G, "C_Secrets")
+    _G.C_Secrets = {
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+    }
+    local ag = AS.WARRIOR.gather_guide_inputs(AS, {})
+    _G.C_Secrets = prev_aura_secrets
+    eq(ag.rend_remaining, nil, "aura-only H4: a hidden Rend row reads nil, not absent")
+    eq(ag.inputs_unknown, true,
+        "aura-only H4: the hidden Rend row is the warrior tick's unknown source")
 end
 
 if failures == 0 then

@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T19:09:35Z",
+  "agent_name": "perf-audit",
+  "self_assessment": {
+    "intent": 4,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Re-grepping every brief symbol before reading (all 2026-10-25 line numbers had moved) and counting the tick path call-by-call in the current tree; running the shipped simple_round under lua5.1 turned a suspicion into a proven user-visible defect (8 of 28 weapon speeds display 0.1s fast).",
+    "what_was_hard": "No in-client profiler exists, so every per-tick/per-second figure is derived from source and has to be labelled as such; several Forever facts (issecretvalue/C_Secrets presence, C_Spell.IsSpellInRange addon-callability, which option setters re-run configure_bar_appearances) can only be closed in-client or by a later trace.",
+    "skill_gap": "First session went inactive without a closing message/journal/report; had to be resumed by the Lead. Deliverables should be written as soon as the trace is complete rather than after further exploration."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

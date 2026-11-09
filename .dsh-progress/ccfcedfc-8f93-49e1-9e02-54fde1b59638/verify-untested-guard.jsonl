@@ -1,0 +1,3 @@
+{"v":1,"task":"verify-untested-guard","state":"running","msg":"started: bash -c cat > /tmp/mut3.py << \"PYEOF\"\nimport os, shutil, subprocess\nSRC=\"/home/sam/SwedgeTimer\"; WORK=\"/tmp/mutwork3\"\nshutil.rmtree(WORK, ignore_errors=True)\nsh","at":1794195093033}
+{"v":1,"task":"verify-untested-guard","msg":"59 steps, 2 failed","at":1794195154674}
+{"v":1,"task":"verify-untested-guard","state":"done","pct":100,"msg":"finished","at":1794195154674}

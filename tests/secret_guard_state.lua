@@ -131,6 +131,13 @@ local function build(opts)
         bar_color_calls = 0,
         aura_calls = 0,
         target_exists = true,
+        -- SEC wave (2026-11-06): scripted shapes for the new compat helpers.
+        unit_is_unit = nil,          -- api.UnitIsUnit's client answer
+        unit_is_unit_throws = false,
+        creature_type_throws = false,
+        aura_throws = false,
+        combat_rating_throws = false,
+        rating_bonus_throws = false,
         known = opts.known or {},
         spell_info = opts.spell_info or {},
         class_db = {},
@@ -164,7 +171,10 @@ local function build(opts)
     }
     env.UnitClass = function() return "Player", opts.class or "WARRIOR" end
     env.UnitExists = function() return sb.target_exists ~= false end
-    env.UnitCreatureType = function() return sb.creature_type end
+    env.UnitCreatureType = function()
+        if sb.creature_type_throws then error("restricted") end
+        return sb.creature_type
+    end
 
     -- Classic-family stubs (present unless a specific profile omits them).
     if not opts.retail then
@@ -260,8 +270,16 @@ local function build(opts)
         env.UnitRangedDamage = function() return sb.ranged_damage end
         env.UnitSpellHaste = function() return sb.spell_haste end
         env.GetSpellHaste = function() return sb.old_spell_haste end
-        env.GetCombatRating = function() return sb.combat_rating end
-        env.GetCombatRatingBonus = function() return sb.rating_bonus end
+        if not opts.omit_ratings then
+            env.GetCombatRating = function()
+                if sb.combat_rating_throws then error("restricted") end
+                return sb.combat_rating
+            end
+            env.GetCombatRatingBonus = function()
+                if sb.rating_bonus_throws then error("restricted") end
+                return sb.rating_bonus
+            end
+        end
         env.GetInventoryItemID = function(unit, slot)
             sb.inventory_query = { unit, slot }
             return sb.inventory_id
@@ -278,6 +296,7 @@ local function build(opts)
         end
         env.UnitAura = function(unit, index)
             sb.aura_calls = sb.aura_calls + 1
+            if sb.aura_throws then error("restricted") end
             local row = sb.aura_rows and sb.aura_rows[index]
             if not row then return nil end
             return row.name, row.icon, row.count, row.dispel, row.duration, row.expiration,
@@ -337,6 +356,12 @@ local function build(opts)
             env.UnitGUID = function(unit)
                 if sb.unit_guid_throws then error("restricted") end
                 return sb.unit_guid and sb.unit_guid[unit] or nil
+            end
+            -- SEC-2/M1: the comparison is secret-capable. A scripted answer (readable
+            -- bool or an opaque flagged value) and a throwing probe.
+            env.UnitIsUnit = function()
+                if sb.unit_is_unit_throws then error("restricted") end
+                return sb.unit_is_unit
             end
         end
     else
@@ -738,7 +763,8 @@ do
     eq(ST.insufficient_rage, false, "warrior rage: a secret cost degrades to sufficient")
     eq(sb.bar_color_calls, 0, "warrior rage: a secret cost causes no colour change")
 
-    -- Guide gather: every restricted input lands as unknown, cooldowns as 0.
+    -- Guide gather: every restricted input lands as unknown - including the cooldowns
+    -- (H2, 2026-11-06): a restricted timing is nil + inputs_unknown, never 0 = ready.
     sb.power = SECRET_POWER_RAGE
     sb.health_max = 1000
     sb.health = SECRET_HEALTH
@@ -759,8 +785,10 @@ do
     eq(out.target_health_pct, nil, "warrior gather: secret health is unknown")
     eq(out.hs_cost, nil, "warrior gather: a secret HS cost is unknown")
     eq(out.cleave_cost, nil, "warrior gather: a secret Cleave cost is unknown")
-    eq(out.hs_remaining, 0, "warrior gather: a secret HS cooldown reads idle")
-    eq(out.hs_duration, nil, "warrior gather: a secret HS cooldown has no length")
+    eq(out.hs_remaining, nil, "warrior gather: a restricted HS cooldown is unknown, not idle")
+    eq(out.hs_duration, nil, "warrior gather: a restricted HS cooldown has no length")
+    eq(out.inputs_unknown, true,
+        "warrior gather: a restricted cooldown marks the whole tick unknown")
 
     -- Control: honest readings flow through untouched.
     sb.power = 40
@@ -981,29 +1009,83 @@ do
     eq(mh, 2.6, "R5 control: mainhand speed passes through")
     eq(oh, 1.8, "R5 control: offhand speed passes through")
 
-    -- The exact main.lua check_weapons offhand decision (main.lua:654-661).
+    -- The shipped main.lua check_weapons decision (2026-11-06 A-3/A-4): an unknown /
+    -- restricted read means UNKNOWN, never "no weapon" - the previous has_weapon value
+    -- is kept, and only a READABLE number may move the flag. This helper mirrors the
+    -- shipped shape; the source pins below keep it honest against main.lua.
+    local function weapon_decision(previous, speed)
+        local has_weapon = previous
+        if type(speed) == "number" then
+            has_weapon = speed > 0
+        end
+        return has_weapon
+    end
+
+    -- Source-shape pins: the old `speed_offhand or 0` (unknown -> 0 -> no weapon) must be
+    -- gone for both hands; a revert re-introduces the persistent "Auto Shot fires, bar
+    -- disabled" shape and fails here.
+    local fh = assert(io.open(ROOT .. "main.lua", "r"))
+    local main_src = fh:read("*a")
+    fh:close()
+    check(main_src:find('if type(speed_offhand) == "number" then', 1, true) ~= nil,
+        "R5: check_weapons moves the offhand flag only on a readable number")
+    check(main_src:find('self.offhand.has_weapon = speed_offhand > 0', 1, true) ~= nil,
+        "R5: check_weapons derives the offhand flag from the readable speed")
+    check(main_src:find('speed_offhand = speed_offhand or 0', 1, true) == nil,
+        "R5: check_weapons no longer turns an unknown offhand read into no weapon")
+    check(main_src:find('if type(speed_ranged) == "number" then', 1, true) ~= nil,
+        "R5: check_weapons moves the ranged flag only on a readable number")
+    check(main_src:find('speed_ranged = speed_ranged or 0', 1, true) == nil,
+        "R5: check_weapons no longer turns an unknown ranged read into no weapon")
+
+    -- (a) A readable offhand speed counts as a weapon.
     sb.attack_speed = { 2.6, 1.8 }
     local _, speed_offhand = api.UnitAttackSpeed("player")
-    speed_offhand = speed_offhand or 0
-    eq(speed_offhand == 0, false, "R5 control: a readable offhand counts as a weapon")
+    eq(speed_offhand, 1.8, "R5 control: the readable offhand speed passes through")
+    eq(weapon_decision(false, speed_offhand), true,
+        "R5 control: a readable offhand counts as a weapon")
 
+    -- (b) A secret offhand degrades the WHOLE wrapper read to nil (pinned, unchanged),
+    -- and check_weapons KEEPS the previous value instead of clearing the hand.
     sb.attack_speed = { 2.6, SECRET_SPEED }
     _, speed_offhand = api.UnitAttackSpeed("player")
-    speed_offhand = speed_offhand or 0
-    eq(speed_offhand, 0, "R5 secret offhand: the whole read degrades to no weapon")
+    eq(speed_offhand, nil, "R5 secret offhand: the wrapper read degrades to nil")
+    eq(weapon_decision(true, speed_offhand), true,
+        "R5 secret offhand: check_weapons keeps a known weapon (unknown is not 'no weapon')")
+    eq(weapon_decision(false, speed_offhand), false,
+        "R5 secret offhand: check_weapons keeps a known 'no weapon' too")
     mh, oh = api.UnitAttackSpeed("player")
     eq(mh, nil, "R5 secret offhand: the mainhand degrades with the read")
     eq(oh, nil, "R5 secret offhand: the offhand degrades with the read")
+
+    -- (c) A readable 0 is a real "no weapon" and still clears the flag.
+    sb.attack_speed = { 2.6, 0 }
+    _, speed_offhand = api.UnitAttackSpeed("player")
+    eq(speed_offhand, 0, "R5 control: a readable zero offhand passes through")
+    eq(weapon_decision(true, speed_offhand), false,
+        "R5 control: a readable zero offhand clears a known weapon")
 
     sb.attack_speed = nil
     mh, oh = api.UnitAttackSpeed("player")
     eq(mh, nil, "R5: an absent weapon reports nil, not 0")
     eq(oh, nil, "R5: an absent offhand reports nil too")
+    eq(weapon_decision(true, oh), true,
+        "R5 absent offhand: check_weapons keeps the previous value")
 
+    -- The same contract through UnitRangedDamage.
     sb.ranged_damage = 2.5
-    eq(api.UnitRangedDamage("player"), 2.5, "R5 control: UnitRangedDamage passes through")
+    local ranged_speed = api.UnitRangedDamage("player")
+    eq(ranged_speed, 2.5, "R5 control: UnitRangedDamage passes through")
+    eq(weapon_decision(false, ranged_speed), true,
+        "R5 control: a readable ranged speed counts as a weapon")
+    sb.ranged_damage = 0
+    eq(weapon_decision(true, api.UnitRangedDamage("player")), false,
+        "R5 control: a readable zero ranged speed clears the flag")
     sb.ranged_damage = SECRET_RANGED_DAMAGE
-    eq(api.UnitRangedDamage("player"), nil, "R5 secret: UnitRangedDamage reports unknown (nil)")
+    local secret_ranged = api.UnitRangedDamage("player")
+    eq(secret_ranged, nil, "R5 secret: UnitRangedDamage reports unknown (nil)")
+    eq(weapon_decision(true, secret_ranged), true,
+        "R5 secret ranged: check_weapons keeps the known weapon")
 end
 
 do
@@ -1115,14 +1197,18 @@ do
     near(ST.weave_cast_start_time, 0.15, 1e-9, "shaman cast control: the live start is honoured")
     near(ST.weave_cast_end_time, 0.1525, 1e-9, "shaman cast control: the live end is honoured")
 
-    -- Guide gather: a secret Stormstrike cooldown reads idle.
+    -- Guide gather: a restricted Stormstrike timing is UNKNOWN (H2, 2026-11-06) - nil
+    -- plus the tick's unknown bit, never 0 = "ready".
     sb.cooldowns = { [17364] = { SECRET_CD_START, SECRET_CD_DURATION, 1, 1 } }
     sb.cast_payload = nil
     local out = {}
     ok = pcall(ST.SHAMAN.gather_guide_inputs, ST, out)
     check(ok, "shaman gather with a secret cooldown does not throw")
-    eq(out.stormstrike_remaining, 0, "shaman gather: a secret cooldown reads idle")
-    eq(out.stormstrike_duration, nil, "shaman gather: a secret cooldown has no length")
+    eq(out.stormstrike_remaining, nil,
+        "shaman gather: a restricted cooldown is unknown, not idle")
+    eq(out.stormstrike_duration, nil, "shaman gather: a restricted cooldown has no length")
+    eq(out.inputs_unknown, true,
+        "shaman gather: a restricted cooldown marks the whole tick unknown")
 
     sb.cooldowns = { [17364] = { 90, 30, 1, 1 } }
     out = {}
@@ -1371,6 +1457,18 @@ do
     }
 
     -- Guide gather: a secret creature type is unknown (never indexed as a key).
+    -- The restricted-regime predicates exist on the real client; install them so the
+    -- power read's unknown path (H1, 2026-11-06) is the one under test.
+    sb.env.C_Secrets = {
+        ShouldUnitPowerBeSecret = function(unit, power_type)
+            return unit == "player" and power_type == 0
+        end,
+        ShouldUnitHealthMaxBeSecret = function() return true end,
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+    }
+    sb.power_type = 0 -- UnitPowerType("player") answers mana on the real client
+    sb.power_token = "MANA"
     sb.creature_type = SECRET_CTYPE
     sb.cooldowns = { [35395] = { SECRET_CD_START, SECRET_CD_DURATION, 1, 1 } }
     sb.power = SECRET_POWER_MANA
@@ -1379,8 +1477,12 @@ do
     local ok, err = pcall(ST.PALADIN.gather_guide_inputs, ST, out)
     check(ok, "paladin gather with secret readings does not throw (" .. tostring(err) .. ")")
     eq(out.creature_type, nil, "paladin gather: a secret creature type is unknown")
-    eq(out.mana_pct, 0, "paladin gather: secret mana is unknown (0%)")
-    eq(out.cs_remaining, 0, "paladin gather: a secret CS cooldown reads ready")
+    eq(out.mana_pct, nil,
+        "paladin gather: a restricted power read is unknown, not 0%")
+    eq(out.cs_remaining, nil,
+        "paladin gather: a restricted CS cooldown is unknown, not ready")
+    eq(out.inputs_unknown, true,
+        "paladin gather: the restricted tick is marked unknown")
 
     -- Control: honest readings flow through untouched.
     sb.creature_type = "Undead"
@@ -2143,6 +2245,237 @@ do
     eq(sb.st.api.IsPlayerMoving(), nil, "R11 throwing: motion is unknown")
 end
 
+--=========================================================================================
+-- 17. SEC wave (2026-11-06): UnitIsUnit tri-state + pass-through, UnitCreatureType,
+--     restricted-aware cooldown remaining, specific aura/power secrecy probes,
+--     classic UnitAura hardening, guarded combat ratings
+--=========================================================================================
+do
+    -- api.UnitIsUnit: a readable answer is (bool, false); a restricted answer is
+    -- (opaque, true) - NOT nil, because the only honest consumer sink is
+    -- SetAlphaFromBoolean(secret_bool, 1, 0) (Blizzard UnitFrameUtil.lua:487); a throw
+    -- or an absent probe is (nil, false).
+    local sb = build()
+    local api = sb.st.api
+
+    sb.unit_is_unit = true
+    local result, restricted = api.UnitIsUnit("targettarget", "player")
+    eq(result, true, "UnitIsUnit control: a readable true passes through")
+    eq(restricted, false, "UnitIsUnit control: a readable answer is not restricted")
+    sb.unit_is_unit = false
+    result, restricted = api.UnitIsUnit("targettarget", "player")
+    eq(result, false, "UnitIsUnit control: a readable false passes through")
+    eq(restricted, false, "UnitIsUnit control: a readable false is not restricted")
+
+    sb.unit_is_unit = SECRET_RANGE_BOOL
+    result, restricted = api.UnitIsUnit("targettarget", "player")
+    eq(result, SECRET_RANGE_BOOL,
+        "UnitIsUnit secret: the opaque reading is passed through for SetAlphaFromBoolean")
+    eq(restricted, true, "UnitIsUnit secret: the restricted flag is raised")
+
+    sb.unit_is_unit = 1
+    result, restricted = api.UnitIsUnit("targettarget", "player")
+    eq(result, true, "UnitIsUnit: the legacy numeric 1 spelling reads true")
+    eq(restricted, false, "UnitIsUnit: the 1 spelling is readable, not restricted")
+    sb.unit_is_unit = 0
+    result, restricted = api.UnitIsUnit("targettarget", "player")
+    eq(result, false, "UnitIsUnit: the legacy numeric 0 spelling reads false")
+    eq(restricted, false, "UnitIsUnit: the 0 spelling is readable, not restricted")
+    sb.unit_is_unit = 2
+    result, restricted = api.UnitIsUnit("targettarget", "player")
+    eq(result, nil, "UnitIsUnit: any other non-boolean reading is unknown, never coerced")
+    eq(restricted, false, "UnitIsUnit: an unrecognised numeric reading is not restricted")
+
+    sb.unit_is_unit_throws = true
+    result, restricted = api.UnitIsUnit("targettarget", "player")
+    eq(result, nil, "UnitIsUnit throw: unknown (nil)")
+    eq(restricted, false, "UnitIsUnit throw: not restricted")
+    sb.unit_is_unit_throws = false
+
+    local absent = build({ omit_compat_probes = true })
+    local r2, f2 = absent.st.api.UnitIsUnit("targettarget", "player")
+    eq(r2, nil, "UnitIsUnit absent probe: unknown (nil)")
+    eq(f2, false, "UnitIsUnit absent probe: not restricted")
+
+    -- api.UnitCreatureType: raw identity read is secret-capable; unknown is nil.
+    sb.creature_type = "Undead"
+    eq(api.UnitCreatureType("target"), "Undead", "UnitCreatureType control: readable type passes through")
+    sb.creature_type = nil
+    eq(api.UnitCreatureType("target"), nil, "UnitCreatureType: an absent answer is nil")
+    sb.creature_type = SECRET_CTYPE
+    eq(api.UnitCreatureType("target"), nil, "UnitCreatureType secret: unknown (nil)")
+    sb.creature_type = 12345
+    eq(api.UnitCreatureType("target"), nil, "UnitCreatureType: a non-string reading is nil")
+    sb.creature_type_throws = true
+    eq(api.UnitCreatureType("target"), nil, "UnitCreatureType throw: unknown (nil)")
+    sb.creature_type_throws = false
+    eq(absent.st.api.UnitCreatureType("target"), nil,
+        "UnitCreatureType absent probe: unknown (nil)")
+end
+
+do
+    -- api.get_cooldown_remaining: remaining/duration/restricted. A restricted read is
+    -- nil/nil/true (never 0 = "ready").
+    local sb = build()
+    local api = sb.st.api
+    sb.clock = 100
+    sb.cooldowns = { [29515] = { 98, 10, 1, 1 } }
+    local remaining, duration, restricted = api.get_cooldown_remaining(29515)
+    near(remaining, 8, 1e-9, "cooldown remaining: start + duration - now")
+    eq(duration, 10, "cooldown remaining: the duration is reported")
+    eq(restricted, false, "cooldown remaining: a readable read is not restricted")
+
+    sb.cooldowns = { [29515] = { 95, 10, 1, 1 } }
+    remaining, duration = api.get_cooldown_remaining(29515, 12345)
+    near(remaining, 5, 1e-9, "cooldown remaining: a readable fallback is used when the primary is idle")
+    eq(duration, 10, "cooldown remaining: the fallback duration is reported")
+
+    sb.cooldowns = { [29515] = { 50, 5, 1, 1 } }
+    remaining, duration = api.get_cooldown_remaining(29515)
+    near(remaining, 0, 1e-9, "cooldown remaining: an expired cooldown clamps at 0")
+    eq(duration, 5, "cooldown remaining: the expired cooldown still reports its duration")
+
+    sb.cooldowns = nil
+    remaining, duration, restricted = api.get_cooldown_remaining(29515)
+    near(remaining, 0, 1e-9, "cooldown remaining: an idle cooldown reads 0")
+    eq(duration, 0, "cooldown remaining: an idle cooldown reports duration 0")
+    eq(restricted, false, "cooldown remaining: idle is a readable answer")
+
+    sb.cooldowns = { [29515] = { SECRET_CD_START, SECRET_CD_DURATION, 1, 1 } }
+    remaining, duration, restricted = api.get_cooldown_remaining(29515)
+    eq(remaining, nil, "cooldown remaining secret: remaining is nil, never 0/ready")
+    eq(duration, nil, "cooldown remaining secret: duration is nil")
+    eq(restricted, true, "cooldown remaining secret: the restricted flag is raised")
+
+    -- A restricted primary with a readable fallback answers from the fallback.
+    sb.cooldowns = {
+        [29515] = { SECRET_CD_START, SECRET_CD_DURATION, 1, 1 },
+        [12345] = { 95, 10, 1, 1 },
+    }
+    remaining, duration, restricted = api.get_cooldown_remaining(29515, 12345)
+    near(remaining, 5, 1e-9, "cooldown remaining: a readable fallback beats a restricted primary")
+    eq(duration, 10, "cooldown remaining: the fallback duration beats the restricted primary")
+    eq(restricted, false, "cooldown remaining: the fallback answer is not restricted")
+end
+
+do
+    -- api.spell_aura_may_be_secret: exact true/false from C_Secrets, nil when absent,
+    -- non-numeric or throwing (unknown is never "no").
+    local sb = build()
+    local api = sb.st.api
+    sb.env.C_Secrets = { ShouldSpellAuraBeSecret = function(id) return id == 1130 end }
+    eq(api.spell_aura_may_be_secret(1130), true, "spell aura probe: a true answer passes through")
+    eq(api.spell_aura_may_be_secret(1978), false, "spell aura probe: a false answer passes through")
+    eq(api.spell_aura_may_be_secret("Hunter's Mark"), nil,
+        "spell aura probe: a non-numeric identifier is unknown")
+    sb.env.C_Secrets = { ShouldSpellAuraBeSecret = function() return "yes" end }
+    eq(api.spell_aura_may_be_secret(1130), nil,
+        "spell aura probe: a non-boolean answer is unknown")
+    sb.env.C_Secrets = { ShouldSpellAuraBeSecret = function() error("restricted") end }
+    eq(api.spell_aura_may_be_secret(1130), nil, "spell aura probe: a throwing probe is unknown")
+    sb.env.C_Secrets = { ShouldSpellAuraBeSecret = 1 }
+    eq(api.spell_aura_may_be_secret(1130), nil, "spell aura probe: a non-function probe is unknown")
+    sb.env.C_Secrets = nil
+    eq(api.spell_aura_may_be_secret(1130), nil,
+        "spell aura probe: no C_Secrets is unknown (classic no-op)")
+end
+
+do
+    -- api.power_may_be_secret: C_Secrets.ShouldUnitPowerBeSecret(unit, powerType) for
+    -- the player. Exact booleans only; nil when absent/throwing/non-numeric.
+    local sb = build()
+    local api = sb.st.api
+    sb.env.C_Secrets = {
+        ShouldUnitPowerBeSecret = function(unit, power_type)
+            return unit == "player" and power_type == 0
+        end,
+    }
+    eq(api.power_may_be_secret(0), true, "power probe: a true answer passes through")
+    eq(api.power_may_be_secret(1), false, "power probe: a false answer passes through")
+    eq(api.power_may_be_secret(nil), nil, "power probe: a nil power type is unknown")
+    sb.env.C_Secrets = { ShouldUnitPowerBeSecret = function() return "yes" end }
+    eq(api.power_may_be_secret(0), nil, "power probe: a non-boolean answer is unknown")
+    sb.env.C_Secrets = { ShouldUnitPowerBeSecret = function() error("restricted") end }
+    eq(api.power_may_be_secret(0), nil, "power probe: a throwing probe is unknown")
+    sb.env.C_Secrets = nil
+    eq(api.power_may_be_secret(0), nil, "power probe: no C_Secrets is unknown")
+end
+
+do
+    -- SEC-4: the classic UnitAura branch gets the C_Secrets per-index precheck and the
+    -- pcall the C_UnitAuras branch already had. The 10-value arity is unchanged.
+    local sb = build()
+    local api = sb.st.api
+    sb.aura_rows = { [2] = { name = "Blood Surge", duration = 10, spell_id = 46916 } }
+
+    sb.env.C_Secrets = {
+        ShouldUnitAuraIndexBeSecret = function(unit, index)
+            return unit == "player" and index == 2
+        end,
+    }
+    sb.aura_calls = 0
+    local name = api.UnitAura("player", 2, "HELPFUL")
+    eq(name, nil, "classic UnitAura: a prechecked restricted index reads absent")
+    eq(sb.aura_calls, 0, "classic UnitAura: the prechecked index is never read")
+
+    sb.env.C_Secrets = { ShouldUnitAuraIndexBeSecret = function() error("restricted") end }
+    sb.aura_calls = 0
+    name = api.UnitAura("player", 2, "HELPFUL")
+    eq(name, "Blood Surge", "classic UnitAura: a throwing precheck keeps reading")
+    eq(sb.aura_calls, 1, "classic UnitAura: a throwing precheck does not block the read")
+
+    sb.env.C_Secrets = nil
+    sb.aura_throws = true
+    local ok_call, err_call = pcall(api.UnitAura, "player", 2, "HELPFUL")
+    check(ok_call, "classic UnitAura: a throwing classic global is contained ("
+        .. tostring(err_call) .. ")")
+    sb.aura_throws = false
+
+    -- The 10-value arity: ten readable returns are all preserved.
+    sb.aura_rows = { [1] = {
+        name = "Blood Surge", icon = 1, count = 2, dispel = "Magic", duration = 10,
+        expiration = 110, source = "player", stealable = false, nameplate = false,
+        spell_id = 46916,
+    } }
+    local n, icon, count, dispel, dur, exp, src, steal, plate, spell_id =
+        api.UnitAura("player", 1, "HELPFUL")
+    eq(n, "Blood Surge", "classic UnitAura arity: name")
+    eq(icon, 1, "classic UnitAura arity: icon")
+    eq(count, 2, "classic UnitAura arity: count")
+    eq(dispel, "Magic", "classic UnitAura arity: dispel")
+    eq(dur, 10, "classic UnitAura arity: duration")
+    eq(exp, 110, "classic UnitAura arity: expiration")
+    eq(src, "player", "classic UnitAura arity: source")
+    eq(steal, false, "classic UnitAura arity: stealable")
+    eq(plate, false, "classic UnitAura arity: nameplate")
+    eq(spell_id, 46916, "classic UnitAura arity: spell id")
+end
+
+do
+    -- SEC-11: api.GetCombatRating/GetCombatRatingBonus never hand a secret or a throw
+    -- to a caller; the no-API client keeps its historical 0 shape.
+    local sb = build()
+    local api = sb.st.api
+    sb.combat_rating = 123
+    eq(api.GetCombatRating(20), 123, "rating control: a readable rating passes through")
+    sb.combat_rating = SECRET_RATING
+    eq(api.GetCombatRating(20), nil, "rating secret: unknown (nil), never opaque arithmetic")
+    sb.combat_rating_throws = true
+    eq(api.GetCombatRating(20), nil, "rating throw: unknown (nil)")
+    sb.combat_rating_throws = false
+    sb.rating_bonus = 45
+    eq(api.GetCombatRatingBonus(20), 45, "rating bonus control: a readable bonus passes through")
+    sb.rating_bonus = SECRET_RATING_BONUS
+    eq(api.GetCombatRatingBonus(20), nil, "rating bonus secret: unknown (nil)")
+    sb.rating_bonus_throws = true
+    eq(api.GetCombatRatingBonus(20), nil, "rating bonus throw: unknown (nil)")
+    sb.rating_bonus_throws = false
+
+    local no_api = build({ omit_ratings = true })
+    eq(no_api.st.api.GetCombatRating(20), 0, "rating absent API: keeps the historical 0 shape")
+    eq(no_api.st.api.GetCombatRatingBonus(20), 0,
+        "rating bonus absent API: keeps the historical 0 shape")
+end
 --=========================================================================================
 -- Non-vacuity floor
 --=========================================================================================

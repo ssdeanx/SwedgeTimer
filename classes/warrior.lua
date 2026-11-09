@@ -3638,6 +3638,11 @@ st.class_loaders["WARRIOR"] = function()
     local hamstring_current_id
     local sunder_current_id
 
+    -- H2 (2026-11-06): per-tick restricted-read flag. A restricted (secret) timing is
+    -- UNKNOWN, never 0 = "ready"; the gather tail publishes inputs_unknown (the display
+    -- suppression path), because nil alone would still pass forever_guide.is_ready(nil).
+    local guide_reads_unknown = false
+
     -- Live cooldown for the guide, with the client's GCD echo filtered: GetSpellCooldown
     -- reports whichever cooldown ends later, so a reading of 1.51 s or less is a GCD echo
     -- and never one of these abilities' own cooldowns. Returns remaining seconds (>= 0) and
@@ -3651,11 +3656,14 @@ st.class_loaders["WARRIOR"] = function()
         -- Name-vs-id rule: the query is the localized name on TBC, the numeric
         -- id elsewhere.
         local query = spell_query(spell)
-        local start_time, duration = api.GetSpellCooldown(query)
-        if not start_time or not duration or duration <= 1.51 then
+        local remaining, duration, restricted = api.get_cooldown_remaining(query)
+        if restricted == true then
+            guide_reads_unknown = true
+            return nil, nil
+        end
+        if type(remaining) ~= "number" or type(duration) ~= "number" or duration <= 1.51 then
             return 0, nil
         end
-        local remaining = start_time + duration - api.get_time()
         if remaining <= 0 then
             return 0, nil
         end
@@ -3962,6 +3970,37 @@ st.class_loaders["WARRIOR"] = function()
             end
             index = index + 1
         end
+        -- H4 (2026-11-06): no row matched. Under the restricted-aura regime that is
+        -- UNKNOWN, not "the debuff is absent" - the arms upkeep must not re-cue a Rend
+        -- the client may be hiding. Specific rank probe first, list-wide fallback; an
+        -- explicit false (classic clients) keeps the historical absent meaning.
+        local may
+        local specific = api.spell_aura_may_be_secret
+        if type(specific) == "function" then
+            local any_true, any_nil = false, false
+            for id in pairs(rend_ids) do
+                local answer = specific(id)
+                if answer == true then
+                    any_true = true
+                elseif answer == nil then
+                    any_nil = true
+                end
+            end
+            if any_true then
+                may = true
+            elseif not any_nil then
+                may = false
+            end
+        end
+        if may == nil then
+            local list_probe = api.auras_may_be_secret
+            if type(list_probe) == "function" then
+                may = list_probe() == true
+            end
+        end
+        if may == true then
+            guide_reads_unknown = true
+        end
         return nil, nil
     end
 
@@ -4013,6 +4052,8 @@ st.class_loaders["WARRIOR"] = function()
     -- between ticks; nil means "the client did not answer".
     function ST.WARRIOR.gather_guide_inputs(self, out)
         local inputs = out or ST.WARRIOR.guide_inputs
+        -- H2 (2026-11-06): fresh per-tick restricted-read flag (the tail publishes it).
+        guide_reads_unknown = false
         local now = api.get_time()
         local d = self.mainhand
         local gcd = self.gcd
@@ -4046,6 +4087,15 @@ st.class_loaders["WARRIOR"] = function()
 
         -- Rage, the on-next-attack state and the tracker state the rule matrix consumes.
         inputs.rage = api.UnitPower("player")
+        if type(inputs.rage) ~= "number" then
+            -- H1 (2026-11-06): a restricted (secret) rage read is UNKNOWN, never 0:
+            -- the whole matrix is rage-gated, so this tick becomes unknown instead of
+            -- silently HOLDing on a fact that was never read.
+            local power_probe = api.power_may_be_secret
+            if type(power_probe) == "function" and power_probe(1) == true then
+                guide_reads_unknown = true
+            end
+        end
         inputs.hs_queued = self.hs_queued and true or false
         inputs.cleave_queued = self.cleave_queued and true or false
         inputs.insufficient_rage = self.insufficient_rage and true or false
@@ -4062,6 +4112,14 @@ st.class_loaders["WARRIOR"] = function()
             local health = api.UnitHealth("target")
             if type(health) == "number" then
                 inputs.target_health_pct = health / health_max * 100
+            end
+        end
+        if inputs.target_health_pct == nil then
+            -- M2 (2026-11-06): a restricted target-health read is UNKNOWN, never 100 %:
+            -- the execute phase must not silently vanish (the tick goes unknown).
+            local hp_probe = api.health_max_may_be_secret
+            if type(hp_probe) == "function" and hp_probe("target") == true then
+                guide_reads_unknown = true
             end
         end
 
@@ -4570,6 +4628,11 @@ st.class_loaders["WARRIOR"] = function()
             if type(cur_hp) == "number" and type(max_hp) == "number" and max_hp > 0 then
                 inputs.player_health_pct = (cur_hp / max_hp) * 100
             end
+        end
+        -- Belt and braces (H1/H2/H4/M2): any restricted read this tick makes the advice
+        -- unknown instead of silently degrading (the display suppresses on the bit).
+        if guide_reads_unknown == true then
+            inputs.inputs_unknown = true
         end
         return inputs
     end

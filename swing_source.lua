@@ -98,15 +98,20 @@ local SUSTAINED_REJECT_SECONDS = 5
 
 -- Session counters for /st diag (H5). The reject paths keep their existing behaviour
 -- (ignore the payload, keep the old cycle); these only make the failure observable.
+-- A-1 (2026-11-06): speed_fallbacks counts the cycles RECOVERED from the equipped speed
+-- when the payload duration was restricted/malformed, and first_reject_notice_shown
+-- latches the once-per-session notice that makes a single dropped payload observable.
 local stats = {
 	payload_rejects = 0,
 	unknown_swing_type = 0,
 	malformed_duration = 0,
+	speed_fallbacks = 0,
 	speed_read_keeps = 0,
 	valid_swings = 0,
 	last_valid_swing_at = nil,
 	first_reject_at = nil,
 	reject_notice_shown = false,
+	first_reject_notice_shown = false,
 	in_combat = false,
 }
 swing_source.stats = stats
@@ -120,8 +125,20 @@ end
 -- Record one rejected payload, and raise the one-time chat notice when the reject has
 -- lasted SUSTAINED_REJECT_SECONDS in combat. The counters are always written first so
 -- /st diag can explain the state even when the notice has been dismissed.
+-- A-1 (2026-11-06): a SINGLE rejected payload is a real user-visible event on this
+-- client ("one shot consumed") and the sustained notice cannot see it, so the first
+-- reject of the session is announced immediately - once, at payload speed. The
+-- sustained notice keeps its own latch for the feed-wide case.
 local function note_payload_reject()
 	stats.payload_rejects = stats.payload_rejects + 1
+	-- The single-reject notice is clock-free and latched first: even a broken clock must
+	-- not make the one user-visible signal disappear.
+	if not stats.first_reject_notice_shown then
+		stats.first_reject_notice_shown = true
+		print_notice("The Forever swing feed rejected a PLAYER_SWING payload; one swing "
+			.. "cycle could not be displayed (the next cycle recovers). /st diag reports "
+			.. "the counts.")
+	end
 	local t = now()
 	if type(t) ~= "number" then
 		return
@@ -203,27 +220,98 @@ end
 -- Event handling
 --------------------------------------------------------------------------------
 
+-- Restricted (secret) payload arguments (A-1, 2026-11-06): a secret number/boolean
+-- passes every type() check and raises on the first comparison, so it must be probed
+-- BEFORE any branch - otherwise the throw escapes OnEvent and one shot is lost with no
+-- counter. Normalised to a plain boolean so the caller never handles an opaque value.
+local function is_restricted(value)
+	return is_secret(value) and true or false
+end
+
+-- One usable positive swing duration, or nil. A restricted, non-numeric, non-finite or
+-- non-positive value is "cannot be timed" - and is never compared while restricted.
+local function usable_duration(value)
+	if is_secret(value) then
+		return nil
+	end
+	if type(value) ~= "number" then
+		return nil
+	end
+	if value ~= value or value == math.huge or value <= 0 then
+		return nil
+	end
+	return value
+end
+
+-- The equipped swing speed for one hand, used to RECOVER a cycle whose PLAYER_SWING
+-- duration could not be timed (A-1). The payload only repeats what the client already
+-- reports about the equipped weapon, so a restricted/malformed duration does not mean
+-- the swing did not happen - dropping the cycle is what made one shot look "consumed".
+-- Same two documented sources the module already reads: UnitAttackSpeed's per-hand
+-- returns (Forever returns all three; Blizzard_SwingTimer.lua:184-192) and, for the
+-- ranged hand only, UnitRangedDamage's first return. Every read is pcall'd and
+-- secret-checked; nothing is invented when neither can answer.
+local function read_equipped_speed(hand)
+	local speed
+	if type(UnitAttackSpeed) == "function" then
+		local ok, main_speed, off_speed, ranged_speed = pcall(UnitAttackSpeed, "player")
+		if ok then
+			if hand == "offhand" then
+				speed = off_speed
+			elseif hand == "ranged" then
+				speed = ranged_speed
+			else
+				speed = main_speed
+			end
+		end
+	end
+	if is_restricted(speed) or type(speed) ~= "number" or speed <= 0 then
+		if hand == "ranged" and type(UnitRangedDamage) == "function" then
+			local ok, damage = pcall(UnitRangedDamage, "player")
+			if ok then
+				speed = damage
+			end
+		end
+	end
+	return usable_duration(speed)
+end
+
 local function on_player_swing(swing_duration, swing_type)
+	-- A restricted swing type cannot be mapped (comparisons and table indexing on an
+	-- opaque value raise), so it is attributed as an unknown type and dropped.
+	if is_restricted(swing_type) then
+		stats.unknown_swing_type = stats.unknown_swing_type + 1
+		note_payload_reject()
+		return
+	end
 	local hand = hand_for_swing_type(swing_type)
 	if not hand then
 		stats.unknown_swing_type = stats.unknown_swing_type + 1
 		note_payload_reject()
 		return -- unknown swing type: ignore
 	end
-	if type(swing_duration) ~= "number" or swing_duration <= 0 then
-		stats.malformed_duration = stats.malformed_duration + 1
-		note_payload_reject()
-		return -- malformed payload: nothing to time
+	local duration = usable_duration(swing_duration)
+	if duration == nil then
+		-- Restricted or malformed duration on a KNOWN hand: recover the cycle from the
+		-- equipped speed instead of swallowing the shot (A-1). Only a payload with no
+		-- readable fallback speed is a counted reject.
+		duration = read_equipped_speed(hand)
+		if duration == nil then
+			stats.malformed_duration = stats.malformed_duration + 1
+			note_payload_reject()
+			return -- malformed payload with no readable fallback: nothing to time
+		end
+		stats.speed_fallbacks = stats.speed_fallbacks + 1
 	end
 
-	local cycle = begin_cycle(hand, now(), swing_duration)
+	local cycle = begin_cycle(hand, now(), duration)
 	stats.valid_swings = stats.valid_swings + 1
 	stats.last_valid_swing_at = cycle.start
 	stats.first_reject_at = nil
-	callbacks:Fire("SWING_TIMER_START", swing_duration, cycle.expiration, hand)
+	callbacks:Fire("SWING_TIMER_START", duration, cycle.expiration, hand)
 
 	-- A newer swing bumps the counter, so a superseded stop timer is a no-op.
-	C_Timer.After(swing_duration + STOP_GRACE_SECONDS, function()
+	C_Timer.After(duration + STOP_GRACE_SECONDS, function()
 		fire_stop_if_current(hand, cycle.counter)
 	end)
 end
@@ -379,18 +467,21 @@ end
 -- Public read API (same contract/shape as LibClassicSwingTimerAPI:SwingTimerInfo)
 --------------------------------------------------------------------------------
 
--- Volatile diagnostic counters for /st diag verbose (H5): rejected payloads and
--- speed-read keeps. The behaviour they observe is unchanged.
+-- Volatile diagnostic counters for /st diag verbose (H5): rejected payloads, recovered
+-- cycles and speed-read keeps. The behaviour they observe is unchanged.
 function swing_source:diagnostic_text()
 	return string.format(
 		"swing source payload_rejects=%d unknown_type=%d malformed_duration=%d"
-		.. " speed_read_keeps=%d valid_swings=%d notice=%s",
+		.. " speed_fallbacks=%d speed_read_keeps=%d valid_swings=%d notice=%s"
+		.. " first_reject_notice=%s",
 		stats.payload_rejects,
 		stats.unknown_swing_type,
 		stats.malformed_duration,
+		stats.speed_fallbacks,
 		stats.speed_read_keeps,
 		stats.valid_swings,
-		stats.reject_notice_shown and "shown" or "no")
+		stats.reject_notice_shown and "shown" or "no",
+		stats.first_reject_notice_shown and "shown" or "no")
 end
 
 function swing_source:SwingTimerInfo(hand)

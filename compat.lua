@@ -175,6 +175,15 @@ local is_secret = issecretvalue or function()
 	return false
 end
 
+-- Additive observability (SEC-12, 2026-11-07): callers that receive a third-party state
+-- table (the HUD provider contract) can verify a numeric field before doing arithmetic
+-- on it. It is never used to branch on a secret VALUE - only to choose the documented
+-- unknown face. Exact no-op on the classic clients (issecretvalue is absent there and
+-- no value is ever secret).
+function api.is_secret(value)
+	return is_secret(value) == true
+end
+
 -- Spell info -----------------------------------------------------------------------------
 -- Classic shape: name, rank, icon, castTime, minRange, maxRange, spellID
 -- Retail shape:  C_Spell.GetSpellInfo returns a SpellInfo table.
@@ -338,6 +347,24 @@ local retail_get_spell_cooldown = C_Spell and C_Spell.GetSpellCooldown
 -- Mainline-code clients answer a restricted cooldown through a duration object that is
 -- itself never secret; it is the only readable source while cooldown restrictions are on.
 local retail_get_spell_cooldown_duration = C_Spell and C_Spell.GetSpellCooldownDuration
+
+-- WoW Forever native pass-through surface (2026-11-08, bench/forever_hud_api_2026-11-08.md
+-- §4-§6). C_Spell.GetSpellCooldownDuration carries no SecretWhen* predicate, so its
+-- LuaDurationObject is a NON-secret opaque handle whose values may be secret; the native
+-- sinks (CooldownFrame:SetCooldownFromDurationObject, DurationTextBinding:SetDuration)
+-- consume it without a Lua number ever being exposed. Every reader below is Forever-only
+-- AND probe-gated, so on any other client it answers "no" and the existing numeric paths
+-- are byte-identical. C_Secrets answers are plain booleans/enums; the duration-text
+-- binding is documented to evaluate its own (possibly secret-valued) duration internally.
+local secrets_api = rawget(_G, "C_Secrets")
+local should_spell_cooldown_be_secret = secrets_api and secrets_api.ShouldSpellCooldownBeSecret
+local duration_util = rawget(_G, "C_DurationUtil")
+local create_duration_text_binding = duration_util and duration_util.CreateDurationTextBinding
+local string_util = rawget(_G, "C_StringUtil")
+local create_seconds_formatter = string_util and string_util.CreateSecondsFormatter
+local create_numeric_rule_formatter = string_util and string_util.CreateNumericRuleFormatter
+local curve_util = rawget(_G, "C_CurveUtil")
+local create_color_curve = curve_util and curve_util.CreateColorCurve
 
 -- Every classic return is checked before any of them is used: a restricted duration would
 -- otherwise reach the "duration == 0" test below, and comparing a secret value raises.
@@ -504,6 +531,241 @@ function api.GetSpellCooldown(spell, fallback_id)
 	return start_time or 0, duration or 0, enabled or 0, mod_rate or 0
 end
 
+-- Remaining cooldown, restricted-aware (SEC-6, 2026-11-06): the shared shape the class
+-- guides need so a restricted read is UNKNOWN, never "ready".
+--   readable   -> remaining_seconds, duration_seconds, false   (idle reads 0, 0, false)
+--   restricted -> nil, nil, true                                (fifth return of the
+--                  wrapper above; a readable fallback answers instead)
+--   no clock   -> nil, nil, false
+-- remaining clamps at 0; it never turns a missing read into a zero.
+function api.get_cooldown_remaining(spell, fallback_id)
+	local start_time, duration, _, _, restricted = api.GetSpellCooldown(spell, fallback_id)
+	if restricted == true then
+		return nil, nil, true
+	end
+	if type(start_time) ~= "number" or type(duration) ~= "number" then
+		return nil, nil, false
+	end
+	local now = api.get_time()
+	if type(now) ~= "number" then
+		return nil, nil, false
+	end
+	local remaining = start_time + duration - now
+	if remaining < 0 then
+		remaining = 0
+	end
+	return remaining, duration, false
+end
+
+-- Forever duration-object pass-through (2026-11-08, bench/forever_hud_api_2026-11-08.md) -----
+-- WoW Forever hides cooldown timing in the restricted states (combat, encounter, challenge
+-- mode, PvP): C_Spell.GetSpellCooldown then hands back a SpellCooldownInfo whose timing
+-- fields are secret. C_Spell.GetSpellCooldownDuration carries NO SecretWhen* predicate, so
+-- the LuaDurationObject it returns is a non-secret opaque handle whose VALUES may be secret.
+-- A tainted addon may (a) hold that handle, (b) hand it to a native sink, and (c) read the
+-- object's own HasSecretValues probe (documented ReturnsNeverSecret) - and must never read
+-- a number out of it. The helpers below are Forever-only AND probe-gated: on every other
+-- client they answer "no" so the existing numeric paths stay byte-identical.
+
+-- The opaque duration object for a spell, or nil when this client cannot answer / is not a
+-- Forever client / the call or the secrecy probe fails. The second return is the object's
+-- own HasSecretValues() answer (a plain bool: true = the object was configured with secret
+-- values, so its individual reads must not be used in Lua; nil = the probe is absent).
+-- ignore_gcd defaults to false exactly like the client API: false carries the global
+-- cooldown in the object, true describes the spell's own cooldown only.
+function api.get_spell_cooldown_duration(spell, ignore_gcd)
+	if st.family ~= "FOREVER" or type(retail_get_spell_cooldown_duration) ~= "function" then
+		return nil
+	end
+	if type(spell) ~= "number" and type(spell) ~= "string" then
+		return nil
+	end
+	local ok, object = pcall(retail_get_spell_cooldown_duration, spell, ignore_gcd == true)
+	if not ok or object == nil then
+		return nil
+	end
+	local probe = object.HasSecretValues
+	if type(probe) ~= "function" then
+		return object
+	end
+	local probe_ok, has_secret_values = pcall(probe, object)
+	if not probe_ok or is_secret(has_secret_values) then
+		return nil
+	end
+	return object, has_secret_values == true
+end
+
+-- The two SpellCooldownInfo fields a HUD may branch on while cooldowns are restricted:
+-- isOnGCD and isActive are NeverSecret = true (SpellSharedDocumentation.lua:25,26,30), so
+-- they are plain booleans even when the table's timing fields are secret. Returns
+-- (on_gcd, active); nil, nil = the client cannot answer, the call threw, or a field came
+-- back secret (in which case nothing is compared). Only exact booleans are ever reported.
+function api.get_spell_cooldown_state(spell)
+	if st.family ~= "FOREVER" or type(retail_get_spell_cooldown) ~= "function" then
+		return nil, nil
+	end
+	if type(spell) ~= "number" and type(spell) ~= "string" then
+		return nil, nil
+	end
+	local ok, info = pcall(retail_get_spell_cooldown, spell)
+	if not ok or type(info) ~= "table" then
+		return nil, nil
+	end
+	local fields_ok, on_gcd, active = pcall(function()
+		return info.isOnGCD, info.isActive
+	end)
+	if not fields_ok or is_secret(on_gcd) or is_secret(active) then
+		return nil, nil
+	end
+	return on_gcd == true, active == true
+end
+
+-- "Is this spell's cooldown secret right now", from the client's own documented predicate
+-- (C_Secrets.ShouldSpellCooldownBeSecret, SecretPredicateAPIDocumentation.lua:171-186).
+-- The answer is plain and safe to branch on. nil = the predicate is absent on this client.
+function api.get_spell_cooldown_secrecy(spell)
+	if st.family ~= "FOREVER" or type(should_spell_cooldown_be_secret) ~= "function" then
+		return nil
+	end
+	if type(spell) ~= "number" and type(spell) ~= "string" then
+		return nil
+	end
+	local ok, secret = pcall(should_spell_cooldown_be_secret, spell)
+	if not ok or type(secret) ~= "boolean" then
+		return nil
+	end
+	return secret
+end
+
+-- A native duration-text binding (C_DurationUtil.CreateDurationTextBinding), or nil when
+-- the client does not expose the surface. The binding formats a duration object itself:
+-- call SetFontString/SetFormatter/SetDuration and never read the text back (GetFormattedText
+-- is ConditionalSecret, and GetText turns secret once the Text aspect is attached).
+function api.create_duration_text_binding()
+	if st.family ~= "FOREVER" or type(create_duration_text_binding) ~= "function" then
+		return nil
+	end
+	local ok, binding = pcall(create_duration_text_binding)
+	if not ok then
+		return nil
+	end
+	return binding
+end
+
+-- A seconds formatter configured with plain arguments to match the HUD's readable face as
+-- closely as the native formatter allows: bare numbers (no unit letters), one decimal below
+-- 3 s, whole seconds above, seconds kept as the largest interval band, truncation with a
+-- rounded-up last unit (Blizzard's own aura-duration configuration). Every setter is
+-- optional and pcall-guarded so an older build keeps a working default formatter.
+-- A unitless human countdown formatter for the native text. The SecondsFormatter
+-- always appends an interval unit ("4 Seconds" with the default full abbreviation);
+-- the AbbreviatedNumberFormatter exposes the raw float ("2.518"). A NumericRuleFormatter
+-- with ONE rule (threshold 0, step 1, rounding Down, format "%.0f") renders the truncated
+-- whole second ("2"), matching the operator's integer countdown face. It is still fed
+-- through the proven DurationTextBinding:SetFormatter path; no new binding surface.
+function api.create_duration_number_formatter()
+	if st.family ~= "FOREVER" or type(create_numeric_rule_formatter) ~= "function" then
+		return nil
+	end
+	local enum = rawget(_G, "Enum")
+	local rounding = enum and enum.NumericRuleFormatRounding
+	local down = rounding and rounding.Down or 2 -- Enum.NumericRuleFormatRounding.Down
+	local ok, formatter = pcall(create_numeric_rule_formatter)
+	if not ok or formatter == nil then
+		return nil
+	end
+	local added = pcall(function()
+		formatter:AddBreakpoint({
+			threshold = 0,
+			step = 1,
+			rounding = down,
+			format = "%.0f",
+		})
+	end)
+	if not added then
+		return nil
+	end
+	return formatter
+end
+
+function api.create_seconds_formatter()
+	if st.family ~= "FOREVER" or type(create_seconds_formatter) ~= "function" then
+		return nil
+	end
+	local ok, formatter = pcall(create_seconds_formatter)
+	if not ok or formatter == nil then
+		return nil
+	end
+	local enum = rawget(_G, "Enum")
+	local abbreviation = enum and enum.SecondsFormatterAbbreviation
+	local interval = enum and enum.SecondsFormatterInterval
+	local rounding = enum and enum.SecondsFormatterRounding
+	pcall(function()
+		if abbreviation then
+			formatter:SetDefaultAbbreviation(abbreviation.None)
+		end
+		if interval then
+			formatter:SetMinInterval(interval.Seconds)
+			formatter:SetMaxInterval(interval.Seconds)
+		end
+		if rounding then
+			formatter:SetRounding(rounding.Truncate)
+		end
+		formatter:SetDesiredUnitCount(1)
+		formatter:SetCanRoundUpLastUnit(true)
+		formatter:SetMillisecondsThreshold(3)
+	end)
+	return formatter
+end
+
+-- A colour curve for the native countdown text: `warn_color` while the remaining duration
+-- is under `warn_seconds`, `normal_color` above. The binding evaluates the curve against
+-- the (possibly secret-valued) duration natively, so the addon never reads the number; the
+-- points are the same shape Blizzard's aura pipeline and the sibling Forever HUD use.
+-- Colours are colorRGBA tables in the 0-1 domain. Returns (curve, property) or nil, nil.
+function api.create_duration_text_color_curve(warn_seconds, warn_color, normal_color)
+	if st.family ~= "FOREVER" or type(create_color_curve) ~= "function" then
+		return nil, nil
+	end
+	local enum = rawget(_G, "Enum")
+	local property = enum and enum.DurationTextBindingProperty
+	if type(property) ~= "table" or property.RemainingDuration == nil then
+		return nil, nil
+	end
+	local function plain_color(color)
+		if type(color) ~= "table" then
+			return nil
+		end
+		local r, g, b = color.r or color[1], color.g or color[2], color.b or color[3]
+		local a = color.a or color[4] or 1
+		if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number"
+			or type(a) ~= "number" then
+			return nil
+		end
+		return { r = r, g = g, b = b, a = a }
+	end
+	local warn = plain_color(warn_color)
+	local normal = plain_color(normal_color)
+	if warn == nil or normal == nil then
+		return nil, nil
+	end
+	local threshold = tonumber(warn_seconds) or 3
+	local ok, curve = pcall(create_color_curve)
+	if not ok or curve == nil then
+		return nil, nil
+	end
+	local points_ok = pcall(function()
+		curve:AddPoint(0, warn)
+		curve:AddPoint(threshold, warn)
+		curve:AddPoint(threshold + 0.01, normal)
+		curve:AddPoint(3600, normal)
+	end)
+	if not points_ok then
+		return nil, nil
+	end
+	return curve, property.RemainingDuration
+end
+
 -- Spell usability ------------------------------------------------------------------------
 -- Whether a spell can be cast right now, and specifically whether it is unusable for lack
 -- of resources (mana). Every probe shape returns (usable, insufficientPower): the C_Spell
@@ -623,6 +885,33 @@ else
 	end
 end
 
+-- Secret-SAFE power reader for widgets that can take a restricted value -----------------
+-- UnitPower is SecretWhenUnitPowerRestricted and UnitPowerMax is
+-- SecretWhenUnitPowerMaxRestricted on origin/forever
+-- (Interface/AddOns/Blizzard_APIDocumentationGenerated/UnitDocumentation.lua:2732-2747 and
+-- :2801-2824), so the bar cannot read them through api.UnitPower/api.UnitPowerMax above:
+-- those nil a restricted value because every other consumer does arithmetic with it
+-- (classes/*.lua resource gates). A StatusBar, however, is allowed to RECEIVE a secret:
+-- SetMinMaxValues (SimpleStatusBarAPIDocumentation.lua:229-236) and SetValue (:354-361)
+-- are SecretArguments = "AllowedWhenTainted" with SecretArgumentsAddAspect =
+-- { Enum.SecretAspect.BarValue }, and Blizzard's own mana-bar update feeds the raw
+-- UnitPower/UnitPowerMax straight into them with no Lua arithmetic
+-- (Blizzard_UnitFrame/Mainline/UnitFrame.lua:948-970 on origin/forever). This reader is the
+-- additive path for exactly that widget case: the raw values, never nil'd, plus a flag the
+-- caller must use to skip every comparison, fraction and format on them. The flag is false
+-- (never nil) on the classic clients, where issecretvalue is absent and no value is secret.
+api.GetPlayerPower = function(power_type)
+	if not legacy_unit_power then
+		return nil, nil, false
+	end
+	local value = legacy_unit_power("player", power_type)
+	if not legacy_unit_power_max then
+		return value, nil, is_secret(value)
+	end
+	local max_value = legacy_unit_power_max("player", power_type)
+	return value, max_value, is_secret(value) or is_secret(max_value)
+end
+
 -- Unit power type: UnitPowerType(unit) returns the numeric power-type id (0 mana,
 -- 1 rage, 3 energy, ...) and its token. The druid form label maps 3 -> Cat and
 -- 1 -> Bear (reference GetDruidFormLabel, SuperSwingTimer_ClassMods.lua:4530-4538) and
@@ -723,8 +1012,18 @@ end
 
 if UnitAura then
 	api.UnitAura = function(unit, index, filter)
-		local name, icon, count, dispel_name, duration, expiration, source, is_stealable,
-		nameplate_show_personal, spell_id = UnitAura(unit, index, filter)
+		-- SEC-4 (2026-11-06): the classic global is a deprecation shim over the raisable
+		-- C_UnitAuras read on clients that ship it, so it gets the same per-index
+		-- C_Secrets precheck and pcall as the C_UnitAuras branch below. Both are exact
+		-- no-ops where C_Secrets/the probe is absent (every classic-line family).
+		if aura_index_is_secret(unit, index, filter) then
+			return nil
+		end
+		local ok, name, icon, count, dispel_name, duration, expiration, source,
+		is_stealable, nameplate_show_personal, spell_id = pcall(UnitAura, unit, index, filter)
+		if not ok then
+			return nil
+		end
 		if aura_entry_is_secret(name, icon, count, dispel_name, duration, expiration,
 				source, is_stealable, nameplate_show_personal, spell_id) then
 			return nil
@@ -891,6 +1190,84 @@ function api.auras_may_be_secret()
 		return nil
 	end
 	local ok, value = pcall(probe)
+	if ok and type(value) == "boolean" then
+		return value
+	end
+	return nil
+end
+
+-- Specific-aura secrecy probe (H3, 2026-11-06) ------------------------------------------
+-- "Could THIS spell's aura row be hidden by the restricted-aura regime right now?"
+-- C_Secrets.ShouldSpellAuraBeSecret(spellIdentifier) answers the exact per-spell
+-- predicate (SecretPredicateAPIDocumentation.lua:139-153). The identifier must be a
+-- numeric spell id here: a localized name is not guaranteed to be in the predicate's
+-- domain on every family, so a non-number reads unknown (nil) instead of guessing.
+-- true/false only when the client answers a boolean; nil when the API/probe is absent,
+-- the argument is not numeric, or the probe throws (unknown is never "no").
+function api.spell_aura_may_be_secret(spell_id)
+	if type(spell_id) ~= "number" then
+		return nil
+	end
+	local c_secrets = rawget(_G, "C_Secrets")
+	if type(c_secrets) ~= "table" then
+		return nil
+	end
+	local probe = rawget(c_secrets, "ShouldSpellAuraBeSecret")
+	if type(probe) ~= "function" then
+		return nil
+	end
+	local ok, value = pcall(probe, spell_id)
+	if ok and type(value) == "boolean" then
+		return value
+	end
+	return nil
+end
+
+-- Player-power secrecy probe (SEC-9 family, 2026-11-06) ---------------------------------
+-- "Could a power read for this power type be secret right now?"
+-- C_Secrets.ShouldUnitPowerBeSecret(unit, powerType) is the exact predicate
+-- (SecretPredicateAPIDocumentation.lua:321-335); this wrapper always asks about the
+-- player, so callers pass only the power type. Same strict answer contract as above.
+function api.power_may_be_secret(power_type)
+	if type(power_type) ~= "number" then
+		return nil
+	end
+	local c_secrets = rawget(_G, "C_Secrets")
+	if type(c_secrets) ~= "table" then
+		return nil
+	end
+	local probe = rawget(c_secrets, "ShouldUnitPowerBeSecret")
+	if type(probe) ~= "function" then
+		return nil
+	end
+	local ok, value = pcall(probe, "player", power_type)
+	if ok and type(value) == "boolean" then
+		return value
+	end
+	return nil
+end
+
+-- Maximum-target-health secrecy probe (M2, 2026-11-06) -----------------------------------
+-- "Could a UnitHealthMax read for this unit be secret right now?"
+-- C_Secrets.ShouldUnitHealthMaxBeSecret(unit) is the exact predicate
+-- (SecretPredicateAPIDocumentation.lua:289-303 on origin/forever: "Returns true if
+-- queries for maximum unit health will produce secret values"). Same strict answer
+-- contract as the probes above: true/false only when the client answers a boolean;
+-- nil when the API/probe is absent, the unit is not a non-empty string, or the probe
+-- throws (unknown is never "no" - every classic client is the exact no-op nil here).
+function api.health_max_may_be_secret(unit)
+	if type(unit) ~= "string" or unit == "" then
+		return nil
+	end
+	local c_secrets = rawget(_G, "C_Secrets")
+	if type(c_secrets) ~= "table" then
+		return nil
+	end
+	local probe = rawget(c_secrets, "ShouldUnitHealthMaxBeSecret")
+	if type(probe) ~= "function" then
+		return nil
+	end
+	local ok, value = pcall(probe, unit)
 	if ok and type(value) == "boolean" then
 		return value
 	end
@@ -1222,24 +1599,66 @@ end
 -- the global, an unchecked reading, a non-number / negative / non-finite value, a
 -- restricted (secret) reading and a throwing call all report nil; callers must treat
 -- nil as unknown, never as a distance.
+--
+-- Forever exact fallback (2026-11-09): UnitDistanceSquared is group-only and #noinstance
+-- (Warcraft Wiki; the checkedDistance bit is false for an attackable enemy), so it cannot
+-- answer the range bar's real case. The same client also exposes UnitPosition(unit):
+-- x, y, z, mapID. Blizzard's own TutorialTutorials.lua uses UnitPosition("target") and
+-- CalculateDistanceSq(targetX, targetY, playerX, playerY) against a yard range, which
+-- proves the coordinates are plain world yards for a target. The fallback below is
+-- Forever-gated (never makes another family call UnitPosition), uses the same 2D yard
+-- metric as that Blizzard consumer, rejects a different map, any secret field and any
+-- non-finite value, and returns nil rather than guessing. UnitDistanceSquared still wins
+-- when the client actually checked it; this only fills the enemy case it refuses.
 local unit_distance_squared = UnitDistanceSquared
+local unit_position = rawget(_G, "UnitPosition")
+
+local function finite_number(value)
+	return type(value) == "number" and value == value
+		and value ~= math.huge and value ~= -math.huge
+end
+
+-- Distance from the player's UnitPosition to `unit`'s, in yards (2D, the metric
+-- Blizzard's own tutorial uses for a target). nil on any unreadable/secret/mismatched read.
+local function position_distance(unit)
+	if st.family ~= "FOREVER" or type(unit_position) ~= "function" then
+		return nil
+	end
+	local ok_player, px, py, pz, pmap = pcall(unit_position, "player")
+	if not ok_player then
+		return nil
+	end
+	local ok_unit, ux, uy, uz, umap = pcall(unit_position, unit)
+	if not ok_unit then
+		return nil
+	end
+	if is_secret(px) or is_secret(py) or is_secret(pz) or is_secret(pmap)
+		or is_secret(ux) or is_secret(uy) or is_secret(uz) or is_secret(umap) then
+		return nil
+	end
+	if not finite_number(px) or not finite_number(py)
+		or not finite_number(ux) or not finite_number(uy) then
+		return nil
+	end
+	-- A different map (or one unreadable map id) is not a distance. Both nil is allowed
+	-- only because some clients omit the map id; the coordinates are still the same unit
+	-- position space in that case.
+	if pmap ~= umap then
+		return nil
+	end
+	local dx, dy = px - ux, py - uy
+	return math.sqrt(dx * dx + dy * dy)
+end
 
 function api.UnitDistance(unit)
-	if not unit_distance_squared then
-		return nil
+	if unit_distance_squared then
+		local ok, squared, checked = pcall(unit_distance_squared, unit)
+		if ok and not is_secret(squared) and not is_secret(checked)
+			and checked == true and finite_number(squared) and squared >= 0 then
+			return math.sqrt(squared)
+		end
 	end
-	local ok, squared, checked = pcall(unit_distance_squared, unit)
-	if not ok or is_secret(squared) or is_secret(checked) then
-		return nil
-	end
-	if not checked then
-		return nil
-	end
-	if type(squared) ~= "number" or squared ~= squared or squared < 0
-		or squared == math.huge then
-		return nil
-	end
-	return math.sqrt(squared)
+	return position_distance(unit)
 end
 
 -- Swing range check (native C_SwingTimer on WoW Forever) ---------------------------------
@@ -1326,22 +1745,34 @@ function api.IsPlayerMoving()
 	return moving
 end
 
--- Combat ratings -------------------------------------------------------------------------
+-- Combat ratings (SEC-11, 2026-11-06) -----------------------------------------------------
+-- Restricted stat reads are secret-capable; a raw pass-through would hand opacity to the
+-- caller (LibGlobalCooldown.lua:21-22 guards its own reads today, but the wrapper is the
+-- contract every future caller sees). A throwing/restricted/non-number answer is nil
+-- (unknown, never zero); the no-API client keeps its historical 0 shape.
+local legacy_get_combat_rating = rawget(_G, "GetCombatRating")
+local legacy_get_combat_rating_bonus = rawget(_G, "GetCombatRatingBonus")
 
-if GetCombatRating then
-	api.GetCombatRating = GetCombatRating
-else
-	api.GetCombatRating = function()
+function api.GetCombatRating(rating_index)
+	if not legacy_get_combat_rating then
 		return 0
 	end
+	local ok, value = pcall(legacy_get_combat_rating, rating_index)
+	if not ok or is_secret(value) or type(value) ~= "number" then
+		return nil
+	end
+	return value
 end
 
-if GetCombatRatingBonus then
-	api.GetCombatRatingBonus = GetCombatRatingBonus
-else
-	api.GetCombatRatingBonus = function()
+function api.GetCombatRatingBonus(rating_index)
+	if not legacy_get_combat_rating_bonus then
 		return 0
 	end
+	local ok, value = pcall(legacy_get_combat_rating_bonus, rating_index)
+	if not ok or is_secret(value) or type(value) ~= "number" then
+		return nil
+	end
+	return value
 end
 
 -- Network stats --------------------------------------------------------------------------
@@ -1393,7 +1824,12 @@ end
 -- Normalised to start, duration, enabled (the classic multi-return). A client that hands
 -- back a SpellCooldownInfo-shaped table instead is unfolded the same way compat's
 -- GetSpellCooldown wrapper unfolds it (startTime / duration / isEnabled). A restricted
--- reading reports the idle shape (0, 0, 0), never a secret.
+-- reading reports the idle shape (0, 0, 0) plus an additive fourth return `restricted`
+-- of true, so a widget can tell "no cooldown" from "the timing is hidden" instead of
+-- painting a confident ready state. A readable read keeps the classic three-value shape
+-- and omits the fourth (nil), exactly like api.GetSpellCooldown's fifth.
+-- (SEC-10, 2026-11-06: the HUD trinket slot needs the unknown face; the contract is
+-- additive, no existing caller changes.)
 
 function api.GetInventoryItemCooldown(slot)
 	if not get_inventory_item_cooldown then
@@ -1404,14 +1840,14 @@ function api.GetInventoryItemCooldown(slot)
 		local info = start_time
 		local enabled_raw = info.isEnabled
 		if is_secret(enabled_raw) then
-			return 0, 0, 0
+			return 0, 0, 0, true
 		end
 		start_time = info.startTime
 		duration = info.duration
 		enabled = enabled_raw and 1 or 0
 	end
 	if is_secret(start_time) or is_secret(duration) or is_secret(enabled) then
-		return 0, 0, 0
+		return 0, 0, 0, true
 	end
 	return start_time or 0, duration or 0, enabled or 0
 end
@@ -1713,6 +2149,57 @@ function api.UnitGUID(unit)
 		return nil
 	end
 	return guid
+end
+
+-- Unit comparison (SEC-2/M1, 2026-11-06) -------------------------------------------------
+-- UnitIsUnit's result is secret-capable (SecretWhenUnitComparisonRestricted; a compound
+-- token like "targettarget" is always secret on an addon-restricted map). A restricted
+-- result is NOT nilled: the only sanctioned consumer of a restricted boolean from
+-- tainted Lua is ScriptRegion:SetAlphaFromBoolean(secret_bool, 1, 0) (AllowedWhenTainted,
+-- Alpha aspect - Blizzard's own UnitFrameUtil.lua:487), and the opaque value is the
+-- argument that sink needs. So:
+--   readable  -> (boolean, false)
+--   restricted-> (opaque boolean, true)   - never compare/index the opaque value
+--   throw     -> (nil, false)
+--   absent    -> (nil, false)
+local legacy_unit_is_unit = rawget(_G, "UnitIsUnit")
+
+function api.UnitIsUnit(unit1, unit2)
+	if not legacy_unit_is_unit then
+		return nil, false
+	end
+	local ok, result = pcall(legacy_unit_is_unit, unit1, unit2)
+	if not ok then
+		return nil, false
+	end
+	if is_secret(result) then
+		return result, true
+	end
+	-- The pre-2026-11-06 caller accepted the numeric spellings too (`yours == true or
+	-- yours == 1`); preserve them as readable booleans, anything else is unknown.
+	if type(result) == "boolean" then
+		return result, false
+	end
+	if type(result) == "number" and (result == 1 or result == 0) then
+		return result == 1, false
+	end
+	return nil, false
+end
+
+-- Unit creature type (SEC-3/M6, 2026-11-06) ----------------------------------------------
+-- UnitCreatureType is an identity read (SecretWhenUnitIdentityRestricted). A restricted
+-- or non-string answer is unknown (nil) - callers must never read nil as "not undead".
+local legacy_unit_creature_type = rawget(_G, "UnitCreatureType")
+
+function api.UnitCreatureType(unit)
+	if not legacy_unit_creature_type then
+		return nil
+	end
+	local ok, creature_type = pcall(legacy_unit_creature_type, unit)
+	if not ok or is_secret(creature_type) or type(creature_type) ~= "string" then
+		return nil
+	end
+	return creature_type
 end
 
 --------------------------------------------------------------------------------

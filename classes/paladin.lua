@@ -2420,10 +2420,11 @@ local JOTC_RESCAN_INTERVAL = 0.5
 -- cap is the TBC debuff-slot count and only bounds a misbehaving client.
 local function get_guide_jotc_remaining(self, now)
     if self.guide_jotc_at and (now - self.guide_jotc_at) < JOTC_RESCAN_INTERVAL then
-        return self.guide_jotc_value
+        return self.guide_jotc_value, self.guide_jotc_restricted == true
     end
     self.guide_jotc_at = now
     self.guide_jotc_value = nil
+    self.guide_jotc_restricted = false
     if UnitExists and UnitExists("target") then
         local best = nil
         local i = 1
@@ -2442,8 +2443,43 @@ local function get_guide_jotc_remaining(self, now)
             i = i + 1
         end
         self.guide_jotc_value = best
+        -- H4 (2026-11-06): no match is not "the debuff is absent" while the
+        -- restricted-aura regime can hide the row. The specific rank probe answers
+        -- first; when it cannot (nil), the list-wide probe is the fallback. Anything
+        -- but an explicit true keeps the historical absent meaning (classic clients
+        -- have neither probe). The gather publishes inputs_unknown from the second
+        -- return, so a hidden JotC never re-cues the refresh or hides the cue silently.
+        if best == nil then
+            local may
+            local specific = api.spell_aura_may_be_secret
+            if type(specific) == "function" then
+                local any_true, any_nil = false, false
+                for id in pairs(jotc_ids) do
+                    local answer = specific(id)
+                    if answer == true then
+                        any_true = true
+                    elseif answer == nil then
+                        any_nil = true
+                    end
+                end
+                if any_true then
+                    may = true
+                elseif not any_nil then
+                    may = false
+                end
+            end
+            if may == nil then
+                local list_probe = api.auras_may_be_secret
+                if type(list_probe) == "function" then
+                    may = list_probe() == true
+                end
+            end
+            if may == true then
+                self.guide_jotc_restricted = true
+            end
+        end
     end
-    return self.guide_jotc_value
+    return self.guide_jotc_value, self.guide_jotc_restricted == true
 end
 
 -- Live cooldown remaining (seconds) for a spell id or name, handling the client's GCD
@@ -2464,13 +2500,22 @@ local function get_guide_cooldown_remaining(self, spell, latch_key, duration_key
     -- Name-vs-id rule: the query is the localized name on TBC, the numeric id
     -- elsewhere (filler names pass through untouched on both).
     local query = spell_query(spell)
-    local start_time, duration = api.GetSpellCooldown(query)
-    if not start_time or not duration or duration == 0 then
+    -- H2 (2026-11-06): the shared restricted-aware read. A restricted (secret) timing
+    -- is UNKNOWN, never 0 = "ready": the helper returns nil and records the tick so the
+    -- gather publishes inputs_unknown. nil ALONE would not be enough - the engine's
+    -- is_ready(nil) is true (forever_guide.lua:14-32) - the unknown bit is the
+    -- display's suppression path (nextaction_ui.lua:638).
+    local remaining, duration, restricted = api.get_cooldown_remaining(query)
+    if restricted == true then
+        self.guide_reads_unknown = true
+        return nil
+    end
+    if type(remaining) ~= "number" or type(duration) ~= "number" or duration == 0 then
         return 0
     end
     if duration > 1.51 then
         if latch_key then
-            self[latch_key] = start_time + duration
+            self[latch_key] = now + remaining
         end
         if duration_key then
             -- A real cooldown: api.GetSpellCooldown has already normalised both shapes
@@ -2478,25 +2523,20 @@ local function get_guide_cooldown_remaining(self, spell, latch_key, duration_key
             -- >1.51 branch means this is not the GCD echo.
             self[duration_key] = duration
         end
-        local remaining = start_time + duration - now
-        if remaining < 0 then
-            remaining = 0
-        end
         return remaining
     end
     -- GCD echo: the real cooldown (if any) ends before this GCD does.
     if not latch_key then
         return 0
     end
-    local remaining = (self[latch_key] or 0) - now
-    if remaining <= 0 then
+    local latched = (self[latch_key] or 0) - now
+    if latched <= 0 then
         return 0
     end
-    local echo_end = start_time + duration - now
-    if remaining > echo_end then
-        remaining = echo_end
+    if latched > remaining then
+        latched = remaining
     end
-    return remaining
+    return latched
 end
 
 -- Player mana percentage and the target's (localized) creature type for the filler
@@ -2507,10 +2547,21 @@ local function get_guide_mana_pct()
     if type(power_max) == "number" and power_max > 0 then
         local power = api.UnitPower("player")
         if type(power) == "number" then
-            return power / power_max * 100
+            return power / power_max * 100, false
         end
     end
-    return 0
+    -- H1 (2026-11-06): a restricted (secret) power read is UNKNOWN, never 0 %. The
+    -- type is only resolved on this unreadable path (no extra probe on a normal tick).
+    -- Unknown in the regime's own words returns nil, so no mana-gated row is decided
+    -- from a fact that was never read; a client that genuinely cannot answer (no
+    -- C_Secrets) keeps the historical 0.
+    local power_type = api.UnitPowerType("player")
+    local probe = api.power_may_be_secret
+    if type(power_type) == "number" and type(probe) == "function"
+        and probe(power_type) == true then
+        return nil, true
+    end
+    return 0, false
 end
 
 -- UnitCreatureType returns a localized string on every family; a restricted (secret)
@@ -3267,15 +3318,22 @@ end
 -- like every other gather reading here).
 local function get_guide_target_health_pct()
     if not (UnitExists and UnitExists("target")) then
-        return nil
+        return nil, false
     end
     local health = api.UnitHealth("target")
     local health_max = api.UnitHealthMax("target")
-    if type(health) ~= "number" or type(health_max) ~= "number"
-        or health_max <= 0 then
-        return nil
+    if type(health) == "number" and type(health_max) == "number"
+        and health_max > 0 then
+        return health / health_max * 100, false
     end
-    return health / health_max * 100
+    -- M2 (2026-11-06): a restricted target-health read is UNKNOWN, never 100 %. The
+    -- unknown bit tells the guide the execute phase is undecidable instead of silently
+    -- withholding it (the display takes its HOLD/unknown face).
+    local probe = api.health_max_may_be_secret
+    if type(probe) == "function" and probe("target") == true then
+        return nil, true
+    end
+    return nil, false
 end
 
 -- Repoint the FCFS slot textures at the resolved ranks once the book answers
@@ -3351,6 +3409,11 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     local gcd = self.gcd
     local db = self:get_class_table() or {}
     local inputs = out or self.PALADIN.guide_inputs
+    -- H2 (2026-11-06): per-tick restricted-read flag. A class cooldown/aura/power
+    -- helper that hits a secret timing records it here; the tail of this gather ORs
+    -- it into inputs_unknown (the display's suppression path), so a degraded read can
+    -- never become advice.
+    self.guide_reads_unknown = false
     -- PROPER: {} reads every tunable as nil, which is exactly the engine's
     -- documented default for each; the live swing/GCD/aura reads below still run.
 
@@ -3535,7 +3598,11 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     -- below), so the two sides always agree. A nil value means the spell is unknown
     -- on this client, i.e. the archive's known=false.
     inputs.melee_count = self.guide_melee_count or 0
-    inputs.mana_pct = get_guide_mana_pct()
+    local mana_pct, mana_restricted = get_guide_mana_pct()
+    if mana_restricted == true then
+        self.guide_reads_unknown = true
+    end
+    inputs.mana_pct = mana_pct
     inputs.creature_type = get_guide_creature_type()
     -- TBC opt-ins (engine defaults preserve the archive; constants, no options):
     -- the judge-feasibility gate is always on. Single-target is reported from
@@ -3547,7 +3614,11 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     -- Undead/Demon is unaffected either way.
     inputs.judge_require_fit = true
     inputs.target_count = inputs.creature_type ~= nil and 1 or nil
-    inputs.jotc_remaining = get_guide_jotc_remaining(self, now)
+    local jotc_remaining, jotc_restricted = get_guide_jotc_remaining(self, now)
+    if jotc_restricted == true then
+        self.guide_reads_unknown = true
+    end
+    inputs.jotc_remaining = jotc_remaining
     inputs.gcd_before_swing = self:get_gcd_time_before_swing_seconds("mainhand")
     local _mana_cons = (type(db) == "table") and rawget(db, "nextaction_filler_mana_consecration") or nil
     if type(_mana_cons) ~= "number" then _mana_cons = 35 end
@@ -3582,18 +3653,23 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     inputs.cons_known = cons_known
     inputs.exo_known = exo_known
     inputs.filler_remaining = nil
+    -- H1 (2026-11-06): the mana read can now be UNKNOWN (nil) under the secret regime.
+    -- No filler may be mirrored from a fact the client hid, so every threshold below is
+    -- gated on a number - nil simply leaves the filler promise out (the engine's
+    -- inputs_unknown suppresses the row anyway).
+    local mana_known = type(inputs.mana_pct) == "number"
     if is_forever_family then
-        if exo_known and inputs.mana_pct > inputs.mana_exorcism_threshold then
+        if mana_known and exo_known and inputs.mana_pct > inputs.mana_exorcism_threshold then
             inputs.filler_remaining = exorcism_remaining
-        elseif cons_known and inputs.mana_pct > inputs.mana_consecration_threshold then
+        elseif mana_known and cons_known and inputs.mana_pct > inputs.mana_consecration_threshold then
             inputs.filler_remaining = consecration_remaining
         end
     elseif na and inputs.creature_type and na.exorcism_target_types
         and na.exorcism_target_types[inputs.creature_type] then
-        if inputs.mana_pct > inputs.mana_exorcism_threshold then
+        if mana_known and inputs.mana_pct > inputs.mana_exorcism_threshold then
             inputs.filler_remaining = exorcism_remaining
         end
-    elseif na and inputs.mana_pct > inputs.mana_consecration_threshold then
+    elseif na and mana_known and inputs.mana_pct > inputs.mana_consecration_threshold then
         inputs.filler_remaining = consecration_remaining
     end
 
@@ -3794,7 +3870,11 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     -- ExtraCastCondition: sim.IsExecutePhase20()); the FCFS engine asks for it
     -- only below 20 %, and an unknown health withholds it.
     if is_era_family or is_forever_family or is_wrath_family then
-        inputs.target_health_pct = get_guide_target_health_pct()
+        local target_hp_pct, hp_restricted = get_guide_target_health_pct()
+        if hp_restricted == true then
+            self.guide_reads_unknown = true
+        end
+        inputs.target_health_pct = target_hp_pct
     else
         inputs.target_health_pct = nil
     end
@@ -3804,6 +3884,12 @@ function ST.PALADIN.gather_guide_inputs(self, out)
     else
         inputs.how_remaining = nil
         inputs.how_cast_seconds = nil
+    end
+    -- Belt and braces (H2/H4/M2): if any restricted read happened this tick, the whole
+    -- advice is unknown - the belt catches a field this gather wrote as a class
+    -- sentinel (999/"never") where the helper could not nil it.
+    if self.guide_reads_unknown == true then
+        inputs.inputs_unknown = true
     end
     return inputs
 end

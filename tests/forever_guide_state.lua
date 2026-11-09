@@ -502,6 +502,70 @@ out = FG.evaluate("PALADIN", "ret", { ["Judgement"] = true, inputs_unknown = tru
 eq(out.inputs_unknown, true, "restricted: the caller's unknown bit is preserved")
 st.api = nil
 
+-- 9b. CLASS-GATHER UNKNOWN CONTRACT (H1/H2/H4/M2, 2026-11-06)
+-- The class gathers publish `inputs_unknown = true` when a read was restricted (see the
+-- per-class suites). This pins what the engine does with that shape, and WHY the bit is
+-- mandatory: a nil cooldown alone is NOT unknown - forever_guide.is_ready(nil) is true -
+-- so without the bit the same restricted read becomes a confident cue. With the bit the
+-- display's own suppression (nextaction_ui.lua:638) withholds every advice target.
+do
+    -- PALADIN / Judgement: the gather writes the never-ready sentinel (999) for a
+    -- restricted Judgement and sets the bit. The engine must not cue it.
+    out = FG.evaluate("PALADIN", "ret", { ["Judgement"] = true, judge_remaining = 0 })
+    eq(out.action, "judge", "gather H2: a raw 0 reads ready and cues Judgement (the defect)")
+    eq(out.inputs_unknown, false, "gather H2: the raw-0 cue carries no unknown bit")
+    out = FG.evaluate("PALADIN", "ret",
+        { ["Judgement"] = true, judge_remaining = 999, inputs_unknown = true })
+    eq(out.inputs_unknown, true, "gather H2: the restricted gather output is unknown")
+    eq(out.action, nil, "gather H2: the restricted Judgement is never cued")
+
+    -- HUNTER / Arcane Shot: nil alone still reads ready (is_ready(nil) is true); the
+    -- gather's unknown bit is what suppresses the cue.
+    local hunter_restricted = {
+        hunters_mark_active = true, serpent_active = true, ["Arcane Shot"] = true,
+        arcane_remaining_cd = nil,
+    }
+    out = FG.evaluate("HUNTER", "ranged", hunter_restricted)
+    eq(out.action, "arcane", "gather H2: a nil Arcane cooldown alone still cues (is_ready(nil))")
+    eq(out.inputs_unknown, false, "gather H2: nil alone is not unknown - the bit is mandatory")
+    hunter_restricted.inputs_unknown = true
+    out = FG.evaluate("HUNTER", "ranged", hunter_restricted)
+    eq(out.inputs_unknown, true, "gather H2: the restricted hunter tick is unknown")
+    eq(out.action, "arcane", "gather H2: the cue is suppressed by the unknown bit, not withheld")
+
+    -- WARRIOR / Rend: a hidden target-aura row (nil remaining) would re-cue the upkeep;
+    -- the gather's unknown bit marks the tick instead of claiming the debuff is absent.
+    out = FG.evaluate("WARRIOR", nil, { ["Rend"] = true, rend_remaining = 0, rage = 30 })
+    eq(out.action, "rend", "gather H4: a raw 0 Rend window re-cues the upkeep (the defect)")
+    eq(out.inputs_unknown, false, "gather H4: the raw-0 re-cue carries no unknown bit")
+    out = FG.evaluate("WARRIOR", nil, { ["Rend"] = true, rage = 30, inputs_unknown = true })
+    eq(out.inputs_unknown, true, "gather H4: a hidden Rend row makes the warrior tick unknown")
+
+    -- DRUID / Rip + Rake: same shape on the cat finisher/upkeep rows.
+    out = FG.evaluate("DRUID", "cat",
+        { faerie_fire_active = true, combo_points = 5, ["Rip"] = true, energy = 40,
+            rip_remaining = 0 })
+    eq(out.action, "rip", "gather H4: a raw 0 Rip window re-cues the finisher (the defect)")
+    eq(out.inputs_unknown, false, "gather H4: the raw-0 Rip cue carries no unknown bit")
+    out = FG.evaluate("DRUID", "cat",
+        { faerie_fire_active = true, combo_points = 5, ["Rip"] = true, energy = 40,
+            inputs_unknown = true })
+    eq(out.inputs_unknown, true, "gather H4: a hidden Rip row makes the druid tick unknown")
+    out = FG.evaluate("DRUID", "cat",
+        { faerie_fire_active = true, combo_points = 2, ["Rake"] = true, rake_active = false,
+            energy = 40, inputs_unknown = true })
+    eq(out.inputs_unknown, true, "gather H4: a hidden Rake row makes the druid tick unknown")
+
+    -- SHAMAN / Flame Shock: the refresh rule reads a nil window as "down".
+    out = FG.evaluate("SHAMAN", "enhancement",
+        { ["Flame Shock"] = true, flameshock_remaining = 0 })
+    eq(out.action, "flameshock", "gather H4: a raw 0 Flame Shock window re-cues (the defect)")
+    eq(out.inputs_unknown, false, "gather H4: the raw-0 Flame Shock cue carries no unknown bit")
+    out = FG.evaluate("SHAMAN", "enhancement",
+        { ["Flame Shock"] = true, inputs_unknown = true })
+    eq(out.inputs_unknown, true, "gather H4: a hidden Flame Shock row makes the shaman tick unknown")
+end
+
 -- 10. VERIFIED FOREVER SPELL IDS (Wowhead Forever DB): the full ladder every tracked
 -- spell must carry. A bare name lookup is the primary path; these tables are the
 -- fallback ladder is_known and the HUD/guide gates walk, so a wrong or missing id
@@ -802,6 +866,121 @@ check(out.action ~= "watershield", "D7: watershield_due=false suppresses even wh
 -- producer suppresses on its own reading.
 out = FG.evaluate("SHAMAN", "enhancement", { ["Water Shield"] = true, watershield_due = false, flameshock_active = true, stormstrike_remaining = 5, shock_remaining = 5 })
 check(out.action ~= "watershield", "D7: an active Water Shield suppresses its own prompt")
+
+--=========================================================================================
+-- SEC/H3 (2026-11-06 secret-core): restricted target identity + Hunter's Mark unknown
+--=========================================================================================
+do
+    -- H3: a restricted (or unreadable) target aura list must not re-cue Hunter's Mark.
+    -- scan_unit_aura returns nil for both "absent" and "could not read", so the specific
+    -- C_Secrets probe decides: may-be-secret -> unknown (HOLD face, no cue); absent ->
+    -- the historical cue.
+    st.api = {
+        get_time = function() return 100 end,
+        scan_unit_aura = function() return nil, nil end,
+        spell_aura_may_be_secret = function() return true end,
+    }
+    local mark_out = FG.evaluate("HUNTER", "ranged",
+        { ["Hunter's Mark"] = true, mana_fraction = 1 })
+    check(mark_out.action ~= "hunters_mark",
+        "H3 restricted: an unreadable aura list never re-cues Hunter's Mark")
+    eq(mark_out.inputs_unknown, true, "H3 restricted: the tick is flagged unknown (HOLD face)")
+
+    st.api.spell_aura_may_be_secret = function() return false end
+    mark_out = FG.evaluate("HUNTER", "ranged",
+        { ["Hunter's Mark"] = true, mana_fraction = 1 })
+    eq(mark_out.action, "hunters_mark", "H3 control: an absent aura list still cues Hunter's Mark")
+    eq(mark_out.inputs_unknown, false, "H3 control: an absent aura list is a known tick")
+
+    st.api.spell_aura_may_be_secret = nil
+    mark_out = FG.evaluate("HUNTER", "ranged",
+        { ["Hunter's Mark"] = true, mana_fraction = 1 })
+    eq(mark_out.action, "hunters_mark",
+        "H3 control: a classic client without the probe keeps the cue")
+
+    -- The mark found -> no cue (unchanged).
+    st.api.scan_unit_aura = function() return 5, nil end
+    mark_out = FG.evaluate("HUNTER", "ranged",
+        { ["Hunter's Mark"] = true, mana_fraction = 1 })
+    check(mark_out.action ~= "hunters_mark", "H3 control: a found mark is never re-cued")
+    st.api = nil
+end
+
+do
+    -- SEC-3/M6: the Exorcism HUD glow compares UnitCreatureType. A restricted identity
+    -- read is unknown: no undead/demon glow, no throw out of the HUD provider.
+    env.UnitExists = function() return true end
+    local calls = 0
+    local secret_type = setmetatable({}, {
+        __eq = function() error("restricted creature type compared") end,
+    })
+    st.api = {
+        get_time = function() return 100 end,
+        GetSpellCooldown = function() return 0, 0 end,
+        UnitCreatureType = function(unit)
+            calls = calls + 1
+            return secret_type
+        end,
+    }
+    local slot = { key = "exorcism", spell = 879, spell_name = "Exorcism" }
+    local ok, state = pcall(FG.get_hud_state, "PALADIN", {}, slot, 100)
+    check(ok, "SEC-3: a restricted creature type never throws out of the HUD provider ("
+        .. tostring(state) .. ")")
+    eq(calls, 1, "SEC-3: the Exorcism branch asks the guarded wrapper once")
+    eq(state.glow, false, "SEC-3: a restricted creature type produces no undead/demon glow")
+
+    st.api.UnitCreatureType = function() return nil end
+    state = FG.get_hud_state("PALADIN", {}, slot, 100)
+    eq(state.glow, false, "SEC-3: an unknown (nil) creature type produces no glow")
+
+    st.api.UnitCreatureType = function() return "Undead" end
+    state = FG.get_hud_state("PALADIN", {}, slot, 100)
+    eq(state.glow, true, "SEC-3 control: a readable Undead still glows")
+    st.api.UnitCreatureType = function() return "Humanoid" end
+    state = FG.get_hud_state("PALADIN", {}, slot, 100)
+    eq(state.glow, false, "SEC-3 control: a readable non-undead/demon does not glow")
+    st.api = nil
+    env.UnitExists = nil
+
+    -- Forever GCD object channel: a ready slot with no numeric expiry still hands the
+    -- opaque LGC handle to the HUD; the numeric path wins whenever an expiry exists.
+    st.api = {
+        get_time = function() return 100 end,
+        GetSpellCooldown = function() return 0, 0 end,
+    }
+    local gcd_object = {}
+    local gcd_self = { gcd = { gcd_object = gcd_object, gcd_on_gcd = true } }
+    local gcd_slot = { key = "cs", spell = 35395, spell_name = "Crusader Strike" }
+    local gcd_state = FG.get_hud_state("PALADIN", gcd_self, gcd_slot, 100)
+    eq(gcd_state.cooldown_object, gcd_object,
+        "Forever GCD: the ready slot carries the opaque LGC handle")
+    eq(gcd_state.on_gcd, true, "Forever GCD: the plain on-GCD flag is exposed")
+    eq(gcd_state.remaining, 0, "Forever GCD: no numeric duration is invented")
+    gcd_self.gcd = { expires = 101, spell_length = 1.5 }
+    gcd_state = FG.get_hud_state("PALADIN", gcd_self, gcd_slot, 100)
+    eq(gcd_state.cooldown_object, nil,
+        "Forever GCD: a readable numeric expiry keeps the numeric path")
+    eq(gcd_state.remaining, 1, "Forever GCD: the numeric expiry is exact")
+    st.api = nil
+
+    -- Source-shape pin: no raw UnitCreatureType read in the provider.
+    local fh = assert(io.open(ROOT .. "forever_guide.lua", "r"))
+    local fsrc = fh:read("*a")
+    fh:close()
+    local fcode = {}
+    for line in fsrc:gmatch("[^\r\n]+") do
+        if not line:match("^%s*%-%-") then
+            fcode[#fcode + 1] = line
+        end
+    end
+    fsrc = table.concat(fcode, "\n")
+    check(fsrc:find("api%.UnitCreatureType%(") ~= nil,
+        "SEC-3: forever_guide.lua routes creature type through api.UnitCreatureType")
+    check(fsrc:find("UnitCreatureType%(") ~= nil
+        and fsrc:find("and UnitCreatureType", 1, true) == nil
+        and fsrc:find("local ct = UnitCreatureType", 1, true) == nil,
+        "SEC-3: forever_guide.lua has no raw UnitCreatureType read")
+end
 
 if failures == 0 then
     print(string.format("PASS  forever_guide_state.lua (%d checks)", checks))

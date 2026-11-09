@@ -27,6 +27,11 @@
 --      states, show/hide and out-of-range dim through the real visibility passes, and the
 --      mainhand-only LibDataBroker feed. Section 2b adds the degraded states: the
 --      engine-dead render (H1) and the per-tick hook/zone isolation (H2).
+--   2a. The per-tick cost contract (2026-11-06): one clock read per tick (the tick's own
+--      reading is handed to set_bar_texts), the leading-edge spark applied only when its
+--      configuration key changes (Show/Hide per tick), and exactly one fill write per
+--      hand per tick; plus the verified simple_round truncation pins (nearest-tenth
+--      display for every one-decimal weapon speed, and the half-up timer case).
 --   3. The per-frame class dispatch (on_bar_update) must-show/must-not states: paladin
 --      twist band alphas (marker/window/armed/attempt/success/impossible) driven by the
 --      real CLEU chain; warrior Overpower flash pulse + Shield Block + Slam + debuff
@@ -140,6 +145,7 @@ local SPELL_INFO = {
 local function make_region_common(region, sb, kind)
     function region:SetPoint(point, ...)
         sb.touches = sb.touches + 1
+        region.point_calls = (region.point_calls or 0) + 1
         region.point = { point, ... }
     end
     function region:GetPoint(index)
@@ -151,6 +157,7 @@ local function make_region_common(region, sb, kind)
     end
     function region:ClearAllPoints()
         sb.touches = sb.touches + 1
+        region.clear_calls = (region.clear_calls or 0) + 1
         region.point = nil
     end
     function region:Hide()
@@ -169,6 +176,7 @@ local function make_region_common(region, sb, kind)
     end
     function region:SetWidth(w)
         sb.touches = sb.touches + 1
+        region.width_calls = (region.width_calls or 0) + 1
         region.width = w
     end
     function region:SetHeight(h)
@@ -177,6 +185,7 @@ local function make_region_common(region, sb, kind)
     end
     function region:SetSize(w, h)
         sb.touches = sb.touches + 1
+        region.size_calls = (region.size_calls or 0) + 1
         region.width, region.height = w, h
     end
     function region:GetWidth()
@@ -193,9 +202,12 @@ local function make_texture(sb)
     sb.touches = sb.touches + 1
     local t = { shown = true }
     make_region_common(t, sb, "texture")
-    function t:SetTexCoord(...) t.texcoord = { ... } end
+    function t:SetTexCoord(...) t.texcoord_calls = (t.texcoord_calls or 0) + 1; t.texcoord = { ... } end
     function t:SetTexture(texture) t.texture = texture end
-    function t:SetVertexColor(r, g, b, a) t.color = { r, g, b, a } end
+    function t:SetVertexColor(r, g, b, a)
+        t.color_calls = (t.color_calls or 0) + 1
+        t.color = { r, g, b, a }
+    end
     function t:SetColorTexture(r, g, b, a) t.color_texture = { r, g, b, a } end
     function t:SetDrawLayer(layer, sub) t.draw_layer = { layer, sub } end
     function t:SetAllPoints() end
@@ -366,6 +378,10 @@ local function build(opts)
         power_token = nil,
         power_reads = 0,
         aura_reads = 0,
+        -- Client clock calls (api.get_time() is GetTimePreciseSec + GetTime per read).
+        -- Section 2a pins the per-tick clock read count through these.
+        time_precise_reads = 0,
+        time_reads = 0,
         cast = nil,
         channel = nil,
         target_exists = false,
@@ -528,8 +544,14 @@ local function build(opts)
     env.WOW_PROJECT_MISTS_CLASSIC = 19
     env.WOW_PROJECT_MAINLINE = 1
     env.WOW_PROJECT_CAMELOT = 18
-    env.GetTime = function() return sb.clock end
-    env.GetTimePreciseSec = function() return sb.clock end
+    env.GetTime = function()
+        sb.time_reads = sb.time_reads + 1
+        return sb.clock
+    end
+    env.GetTimePreciseSec = function()
+        sb.time_precise_reads = sb.time_precise_reads + 1
+        return sb.clock
+    end
     env.GetBuildInfo = function() return "3.3.5", "12340", "today", sb.interface end
     env.STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
     env.floor = math.floor
@@ -1246,7 +1268,10 @@ do
     eq(vf.bar.texcoord[2], 0.25, "quarter swing: texcoord right edge is the progress")
     eq(vf.left_text.text, "2.6", "quarter swing: left text keeps the speed")
     eq(vf.right_text.shown, true, "quarter swing: right text shows an active swing")
-    eq(vf.right_text.text, "1.9", "quarter swing: swing timer formatted to a tenth")
+    -- 2.6 - 0.65 = 1.95 s remaining. The 2026-11-06 rounding fix (A4) makes simple_round
+    -- round to NEAREST, so a true half-up case shows 2.0; the old floor() truncation
+    -- displayed 1.9. This pin carried the old value and is corrected with the fix.
+    eq(vf.right_text.text, "2.0", "quarter swing: swing timer rounds to nearest tenth")
 
     -- GCD underlay branch 1: the GCD ends inside the swing.
     ST:GCD_STARTED("GCD_STARTED", 1.5, 2.0)
@@ -1434,6 +1459,203 @@ do
     eq(sb.hook_calls.PALADIN or 0, hooks_before + 1,
         "hook dispatch: every tick invokes the class hook exactly once")
     eq(sb.hook_calls.PALADIN or 0, ticks, "hook dispatch: tick count matches hook count")
+end
+
+--=========================================================================================
+-- 2a) Per-tick cost: the tick clock, the spark decoration cache and the single fill write
+--=========================================================================================
+-- The 2026-11-06 bar perf pass (A1/A2/A3) removes work, not pixels: the same frame, fewer
+-- client calls per hand per tick. The pins below are shaped so RE-INTRODUCING the removed
+-- calls makes them fail (not just a changed return value):
+--   A1 - the tick hands its own st.api.get_time() reading to set_bar_texts; the text path
+--        no longer pays for a second pair of clock C calls (api.get_time() is
+--        GetTimePreciseSec + GetTime on every client that has the precise clock).
+--   A2 - the spark's size/anchor/colour are configuration: applied once per key
+--        (show_spark / spark_width / spark_color / bar height), read live from the db and
+--        re-applied on the next tick when it changes; per tick only Show()/Hide().
+--   A3 - one SetWidth + SetTexCoord pair per hand per tick, and it is the tick's last word
+--        (the 2026-10-28 correctness fix, pins 12c2/12c3, stays untouched).
+-- A4 is the one visible change: simple_round truncated (8 of 28 weapon speeds displayed a
+-- tenth low), so those speeds and a true half case are pinned here.
+do
+    -- ---- A4: the verified rounding bug -----------------------------------------------
+    -- Every one-decimal weapon speed must display itself. The old floor(num/step)*step
+    -- truncated: 1.4 -> "1.3", 1.9 -> "1.8", 2.3, 2.4, 2.8 -> "2.7", 2.9, 3.3, 3.8
+    -- (8 of the 28 speeds). Left text = attack speed by shipped default.
+    do
+        local b = boot({ class = "WARRIOR" })
+        local sb, ST = b.sb, b.ST
+        local vf = visuals(b, "mainhand")
+        -- The class hook does not paint bar texts; silence it so this block's clock
+        -- arithmetic cannot be perturbed by a hook's own writes.
+        local class = ST[ST.player_class]
+        local real_hook = class.on_bar_update
+        class.on_bar_update = function() end
+        local TRUNCATED = { 1.4, 1.9, 2.3, 2.4, 2.8, 2.9, 3.3, 3.8 }
+        for _, speed in ipairs(TRUNCATED) do
+            sb.clock = 10
+            start_swing(b, "mainhand", speed, speed)
+            sb.clock = 10.5
+            tick(b, "mainhand")
+            eq(vf.left_text.text, string.format("%.1f", speed),
+                "round: " .. string.format("%.1f", speed) .. " displays its own tenth (was truncated)")
+        end
+        -- Control: a speed the old truncation happened to get right is unchanged.
+        sb.clock = 10
+        start_swing(b, "mainhand", 2.6, 2.6)
+        sb.clock = 10.5
+        tick(b, "mainhand")
+        eq(vf.left_text.text, "2.6", "round: 2.6 still displays 2.6 (control)")
+        -- Nearest-rounding at a half case: 2.6 - 0.65 = 1.95 s remaining -> 2.0, not 1.9.
+        sb.clock = 10
+        start_swing(b, "mainhand", 2.6, 2.6)
+        sb.clock = 10.65
+        tick(b, "mainhand")
+        eq(vf.right_text.text, "2.0", "round: a 1.95 s remaining rounds half up to 2.0")
+        class.on_bar_update = real_hook
+    end
+
+    -- ---- A1: the tick clock ----------------------------------------------------------
+    -- The offhand tick is the clean probe: the LibDataBroker feed is mainhand-only and the
+    -- warrior's class hook returns for the offhand, so every clock read in this tick comes
+    -- from the tick path itself. Before A1 a tick read the clock twice (onupdate_common +
+    -- set_bar_texts); after it reads once.
+    do
+        local b = boot({ class = "WARRIOR" })
+        local sb, ST = b.sb, b.ST
+        local vf = visuals(b, "offhand")
+        sb.clock = 10
+        start_swing(b, "offhand", 2.6, 2.6) -- ends at 12.6
+        sb.clock = 11.58
+        local reads_before = sb.time_precise_reads
+        tick(b, "offhand")
+        eq(sb.time_precise_reads - reads_before, 1,
+            "tick clock: the offhand tick reads the clock exactly once")
+        eq(vf.right_text.text, "1.0", "tick clock: the timer is 12.6 - 11.58 = 1.0 s")
+        -- The no-cycle early-return paint uses the same tick clock instead of re-reading.
+        ST.offhand.speed = nil
+        ST.offhand.start = nil
+        ST.offhand.ends_at = nil
+        reads_before = sb.time_precise_reads
+        tick(b, "offhand")
+        eq(sb.time_precise_reads - reads_before, 1,
+            "tick clock: the no-cycle early-return paint also reads the clock once")
+        -- A clock handed to set_bar_texts wins over the live clock and is not re-read.
+        ST.offhand.speed = 2.6
+        ST.offhand.start = 10
+        ST.offhand.ends_at = 12.6
+        sb.clock = 12.5 -- the live clock would show 0.1 s
+        reads_before = sb.time_precise_reads
+        ST:set_bar_texts("offhand", 11.6) -- 12.6 - 11.6 = 1.0 s
+        eq(vf.right_text.text, "1.0", "text clock: set_bar_texts uses the clock it is given")
+        eq(sb.time_precise_reads - reads_before, 0,
+            "text clock: set_bar_texts does not re-read the clock when handed one")
+    end
+
+    -- ---- A2: the spark is a configured decoration ------------------------------------
+    -- The old tick rebuilt the spark every frame: SetSize + ClearAllPoints + SetPoint +
+    -- SetVertexColor + Show (5 client calls) although only bar height / spark_width /
+    -- spark_color / show_spark change its look. Per-tick cost is now Show()/Hide(); a live
+    -- db change (no option-setter hook in bars.lua) still re-applies on the next tick.
+    do
+        local b = boot({ class = "WARRIOR" })
+        local sb, ST = b.sb, b.ST
+        local vf = visuals(b, "mainhand")
+        local spark = vf.spark
+        local function deco_calls()
+            return (spark.size_calls or 0) + (spark.clear_calls or 0)
+                + (spark.point_calls or 0) + (spark.color_calls or 0)
+        end
+        sb.clock = 10
+        start_swing(b, "mainhand", 4, 4) -- start 10, ends 14
+        sb.clock = 11 -- progress 0.25
+        tick(b, "mainhand")
+        eq(spark.shown, true, "spark: shown mid-swing")
+        near(spark:GetWidth(), 4, 1e-9, "spark: width from spark_width (shipped default 4)")
+        near(spark:GetHeight(), vf.height * 2.2, 1e-9, "spark: height from the bar height")
+        eq(spark.point[1], "CENTER", "spark: anchored CENTER")
+        eq(spark.point[3], "RIGHT", "spark: on the fill's leading edge")
+        eq(spark.point[4], 0, "spark: x offset 0")
+        colour_eq(spark.color, hand_db(b, "mainhand").spark_color, "spark: colour from spark_color")
+        -- The decoration was applied once; advancing the fill must not rebuild it.
+        local applied = deco_calls()
+        sb.clock = 11.5 -- progress 0.375
+        tick(b, "mainhand")
+        eq(spark.shown, true, "spark: still shown one frame later")
+        eq(deco_calls(), applied, "spark: an unchanged key applies no decoration calls")
+        sb.clock = 12 -- progress 0.5
+        tick(b, "mainhand")
+        eq(deco_calls(), applied, "spark: the next tick applies no decoration calls either")
+        -- Live db change with no setter outside bars.lua: the next tick picks it up.
+        hand_db(b, "mainhand").spark_width = 7
+        tick(b, "mainhand")
+        near(spark:GetWidth(), 7, 1e-9, "spark: a live spark_width change re-applies on the next tick")
+        check(deco_calls() > applied, "spark: the width change re-applied the decoration")
+        applied = deco_calls()
+        hand_db(b, "mainhand").spark_color = { 20, 120, 240, 0.5 }
+        tick(b, "mainhand")
+        vertex_eq(spark.color, { 20 / 255, 120 / 255, 240 / 255, 0.5 },
+            "spark: a live spark_color change re-applies on the next tick")
+        check(deco_calls() > applied, "spark: the colour change re-applied the decoration")
+        -- Bar height is part of the key: a resize re-applies the spark geometry.
+        ST:configure_bar_size_and_positions("mainhand", nil, 40)
+        tick(b, "mainhand")
+        near(spark:GetHeight(), vf.height * 2.2, 1e-9,
+            "spark: a bar-height change re-applies the spark geometry")
+        -- Visibility is the per-tick part; hiding never rebuilds the decoration.
+        applied = deco_calls()
+        sb.clock = 14 -- progress 1
+        tick(b, "mainhand")
+        eq(spark.shown, false, "spark: hidden at full progress")
+        eq(deco_calls(), applied, "spark: hiding at full progress applies no decoration calls")
+        hand_db(b, "mainhand").show_spark = false
+        sb.clock = 12
+        tick(b, "mainhand")
+        eq(spark.shown, false, "spark: show_spark = false hides it")
+        hand_db(b, "mainhand").show_spark = true
+        tick(b, "mainhand")
+        eq(spark.shown, true, "spark: re-enabling the option shows it again")
+    end
+
+    -- ---- A3: the fill is written once per tick ---------------------------------------
+    -- The tick used to write the same fill width/texcoord twice: at the top of the tick
+    -- and again as the final re-assert. The final write is the 2026-10-28 correctness fix
+    -- (the fill must be the tick's last word), so it stays; the top write is gone, making
+    -- the pair exactly one write per hand per frame. Pins 12c2/12c3 keep the correctness
+    -- side honest.
+    do
+        local b = boot({ class = "WARRIOR" })
+        local sb, ST = b.sb, b.ST
+        local vf = visuals(b, "mainhand")
+        local fill = vf.bar
+        local class = ST[ST.player_class]
+        local real_hook = class.on_bar_update
+        class.on_bar_update = function() end -- only the tick may write the fill here
+        sb.clock = 10
+        start_swing(b, "mainhand", 4, 4)
+        sb.clock = 11
+        tick(b, "mainhand") -- warm-up tick
+        local width_before = fill.width_calls or 0
+        local tc_before = fill.texcoord_calls or 0
+        sb.clock = 11.5 -- progress 0.375
+        tick(b, "mainhand")
+        eq((fill.width_calls or 0) - width_before, 1, "fill: exactly one SetWidth per tick")
+        eq((fill.texcoord_calls or 0) - tc_before, 1, "fill: exactly one SetTexCoord per tick")
+        near(fill:GetWidth(), math.max(1, vf:GetWidth() * 0.375), 1e-9,
+            "fill: the single write is the live progress")
+        eq(fill.texcoord[2], 0.375, "fill: the single crop is the live progress")
+        -- A resize pass between ticks repaints the fill itself; the next tick is still one
+        -- write (and that write is the progress, not the resized full width).
+        ST:configure_bar_size_and_positions("mainhand", vf:GetWidth() + 2)
+        width_before = fill.width_calls or 0
+        tc_before = fill.texcoord_calls or 0
+        tick(b, "mainhand")
+        eq((fill.width_calls or 0) - width_before, 1,
+            "fill: still one SetWidth per tick after an out-of-band resize pass")
+        eq((fill.texcoord_calls or 0) - tc_before, 1,
+            "fill: still one SetTexCoord per tick after an out-of-band resize pass")
+        class.on_bar_update = real_hook
+    end
 end
 
 --=========================================================================================

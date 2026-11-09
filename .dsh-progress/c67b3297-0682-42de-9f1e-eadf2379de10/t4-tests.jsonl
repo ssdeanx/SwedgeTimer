@@ -1,0 +1,15 @@
+{"v":1,"task":"t4-tests","state":"running","msg":"started: bash tests/run.sh","at":1794193396997}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/shaman_state.lua","at":1794193397999}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/warrior_state.lua","at":1794193399003}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/hunter_state.lua","at":1794193400008}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/nextaction_state.lua","at":1794193401013}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/practice_progress_ui_state.lua","at":1794193402019}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/neutral_actions_state.lua","at":1794193405033}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/prepull_contract_state.lua","at":1794193408049}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/main_init_state.lua","at":1794193410059}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/engine_matrix_state.lua","at":1794193411063}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/swing_gate_state.lua","at":1794193412068}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/toc_check.lua","at":1794193413073}
+{"v":1,"task":"t4-tests","msg":"PASS  lua5.1 tests/wiring_check.lua","at":1794193451248}
+{"v":1,"task":"t4-tests","msg":"59 steps, 0 failed","at":1794193460024}
+{"v":1,"task":"t4-tests","state":"done","pct":100,"msg":"finished","at":1794193460024}

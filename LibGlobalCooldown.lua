@@ -46,10 +46,27 @@ local function read_combat_rating_bonus(index)
     end
     return value
 end
+
+-- A plain finite number, or nil. is_secret is asked BEFORE any comparison or type() use:
+-- a secret value keeps its underlying type and raises on comparison, so the probe is the
+-- only legal question. A restricted read therefore never reaches the arithmetic below.
+local function plain_number(value)
+    if is_secret(value) then
+        return nil
+    end
+    if type(value) ~= "number" then
+        return nil
+    end
+    if value ~= value or value == math.huge or value == -math.huge then
+        return nil
+    end
+    return value
+end
+
 -- Secret-safe for the reads below: compat's GetSpellCooldown reports a restricted
--- (secret) reading as 0/0/0/0, the same shape as a cleared cooldown, which the == 0
--- early-outs in poll_gcd / UNIT_SPELLCAST_INTERRUPTED already handle. No arithmetic
--- below ever sees a secret cooldown value.
+-- (secret) reading as 0/0/0/0 plus a fifth `restricted` return. A readable zero is still
+-- the cleared-cooldown shape the == 0 early-outs handle; a restricted read is UNKNOWN and
+-- now clears the timing state instead of being stored as a number.
 local GetSpellCooldown = api.GetSpellCooldown
 local GetSpellInfo = api.GetSpellInfo
 local GetTime = GetTime
@@ -67,6 +84,12 @@ lib.GCD_STARTED = "GCD_STARTED"
 lib.GCD_DURATIONS_UPDATED = "GCD_DURATIONS_UPDATED"
 lib.GCD_PHYS_UPDATED = "GCD_PHYS_UPDATED"
 lib.GCD_SPELL_UPDATED = "GCD_SPELL_UPDATED"
+-- Forever object channel (bench/forever_hud_api_2026-11-08.md §6): while the client hides
+-- cooldown timing the numeric read is the degraded zero shape, so the GCD is carried by the
+-- client's opaque LuaDurationObject. The handle is NOT a secret value and no number is
+-- derived from it; the event is additive, so existing consumers are untouched.
+lib.GCD_OBJECT_STARTED = "GCD_OBJECT_STARTED"
+lib.GCD_OBJECT_OVER = "GCD_OBJECT_OVER"
 
 -- Containers for state tracking
 lib.in_combat = false
@@ -76,6 +99,12 @@ lib.current_form = nil
 lib.gcd_duration = nil
 lib.gcd_started = nil
 lib.gcd_expires = nil
+
+-- Forever object channel state. Both fields are plain by construction: the object is a
+-- non-secret opaque handle and gcd_on_gcd is the NeverSecret SpellCooldownInfo field.
+-- nil = no object-reported GCD.
+lib.gcd_object = nil
+lib.gcd_on_gcd = nil
 
 -- Containers for predicted GCD info
 lib.phys_gcd = 1.5 -- will be modified for feral cats
@@ -146,7 +175,19 @@ end
 function lib:release_gcd_lock()
     self.gcd_duration = nil
     self.gcd_started = nil
+    self:clear_gcd_object()
     self:Fire(self.GCD_OVER)
+end
+
+-- Drop the Forever object channel. The over event fires only when it was carrying, so a
+-- callback consumer sees one start and one over per object-reported GCD.
+function lib:clear_gcd_object()
+    if self.gcd_object == nil and self.gcd_on_gcd == nil then
+        return
+    end
+    self.gcd_object = nil
+    self.gcd_on_gcd = nil
+    self:Fire(self.GCD_OBJECT_OVER)
 end
 
 function lib:poll_gcd()
@@ -155,15 +196,57 @@ function lib:poll_gcd()
     if self.gcd_duration then
         return
     end
-    local time_started, duration_reported = GetSpellCooldown(gcd_probe_spell_id)
-    if duration_reported == 0 then
+    -- Forever only + exact API probe: while cooldown timing is restricted the numeric read
+    -- below is the degraded zero shape and would never arm a GCD. The plain NeverSecret
+    -- SpellCooldownInfo fields (isOnGCD/isActive) say a GCD is running, and the opaque
+    -- duration object carries it; NO number is derived from either. Never keyed on
+    -- st.is_mainline alone (Retail keeps the numeric path).
+    if st.family == "FOREVER" and type(api.get_spell_cooldown_duration) == "function" then
+        local on_gcd, active
+        if type(api.get_spell_cooldown_state) == "function" then
+            local state_ok
+            state_ok, on_gcd, active = pcall(api.get_spell_cooldown_state, gcd_probe_spell_id)
+            if not state_ok then
+                on_gcd, active = nil, nil
+            end
+        end
+        if on_gcd == true or active == true then
+            local object_ok, object = pcall(api.get_spell_cooldown_duration,
+                gcd_probe_spell_id, false)
+            if object_ok and object ~= nil then
+                local was_carrying = self.gcd_object ~= nil
+                self.gcd_object = object
+                self.gcd_on_gcd = on_gcd == true
+                if not was_carrying then
+                    self:Fire(self.GCD_OBJECT_STARTED, object, on_gcd == true)
+                end
+            end
+            return
+        end
+        -- The client says no GCD is running: release the object channel so the next GCD
+        -- reports its own start.
+        self:clear_gcd_object()
+    end
+    local time_started, duration_reported, _, _, restricted = GetSpellCooldown(gcd_probe_spell_id)
+    if restricted == true then
+        -- The client hid the timing and no object answered: clear the timing state rather
+        -- than storing a partial number derived from the degraded idle shape.
+        self:clear_gcd_object()
+        return
+    end
+    local duration = plain_number(duration_reported)
+    local started = plain_number(time_started)
+    if duration == nil or started == nil or duration <= 0 then
+        -- A readable idle read: no GCD is running (a restricted read took the branch above),
+        -- so a stale object channel is released here as well.
+        self:clear_gcd_object()
         return
     end
     local t = GetTime()
-    local duration_actual = duration_reported - (t - time_started)
+    local duration_actual = duration - (t - started)
     local expires = t + duration_actual
-    self.gcd_duration = duration_reported
-    self.gcd_started = time_started
+    self.gcd_duration = duration
+    self.gcd_started = started
     self.gcd_expires = expires
     -- print(duration_reported)
     self:Fire(self.GCD_STARTED, duration_actual, expires)
@@ -234,6 +317,11 @@ end
 
 function lib:UNIT_SPELLCAST_INTERRUPTED()
     if self.gcd_duration then
+        -- The numeric lock is only ever armed from a READABLE read, so this release keeps
+        -- its historical shape: compat reports a restricted read as the cleared 0 shape,
+        -- and releasing then is harmless (the object channel never uses this lock). T1's
+        -- warning - that this must not become the only release path once the GCD works -
+        -- is honoured by the object channel, which releases from the plain GCD state.
         local duration_reported = select(2, GetSpellCooldown(gcd_probe_spell_id))
         if duration_reported == 0 then
             self:release_gcd_lock()

@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.1.7"
+local version = "2.1.8"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -10,12 +10,19 @@ local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEv
 ST.addon_version = version
 local LSM = LibStub("LibSharedMedia-3.0")
 local STL = LibStub("LibClassicSwingTimerAPI", true)
--- The swing library is only shipped on clients with a classic combat log (see the
--- flavor TOCs). WoW Forever has no classic combat log but exposes PLAYER_SWING, so
--- swing_source.lua provides a compatible engine there; Retail keeps the whole
--- initialisation flow intact with an inert stand-in, and the user is told in
--- init_libs. The same stand-in replaces an engine that loads but never reports
--- itself ready (see the init deadline in OnInitialize).
+-- Single-TOC release (2026-11-07): swing_lib_gate.lua pre-registers a tagged stub so the
+-- vendored classic library no-ops on clients where it must not run (Forever, Retail,
+-- Cata, Mists); swing_lib_gate_release.lua removes it again right after the library's
+-- TOC line. A tagged stub is NOT an engine - treat it as absent so the client selects
+-- its own path below.
+if STL ~= nil and STL.__st_gate_stub == true then
+	STL = nil
+end
+-- WoW Forever has no classic combat log but exposes PLAYER_SWING, so swing_source.lua
+-- provides a compatible engine there; Retail keeps the whole initialisation flow intact
+-- with an inert stand-in, and the user is told in init_libs. The same stand-in replaces
+-- an engine that loads but never reports itself ready (see the init deadline in
+-- OnInitialize).
 local function make_swing_stub()
 	return {
 		RegisterCallback = function(...) end,
@@ -566,6 +573,15 @@ function ST:OnInitialize()
 	LGC.RegisterCallback(self, LGC.GCD_STARTED, self.callback_event_handler)
 	LGC.RegisterCallback(self, LGC.GCD_OVER, self.callback_event_handler)
 	LGC.RegisterCallback(self, LGC.GCD_DURATIONS_UPDATED, self.callback_event_handler)
+	-- Forever object channel (additive; the library only fires these when it carries the
+	-- opaque GCD handle, i.e. while cooldown timing is restricted). Other clients never
+	-- see them, so their numeric GCD path is untouched. Guarded for an older library.
+	if LGC.GCD_OBJECT_STARTED then
+		LGC.RegisterCallback(self, LGC.GCD_OBJECT_STARTED, self.callback_event_handler)
+	end
+	if LGC.GCD_OBJECT_OVER then
+		LGC.RegisterCallback(self, LGC.GCD_OBJECT_OVER, self.callback_event_handler)
+	end
 
 	-----------------------------------------------------------
 	-- The set of containers and frames used in the addon.
@@ -679,6 +695,10 @@ function ST:OnInitialize()
 	self.gcd.duration = nil
 	self.gcd.started = nil
 	self.gcd.expires = nil
+	-- Forever object channel: the opaque GCD handle and the plain NeverSecret isOnGCD
+	-- flag. The handle is not a secret; no number is derived from it. nil = no object GCD.
+	self.gcd.gcd_object = nil
+	self.gcd.gcd_on_gcd = nil
 	self.gcd.phys_length = nil
 	self.gcd.spell_length = nil
 
@@ -989,18 +1009,21 @@ function ST:check_weapons()
 	-- This lib used the same events that this function is triggered on internally,
 	-- which led to inconsistencies depending on callback order. Using the basic
 	-- WoW API to make these checks fixes the issue.
+	--
+	-- A-3/A-4 (2026-11-06): a stat read can be RESTRICTED (secret) on the Forever
+	-- client, and compat degrades that to nil. The old `or 0` turned "unknown" into
+	-- "no weapon", which disables the hand's bar (bar_is_enabled), refuses the lazy
+	-- build and gates the out-of-range alpha until the next equipment event - the
+	-- persistent form of "Auto Shot fires but is not displayed". Only a READABLE
+	-- number may move the flag; an unreadable answer keeps the previous value. A real
+	-- unequip still answers 0 on a readable client and clears it.
 	local _, speed_offhand = api.UnitAttackSpeed("player")
-	speed_offhand = speed_offhand or 0
-	local speed_ranged = api.UnitRangedDamage("player") or 0
-	if speed_offhand == 0 then
-		self.offhand.has_weapon = false
-	else
-		self.offhand.has_weapon = true
+	if type(speed_offhand) == "number" then
+		self.offhand.has_weapon = speed_offhand > 0
 	end
-	if speed_ranged == 0 then
-		self.ranged.has_weapon = false
-	else
-		self.ranged.has_weapon = true
+	local speed_ranged = api.UnitRangedDamage("player")
+	if type(speed_ranged) == "number" then
+		self.ranged.has_weapon = speed_ranged > 0
 	end
 	-- F2 (deep audit 2026-10-19): has_oh is the offhand-presence guard of
 	-- ST:PLAYER_TARGET_SET_ATTACKING. It was initialised false and never set again,
@@ -1008,7 +1031,58 @@ function ST:check_weapons()
 	-- in production. It is derived here from the very same probe that fills
 	-- offhand.has_weapon, so the two can never disagree, and it follows every weapon
 	-- change (PLAYER_EQUIPMENT_CHANGED calls this function for the weapon slots).
-	self.has_oh = self.offhand.has_weapon
+	self.has_oh = self.offhand.has_weapon == true
+end
+
+-- B-1 (2026-11-06): the ranged distance bar's init used to be an unguarded call in
+-- post_init's tail. One throw before it (or a throwing init) left the driver frame
+-- uncreated for the session with no receipt. This seam isolates the call, says so once,
+-- and is safe to call twice: weave.init is idempotent (it returns early when the frame
+-- or the inert flag exists).
+function ST:init_weave_range()
+	local weave = st.weave_range
+	if type(weave) ~= "table" or type(weave.init) ~= "function" then
+		return false
+	end
+	if weave.frame ~= nil then
+		return true
+	end
+	if weave.inert == true then
+		-- The module already answered "no UIParent/CreateFrame" - another call cannot
+		-- change that, and retrying would be a lie about progress.
+		return false
+	end
+	local ok, err = pcall(weave.init, self)
+	if not ok then
+		if not self.weave_range_init_notice_shown then
+			self.weave_range_init_notice_shown = true
+			self:Print("The ranged distance bar could not be created and was isolated: "
+				.. tostring(err))
+		end
+		return false
+	end
+	return weave.frame ~= nil
+end
+
+-- Forever-only aura icon row (aura_icons.lua): creates the native Forever aura
+-- containers above the topmost visible swing bar. Mirrors ST:init_weave_range: the
+-- module answers false before a frame exists on every non-Forever family, an absent
+-- module (harness sandbox) is a no-op, and a throwing module costs only the row - never
+-- the rest of init. A later world-entry/retry pass lives inside the module itself.
+function ST:init_aura_icons()
+	local A = st.aura_icons
+	if type(A) ~= "table" or type(A.init) ~= "function" then
+		return false
+	end
+	local ok, created = pcall(A.init, self)
+	if not ok then
+		if not self.aura_icons_init_notice_shown then
+			self.aura_icons_init_notice_shown = true
+			self:Print("The aura icon row could not be created and was isolated: " .. tostring(created))
+		end
+		return false
+	end
+	return created == true
 end
 
 function ST:post_init()
@@ -1046,9 +1120,8 @@ function ST:post_init()
 	-- (ST.weave_range_default_enabled), the other classes default off, and an explicit
 	-- per-class toggle always wins. The driver gates and drives itself through
 	-- init()/poll(); an absent module (harness sandboxes) stays a no-op here.
-	if st.weave_range then
-		st.weave_range.init(self)
-	end
+	-- B-1: guarded seam + one world-entry retry (see init_weave_range).
+	self:init_weave_range()
 
 	-- Set frames to locked or unlocked based on settings. No class row means no
 	-- stored lock choice, and the shipped default is locked (class_defaults
@@ -1070,6 +1143,12 @@ function ST:post_init()
 	if st.power_bar and type(st.power_bar.init) == "function" then
 		st.power_bar.init(self)
 	end
+
+	-- Aura icon row (aura_icons.lua): WoW Forever only, after the bars exist because the
+	-- row anchors above the topmost visible one. On every other family the module's gate
+	-- answers false before a frame, an event or an aura read exists, so this call is the
+	-- only cross-family delta (one table lookup + one call).
+	self:init_aura_icons()
 
 	-- TBC Anniversary: UNIT_AURA does not fire reliably there, so start the 0.05 s
 	-- aura re-parse loop (TBC family only; a no-op everywhere else).
@@ -1347,6 +1426,24 @@ function ST:GCD_STARTED(_, duration, expires)
 	self.gcd.expires = expires
 end
 
+-- Forever object channel (additive). The HUD provider reads these two plain fields and
+-- hands the opaque handle to the native cooldown sink; no value is read out of it.
+function ST:GCD_OBJECT_STARTED(_, object, on_gcd)
+	if type(self.gcd) ~= "table" then
+		return
+	end
+	self.gcd.gcd_object = object
+	self.gcd.gcd_on_gcd = on_gcd == true
+end
+
+function ST:GCD_OBJECT_OVER()
+	if type(self.gcd) ~= "table" then
+		return
+	end
+	self.gcd.gcd_object = nil
+	self.gcd.gcd_on_gcd = nil
+end
+
 function ST:GCD_OVER()
 	-- Registered in OnInitialize, so this can fire inside the ~5s init window; the
 	-- visuals frames do not exist yet and indexing them used to crash.
@@ -1354,6 +1451,10 @@ function ST:GCD_OVER()
 		return
 	end
 	self.gcd.expires = nil
+	-- A numeric GCD_OVER is authoritative for the numeric path; clear the object channel
+	-- too so a handle cannot outlive the GCD that owned it.
+	self.gcd.gcd_object = nil
+	self.gcd.gcd_on_gcd = nil
 	for hand in self:iter_hands() do
 		-- HU-22 lazy bars: an unbuilt hand has no anchor/visuals frames (they
 		-- are created once by ensure_bar), so skip it instead of indexing
@@ -1572,6 +1673,21 @@ function ST:SWING_TIMER_START(_, speed, expiration_time, hand, on_our_axis)
 	if self.swing_engine == "forever-source"
 		and (hand == "offhand" or hand == "ranged") then
 		self:note_hand_activity(hand, now, "forever")
+		-- A-4 (2026-11-06): that same receipt is ground truth for the hand's weapon. A
+		-- restricted stat read at init/equip can leave has_weapon=false, which refuses
+		-- the lazy build and hides the bar for the session while the hand demonstrably
+		-- swings; the engine cannot fire this START without a weapon.
+		if self[hand].has_weapon ~= true then
+			self[hand].has_weapon = true
+			if type(self.ensure_bar) == "function" then
+				self:ensure_bar(hand)
+			end
+		end
+		-- A shot that lands while the bar is hidden must show at once: the 0.05 s range
+		-- poll is not fast enough to be the only opener (R1/A-2, 2026-11-06).
+		if self.interfaces_are_initialised then
+			self:handle_bar_visibility(hand)
+		end
 	end
 	-- Next-action guide: count melee swings started while in combat (the guide's
 	-- filler suggestion waits for more than two swings; paladins only have a
@@ -1679,6 +1795,17 @@ function ST:SWING_TIMER_UPDATE(_, speed, expiration_time, hand, on_our_axis)
 	end
 	-- st.utils.print_msg('New speed = ' .. tostring(speed))
 	self:on_attack_speed_change(hand)
+	-- A-2 (2026-11-06): on the Forever engine an UPDATE is also a real cycle event (the
+	-- engine only re-times a live PLAYER_SWING cycle), so it refreshes the receipt
+	-- window and opens the bar in the same tick. The classic library's UPDATE is not a
+	-- receipt (it also re-times reset cycles), so this stays engine-scoped.
+	if self.swing_engine == "forever-source"
+		and (hand == "offhand" or hand == "ranged") then
+		self:note_hand_activity(hand, t, "forever")
+		if self.interfaces_are_initialised then
+			self:handle_bar_visibility(hand)
+		end
+	end
 end
 
 ------------------------------------------------------------------------------------
@@ -1703,6 +1830,18 @@ function ST:PLAYER_ENTERING_WORLD(_event, _is_initial_login, _is_reloading_ui)
 	-- enemy_swing.lua, swing_source.lua) register it on their own frames.
 	-- On WoW Forever / Camelot, apply user preference for Blizzard swing timer visibility.
 	self:apply_blizzard_swing_timer_visibility()
+	-- A-3/A-4 (2026-11-06): re-probe the equipped weapons at world entry. This is the
+	-- client point where every unit/stat read is guaranteed readable, so a hand whose
+	-- has_weapon was left at its pre-load value (or was never re-probed after a
+	-- restricted read) gets a real answer. Unknown still keeps the previous value.
+	self:check_weapons()
+	-- B-1 (2026-11-06): the ranged distance bar is initialised from post_init, whose
+	-- tail used to run unguarded. If that attempt failed (or the module was absent at
+	-- that moment), retry exactly once here; weave.init is idempotent.
+	if not self.weave_range_world_retry_used then
+		self.weave_range_world_retry_used = true
+		self:init_weave_range()
+	end
 end
 
 function ST:PLAYER_EQUIPMENT_CHANGED(_event, slot, _has_current)
@@ -2258,8 +2397,12 @@ function ST:UNIT_SPELLCAST_SUCCEEDED(_event, unit_id, cast_guid, spell_id)
 	-- A completed shot is the ranged hand's activity receipt: the hand is in use from
 	-- the shot onward (its bar must not appear from combat state, and must not vanish
 	-- between two shots). The same token set arms the melee-reset guard at cast start.
+	-- A-2 (2026-11-06): open the bar in this same event - a shot that lands while the
+	-- bar is hidden must not wait for the next 0.05 s poll (and must still show if that
+	-- poll's range leg is disabled).
 	if is_ranged_shot_token(spell_id) or is_ranged_shot_token(cast_guid) then
 		self:note_hand_activity("ranged", nil, "shot")
+		self:handle_bar_visibility("ranged")
 	end
 	-- Utility-cast swing resets (G4, our side): HoJ/Holy Wrath-style instants the
 	-- lib never resets (no explicit entry, no casting flag). Converges with the
@@ -2502,6 +2645,11 @@ function ST:START_AUTOREPEAT_SPELL()
 	if class and class.on_autorrepeat_event then
 		class.on_autorrepeat_event(self, true)
 	end
+	-- A-2/A-4 (2026-11-06): arming Auto Shot is ranged activity right now - make the
+	-- bar reflect the refreshed cache in this event instead of waiting for the poll.
+	if self.player_class == "HUNTER" and self.interfaces_are_initialised then
+		self:handle_bar_visibility("ranged")
+	end
 end
 
 function ST:STOP_AUTOREPEAT_SPELL()
@@ -2509,6 +2657,9 @@ function ST:STOP_AUTOREPEAT_SPELL()
 	local class = self[self.player_class]
 	if class and class.on_autorrepeat_event then
 		class.on_autorrepeat_event(self, false)
+	end
+	if self.player_class == "HUNTER" and self.interfaces_are_initialised then
+		self:handle_bar_visibility("ranged")
 	end
 end
 
@@ -2696,17 +2847,18 @@ end
 -- Range finding
 ------------------------------------------------------------------------------------
 -- Exact-yard range state (R1, 2026-10-21). Source: compat's api.UnitDistance, one
--- UnitDistanceSquared probe per poll. nil means the client cannot answer (unknown),
--- and unknown is never turned into a guess or a 0. LibRangeCheck is NOT consulted for
--- range state any more: its interaction ladder called CheckInteractDistance, a
--- PROTECTED function on TBC Anniversary (see the vendored header block), so the addon
--- reads exact yards and the library keeps only its non-interact checkers.
--- UnitDistanceSquared is addon-callable: Blizzard's own CompactUnitFrame.lua:1069
--- (classic_anniversary) calls it from insecure unit-frame Lua and trusts the reading
--- only when checkedDistance is true; compat normalises exactly that. Blizzard calls
--- CheckInteractDistance only from secure popup code (UnitPopupSharedUtils.lua:194,
--- classic_anniversary); the addon block is the 2026-10-21 in-client
--- ADDON_ACTION_BLOCKED log, not a documented API restriction.
+-- call per poll. On WoW Forever the wrapper falls back to UnitPosition coordinates when
+-- UnitDistanceSquared reports checkedDistance=false (the group-only enemy case), so the
+-- target now answers exact yards instead of unknown. nil means the client cannot answer
+-- (unknown), and unknown is never turned into a guess or a 0. LibRangeCheck is NOT
+-- consulted for range state: its interaction ladder called CheckInteractDistance, a
+-- PROTECTED function on TBC Anniversary (see the vendored header block), and its modern
+-- spell ladder is deliberately disabled. UnitDistanceSquared is addon-callable:
+-- Blizzard's own CompactUnitFrame.lua:1069 (classic_anniversary) calls it from insecure
+-- unit-frame Lua and trusts the reading only when checkedDistance is true; compat
+-- normalises exactly that. Blizzard calls CheckInteractDistance only from secure popup
+-- code (UnitPopupSharedUtils.lua:194, classic_anniversary); the addon block is the
+-- 2026-10-21 in-client ADDON_ACTION_BLOCKED log, not a documented API restriction.
 --
 -- RF_MELEE_RANGE = 5: the vendored library's retired interaction ladder treated 5 yd
 -- as the melee band (HarmItems[5], item 8149 "Voodoo Charm"). The library's own
@@ -2787,44 +2939,77 @@ end
 -- exponential backoff before the session-disable. A nil reading is NOT a failure: it is
 -- the honest "unknown" answer and the loop keeps polling. Only the failure terminal
 -- sets rf_disabled; its counters stay in /st diag's runtime line.
+--
+-- R1/A-2 (2026-11-06): the poll is the addon's HEARTBEAT - its C_Timer.After re-arm is
+-- the only thing that runs the visibility/alpha pass, i.e. the only thing that shows or
+-- hides any bar. Two invariants, both pinned in tests/main_init_state.lua §10:
+--   1. the re-arm runs on EVERY path (success, backoff retry, session-disable, and a
+--      throw anywhere in the range or visibility work);
+--   2. the visibility/alpha pass runs even while range checking is disabled - a client
+--      whose distance probe cannot answer must still show/hide bars from combat/target
+--      state, otherwise a shot that lands during the disable is never painted again.
+-- The pass runs in its own guarded units so one frame-side throw cannot stop the
+-- heartbeat; its counters ride the /st diag runtime line (rf_heartbeat_errors).
 local RF_MAX_POLL_FAILURES = 3
 local RF_MAX_RETRY_DELAY = 0.4
 
-function ST:rf_update()
-	if self.rf_disabled then
-		-- Range checking was disabled by the poll dead-man: stop the retry loop.
-		return
+function ST:run_bar_visibility_pass()
+	local ok_vis, err_vis = pcall(self.set_bar_visibilities, self)
+	local ok_oor, err_oor = pcall(self.handle_oor, self)
+	if not ok_vis or not ok_oor then
+		self.rf_heartbeat_errors = (self.rf_heartbeat_errors or 0) + 1
+		self.rf_heartbeat_last_error = tostring(not ok_vis and err_vis or err_oor)
+		return false
 	end
+	return true
+end
+
+function ST:rf_update()
 	if not self.rf_tick_fn then
 		self.rf_tick_fn = function() self:rf_update() end
 	end
-	-- api.UnitDistance already pcalls the client call; this outer pcall also covers
-	-- the state writes, so a future edit here cannot kill the polling loop silently.
-	local ok, err = pcall(self.update_range_state, self)
-	if not ok then
-		self.rf_failure_count = (self.rf_failure_count or 0) + 1
-		self.rf_last_error = tostring(err)
-		if self.rf_failure_count >= RF_MAX_POLL_FAILURES then
-			self.rf_disabled_after_failures = true
-			self:disable_range_checking()
-			return
-		end
-		local delay = self.rangefinder_interval * (2 ^ (self.rf_failure_count - 1))
-		if delay > RF_MAX_RETRY_DELAY then
-			delay = RF_MAX_RETRY_DELAY
-		end
-		self.rf_retry_delay = delay
-		C_Timer.After(delay, self.rf_tick_fn)
-		return
+	local delay = self.rangefinder_interval
+	-- The ranged-shot guard is engine state, not range state: keep it armed on every
+	-- heartbeat (a dead range probe must not silently retire the shot->melee guard) and
+	-- isolate it from the re-arm below.
+	local ok_arm, err_arm = pcall(self.arm_ranged_shot_reset_guard_tick, self)
+	if not ok_arm then
+		self.rf_heartbeat_errors = (self.rf_heartbeat_errors or 0) + 1
+		self.rf_heartbeat_last_error = tostring(err_arm)
 	end
-	self.rf_failure_count = 0
-	self.rf_retry_delay = nil
-	-- Ranged-shot guard re-arm (see arm_ranged_shot_reset_guard_tick): the poll is the
-	-- addon's 0.05 s heartbeat, so a live shot cast is covered for its whole window.
-	self:arm_ranged_shot_reset_guard_tick()
-	self:set_bar_visibilities()
-	self:handle_oor()
-	C_Timer.After(self.rangefinder_interval, self.rf_tick_fn)
+	-- A transient range-probe failure keeps the previous paint for its short backoff
+	-- window (no frame touches); every other path runs the visibility pass below.
+	local transient_retry = false
+	if not self.rf_disabled then
+		-- api.UnitDistance already pcalls the client call; this outer pcall also covers
+		-- the state writes, so a future edit here cannot kill the polling loop silently.
+		local ok, err = pcall(self.update_range_state, self)
+		if ok then
+			self.rf_failure_count = 0
+			self.rf_retry_delay = nil
+		else
+			self.rf_failure_count = (self.rf_failure_count or 0) + 1
+			self.rf_last_error = tostring(err)
+			if self.rf_failure_count >= RF_MAX_POLL_FAILURES then
+				self.rf_disabled_after_failures = true
+				self:disable_range_checking()
+			else
+				local backoff = self.rangefinder_interval * (2 ^ (self.rf_failure_count - 1))
+				if backoff > RF_MAX_RETRY_DELAY then
+					backoff = RF_MAX_RETRY_DELAY
+				end
+				self.rf_retry_delay = backoff
+				delay = backoff
+				transient_retry = true
+			end
+		end
+	end
+	if not transient_retry then
+		self:run_bar_visibility_pass()
+	end
+	-- UNCONDITIONAL re-arm: the last statement of every path, so no throw or disable
+	-- above can ever end the heartbeat.
+	C_Timer.After(delay, self.rf_tick_fn)
 end
 
 ------------------------------------------------------------------------------------
@@ -2925,6 +3110,11 @@ end
 local HAND_ACTIVITY_CYCLES = 2
 local HAND_ACTIVITY_MIN_SECONDS = 1.5
 local HAND_ACTIVITY_MAX_SECONDS = 8
+-- Ranged hands only (2026-11-06): one full cycle plus this margin is the FLOOR for the
+-- ranged window. The old clamp could hand the ranged hand a 1.5 s window while its real
+-- Auto Shot cycle was longer (no engine speed stamp yet), so two consecutive missed
+-- receipts could expire the window and hide a live cycle.
+local HAND_ACTIVITY_RANGED_MARGIN = 0.5
 
 function ST:hand_visibility_needs_activity(hand)
 	-- The mainhand is the always-there melee bar and keeps its configured visibility.
@@ -2960,10 +3150,26 @@ function ST:hand_activity_window(hand)
 	-- cycles, clamped so a fast dagger cannot flicker and a slow weapon cannot linger.
 	local state = self[hand]
 	local speed = type(state) == "table" and state.speed or nil
+	if hand == "ranged" then
+		-- The engine's own cycle stamp is authoritative; before the first ranged START
+		-- the hunter sync's cached duration is the only known cycle length (Auto Shot can
+		-- be re-armed before any SWING_TIMER_START arrives). Never fall back to a guess.
+		local synced = type(state) == "table" and state.synced_duration or nil
+		if (type(speed) ~= "number" or speed <= 0)
+			and type(synced) == "number" and synced > 0 then
+			speed = synced
+		end
+	end
 	local seconds = type(speed) == "number" and speed > 0
 		and speed * HAND_ACTIVITY_CYCLES or nil
 	if seconds == nil then
 		seconds = HAND_ACTIVITY_MIN_SECONDS
+	end
+	if hand == "ranged" and type(speed) == "number" and speed > 0 then
+		local full_cycle_floor = speed + HAND_ACTIVITY_RANGED_MARGIN
+		if seconds < full_cycle_floor then
+			seconds = full_cycle_floor
+		end
 	end
 	if seconds < HAND_ACTIVITY_MIN_SECONDS then
 		seconds = HAND_ACTIVITY_MIN_SECONDS
@@ -3195,6 +3401,10 @@ function ST:print_runtime_diag()
 	parts[#parts + 1] = "rf_failures=" .. tostring(self.rf_failure_count or 0)
 	parts[#parts + 1] = "rf_disabled=" .. tostring(self.rf_disabled == true)
 	parts[#parts + 1] = "rf_disabled_after_failures=" .. tostring(self.rf_disabled_after_failures == true)
+	-- A-2/R1 (2026-11-06): the visibility/alpha pass and the shot-guard tick arm are
+	-- isolated from the heartbeat. A non-zero count means the heartbeat survived a throw
+	-- (the pass is skipped for that tick only); the range probe itself is unaffected.
+	parts[#parts + 1] = "rf_heartbeat_errors=" .. tostring(self.rf_heartbeat_errors or 0)
 	-- Client identity the swing lib's version branches read (Era vs Anniversary,
 	-- 2026-10-21): the vendored engine picks its isClassic/isBCC tables off
 	-- WOW_PROJECT_ID and LE_EXPANSION_LEVEL_CURRENT, compared against the
@@ -3231,6 +3441,16 @@ function ST:print_runtime_diag()
 		parts[#parts + 1] = "swing_last=" .. tostring(last.kind) .. ":" .. tostring(last.hand) .. ":" .. age .. "s"
 	else
 		parts[#parts + 1] = "swing_last=none"
+	end
+	-- B-7 (2026-11-06): the ranged distance bar (weave_range.lua) had no /st diag receipt
+	-- at all, so "worked then stopped" was unattributable in-client. The module owns the
+	-- state; this token carries enabled/shown/why/distance/state/failures/quarantine.
+	local weave = st.weave_range
+	if type(weave) == "table" and type(weave.diagnostic_text) == "function" then
+		local ok_weave, weave_text = pcall(weave.diagnostic_text, self)
+		if ok_weave and type(weave_text) == "string" and weave_text ~= "" then
+			parts[#parts + 1] = weave_text
+		end
 	end
 	self:Print("diag runtime " .. table.concat(parts, " "))
 	if st.swing_source and st.swing_source.available

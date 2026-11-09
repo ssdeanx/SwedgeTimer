@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T19:45:44Z",
+  "run_id": "display-fix-2026-11-06",
+  "agent_name": "display-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Audit-driven fixes with red-first pins: swing_source A-1, main.lua A-2/R1 heartbeat+immediate visibility, A-3/A-4 weapon probe and numeric auto-repeat probe, weave_range B-5/B-6/B-1/B-7, red-zone contract pins; 17/17 mutation kills on an isolated /tmp copy; full gate 57 steps / 0 failed, luacheck 2/0.",
+    "what_was_hard": "The on-disk bench/bars_perf_audit_2026-11-06.md was a 17-line summary without the cited \u00a74/\u00a75 (used the perf-audit desk journal). A restricted-secret value cannot be simulated semantically in plain Lua, so the A-1 secret guard is pinned behaviourally AND at source level. Restricted stat reads and the client's Auto Shot event shapes remain in-client questions.",
+    "skill_gap": "None blocking; the lane skills were present and used."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -74,6 +74,7 @@ run "lua5.1 tests/hunter_guide_state.lua" lua5.1 tests/hunter_guide_state.lua
 run "lua5.1 tests/forever_guide_state.lua" lua5.1 tests/forever_guide_state.lua
 run "lua5.1 tests/forever_hud_gate_state.lua" lua5.1 tests/forever_hud_gate_state.lua
 run "lua5.1 tests/forever_guide_gate_state.lua" lua5.1 tests/forever_guide_gate_state.lua
+run "lua5.1 tests/aura_icons_state.lua" lua5.1 tests/aura_icons_state.lua
 run "lua5.1 tests/practice_state.lua" lua5.1 tests/practice_state.lua
 run "lua5.1 tests/practice_progress_state.lua" lua5.1 tests/practice_progress_state.lua
 run "lua5.1 tests/practice_stats_state.lua" lua5.1 tests/practice_stats_state.lua
@@ -103,6 +104,7 @@ run "lua5.1 tests/spell_query_family_state.lua" lua5.1 tests/spell_query_family_
 run "lua5.1 tests/forever_secret_compat_state.lua" lua5.1 tests/forever_secret_compat_state.lua
 run "lua5.1 tests/range_source_state.lua" lua5.1 tests/range_source_state.lua
 run "lua5.1 tests/power_bar_state.lua" lua5.1 tests/power_bar_state.lua
+run "lua5.1 tests/swing_gate_state.lua" lua5.1 tests/swing_gate_state.lua
 run "lua5.1 tests/toc_check.lua" lua5.1 tests/toc_check.lua
 run "lua5.1 tests/wiring_check.lua" lua5.1 tests/wiring_check.lua
 

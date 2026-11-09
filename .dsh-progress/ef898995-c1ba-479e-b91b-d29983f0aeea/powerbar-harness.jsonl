@@ -1,0 +1,17 @@
+{"v":1,"task":"powerbar-harness","state":"running","msg":"started: bash tests/run.sh","at":1793993131920}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/shaman_state.lua","at":1793993132925}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/warrior_state.lua","at":1793993133930}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/hunter_state.lua","at":1793993134934}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/druid_state.lua","at":1793993135939}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/druid_guide_state.lua","at":1793993136944}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/practice_progress_ui_state.lua","at":1793993137949}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/practice_timeline_state.lua","at":1793993139959}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/neutral_actions_state.lua","at":1793993140964}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/prepull_contract_state.lua","at":1793993143979}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/weave_bar_state.lua","at":1793993145989}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/engine_matrix_state.lua","at":1793993146994}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/power_bar_state.lua","at":1793993149004}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/toc_check.lua","at":1793993150009}
+{"v":1,"task":"powerbar-harness","msg":"PASS  lua5.1 tests/wiring_check.lua","at":1793993202269}
+{"v":1,"task":"powerbar-harness","msg":"57 steps, 2 failed","at":1793993213082}
+{"v":1,"task":"powerbar-harness","state":"failed","msg":"exit code 1","at":1793993213082}

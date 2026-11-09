@@ -2891,15 +2891,22 @@ ST.SHAMAN.guide_inputs = {}
 -- reports whichever cooldown ends later, so a reading of 1.51 s or less is a GCD echo
 -- and never Stormstrike's own cooldown. Returns remaining seconds (>= 0) and the
 -- client-reported duration, or (0, nil) when there is no real cooldown to show.
+-- H2 (2026-11-06): restricted read -> UNKNOWN, never 0 = "ready". The per-tick flag
+-- lives on the class table (this chunk is at Lua 5.1's local ceiling - no new
+-- file-scope local); the gather tail publishes inputs_unknown from it, the display's
+-- suppression path, because nil alone would still pass forever_guide.is_ready(nil).
 local function get_guide_cooldown(spell)
 	if not spell then
 		return nil, nil
 	end
-	local start_time, duration = api.GetSpellCooldown(spell)
-	if not start_time or not duration or duration <= 1.51 then
+	local remaining, duration, restricted = api.get_cooldown_remaining(spell)
+	if restricted == true then
+		ST.SHAMAN.guide_reads_unknown = true
+		return nil, nil
+	end
+	if type(remaining) ~= "number" or type(duration) ~= "number" or duration <= 1.51 then
 		return 0, nil
 	end
-	local remaining = start_time + duration - api.get_time()
 	if remaining <= 0 then
 		return 0, nil
 	end
@@ -3118,6 +3125,8 @@ end
 -- between ticks; nil means "the client did not answer".
 function ST.SHAMAN.gather_guide_inputs(self, out)
 	local inputs = out or ST.SHAMAN.guide_inputs
+	-- H2 (2026-11-06): fresh per-tick restricted-read flag (the tail publishes it).
+	ST.SHAMAN.guide_reads_unknown = false
 	local now = api.get_time()
 	local d = self.mainhand
 	local gcd = self.gcd
@@ -3242,6 +3251,25 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	if self.weave_fs_duration or self.weave_fs_expires then
 		inputs.flameshock_remaining, inputs.flameshock_duration =
 			st.weave.get_flame_shock_remaining(self.weave_fs_duration, self.weave_fs_expires, now)
+	else
+		-- H4 (2026-11-06): no Flame Shock timing is stored. Under the restricted-aura
+		-- regime that is UNKNOWN, not "the debuff is absent" - the refresh rule must not
+		-- re-cue an upkeep the client may be hiding. An explicit false (classic clients,
+		-- no C_Secrets) keeps the historical absent meaning.
+		local may
+		local specific = api.spell_aura_may_be_secret
+		if type(specific) == "function" then
+			may = specific(WEAVE_FLAME_SHOCK_BASE_SPELL_ID)
+		end
+		if may == nil then
+			local list_probe = api.auras_may_be_secret
+			if type(list_probe) == "function" then
+				may = list_probe() == true
+			end
+		end
+		if may == true then
+			ST.SHAMAN.guide_reads_unknown = true
+		end
 	end
 
 	-- Era-base veto (audit 2026-10-19 Era §: the Era sim never casts Flame Shock):
@@ -3301,6 +3329,15 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 			local frac = cur / max
 			if frac < 0 then frac = 0 elseif frac > 1 then frac = 1 end
 			inputs.mana_fraction = frac
+		else
+			-- H1 (2026-11-06): an unreadable mana pair is UNKNOWN when the regime says
+			-- the power read may be secret - never 0 %, so mana-gated rules do not decide.
+			local power_type = api.UnitPowerType("player")
+			local power_probe = api.power_may_be_secret
+			if type(power_type) == "number" and type(power_probe) == "function"
+				and power_probe(power_type) == true then
+				ST.SHAMAN.guide_reads_unknown = true
+			end
 		end
 	end
 
@@ -3727,6 +3764,11 @@ function ST.SHAMAN.gather_guide_inputs(self, out)
 	-- a missing option falls back to the shipped default, never to the old 3 s
 	-- clip (the sim-exact value is 0 - the 3 clipped ~3 s of dot every cycle).
 	inputs.flameshock_refresh = db.guide_flameshock_refresh or 0
+	-- Belt and braces (H1/H2/H4): any restricted read this tick makes the advice
+	-- unknown instead of silently degrading (the display suppresses on the bit).
+	if ST.SHAMAN.guide_reads_unknown == true then
+		inputs.inputs_unknown = true
+	end
 	return inputs
 end
 

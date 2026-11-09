@@ -1136,6 +1136,9 @@ function ST:onupdate_common(hand, elapsed)
     if type(d) ~= "table" then
         return
     end
+    -- One clock read for the whole tick. Everything below (the flash fade, the text
+    -- timers) and every paint path that formats a timer uses this reading; a second
+    -- st.api.get_time() per tick costs a second pair of client clock calls (A1).
     local t = st.api.get_time()
     local db = self:get_hand_table(hand)
     if type(db) ~= "table" then
@@ -1146,7 +1149,7 @@ function ST:onupdate_common(hand, elapsed)
         -- with an explicit degraded label instead. This is terminal for the session.
         frame.bar:SetWidth(1)
         frame.bar:SetTexCoord(0, 0, 0, 1)
-        self:set_bar_texts(hand)
+        self:set_bar_texts(hand, t)
         if not frame._engine_dead_rendered then
             frame._engine_dead_rendered = true
             frame.bar:SetAlpha(0.35)
@@ -1160,7 +1163,7 @@ function ST:onupdate_common(hand, elapsed)
         -- on nil - the old path divided nil and froze the tick.
         frame.bar:SetWidth(1)
         frame.bar:SetTexCoord(0, 0, 0, 1)
-        self:set_bar_texts(hand)
+        self:set_bar_texts(hand, t)
         return
     end
     if not d.is_paused then
@@ -1170,28 +1173,57 @@ function ST:onupdate_common(hand, elapsed)
 
     local progress = d.current_progress or 0
     local w, h = self:get_bar_visuals_width_and_height(hand)
-    -- Update the main bar's width
+    -- The fill's geometry for this tick. The write itself happens ONCE, at the end of this
+    -- function (see the block there): the fill is this hand's own progress and the tick's
+    -- last word, so a mid-tick resize can never own it.
     local timer_width = w * progress
-    if frame.bar then
-        frame.bar:SetWidth(max(1, timer_width))
-        frame.bar:SetTexCoord(0, progress, 0, 1)
-    end
 
-    -- Leading edge spark (visual brainstorm item 1)
+    -- Leading edge spark (visual brainstorm item 1). A configured decoration: its size,
+    -- anchor and colour change only with the hand's config (spark_width / spark_color /
+    -- bar height) and the visibility option, so applying them is cached per hand and the
+    -- per-frame part is only Show()/Hide(). The cache key is re-read from the live db every
+    -- tick, so a theme preset or an options change repaints on the next frame without any
+    -- setter hook here. (Until 2026-11-06 this block rebuilt all five properties - 5 client
+    -- calls - on every shown frame.)
     if frame.spark then
         if db.show_spark ~= false and not d.is_full and progress > 0 and progress < 1 then
             local spark_w = db.spark_width or (h * 0.7)
             if spark_w < 4 then spark_w = 4 end
             local spark_h = h * 2.2
-            frame.spark:SetSize(spark_w, spark_h)
-            frame.spark:ClearAllPoints()
-            frame.spark:SetPoint("CENTER", frame.bar, "RIGHT", 0, 0)
-            local sc = db.spark_color or {255, 255, 255, 1}
-            local sr, sg, sb, sa = self:convert_color(sc)
-            frame.spark:SetVertexColor(sr, sg, sb, sa)
+            local sc = db.spark_color
+            local cr, cg, cb, ca = 255, 255, 255, 1
+            if type(sc) == "table" then
+                cr, cg, cb, ca = sc[1], sc[2], sc[3], sc[4]
+            end
+            local deco_dirty = d.spark_deco_applied ~= true
+                or d.spark_deco_w ~= spark_w or d.spark_deco_h ~= spark_h
+                or d.spark_deco_r ~= cr or d.spark_deco_g ~= cg
+                or d.spark_deco_b ~= cb or d.spark_deco_a ~= ca
+            if deco_dirty then
+                frame.spark:SetSize(spark_w, spark_h)
+                frame.spark:ClearAllPoints()
+                frame.spark:SetPoint("CENTER", frame.bar, "RIGHT", 0, 0)
+                local sr, sg, sb, sa
+                if type(sc) == "table" then
+                    sr, sg, sb, sa = self:convert_color(sc)
+                else
+                    sr, sg, sb, sa = 1, 1, 1, 1
+                end
+                frame.spark:SetVertexColor(sr, sg, sb, sa)
+                d.spark_deco_applied = true
+                d.spark_deco_w, d.spark_deco_h = spark_w, spark_h
+                d.spark_deco_r, d.spark_deco_g = cr, cg
+                d.spark_deco_b, d.spark_deco_a = cb, ca
+            end
             frame.spark:Show()
         else
             frame.spark:Hide()
+            if db.show_spark == false then
+                -- Turning the option off invalidates the cache, so turning it back on
+                -- repaints the decoration once instead of trusting a key nothing has
+                -- rendered since.
+                d.spark_deco_applied = false
+            end
         end
     end
 
@@ -1273,8 +1305,8 @@ function ST:onupdate_common(hand, elapsed)
         end
     end
 
-    -- Set texts
-    self:set_bar_texts(hand)
+    -- Set texts (with this tick's clock: the text path must not re-read it)
+    self:set_bar_texts(hand, t)
 
     -- Generic class hook for per-frame bar visuals (e.g. the paladin twist band).
     -- Isolated per tick (H2): the fill/text above already painted, so a throwing hook
@@ -1306,16 +1338,18 @@ function ST:onupdate_common(hand, elapsed)
         st.guard.run(self, "ldb:update", st.ldb.update, self, hand)
     end
 
-    -- The fill is this hand's OWN progress, and it is the tick's last word. Everything
-    -- above can resize the hand while the tick runs - the class hook (the hunter melee
-    -- stack sizes the melee rows from the ranged bar) and a layout pass both call
-    -- configure_bar_size_and_positions, whose own fill repaint is one frame stale. That
-    -- is how the thin mainhand bar read as permanently full (2026-10-28: the fill
-    -- texture stayed at the full visuals width while the tick's TexCoord crop shrank, so
-    -- the bar showed a squeezed full-width fill). Re-asserting the value painted at the
-    -- top of this tick makes the last write per frame the real progress, whatever ran in
-    -- between. Two writes on a frame where nothing resized; correctness on the frames
-    -- that do.
+    -- The fill is this hand's OWN progress, and this is the tick's ONE fill write: it is
+    -- structurally the last word of the frame. Everything above can resize the hand while
+    -- the tick runs - the class hook (the hunter melee stack sizes the melee rows from the
+    -- ranged bar) and a layout pass both call configure_bar_size_and_positions, whose own
+    -- fill repaint lands client-side in the middle of this pass. That is how the thin
+    -- mainhand bar read as permanently full (2026-10-28: the fill texture stayed at the
+    -- full visuals width while the tick's TexCoord crop shrank, so the bar showed a
+    -- squeezed full-width fill). Painting here makes the last write per frame the real
+    -- progress, whatever ran in between. Until 2026-11-06 the same width/texcoord pair was
+    -- written twice per tick (at the top of the tick and again here); the top write was
+    -- always overwritten by this one, so removing it keeps the identical final pixels for
+    -- one SetWidth/SetTexCoord pair per hand per frame.
     if frame.bar then
         frame.bar:SetWidth(max(1, timer_width))
         frame.bar:SetTexCoord(0, progress, 0, 1)
@@ -1592,7 +1626,7 @@ function ST:needs_range_string(hand)
     return false
 end
 
-function ST:set_bar_texts(hand)
+function ST:set_bar_texts(hand, now)
     if not self:bar_is_built(hand) then
         return
     end
@@ -1617,7 +1651,14 @@ function ST:set_bar_texts(hand)
     if hand_tab.is_paused then return end
     local db = self:get_hand_table(hand)
     if not db then return end
-    local t = st.api.get_time()
+    -- The caller's clock when it has one (the tick reads it once at the top), else read it
+    -- here. api.get_time() is two C calls on every client with GetTimePreciseSec (the
+    -- precise read plus the GetTime() domain reference), so a per-tick caller hands its
+    -- own reading through instead of paying for a second pair.
+    local t = now
+    if type(t) ~= "number" then
+        t = st.api.get_time()
+    end
     local speed = hand_tab.speed
     local ends_at = hand_tab.ends_at
     local timer = type(ends_at) == "number" and max(0, ends_at - t) or nil

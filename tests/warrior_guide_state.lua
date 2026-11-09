@@ -3461,10 +3461,8 @@ do
     check(pct_widget:find("min%s*=%s*5[^%d]") ~= nil and pct_widget:find("max%s*=%s*35") ~= nil,
         "option_tables.lua: guide_execute_pct is a 5-35 range")
 
-    -- warrior_guide.lua loads after nextaction.lua in every TOC.
-    local tocs = { "SwedgeTimer.toc", "SwedgeTimer_Vanilla.toc", "SwedgeTimer_TBC.toc",
-        "SwedgeTimer_Wrath.toc", "SwedgeTimer_Mainline.toc", "SwedgeTimer_Cata.toc",
-        "SwedgeTimer_Mists.toc" }
+    -- warrior_guide.lua loads after nextaction.lua in the single TOC.
+    local tocs = { "SwedgeTimer.toc" }
     for i = 1, #tocs do
         local text = read(tocs[i])
         local after = text:find("\nnextaction.lua", 1, true)

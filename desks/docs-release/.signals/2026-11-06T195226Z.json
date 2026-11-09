@@ -1,0 +1,22 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T19:52:26Z",
+  "agent_name": "docs-release",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Reading the Forever audit plus all three fix reports before touching prose gave an exact claim contract: every bullet was traced to a named report claim, and the only prose-reading test (toc_check's 'The per-class sets.' passage) was proven byte-identical to HEAD so a docs-only diff provably cannot move the gate. The Lead's late range-bar correction validated the method in reverse: the fix report §B-5 had the precise condition, the dispatch summary had compressed it.",
+    "what_was_hard": "The dispatch's one-line range-bar summary over-generalised the contract ('client cannot answer the distance' vs 'target present + attackable + distance unknown; no target/non-attackable still hides'). Also the prior desk journal recorded CHANGELOG as all-CRLF while the current tree is LF; verified and preserved rather than assumed.",
+    "skill_gap": "No repeatable doc-claim tracer: the evidence map is a hand-written prose-to-report link table, so a future docs lane must re-read the reports. A generated claim table would help but is outside a prose lane's write scope."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

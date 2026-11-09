@@ -115,7 +115,7 @@ check(#tocs > 0, "repo root has SwedgeTimer*.toc files")
 
 -- Captured per toc so the matrix-level family invariants after the loop can be checked:
 -- toc_values[toc] = set of ## Interface values; toc_lists[toc] = set of listed paths.
-local toc_values, toc_lists = {}, {}
+local toc_values, toc_lists, toc_entries = {}, {}, {}
 
 -- F10: the shared error-isolation contract (guard.lua) must load before every module
 -- that uses it - a missing or late line is a silent runtime no-op (the consumer would
@@ -198,6 +198,7 @@ for _, toc in ipairs(tocs) do
             toc .. ": no duplicate entries" ..
             (#duplicates > 0 and (" (duplicates: " .. table.concat(duplicates, ", ") .. ")") or ""))
         toc_lists[toc] = seen
+        toc_entries[toc] = entries
 
         -- compat.lua before main.lua (covers that both are listed)
         local compat_index, main_index
@@ -299,46 +300,77 @@ end
 -- directions are pinned here.
 
 local LCTA = "Libs\\LibClassicSwingTimerAPI\\LibClassicSwingTimerAPI.lua"
+local GATE = "swing_lib_gate.lua"
+local GATE_RELEASE = "swing_lib_gate_release.lua"
+local SINGLE_TOC = "SwedgeTimer.toc"
 
--- LibClassicSwingTimerAPI: classic-line engines only. Its spell tables stay nil on
--- Cata/Mists and Mainline has no classic combat log at all (swing_source.lua on Forever,
--- the inert stand-in on Retail), so shipping it there - or dropping it from a classic-line
--- toc - is wrong in both directions.
-local LCTA_TOCS = {
-    ["SwedgeTimer_Vanilla.toc"] = true,
-    ["SwedgeTimer_TBC.toc"] = true,
-    ["SwedgeTimer_Wrath.toc"] = true,
-}
-local FLAVOR_TOCS = {
-    "SwedgeTimer_Vanilla.toc", "SwedgeTimer_TBC.toc", "SwedgeTimer_Wrath.toc",
-    "SwedgeTimer_Mainline.toc", "SwedgeTimer_Cata.toc", "SwedgeTimer_Mists.toc",
-}
-for _, toc in ipairs(FLAVOR_TOCS) do
-    check(toc_lists[toc] ~= nil, toc .. ": exists and was checked")
-    local ships = toc_lists[toc] ~= nil and toc_lists[toc][LCTA] == true
-    local should_ship = LCTA_TOCS[toc] == true
-    check(ships == should_ship, toc .. (should_ship
-        and ": ships LibClassicSwingTimerAPI (classic swing engine)"
-        or ": does not ship LibClassicSwingTimerAPI (Mainline stand-in / Cata-Mists nil tables)"))
+-- Single-TOC contract (operator order 2026-11-07): ONE root TOC serves every client.
+-- Per-client behaviour is a runtime branch, never a second TOC. The classic swing
+-- library stays listed (it is the engine on Era/TBC/Wrath) and is neutralised on the
+-- other clients by swing_lib_gate.lua, so both the file and the gate must be present.
+check(#tocs == 1 and tocs[1] == SINGLE_TOC,
+    "the release ships exactly one root TOC: " .. SINGLE_TOC ..
+    (#tocs ~= 1 and (" (found: " .. table.concat(tocs, ", ") .. ")") or ""))
+
+local single_list = toc_lists[SINGLE_TOC] or {}
+local single_entries = toc_entries[SINGLE_TOC] or {}
+check(single_list[LCTA] == true,
+    SINGLE_TOC .. ": ships LibClassicSwingTimerAPI (the Era/TBC/Wrath engine)")
+check(single_list[GATE] == true, SINGLE_TOC .. ": ships swing_lib_gate.lua (the runtime gate)")
+check(single_list[GATE_RELEASE] == true,
+    SINGLE_TOC .. ": ships swing_lib_gate_release.lua (removes the stub again)")
+
+-- Load order around the library: LibStub, then the gate, then the library, then the
+-- release. A gate after the library would be a no-op (the library already registered),
+-- and a release before the library would delete the stub while it is still needed.
+local libstub_at, gate_at, lcta_at, release_at
+for i, entry in ipairs(single_entries) do
+    if entry == "Libs\\LibStub\\LibStub.lua" and libstub_at == nil then libstub_at = i end
+    if entry == GATE and gate_at == nil then gate_at = i end
+    if entry == LCTA and lcta_at == nil then lcta_at = i end
+    if entry == GATE_RELEASE and release_at == nil then release_at = i end
 end
+check(libstub_at and gate_at and lcta_at and release_at
+    and libstub_at < gate_at and gate_at < lcta_at and lcta_at < release_at,
+    SINGLE_TOC .. ": LibStub before swing_lib_gate.lua before LibClassicSwingTimerAPI "
+        .. "before swing_lib_gate_release.lua")
 
--- ## Interface matrix: each flavour advertises EXACTLY its client (the base toc is the
--- classic-line fallback only, Mainline owns Retail/Forever), and WotLK Classic (30401) is
--- not a supported target.
+-- The gate's minor must out-rank the vendored library (LibStub:NewLibrary returns nil
+-- when the registered minor is >= the requested one), and both files must agree on the
+-- tag main.lua checks. Read from source so an upstream minor bump that breaks the gate
+-- fails here instead of silently loading the classic engine on Forever.
+local function read_text(path)
+    -- TOC paths are backslash-separated; the filesystem needs the platform separator.
+    local f = io.open((path:gsub("\\", "/")), "r")
+    if not f then return nil end
+    local text = f:read("*a")
+    f:close()
+    return text
+end
+local gate_src = read_text(ROOT .. GATE)
+local lib_src = read_text(ROOT .. LCTA)
+local main_src = read_text(ROOT .. "main.lua")
+local gate_minor = gate_src and tonumber(gate_src:match("GATE_MINOR%s*=%s*(%d+)"))
+local lib_minor = lib_src and tonumber(lib_src:match(
+    'local%s+MAJOR,%s*MINOR%s*=%s*"LibClassicSwingTimerAPI"%s*,%s*(%d+)'))
+check(gate_minor ~= nil and lib_minor ~= nil and gate_minor > lib_minor,
+    GATE .. ": GATE_MINOR (" .. tostring(gate_minor) .. ") out-ranks the vendored MINOR ("
+    .. tostring(lib_minor) .. ")")
+check(gate_src and gate_src:find("__st_gate_stub", 1, true) ~= nil,
+    GATE .. ": tags the stub (__st_gate_stub)")
+check(main_src and main_src:find("__st_gate_stub", 1, true) ~= nil,
+    "main.lua: treats a tagged gate stub as absent")
+check(lib_src and lib_src:find("LibStub:NewLibrary(MAJOR, MINOR)", 1, true) ~= nil
+    and lib_src:find("if not lib then", 1, true) ~= nil,
+    LCTA .. ": keeps the LibStub early-return the gate relies on")
+
+-- ## Interface: the one TOC advertises every supported client exactly once. Cata (40402)
+-- and Mists (50500) are included because the single build still loads there; 16001 is
+-- WoW Forever (safe now that the classic library is gated off on that client).
 local INTERFACE_EXACT = {
-    { toc = "SwedgeTimer_Vanilla.toc", values = { "11509" } },
-    { toc = "SwedgeTimer_TBC.toc", values = { "20506" } },
-    { toc = "SwedgeTimer_Wrath.toc", values = { "38002" } },
-    { toc = "SwedgeTimer_Mainline.toc", values = { "120100", "120105", "16001" } },
-    -- The base toc is the classic-line FALLBACK only: it ships
-    -- LibClassicSwingTimerAPI, whose file-scope RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-    -- throws on mainline-code clients (no classic combat log there) and would abort the
-    -- whole addon load. It therefore advertises NO mainline interface. This is an EXACT
-    -- check, not a contains check: the F6 regression (2026-10-25) re-added 120105/120107/
-    -- 16001 and passed a contains-only loop, which is the hole this table closes.
-    { toc = "SwedgeTimer.toc", values = { "11509", "20506", "38002" } },
+    { toc = SINGLE_TOC, values = {
+        "11509", "20506", "38002", "40402", "50500", "120100", "120105", "16001" } },
 }
-local INTERFACE_CONTAINS = {}
 local function interface_list(toc)
     local values = {}
     for value in pairs(toc_values[toc] or {}) do values[#values + 1] = value end
@@ -357,15 +389,6 @@ for _, spec in ipairs(INTERFACE_EXACT) do
     check(same, spec.toc .. ": ## Interface is exactly " .. table.concat(spec.values, ", ")
         .. " (got: " .. interface_list(spec.toc) .. ")")
 end
-for _, spec in ipairs(INTERFACE_CONTAINS) do
-    local got = toc_values[spec.toc] or {}
-    local missing = {}
-    for i = 1, #spec.values do
-        if not got[spec.values[i]] then missing[#missing + 1] = spec.values[i] end
-    end
-    check(#missing == 0, spec.toc .. ": ## Interface advertises " .. table.concat(spec.values, ", ")
-        .. " (missing: " .. ((#missing > 0) and table.concat(missing, ", ") or "none") .. ")")
-end
 for _, toc in ipairs(tocs) do
     check(not (toc_values[toc] and toc_values[toc]["30401"]),
         toc .. ": does not advertise Interface 30401 (WotLK Classic is not a supported target)")
@@ -376,6 +399,7 @@ end
 -- check above, so the names are pinned explicitly on every toc.
 local REQUIRED_MODULES = {
     "diag.lua", "hunter_window.lua", "power_bar.lua", "rogue_guide.lua", "classes\\rogue.lua",
+    "aura_icons.lua",
 }
 for _, toc in ipairs(tocs) do
     for _, module_path in ipairs(REQUIRED_MODULES) do

@@ -1,0 +1,30 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-09T03:41:00Z",
+  "run_id": "aura-hud-verify-2026-11-08",
+  "agent_name": "verifier",
+  "task": "t5",
+  "attempt_id": "c9c05608-3a85-49c7-b181-b959bdf40757",
+  "verdict": "pass",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 5
+  },
+  "patterns": {
+    "what_worked": "Verifying the two lanes against the client source instead of their own reports was the highest-value move: every load-bearing API claim in T1 was re-read on origin/forever (no SecretWhen* on GetSpellCooldownDuration, no SecretArgumentsAddAspect on SetCooldownFromDurationObject, NeverSecret isOnGCD/isActive, HasSecretValues ReturnsNeverSecret, allowUntaintedCreation + DisableUntrustedLayoutScriptsTemplate, the exact formatter enum members the code passes, initializeFrame running before access restrictions), so the audit rests on the branch rather than on trust. Two independent proofs made the secret-flow verdict concrete: (1) with HasSecretValues()==true and every object getter raising, compat returns 0,0,0,0,true and the new helper returns the handle without calling a getter (259 checks, 0 failed); (2) truncating the new sections out of copies of the two extended suites yields exactly the pre-lane check counts (893 and 177), which is how I proved no pre-existing check was deleted or weakened without a diff. The mutation re-run reproduced all 20 claimed mutants with identical counts and the declared survivor, and one extra mutant of mine showed the pre-existing HasSecretValues guard is pinned (not an untested secret path).",
+    "what_was_hard": "The brief forbids git in this repo, so there is no historical diff for behaviour preservation; I substituted (a) a source-level read of every numeric branch, (b) check-count parity of the pre-existing suites, and (c) the mutation table - and disclosed that residual in the report. The other hard part is the environment: every bash call gets a private /tmp, so the copy + mutant + suite + cleanup must live inside one call (the trap T1 and t3 recorded); the first attempt to reuse a /tmp copy across calls silently lost it. Also worth knowing for the next verifier: the trivial try of a mutation can fail for the wrong reason if the asserting helper returns a table (my first V1 probe destructured pcall's returns wrongly); always read the failure text.",
+    "skill_gap": "No client, so the last mile stays open: whether the engine accepts and renders a secret-valued LuaDurationObject from a tainted caller (U3/U5) and whether the Mainline GCD probe spell 61304 exists on Forever (U7/F8). Both are exact /run probes in the report and neither is claimed closed. My own two findings that no offline test can currently catch (F3 named-container retry after a post-creation setup failure; F4 resize denial while auras are secret) need injectors the aura suite does not have yet."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Both lanes PASS; keep them. Lead action: rule on F1-F5 (all low: two comment typos, stray luac.out in the repo root, named-container retry hazard after a post-create setup failure, resize-under-secrecy cosmetic, report wording '6' vs 7 hidden option entries) and delete luac.out before release. Operator action: run the report §10 probes in one restricted Forever moment - probe 4 (SetCooldownFromDurationObject accepts a secret-valued object from a tainted caller) and probe 5 (the binding renders), plus probes 2-3 for the additive LibGlobalCooldown channel - those are the only remaining closers; nothing else needs a code change."
+  },
+  "artifacts": [
+    "bench/hud_forever_verification_2026-11-08.md",
+    "desks/aura-hud-verify/journal.md"
+  ]
+}

@@ -1228,10 +1228,8 @@ do
     check(rake_widget:find("min%s*=%s*0[^%d]") ~= nil and rake_widget:find("max%s*=%s*10") ~= nil,
         "option_tables.lua: guide_rake_refresh is a 0-10 range")
 
-    -- druid_guide.lua loads after nextaction.lua in every TOC.
-    local tocs = { "SwedgeTimer.toc", "SwedgeTimer_Vanilla.toc", "SwedgeTimer_TBC.toc",
-        "SwedgeTimer_Wrath.toc", "SwedgeTimer_Mainline.toc", "SwedgeTimer_Cata.toc",
-        "SwedgeTimer_Mists.toc" }
+    -- druid_guide.lua loads after nextaction.lua in the single TOC.
+    local tocs = { "SwedgeTimer.toc" }
     for i = 1, #tocs do
         local text = read(tocs[i])
         local after = text:find("\nnextaction.lua", 1, true)

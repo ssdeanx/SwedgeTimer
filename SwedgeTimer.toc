@@ -1,9 +1,9 @@
-## Interface: 11509, 20506, 38002
+## Interface: 11509, 20506, 38002, 40402, 50500, 120100, 120105, 16001
 ## Title: SwedgeTimer
 ## Notes: General purpose swing timer addon for all WoW clients.
 ## IconTexture: Interface\Addons\SwedgeTimer\Logo.tga
 ## Author: Swedge
-## Version: "2.1.7"
+## Version: "2.1.8"
 ## DefaultState: enabled
 ## OptDeps: Ace3, LibSharedMedia-3.0, LibStub
 ## SavedVariables: SwedgeTimerDB
@@ -15,7 +15,9 @@ Libs\LibStub\LibStub.lua
 Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
 Libs\LibWindow-1.1\LibWindow-1.1\LibWindow-1.1.lua
 Libs\LibSharedMedia-3.0\lib.xml
+swing_lib_gate.lua
 Libs\LibClassicSwingTimerAPI\LibClassicSwingTimerAPI.lua
+swing_lib_gate_release.lua
 Libs\LibRangeCheck-2.0\LibRangeCheck-2.0\LibRangeCheck-2.0.lua
 Libs\LibCustomGlow-1.0\LibCustomGlow-1.0.lua
 Libs\LibClassicDurations\LibClassicDurations.xml
@@ -62,6 +64,7 @@ ldb.lua
 nextaction_ui.lua
 practice_ui.lua
 hud.lua
+aura_icons.lua
 diag.lua
 rotationtext.lua
 designmode.lua

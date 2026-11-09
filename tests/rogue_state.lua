@@ -561,6 +561,31 @@ local function build(opts)
         return nil
     end
 
+    -- Secret-restricted client (2026-11-06 secret-guide lane): the probe and the
+    -- restricted fixtures exist BEFORE compat.lua loads (it captures the probe). The
+    -- switches let one case mix a readable power pool with restricted cooldowns.
+    local SECRET_MARKER = "<secret>"
+    sb.secret_marker = SECRET_MARKER
+    if opts.restricted == true then
+        env.issecretvalue = function(value) return value == SECRET_MARKER end
+        env.UnitPower = function(unit, power)
+            if sb.restricted_power ~= false then
+                return SECRET_MARKER
+            end
+            return sb.power and sb.power[power or 0] or nil
+        end
+        env.GetSpellCooldown = function(spell)
+            if sb.restricted_cooldowns ~= false then
+                return SECRET_MARKER, SECRET_MARKER, SECRET_MARKER, SECRET_MARKER
+            end
+            local cd = sb.spell_cd and sb.spell_cd[spell]
+            if cd then
+                return cd[1], cd[2], 1, 1
+            end
+            return 0, 0, 0, 0
+        end
+    end
+
     -- compat.lua reads several legacy globals through _G; mirror every sandbox stub for
     -- the duration of its load, then restore _G exactly.
     local mirrored = {}
@@ -609,11 +634,7 @@ end
 --=========================================================================================
 -- 1) Load order: every shipped TOC lists the class + its pure guide in the right place
 --=========================================================================================
-local TOCS = {
-    "SwedgeTimer.toc", "SwedgeTimer_Vanilla.toc", "SwedgeTimer_TBC.toc",
-    "SwedgeTimer_Wrath.toc", "SwedgeTimer_Cata.toc", "SwedgeTimer_Mists.toc",
-    "SwedgeTimer_Mainline.toc",
-}
+local TOCS = { "SwedgeTimer.toc" }
 for i = 1, #TOCS do
     local toc = TOCS[i]
     local text = read_file(toc)
@@ -4247,6 +4268,51 @@ end
 --=========================================================================================
 -- Done
 --=========================================================================================
+--=========================================================================================
+-- SEC (2026-11-06 H1/H2): restricted reads are UNKNOWN, never 0/"ready"
+--=========================================================================================
+-- Wow Forever restricted reads: the rogue's energy/combo points and the spell cooldowns
+-- come back opaque. The gather already treated an unreadable power pair as unknown
+-- (M5/M6); a restricted COOLDOWN now records the same tick bit, so a read the engine
+-- consumes can never arrive as 0 = "ready". C_Secrets is installed around the gather
+-- because compat probes it dynamically.
+do
+    local sb = build({ project = 18, interface = 16001, restricted = true })
+    local S = sb.ST
+    local prev_secrets = rawget(_G, "C_Secrets")
+    _G.C_Secrets = {
+        ShouldCooldownsBeSecret = function() return true end,
+        ShouldAurasBeSecret = function() return true end,
+        ShouldSpellAuraBeSecret = function() return true end,
+        ShouldUnitPowerBeSecret = function() return true end,
+        ShouldUnitHealthMaxBeSecret = function() return true end,
+    }
+    -- H1: a restricted energy/combo read is nil + unknown, never 0.
+    local g = S.ROGUE.gather_guide_inputs(S, {})
+    eq(g.energy_now, nil, "secret H1: a restricted energy read stays nil, never 0")
+    eq(g.cp, nil, "secret H1: a restricted combo-point read stays nil, never 0")
+    eq(g.inputs_unknown, true, "secret H1: the unreadable pool marks the tick unknown")
+
+    -- H2: readable power, restricted cooldowns -> the cooldown read records the tick
+    -- unknown instead of handing the engine a 0 = "ready".
+    sb.restricted_power = false
+    sb.power = { [3] = 60, [4] = 5 }
+    local g2 = S.ROGUE.gather_guide_inputs(S, {})
+    eq(g2.energy_now, 60, "secret H2: the readable energy pool passes through")
+    eq(g2.inputs_unknown, true,
+        "secret H2: a restricted cooldown read marks the tick unknown")
+    _G.C_Secrets = prev_secrets
+
+    -- Control: the same profile with readable values keeps the old shapes.
+    local plain = build({ project = 18, interface = 16001 })
+    local PS = plain.ST
+    plain.power = { [3] = 60, [4] = 5 }
+    local pg = PS.ROGUE.gather_guide_inputs(PS, {})
+    check(pg.inputs_unknown ~= true,
+        "control: an unrestricted gather keeps inputs_unknown clear")
+    eq(pg.energy_now, 60, "control: a readable energy pool passes through")
+end
+
 print(string.format("%d checks, %d failures", checks, failures))
 if failures > 0 then
     os.exit(1)

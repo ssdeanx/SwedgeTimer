@@ -988,12 +988,63 @@ function ST.HUNTER.suppress_shot_melee_reset(self)
     ST.HUNTER.arm_shot_melee_reset_guard(self, unit, unit.lastCastSpellId, unit.lastCastName)
 end
 
+-- A-4 (2026-11-06): Auto Shot armed-state refresh. The ranged bar is activity-gated and
+-- `auto_repeat_active` is the designed backstop between two cycle receipts, so the cache
+-- must not depend on a single event pair. Sources, cheapest first:
+--   * START/STOP_AUTOREPEAT_SPELL -> on_autorrepeat_event (event-driven, exact);
+--   * SPELL_UPDATE_COOLDOWN      -> on_cooldown_update (forced probe, before its early
+--                                   returns - the cooldown read can answer 0/0 while
+--                                   Auto Shot IS armed);
+--   * the class tick             -> on_bar_update (throttled backstop, covers a missed
+--                                   event).
+-- The probe argument is the NUMERIC spell id: C_Spell.IsAutoRepeatSpell(75) is the
+-- client's own form (origin/forever MainActionBarFrame.lua:226), while the name-shaped
+-- spell_token(75) is what compat's numeric-only fallback could not recover from.
+ST.HUNTER.AUTO_REPEAT_REFRESH_INTERVAL = 0.25
+
+-- Returns true when the cached reading CHANGED (the caller opens/closes the bar), nil
+-- when the throttled call skipped, false when it probed without a change.
+function ST.HUNTER.refresh_auto_repeat(self, force)
+    local ranged = self.ranged
+    if type(ranged) ~= "table" then
+        return nil
+    end
+    local now = api.get_time()
+    local last = self.hunter_auto_repeat_probe_at
+    if force ~= true and ranged.auto_repeat_probed == true
+        and type(now) == "number" and type(last) == "number"
+        and now >= last
+        and now - last < ST.HUNTER.AUTO_REPEAT_REFRESH_INTERVAL then
+        return nil
+    end
+    self.hunter_auto_repeat_probe_at = now
+    -- Mounted hunters never auto-repeat (reference IsHunterAutoRepeatActive): the probe
+    -- would otherwise hold the bar open while the player is on a mount.
+    local active = false
+    if not api.IsMounted() then
+        active = api.IsAutoRepeatSpell(AUTO_SHOT_ID) == true
+    end
+    local changed = ranged.auto_repeat_active ~= active
+    ranged.auto_repeat_active = active
+    ranged.auto_repeat_probed = true
+    return changed
+end
+
 function ST.HUNTER.on_cooldown_update(self)
     -- SPELL_UPDATE_COOLDOWN: keep the ranged cycle length in sync with the live Auto
     -- Shot cooldown (reference SyncRangedTimerSpeed, State.lua:697-710). A valid
     -- reading is applied unconditionally; the cached hidden window is dropped (its
     -- bounds depend on the old duration) and the swing anchor moves only past the
     -- 0.01 s drift rule.
+    -- A-4 (2026-11-06): refresh the Auto Shot armed cache FIRST, before every early
+    -- return below (a cooldown read can legitimately answer 0/0 while Auto Shot is
+    -- armed between two shots, which used to skip the only other refresh path). A state
+    -- change is a ranged-activity transition: open/close the bar in this event.
+    local repeat_changed = ST.HUNTER.refresh_auto_repeat(self, true)
+    if repeat_changed == true and self.interfaces_are_initialised
+        and type(self.handle_bar_visibility) == "function" then
+        self:handle_bar_visibility("ranged")
+    end
     if not hunter_window then
         return
     end
@@ -1034,18 +1085,18 @@ function ST.HUNTER.on_autorrepeat_event(self, is_start)
     -- (reference StartRangedSwing, State.lua:832-853); the swing engine stays
     -- authoritative for the displayed bar and overwrites start on its next ranged
     -- SWING_TIMER_START/UPDATE stamp.
-    if not hunter_window then
-        return
-    end
     local ranged = self.ranged
     if not ranged then
         return
     end
-    local active = false
-    if not api.IsMounted() then
-        active = api.IsAutoRepeatSpell(spell_token(AUTO_SHOT_ID))
+    -- A-4 (2026-11-06): one shared probe path (numeric id, the client's own form) that
+    -- also stamps the throttle, so the class-tick backstop does not re-probe the same
+    -- frame. Done before the hunter_window guard: the cache is main.lua state.
+    ST.HUNTER.refresh_auto_repeat(self, true)
+    local active = ranged.auto_repeat_active == true
+    if not hunter_window then
+        return
     end
-    ranged.auto_repeat_active = active
     if not (is_start and active) then
         return
     end
@@ -1317,11 +1368,20 @@ function ST.HUNTER.maintain_queue_tint(self)
     -- B1: the moment the melee cycle is gone (swing consumed with no next start,
     -- combat exit, engine death) the queue no longer has a next attack to ride.
     local clear = not hunter_mainhand_cycle_live(self)
-    if not clear and type(UnitGUID) == "function" then
+    if not clear then
         -- B2 (target change): a queue armed against the old target must not survive the
-        -- swap. UnitGUID is nil-safe on every supported family; a client that cannot
-        -- answer leaves both sides nil, which is not a change.
-        clear = UnitGUID("target") ~= self.hunter_tint_target
+        -- swap. SEC-1/H6 (2026-11-06): target identity is secret-capable (a restricted
+        -- GUID passes type() and raises on the first comparison), so it goes through
+        -- api.UnitGUID, which answers nil for a restricted/unreadable identity. An
+        -- unknown identity is NOT a change: keep the tint and let the cycle-end
+        -- backstop above clear it, rather than compare an opaque value or clear on a
+        -- fact we do not have. A readable identity only clears against a readable
+        -- baseline (a nil baseline means the arming identity was unknown).
+        local target_guid = api.UnitGUID("target")
+        if target_guid ~= nil and self.hunter_tint_target ~= nil
+            and target_guid ~= self.hunter_tint_target then
+            clear = true
+        end
     end
     if not clear then
         return
@@ -1354,6 +1414,15 @@ function ST.HUNTER.on_bar_update(self, hand)
     -- ticks (the main-hand bar may be hidden at range) clears a tint whose melee cycle
     -- is gone. Idle cost is two boolean reads.
     ST.HUNTER.maintain_queue_tint(self)
+    -- A-4 (2026-11-06): the Auto Shot armed-state backstop. A missed
+    -- START/STOP_AUTOREPEAT_SPELL event would otherwise leave the ranged activity gate
+    -- without its designed backstop; the shared probe is throttled to 4/second so the
+    -- per-frame hook stays cheap. A transition opens/closes the bar in this tick.
+    local repeat_changed = ST.HUNTER.refresh_auto_repeat(self, false)
+    if repeat_changed == true and self.interfaces_are_initialised
+        and type(self.handle_bar_visibility) == "function" then
+        self:handle_bar_visibility("ranged")
+    end
     if hand ~= "ranged" and hand ~= "mainhand" then
         return
     end
@@ -1519,14 +1588,14 @@ function ST.HUNTER.set_bar_color(self, hand)
     -- On-next-attack behaviours
     if db_class.enable_raptor_strike_color and self.raptor_strike_queued then
         -- The target the queue was painted against: a later target change clears it.
-        self.hunter_tint_target = (type(UnitGUID) == "function") and UnitGUID("target") or nil
+        self.hunter_tint_target = api.UnitGUID("target")
         frame.bar:SetVertexColor(
             self:convert_color(db_class.raptor_strike_color)
         )
         return true
     end
     if db_class.enable_steady_shot_color and self.steady_shot_queued then
-        self.hunter_tint_target = (type(UnitGUID) == "function") and UnitGUID("target") or nil
+        self.hunter_tint_target = api.UnitGUID("target")
         frame.bar:SetVertexColor(
             self:convert_color(db_class.steady_shot_color)
         )
@@ -1552,20 +1621,30 @@ end
 -- "targettarget" is the stock ToT token used by Blizzard_UnitFrame TargetFrame on
 -- classic_era). In-client ToT behaviour UNCONFIRMED.
 function ST.HUNTER.get_target_warning(self)
-    if type(UnitExists) ~= "function" or type(UnitIsUnit) ~= "function" then
-        return nil
+    -- SEC-2/M1 (2026-11-06): UnitIsUnit's result is secret-capable (a compound token is
+    -- always secret on an addon-restricted map), so the call goes through
+    -- api.UnitIsUnit. Returns (warn, restricted):
+    --   readable  -> (true/false/nil, false) - the pre-existing behaviour
+    --   restricted-> (opaque boolean, true)  - the caller MUST pass it to
+    --                SetAlphaFromBoolean and must not compare it (only the sanctioned
+    --                secret-boolean sink can render it; hunter_ui does that).
+    if type(UnitExists) ~= "function" then
+        return nil, false
     end
     if not UnitExists("target") then
-        return nil
+        return nil, false
     end
     if not UnitExists("targettarget") then
-        return false
+        return false, false
     end
-    local yours = UnitIsUnit("targettarget", "player")
+    local yours, restricted = api.UnitIsUnit("targettarget", "player")
+    if restricted == true then
+        return yours, true
+    end
     if yours == nil then
-        return nil
+        return nil, false
     end
-    return yours == true or yours == 1
+    return yours == true, false
 end
 
 --=========================================================================================
@@ -2642,10 +2721,18 @@ local aimed_cast_time
 -- Sniper rank is resolved, so no other client spends a probe.
 local sniper_cast_time
 
+-- H2 (2026-11-06): per-tick restricted-read flag. A restricted (secret) cooldown
+-- read records itself here; the gather tail ORs it into inputs_unknown, the display's
+-- suppression path (nextaction_ui.lua:638). Returning nil alone is not enough:
+-- forever_guide.is_ready(nil) is true (forever_guide.lua:14-32), so a degraded read
+-- would still read as "ready".
+local guide_reads_unknown = false
+
 -- Live cooldown for the guide, with the client's GCD echo filtered: GetSpellCooldown
 -- reports whichever cooldown ends later, so a reading of 1.51 s or less is a GCD echo.
 -- Returns remaining seconds (>= 0) and the client-reported duration, or (0, nil) when
--- there is no real cooldown to show.
+-- there is no real cooldown to show. A restricted (secret) timing returns (nil, nil)
+-- and records the tick unknown - never 0 = "ready".
 local function get_guide_cooldown(spell)
     if not spell then
         return 0, nil
@@ -2654,11 +2741,14 @@ local function get_guide_cooldown(spell)
     if query == nil then
         return 0, nil
     end
-    local start_time, duration = api.GetSpellCooldown(query)
-    if not start_time or not duration or duration <= 1.51 then
+    local remaining, duration, restricted = api.get_cooldown_remaining(query)
+    if restricted == true then
+        guide_reads_unknown = true
+        return nil, nil
+    end
+    if type(remaining) ~= "number" or type(duration) ~= "number" or duration <= 1.51 then
         return 0, nil
     end
-    local remaining = start_time + duration - api.get_time()
     if remaining <= 0 then
         return 0, nil
     end
@@ -3065,15 +3155,18 @@ end
 --     hidden from the read, so a missing sting is unknown (nil), never "down".
 -- Outside the secret regime (every shipped client) a missing row is an honest
 -- "the sting is not up on this target".
+-- The second return is true only when a MISS was caused by the restricted-aura
+-- regime (the gather turns it into the tick's unknown bit - H4, 2026-11-06); a miss
+-- for "no target"/"no scan" is unknown too but not a secret claim.
 local function read_serpent_active()
     if serpent_known ~= true then
-        return nil
+        return nil, false
     end
     if type(api.scan_unit_aura) ~= "function" then
-        return nil -- no scan on this build: hide, never throw
+        return nil, false -- no scan on this build: hide, never throw
     end
     if not (UnitExists and UnitExists("target")) then
-        return nil -- no target: there is nothing to scan (never "down")
+        return nil, false -- no target: there is nothing to scan (never "down")
     end
     local matched = false
     api.scan_unit_aura("target", function(spell_id, name)
@@ -3084,13 +3177,39 @@ local function read_serpent_active()
         return false
     end)
     if matched then
-        return true
+        return true, false
     end
-    local secret_probe = api.auras_may_be_secret
-    if type(secret_probe) == "function" and secret_probe() == true then
-        return nil
+    -- The specific-id probe answers first (the rank tables are id sets); a nil there
+    -- falls back to the list-wide predicate. Anything but an explicit true keeps the
+    -- historical "absent" meaning (classic clients have neither probe).
+    local may
+    local specific = api.spell_aura_may_be_secret
+    if type(specific) == "function" then
+        local any_true, any_nil = false, false
+        for id in pairs(serpent_sting_ids) do
+            local answer = specific(id)
+            if answer == true then
+                any_true = true
+            elseif answer == nil then
+                any_nil = true
+            end
+        end
+        if any_true then
+            may = true
+        elseif not any_nil then
+            may = false
+        end
     end
-    return false
+    if may == nil then
+        local secret_probe = api.auras_may_be_secret
+        if type(secret_probe) == "function" then
+            may = secret_probe() == true
+        end
+    end
+    if may == true then
+        return nil, true
+    end
+    return false, false
 end
 
 -- The APL UTILITY layer's aura reads (the class's utility lines, 2026-10-20).
@@ -3159,6 +3278,8 @@ end
 
 function ST.HUNTER.gather_guide_inputs(self, out)
     local inputs = out or ST.HUNTER.guide_inputs
+    -- H2 (2026-11-06): fresh per-tick restricted-read flag (the tail publishes it).
+    guide_reads_unknown = false
     local now = api.get_time()
     local ranged = self.ranged
 
@@ -3429,6 +3550,13 @@ function ST.HUNTER.gather_guide_inputs(self, out)
         local hp_max = api.UnitHealthMax("target")
         if type(hp) == "number" and type(hp_max) == "number" and hp_max > 0 then
             inputs.target_hp_frac = hp / hp_max
+        else
+            -- M2 (2026-11-06): a restricted target-health pair is unknown, never a
+            -- guess; the execute read disappears honestly (the tick goes unknown).
+            local hp_probe = api.health_max_may_be_secret
+            if type(hp_probe) == "function" and hp_probe("target") == true then
+                guide_reads_unknown = true
+            end
         end
     end
 
@@ -3517,6 +3645,16 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     if utility_family == "SOD" or utility_family == "TBC"
         or utility_family == "WRATH" or utility_family == "FOREVER" then
         inputs.mana_frac = ST.HUNTER.get_mana_fraction()
+        -- H1 (2026-11-06): an unreadable mana pair is UNKNOWN when the regime says the
+        -- power read may be secret - the aspect/viper rules must not decide on 0/mana.
+        if inputs.mana_frac == nil then
+            local power_type = api.UnitPowerType("player")
+            local power_probe = api.power_may_be_secret
+            if type(power_type) == "number" and type(power_probe) == "function"
+                and power_probe(power_type) == true then
+                guide_reads_unknown = true
+            end
+        end
     else
         inputs.mana_frac = nil
     end
@@ -3558,7 +3696,13 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     end
     inputs.lnl_ready = (type(lnl_remaining) == "number" and lnl_remaining > 0) or nil
     inputs.serpent_known = serpent_known or nil
-    inputs.serpent_active = read_serpent_active()
+    local serpent_active, serpent_restricted = read_serpent_active()
+    if serpent_restricted == true then
+        -- H4 (2026-11-06): a miss under the restricted-aura regime is unknown, so the
+        -- whole advice goes unknown instead of re-cueing an upkeep that may already be up.
+        guide_reads_unknown = true
+    end
+    inputs.serpent_active = serpent_active
     inputs.sniper_range_buff_active = nil
 
     -- The ranged range of the Steady Shot school; nil = unknown (the engine never treats
@@ -3578,6 +3722,11 @@ function ST.HUNTER.gather_guide_inputs(self, out)
     inputs.weave_band = ST.HUNTER.get_weave_band(
         self.in_melee_range, self.in_ranged_range,
         self.target_min_range, self.target_max_range)
+    -- Belt and braces (H2/H4/M2): any restricted read this tick makes the advice
+    -- unknown instead of silently degrading (the display suppresses on the bit).
+    if guide_reads_unknown == true then
+        inputs.inputs_unknown = true
+    end
     return inputs
 end
 

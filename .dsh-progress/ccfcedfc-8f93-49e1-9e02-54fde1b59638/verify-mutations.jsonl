@@ -1,0 +1,3 @@
+{"v":1,"task":"verify-mutations","state":"running","msg":"started: bash -c cat > /tmp/mut.py << \"PYEOF\"\nimport os, shutil, subprocess, sys, re\n\nSRC = \"/home/sam/SwedgeTimer\"\nWORK = \"/tmp/mutwork\"\nshutil.rmtree(WORK, ignore_erro","at":1794194939702}
+{"v":1,"task":"verify-mutations","msg":"NONFAIL: T3-M5 state scrub removed (known survivor) | 0 | PASS  hud_state.lua (1024 checks)","at":1794194943398}
+{"v":1,"task":"verify-mutations","state":"done","pct":100,"msg":"finished","at":1794194943398}

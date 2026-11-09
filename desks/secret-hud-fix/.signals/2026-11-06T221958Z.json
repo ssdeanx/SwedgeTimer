@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T22:19:58Z",
+  "run_id": "secret-hud-fix-2026-11-06",
+  "agent_name": "secret-hud-fix",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 5,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Modeling the restricted read through the REAL compat wrapper (issecretvalue + value-keyed secret sentinels on the raw fixture return) instead of mocking the wrapper: the HUD pins consume the shipped 0,0,0,true contract. Red-first captured 10/895 intended failures, then green 895. Three mutations on fresh /tmp copies re-introduce each historical failure mode (hide-on-unknown 5 fails, paint-on-restricted 5, ignore-fourth-return 10) and kill only the SEC-10 pins.",
+    "what_was_hard": "The end-to-end driver pin needed the real occupancy pass (refresh_layout_cache) because icon.wanted is toggle-level and the trinket was equipped after init; found by reading the wanted/last_hidden split. Nothing else was blocked.",
+    "skill_gap": "None."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": "Gate is green here (57 steps, 0 failed). L5 '?' marker remains an operator display decision; L4 diag receipt is another desk's file."
+  }
+}

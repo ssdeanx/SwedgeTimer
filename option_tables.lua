@@ -194,6 +194,207 @@ end
 
 local hud_template_matches
 
+--=========================================================================================
+-- Aura icon row controls (aura_icons.lua): WoW Forever only
+--=========================================================================================
+-- The row itself is created by aura_icons.lua from the native Forever aura-container
+-- system. The module is inert on every other family, so these widgets must not even
+-- PRINT there: every widget carries the same hidden rule, and the set is merged into the
+-- Behaviour page after the HUD styling block by generate_top_level_options_table.
+--
+-- Kept in one named builder so the offline suite (tests/aura_icons_state.lua) can
+-- build/inspect exactly this widget set without the whole options tree, and so the key
+-- set exists in one place. Nil-safe getters: a profile saved before the keys existed
+-- answers the SHIPPED default read from the module's own DEFAULTS table (one source of
+-- truth - pinned by the suite), and an explicit false still disables. Setters write the
+-- class row and apply immediately through the module's apply_settings, so a broken or
+-- absent module can never break the panel.
+function ST:aura_icon_options_args()
+    local function module_table()
+        local module = st.aura_icons
+        if type(module) == "table" then
+            return module
+        end
+        return nil
+    end
+
+    local function module_default(key, fallback)
+        local module = module_table()
+        local defaults = module and module.DEFAULTS
+        if type(defaults) == "table" and defaults[key] ~= nil then
+            return defaults[key]
+        end
+        return fallback
+    end
+
+    local function hidden()
+        if st.family ~= "FOREVER" then
+            return true
+        end
+        local module = module_table()
+        if module == nil or type(module.options_visible) ~= "function" then
+            return true
+        end
+        local ok, visible = pcall(module.options_visible)
+        return not (ok and visible == true)
+    end
+
+    local function class_row()
+        local ok, class_db = pcall(ST.get_class_table, ST)
+        if ok and type(class_db) == "table" then
+            return class_db
+        end
+        return nil
+    end
+
+    local function apply()
+        local module = module_table()
+        if module == nil or type(module.apply_settings) ~= "function" then
+            return
+        end
+        pcall(module.apply_settings, ST)
+    end
+
+    local enabled_default = module_default("enabled", true)
+    local debuffs_default = module_default("show_debuffs", true)
+    local size_default = module_default("size", 22)
+    local spacing_default = module_default("spacing", 3)
+    local grow_default = module_default("grow", "right")
+
+    return {
+        aura_icons_header = {
+            type = "header",
+            order = 2.9,
+            name = "Aura icons (WoW Forever)",
+            hidden = hidden,
+        },
+        aura_icons_desc = {
+            type = "description",
+            order = 2.91,
+            name = "Two native aura icon rows above the topmost visible swing bar: your temporary "..
+                "buffs and the target debuffs you applied yourself. Forever-only - the row does not "..
+                "exist on other clients, so these controls are hidden there. The debuff row is empty "..
+                "on friendly targets by the client's own identity-filter rule.",
+            hidden = hidden,
+        },
+        aura_icons_enabled = {
+            type = "toggle",
+            order = 2.92,
+            name = "Show aura icons",
+            desc = "Show the buff/debuff icon rows above the swing bars. On by default on WoW Forever.",
+            get = function()
+                local class_db = class_row()
+                if class_db == nil then
+                    return enabled_default
+                end
+                return class_db.aura_icons_enabled ~= false
+            end,
+            set = function(_, value)
+                local class_db = class_row()
+                if class_db == nil then
+                    return
+                end
+                class_db.aura_icons_enabled = value and true or false
+                apply()
+            end,
+            hidden = hidden,
+        },
+        aura_icons_show_debuffs = {
+            type = "toggle",
+            order = 2.93,
+            name = "Show target debuffs",
+            desc = "Show the target-debuff row (the debuffs YOUR character applied; the client "..
+                "includes your pet's and vehicle's). Empty on friendly targets by the client's rule.",
+            get = function()
+                local class_db = class_row()
+                if class_db == nil then
+                    return debuffs_default
+                end
+                return class_db.aura_icons_show_debuffs ~= false
+            end,
+            set = function(_, value)
+                local class_db = class_row()
+                if class_db == nil then
+                    return
+                end
+                class_db.aura_icons_show_debuffs = value and true or false
+                apply()
+            end,
+            hidden = hidden,
+        },
+        aura_icons_size = {
+            type = "range",
+            order = 2.94,
+            name = "Icon size",
+            desc = "Edge length of one aura icon, in pixels.",
+            min = 12, max = 48, step = 1,
+            get = function()
+                local class_db = class_row()
+                local value = class_db and tonumber(class_db.aura_icons_size) or nil
+                return value or size_default
+            end,
+            set = function(_, value)
+                local class_db = class_row()
+                if class_db == nil then
+                    return
+                end
+                class_db.aura_icons_size = tonumber(value) or size_default
+                apply()
+            end,
+            hidden = hidden,
+        },
+        aura_icons_spacing = {
+            type = "range",
+            order = 2.95,
+            name = "Icon spacing",
+            desc = "Space between aura icons, in pixels.",
+            min = 0, max = 12, step = 1,
+            get = function()
+                local class_db = class_row()
+                local value = class_db and tonumber(class_db.aura_icons_spacing) or nil
+                return value or spacing_default
+            end,
+            set = function(_, value)
+                local class_db = class_row()
+                if class_db == nil then
+                    return
+                end
+                class_db.aura_icons_spacing = tonumber(value) or spacing_default
+                apply()
+            end,
+            hidden = hidden,
+        },
+        aura_icons_grow = {
+            type = "select",
+            order = 2.96,
+            name = "Row direction",
+            desc = "Which side the icons grow towards from the row's origin.",
+            values = { right = "Grow right", left = "Grow left" },
+            sorting = { "right", "left" },
+            get = function()
+                local class_db = class_row()
+                local value = class_db and class_db.aura_icons_grow or nil
+                if value == "right" or value == "left" then
+                    return value
+                end
+                return grow_default
+            end,
+            set = function(_, value)
+                local class_db = class_row()
+                if class_db == nil then
+                    return
+                end
+                if value ~= "right" and value ~= "left" then
+                    value = grow_default
+                end
+                class_db.aura_icons_grow = value
+                apply()
+            end,
+            hidden = hidden,
+        },
+    }
+end
+
 function ST:generate_top_level_options_table()
     -- Set the top-level options that are displayed above the settings menu.
     self.opts_table.handler = self.opts_funcs.global
@@ -470,6 +671,12 @@ function ST:generate_top_level_options_table()
             },
         },
     }
+    -- Aura icon row controls (aura_icons.lua): WoW Forever only, merged after the HUD
+    -- styling block on this page (one named builder - see ST:aura_icon_options_args).
+    local aura_icon_args = ST:aura_icon_options_args()
+    for key, widget in pairs(aura_icon_args) do
+        ST.behaviour_group.args[key] = widget
+    end
     ST.opts_table.args.behaviour = ST.behaviour_group
 
     -- Add the Design Mode panel (designmode.lua): the global unlock. Its persisted keys

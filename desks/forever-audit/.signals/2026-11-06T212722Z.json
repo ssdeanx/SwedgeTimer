@@ -1,0 +1,23 @@
+{
+  "signal_type": "execution",
+  "subtype": "done",
+  "timestamp": "2026-11-06T21:27:22Z",
+  "run_id": "secret-api-matrix-2026-11-06",
+  "agent_name": "forever-audit",
+  "self_assessment": {
+    "intent": 5,
+    "confidence": 4,
+    "accuracy": 4,
+    "completeness": 4
+  },
+  "patterns": {
+    "what_worked": "Enumerating the compat surface first (61 named entries) and then scanning bare globals alias-aware gave a complete call graph; dumping only the relevant generated API docs and parsing each function block for SecretWhen*/SecretArguments/aSpects produced exact branch:path:line citations for every row. Reading the landed fix desks' journals and bench reports first avoided re-deriving the power pass-through and kept the matrix on the settled tree.",
+    "what_was_hard": "The product tree changed under the audit (10 files modified by three fix desks, version fields 2.1.7 -> 2.1.8 -> 2.2.0 uncommitted), so every addon line number had to be re-read after the fixes landed; and the secret regime is runtime state that no source tree can instantiate, so the predicate map is documented but the trigger context stays client-only (marked UNVERIFIED with exact /st diag and /run probes).",
+    "skill_gap": "None for this lane. One trap worth recording: a source scan for 'api.GetSpellCooldown call sites' must exclude comment/needs strings and count per file, otherwise the total drifts (verified 28 real sites, not the ~70 in the dispatch estimate)."
+  },
+  "escalation": {
+    "reason": null,
+    "blocked_on": null,
+    "recommendation": null
+  }
+}

@@ -109,18 +109,10 @@ local ROOT = script_dir .. "/.."
 -- interfaces_are_initialised guard in the handler itself. Slug = the event name lowercased.
 local ACCEPTED = {
 	-- --- deliberate, no defect
-	["3|main.lua|swing_timer_start-no-guard"] =
-		"Swing-engine callbacks are registered by register_timer_callbacks(), which "
-		.. "init_timers() calls at main.lua:702 - one line AFTER interfaces_are_initialised "
-		.. "is set at main.lua:692. The engine therefore cannot deliver a callback before "
-		.. "the frames exist.",
 	["3|main.lua|swing_timer_stop-no-guard"] =
 		"Registered by register_timer_callbacks() after the flag is set (see "
 		.. "swing_timer_start-no-guard); the C_Timer body that reaches on_bar_inactive is "
 		.. "later still.",
-	["3|main.lua|swing_timer_update-no-guard"] =
-		"Registered by register_timer_callbacks() after the flag is set (see "
-		.. "swing_timer_start-no-guard).",
 
 	-- --- pre-existing compat-contract defect (check 4)
 }

@@ -34,12 +34,27 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 
 ---
 
-## 🚀 What's New in v2.1.7
+## 🚀 What's New in v2.1.8
 
 > [!IMPORTANT]
-> **<span style="color:#FFD700">WoW Forever (Camelot 1.60.1)</span> & <span style="color:#00BFFF">TBC Anniversary (2.5.6)</span> Launch Ready!** SwedgeTimer v2.1.7 brings complete rotation engines for all 6 melee classes calibrated directly against official simulation priority models, unified tanking rotations for Protection Paladin, Protection Warrior, and Feral Bear Druid, buttery-smooth frame performance, and real-time leveling progression from Level 1 to 70. It also hardens the WoW Forever runtime against restricted (secret) aura and cooldown reads and aligns the rogue finisher with the client's `Venom` name.
+> **<span style="color:#FFD700">WoW Forever (Camelot 1.60.1)</span> Display & Power-Bar Fixes!** SwedgeTimer v2.1.8 repairs the WoW Forever display pipeline: Auto Shot display is no longer lost, the horizontal range bar now shows the client's own exact range band (`<=5 yd` / `5-35 yd` / `>35 yd`) when the client cannot provide exact yards instead of a dead grey bar, and the primary power bar paints a restricted (secret) power reading through a real StatusBar and its value text instead of hiding or printing `?`. It also fixes bar text that showed eight weapon speeds a tenth low and trims the per-tick bar work, and hardens the Forever runtime against restricted (secret) reads — power, target auras, target health, identity, comparisons and item cooldowns — so the guide and HUD withhold or pass through instead of guessing. The feature highlights below — complete rotation engines for all 6 melee classes calibrated directly against official simulation priority models, unified tanking rotations for Protection Paladin, Protection Warrior, and Feral Bear Druid, buttery-smooth frame performance, real-time leveling progression from Level 1 to 70, and the restricted (secret) aura/cooldown hardening with the rogue `Venom` alignment — remain accurate for this release.
 
-### 🌟 Release Highlights
+### ✨ WoW Forever Display, Range & Power Fixes (v2.1.8)
+
+- 🏹 **Auto Shot Display Recovery**: The visibility heartbeat no longer dies with the range poll (bars keep showing and hiding), a ranged swing START/UPDATE or a completed shot opens the ranged bar in the same event, a secret/malformed swing duration is recovered from your equipped speed instead of silently skipping the shot, and a restricted weapon-stat read no longer marks the hand as "no weapon" — the persistent "Auto Shot not displayed" variant. Auto Shot auto-repeat is probed with the client's numeric id (`75`) so the ranged activity backstop works.
+- 📏 **Range Bar Shows The Real Band**: `UnitDistanceSquared` only answers for units in your group and not in instances, so an enemy target reads unknown on Forever. The bar now falls back to the client's own exact swing-range check (`C_SwingTimer.IsTargetWithinSwingRange`) and paints `<=5 yd MELEE`, `5-35 yd IN RANGE` or `>35 yd OUT` — never an invented yard count — and only shows the explicit `--` face when both exact tiers are silent (no target or a non-attackable target still hides it). Its driver no longer permanently quarantines itself, and its initialization is guarded with a world-entry retry.
+- 🔋 **Secret Power Bar**: A restricted (secret) power reading is passed raw through a real StatusBar for the fill and through `FontString:SetText` for the number (the client's sanctioned secret sinks), so the bar stays visible and shows the value instead of hiding or printing `?`.
+- ⏱️ **Bar Text & Tick**: Attack-speed and timer text no longer show eight weapon speeds a tenth low (`1.4`/`1.9`/`2.3`/`2.4`/`2.8`/`2.9`/`3.3`/`3.8`), and each bar tick now reads the clock once, caches the spark decoration and writes the fill once.
+
+### 🔒 Secret-Value Hardening (WoW Forever, v2.1.8)
+
+- 🧠 **Restricted reads are UNKNOWN, never guessed**: A restricted cooldown, power, target-aura or target-health read no longer becomes `0`/"ready"/"absent"/`100 %`; the class gathers mark the tick unknown and the Forever guide withholds advice instead of cueing Judgement/Arcane/Rend/Rip/Rake/Flame Shock/Enrages on hidden data. The same pass fixed a latent paladin mana-compare crash.
+- 🛡️ **Target-of-target warning still renders**: A restricted `UnitIsUnit` result is passed through the client's sanctioned `SetAlphaFromBoolean` sink as a secret boolean instead of being compared or guessed; the readable path is unchanged.
+- 🔋 **HUD trinkets stay visible**: A restricted item-cooldown read keeps an equipped on-use trinket on screen with the existing grey unknown face (no swipe or countdown) instead of hiding it; a readable passive still hides.
+- 🏹 **Hunter identity and auras**: Target identity uses the secret-safe `api.UnitGUID` (no raw comparison), the three aura scans no longer truncate on a restricted row (Rapid Fire, Frenzy and the aspect icon keep working), and an unknown `UnitCreatureType` is not treated as "not undead".
+- 🧩 **Compat hardening**: The classic `UnitAura` branch now carries the `C_Secrets` per-index precheck and a `pcall`; combat-rating reads are guarded; new restricted-aware helpers (`api.get_cooldown_remaining`, `api.spell_aura_may_be_secret`, `api.power_may_be_secret`, `api.health_max_may_be_secret`, a fourth `restricted` return on `api.GetInventoryItemCooldown`) leave existing contracts unchanged.
+
+### 🌟 Release Highlights (v2.1.7)
 
 - ⚔️ **Complete WoW Forever 1.60.1 Rotation Engines (<span style="color:#FFD700">6 Classes / 16 Specs</span>)**:
   - **<span style="color:#F58CBA">Paladin</span>**: Retribution (Holy Strike weaving, HoW execute, Seal cycling), Holy Shock burst, and Protection Tank (Holy Shield, Seal of Fury, Righteous Fury).
@@ -73,7 +88,7 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 - 🧭 **Guide Leveling, Stalls, Swipes and Shield Wiring**: paladin leveling requires its Seal known else HOLD/WAIT; hunter leveling and druid caster hold WAIT instead of blanking; Forever guide slots carry cooldown keys where a matching input exists; warrior Thunder Clap / Cleave stay marked filed-skeleton without a Forever target-count producer; shaman Water Shield uses its own Forever-gated due flag.
 - 🗡️ **Rogue Finisher Uses Venom**: The WoW Forever rogue finisher now uses the client's `Venom` name (id `1310703`) and is driven by `venom_ready`, `venom_buff_active` and `cp >= 3`; the internal action key stays `envenom`, so nothing else moves.
 
-*All WoW Forever behaviour in this section is verified offline; in-client confirmation on the Forever client is still pending.*
+*All WoW Forever behaviour in this section is verified offline by the unit suites; in-client confirmation on the Forever client is still pending.*
 
 ---
 
@@ -218,10 +233,10 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
    - **TBC Anniversary**: `World of Warcraft/_classic_/Interface/AddOns/SwedgeTimer`
    - **WotLK Titanforge**: `World of Warcraft/_classic_/Interface/AddOns/SwedgeTimer`
    - **Retail**: `World of Warcraft/_retail_/Interface/AddOns/SwedgeTimer`
-3. Launch World of Warcraft. The client automatically picks the matching flavor TOC file.
+3. Launch World of Warcraft. The addon ships one `SwedgeTimer.toc` that advertises every supported client, so there is no flavor file to pick.
 
 > [!NOTE]
-> All flavor variants are bundled into one universal download. The WoW client automatically selects the correct `.toc` file for your active game version.
+> **One TOC for every client (v2.1.8):** the old per-flavor `.toc` files are gone. `SwedgeTimer.toc` lists `## Interface: 11509, 20506, 38002, 40402, 50500, 120100, 120105, 16001`; the client picks its engine at runtime, and the classic swing library is gated off on Forever/Retail/Cata/Mists by `swing_lib_gate.lua` (so it is listed once, never duplicated per flavor).
 
 ---
 

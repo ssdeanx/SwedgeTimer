@@ -393,11 +393,17 @@ local function spell_cooldown(self, query, now)
 	if type(query) ~= "number" and type(query) ~= "string" then
 		return nil
 	end
-	local start_time, duration = api.GetSpellCooldown(query)
-	if type(start_time) ~= "number" or type(duration) ~= "number" or duration <= 1.51 then
+	-- H2 (2026-11-06): read the shared restricted-aware helper. A restricted (secret)
+	-- timing is UNKNOWN, never 0 = "ready": nil is returned and the tick records the
+	-- flag, so the gather can publish inputs_unknown (the display suppression path).
+	local remaining, duration, restricted = api.get_cooldown_remaining(query)
+	if restricted == true then
+		self.guide_reads_unknown = true
 		return nil
 	end
-	local remaining = start_time + duration - now
+	if type(remaining) ~= "number" or type(duration) ~= "number" or duration <= 1.51 then
+		return nil
+	end
 	if remaining <= 0 then
 		return nil
 	end
@@ -966,6 +972,8 @@ ST.ROGUE.guide_inputs = {}
 function ST.ROGUE.gather_guide_inputs(self, out)
 	local rg = st.rogue_guide
 	local inputs = out or ST.ROGUE.guide_inputs
+	-- H2 (2026-11-06): fresh per-tick restricted-read flag (the tail publishes it).
+	self.guide_reads_unknown = false
 	local now = api.get_time()
 	local db = self:get_class_table() or {}
 	-- PROPER: {} reads every tunable as nil, which is exactly the engine's
@@ -1336,6 +1344,11 @@ function ST.ROGUE.gather_guide_inputs(self, out)
 	inputs.lust_unknown = self.rogue_lust_unknown == true
 	inputs.inputs_unknown = type(energy) ~= "number" or type(cp) ~= "number"
 		or self.rogue_lust_unknown == true
+	-- Belt and braces (H2): a restricted cooldown read this tick (the AR/Vanish
+	-- display feeds) also makes the advice unknown rather than "ready".
+	if self.guide_reads_unknown == true then
+		inputs.inputs_unknown = true
+	end
 	if rg == nil then
 		inputs.inputs_unknown = true
 	end

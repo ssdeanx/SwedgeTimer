@@ -219,7 +219,9 @@ eq(boots.titan.st.swing_source.available, false, "titan: swing_source unavailabl
 eq(boots.forever.st.swing_source.available, true, "forever: swing_source available")
 eq(boots.retail.st.swing_source.available, false, "retail: swing_source unavailable")
 
--- 1b) The TOC contract the matrix depends on: only _Mainline omits the vendored library.
+-- 1b) The TOC contract the matrix depends on (single-TOC release 2026-11-07): ONE TOC
+-- ships the vendored library, the load gate and the native swing source; the runtime gate
+-- - not a flavor TOC - decides which clients run the library.
 -- (toc_check.lua owns the full TOC pins; this keeps the matrix's premise explicit.)
 do
     local function toc_has(path, needle)
@@ -229,12 +231,17 @@ do
         return text:find(needle, 1, true) ~= nil
     end
     local LIB = "Libs\\LibClassicSwingTimerAPI\\LibClassicSwingTimerAPI.lua"
-    eq(toc_has("SwedgeTimer_Vanilla.toc", LIB), true, "toc: _Vanilla ships the classic library")
-    eq(toc_has("SwedgeTimer_TBC.toc", LIB), true, "toc: _TBC ships the classic library")
-    eq(toc_has("SwedgeTimer_Wrath.toc", LIB), true, "toc: _Wrath ships the classic library")
-    eq(toc_has("SwedgeTimer_Mainline.toc", LIB), false, "toc: _Mainline omits the classic library")
-    eq(toc_has("SwedgeTimer_Mainline.toc", "swing_source.lua"), true,
-        "toc: _Mainline ships the native swing source")
+    eq(toc_has("SwedgeTimer.toc", LIB), true,
+        "toc: the single TOC ships the classic library")
+    eq(toc_has("SwedgeTimer.toc", "swing_source.lua"), true,
+        "toc: the single TOC ships the native swing source")
+    eq(toc_has("SwedgeTimer.toc", "swing_lib_gate.lua"), true,
+        "toc: the single TOC ships the load gate")
+    eq(toc_has("SwedgeTimer.toc", "swing_lib_gate_release.lua"), true,
+        "toc: the single TOC ships the gate release")
+    local gone = io.open(ROOT .. "SwedgeTimer_Mainline.toc", "r")
+    if gone then gone:close() end
+    eq(gone, nil, "toc: the retired flavor TOCs are gone")
 end
 
 --=========================================================================================
@@ -296,10 +303,45 @@ do
     local before = #b.fired
     fire("PLAYER_SWING", 3.0, 9)
     eq(#b.fired, before, "forever payload: an unknown swing type is ignored")
+
+    -- A-1 (2026-11-06): a malformed/restricted duration on a KNOWN hand is RECOVERED
+    -- from the equipped speed instead of dropping the cycle - the payload only repeats
+    -- what the client already reports for that hand, so one bad argument must not
+    -- consume the shot. The fixture reports 2.6 (mainhand) / 1.8 (offhand) / 3.0 (ranged).
+    local stats = b.st.swing_source.stats
+    local valid_before = stats.valid_swings
+    local rejects_before = stats.payload_rejects
+    local fallbacks_before = stats.speed_fallbacks
     fire("PLAYER_SWING", 0, 0)
-    eq(#b.fired, before, "forever payload: a zero duration is ignored")
+    eq(#b.fired, before + 1, "forever payload: a zero duration recovers the mainhand cycle")
+    eq(last_fired(b).event, "SWING_TIMER_START",
+        "forever payload: the recovered payload fires a START")
+    eq(last_fired(b).args[1], 2.6,
+        "forever payload: the recovered cycle uses the equipped mainhand speed")
+    eq(last_fired(b).args[3], "mainhand", "forever payload: the recovered cycle keeps its hand")
+    eq(stats.valid_swings, valid_before + 1, "forever payload: the recovery counts as a valid swing")
+    eq(stats.payload_rejects, rejects_before, "forever payload: a recovered payload is not a reject")
+    eq(stats.speed_fallbacks, fallbacks_before + 1,
+        "forever payload: the recovery is counted on the fallback counter")
+
     fire("PLAYER_SWING", "x", 0)
-    eq(#b.fired, before, "forever payload: a non-numeric duration is ignored")
+    eq(#b.fired, before + 2, "forever payload: a non-numeric duration recovers too")
+    eq(last_fired(b).args[1], 2.6,
+        "forever payload: the non-numeric recovery keeps the equipped speed")
+
+    -- No readable equipped speed: the cycle cannot be timed, so it is dropped AND counted
+    -- (never invented). This is the half of the contract the old reject-only pin covered.
+    b.env.UnitAttackSpeed = function() return nil end
+    b.env.UnitRangedDamage = nil
+    local fired_before_reject = #b.fired
+    rejects_before = stats.payload_rejects
+    fire("PLAYER_SWING", 0, 2)
+    eq(#b.fired, fired_before_reject,
+        "forever payload: no readable equipped speed means no invented cycle")
+    eq(stats.payload_rejects, rejects_before + 1,
+        "forever payload: the unrecoverable payload is rejected")
+    b.env.UnitAttackSpeed = function() return 2.6, 1.8, 3.0 end
+    b.env.UnitRangedDamage = function() return 3.0 end
 
     -- UNIT_ATTACK_SPEED(unitTarget) per UnitDocumentation.lua:4143-4151.
     b.env.UnitAttackSpeed = function() return 1.3, 1.8, 3.0 end

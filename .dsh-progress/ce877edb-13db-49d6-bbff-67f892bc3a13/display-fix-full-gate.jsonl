@@ -1,0 +1,14 @@
+{"v":1,"task":"display-fix-full-gate","state":"running","msg":"started: bash tests/run.sh","at":1793994259703}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/shaman_state.lua","at":1793994260708}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/hunter_state.lua","at":1793994261712}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/nextaction_state.lua","at":1793994263722}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/practice_progress_ui_state.lua","at":1793994264728}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/practice_timeline_state.lua","at":1793994266737}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/neutral_actions_state.lua","at":1793994267741}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/prepull_contract_state.lua","at":1793994269749}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/bars_state.lua","at":1793994271759}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/engine_matrix_state.lua","at":1793994272765}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/toc_check.lua","at":1793994274774}
+{"v":1,"task":"display-fix-full-gate","msg":"PASS  lua5.1 tests/wiring_check.lua","at":1793994313969}
+{"v":1,"task":"display-fix-full-gate","msg":"57 steps, 0 failed","at":1793994322729}
+{"v":1,"task":"display-fix-full-gate","state":"done","pct":100,"msg":"finished","at":1793994322729}
