@@ -126,7 +126,10 @@ wr.UNKNOWN_LABEL = "--"
 -- fills the track, IN RANGE marks its midpoint, OUT is the 1 px sliver.
 wr.BAND_IN_RANGE_FRACTION = 0.5
 wr.BG_COLOR = { 0.0, 0.0, 0.0, 0.85 }
+wr.BORDER_COLOR = { 0.08, 0.08, 0.08, 0.95 }
 wr.LABEL_COLOR = { 1.0, 1.0, 1.0, 1.0 }
+wr.TEXT_FONT = "Fonts\\FRIZQT__.TTF"
+wr.TEXT_SIZE = 10
 
 -- Driver-quarantine recovery (B-6, 2026-11-06). A quarantine used to remove the
 -- driver's OnUpdate permanently and hide the bar. Now it keeps the driver armed, skips
@@ -316,23 +319,67 @@ end
 -- Frame driver (WoW-facing; reached only through init()/poll())
 --=========================================================================================
 
+local function is_secret(value)
+    local api = st.api
+    if type(api) ~= "table" or type(api.is_secret) ~= "function" then
+        return false
+    end
+    local ok, secret = pcall(api.is_secret, value)
+    if not ok then
+        return true
+    end
+    return secret == true
+end
+
+local function plain_number(value)
+    if type(value) ~= "number" or is_secret(value) then
+        return nil
+    end
+    if value ~= value or value == math.huge or value == -math.huge then
+        return nil
+    end
+    return value
+end
+
+local function plain_bool(value)
+    if is_secret(value) then
+        return nil
+    end
+    if value == true or value == 1 then
+        return true
+    end
+    if value == false or value == 0 then
+        return false
+    end
+    return nil
+end
+
 -- The frame to hang the bar below: the power bar when it is shown (the row directly
 -- under the bottom-most melee bar), else the lowest visible melee bar, else nil (the
 -- driver centres on UIParent). Reads every ref once per layout pass.
 local function bottom_anchor(ST)
     local pb = st.power_bar
     local power = pb and pb.frame
-    if power and type(power.IsShown) == "function" and power:IsShown() then
-        return power
+    if power and type(power.IsShown) == "function" then
+        local ok_shown, shown = pcall(power.IsShown, power)
+        if ok_shown and not is_secret(shown) and shown == true then
+            return power
+        end
     end
     local best, best_bottom
     if type(ST) == "table" and type(ST.iter_hands) == "function" then
         for hand in ST:iter_hands() do
             local frame = ST.get_bar_frame and ST:get_bar_frame(hand) or nil
-            if frame and type(frame.IsShown) == "function" and frame:IsShown() then
-                local bottom = type(frame.GetBottom) == "function" and frame:GetBottom() or nil
-                if type(bottom) == "number" and (best_bottom == nil or bottom < best_bottom) then
-                    best, best_bottom = frame, bottom
+            if frame and type(frame.IsShown) == "function" then
+                local ok_shown, shown = pcall(frame.IsShown, frame)
+                if ok_shown and not is_secret(shown) and shown == true then
+                    local ok_bot, raw_bot = pcall(function()
+                        return type(frame.GetBottom) == "function" and frame:GetBottom() or nil
+                    end)
+                    local bottom = ok_bot and plain_number(raw_bot) or nil
+                    if bottom ~= nil and (best_bottom == nil or bottom < best_bottom) then
+                        best, best_bottom = frame, bottom
+                    end
                 end
             end
         end
@@ -350,11 +397,11 @@ function wr.swing_band()
     if type(api) ~= "table" or type(api.is_target_in_swing_range) ~= "function" then
         return nil
     end
-    local melee = api.is_target_in_swing_range("mainhand")
+    local melee = plain_bool(api.is_target_in_swing_range("mainhand"))
     if melee == true then
         return "melee"
     end
-    local ranged = api.is_target_in_swing_range("ranged")
+    local ranged = plain_bool(api.is_target_in_swing_range("ranged"))
     if ranged == true then
         return "in_range"
     end
@@ -370,7 +417,8 @@ end
 -- The same spell-range probes the left hunter range helper uses (Auto Shot for the
 -- ranged band, Wing Clip / Raptor Strike for the melee band). This is the working
 -- in-instance source when UnitDistance and C_SwingTimer are both silent: the native spell
--- check answers true/false and the bar paints the band instead of the grey unknown face.
+-- check answers true/false (or 1/0 via compat) and the bar paints the band instead of the
+-- grey unknown face.
 function wr.spell_band()
     local api = st.api
     if type(api) ~= "table" or type(api.IsSpellInRange) ~= "function" then
@@ -381,38 +429,44 @@ function wr.spell_band()
     -- indicator the operator sees. Only if it has no state do we re-probe the APIs.
     if ui ~= nil and type(ui.range_band) == "function" then
         local ok, band = pcall(ui.range_band)
-        if ok and band ~= nil then
+        if ok and type(band) == "string" and not is_secret(band) then
             return band
         end
     end
     -- Next, the working left helper's own probe (including its numeric-ID fallbacks).
     if ui ~= nil and type(ui.spell_range_band) == "function" then
         local ok, band = pcall(ui.spell_range_band)
-        if ok and band ~= nil then
+        if ok and type(band) == "string" and not is_secret(band) then
             return band
         end
     end
-    local function probe(token, fallback)
+    local function probe(token, fallback_name, fallback_id)
         local answer
         if token ~= nil then
             local ok, value = pcall(api.IsSpellInRange, token, "target")
             if ok then
-                answer = value
+                answer = plain_bool(value)
             end
         end
-        if answer == nil and fallback ~= nil then
-            local ok, value = pcall(api.IsSpellInRange, fallback, "target")
+        if answer == nil and fallback_name ~= nil and fallback_name ~= token then
+            local ok, value = pcall(api.IsSpellInRange, fallback_name, "target")
             if ok then
-                answer = value
+                answer = plain_bool(value)
+            end
+        end
+        if answer == nil and fallback_id ~= nil and fallback_id ~= token then
+            local ok, value = pcall(api.IsSpellInRange, fallback_id, "target")
+            if ok then
+                answer = plain_bool(value)
             end
         end
         return answer
     end
-    local melee = probe(ui and ui.wing_clip_token, "Wing Clip")
+    local melee = probe(ui and ui.wing_clip_token, "Wing Clip", 2974)
     if melee == nil then
-        melee = probe(ui and ui.raptor_token, "Raptor Strike")
+        melee = probe(ui and ui.raptor_token, "Raptor Strike", 2973)
     end
-    local ranged = probe(ui and ui.auto_shot_token, "Auto Shot")
+    local ranged = probe(ui and ui.auto_shot_token, "Auto Shot", 75)
     if melee == true then
         return "melee"
     end
@@ -459,12 +513,29 @@ function wr.init(ST)
     frame.fill = fill
 
     local text = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    if type(text.SetFont) == "function" then
+        local global_font = rawget(_G, "STANDARD_TEXT_FONT")
+        local font_file = (type(global_font) == "string" and global_font ~= "")
+            and global_font or wr.TEXT_FONT
+        pcall(text.SetFont, text, font_file, wr.TEXT_SIZE, "OUTLINE")
+    end
+    if type(text.SetShadowColor) == "function" then
+        pcall(text.SetShadowColor, text, 0, 0, 0, 1)
+    end
+    if type(text.SetShadowOffset) == "function" then
+        pcall(text.SetShadowOffset, text, 1, -1)
+    end
     text:SetPoint("CENTER", frame, "CENTER", 0, 0)
     text:SetJustifyH("CENTER")
     text:SetTextColor(unpack(wr.LABEL_COLOR))
     frame.text = text
 
     frame:Hide()
+
+    if st.api and type(st.api.enable_swing_range_check) == "function" then
+        pcall(st.api.enable_swing_range_check, "mainhand", true)
+        pcall(st.api.enable_swing_range_check, "ranged", true)
+    end
 
     -- The driver is a separate, never-hidden frame: OnUpdate does not run on a hidden
     -- frame, so the bar frame itself cannot own the poll that decides to show it.
@@ -512,20 +583,24 @@ local function layout(ST, now)
     local bar = bottom_anchor(ST)
     local width = wr.BAR_WIDTH
     if bar and type(bar.GetWidth) == "function" then
-        local bar_width = bar:GetWidth()
-        if type(bar_width) == "number" and bar_width > 0 then
+        local ok_w, raw_w = pcall(bar.GetWidth, bar)
+        local bar_width = ok_w and plain_number(raw_w) or nil
+        if bar_width ~= nil and bar_width > 0 then
             width = bar_width
         end
     end
-    local clamp_due = type(now) == "number"
-        and (type(wr.clamp_at) ~= "number" or now >= wr.clamp_at)
+    local safe_now = plain_number(now)
+    local clamp_due = safe_now ~= nil
+        and (type(wr.clamp_at) ~= "number" or safe_now >= wr.clamp_at)
     local changed = bar ~= wr.anchor or width ~= wr.width
     if not changed and not clamp_due then
         return
     end
     wr.anchor, wr.width = bar, width
-    wr.clamp_at = (type(now) == "number") and (now + 1) or nil
-    if width ~= frame:GetWidth() then
+    wr.clamp_at = (safe_now ~= nil) and (safe_now + 1) or nil
+    local ok_fw, raw_fw = pcall(frame.GetWidth, frame)
+    local frame_width = ok_fw and plain_number(raw_fw) or nil
+    if width ~= frame_width then
         frame:SetWidth(width)
         -- The fill width is derived from the inner width: a resized bar must repaint even
         -- when the distance (and therefore the fraction) has not moved.
@@ -542,27 +617,30 @@ local function layout(ST, now)
     -- Screen clamp: a bar below a bottom-of-screen power bar must stay on screen. Measure
     -- once, then shift the vertical offset (never the stored position - this frame owns
     -- its own anchor).
-    local top = type(frame.GetTop) == "function" and frame:GetTop() or nil
-    local limit = type(UIParent.GetTop) == "function" and UIParent:GetTop() or nil
-    if type(top) == "number" and type(limit) == "number" then
+    local top = type(frame.GetTop) == "function" and plain_number(frame:GetTop()) or nil
+    local limit = type(UIParent.GetTop) == "function" and plain_number(UIParent:GetTop()) or nil
+    if top ~= nil and limit ~= nil then
         local overflow = top - (limit - wr.SCREEN_MARGIN)
         if overflow > 0 then
             local point, relative, relative_point, x, y = frame:GetPoint(1)
+            local px = plain_number(x) or 0
+            local py = plain_number(y) or 0
             if point then
-                frame:SetPoint(point, relative, relative_point, x or 0,
-                    (y or 0) - overflow)
+                frame:SetPoint(point, relative, relative_point, px, py - overflow)
             end
         end
     end
-    local bottom = type(frame.GetBottom) == "function" and frame:GetBottom() or nil
-    local limit_bottom = type(UIParent.GetBottom) == "function" and UIParent:GetBottom() or nil
-    if type(bottom) == "number" and type(limit_bottom) == "number" then
+    local bottom = type(frame.GetBottom) == "function" and plain_number(frame:GetBottom()) or nil
+    local limit_bottom = type(UIParent.GetBottom) == "function"
+        and plain_number(UIParent:GetBottom()) or nil
+    if bottom ~= nil and limit_bottom ~= nil then
         local under = (limit_bottom + wr.SCREEN_MARGIN) - bottom
         if under > 0 then
             local point, relative, relative_point, x, y = frame:GetPoint(1)
+            local px = plain_number(x) or 0
+            local py = plain_number(y) or 0
             if point then
-                frame:SetPoint(point, relative, relative_point, x or 0,
-                    (y or 0) + under)
+                frame:SetPoint(point, relative, relative_point, px, py + under)
             end
         end
     end
@@ -622,7 +700,7 @@ function wr.update(ST, now)
     local far = wr.far_yards_for(ST.player_class)
     local yards
     if st.api and type(st.api.UnitDistance) == "function" then
-        yards = st.api.UnitDistance("target")
+        yards = plain_number(st.api.UnitDistance("target"))
     end
     if type(yards) ~= "number" then
         -- Tier 2 (2026-11-07): the exact API is silent (UnitDistanceSquared is

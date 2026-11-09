@@ -134,10 +134,11 @@ A.BAR_GAP = 6
 -- bar: the row was correctly above the cast bar but visually touching it. This is added
 -- only for the hunter-widget anchor; the swing-bar gap stays A.BAR_GAP.
 A.HUNTER_GAP = 6
--- Fallback when the hunter cast bar is not visible: at least 15 px above the ranged
--- bar (operator rule 2026-11-09). The cast bar is only used while it is SHOWN; a hidden
--- cast frame must not reserve space above the row.
-A.HUNTER_RANGED_GAP = 15
+-- Fallback when the hunter cast bar is not visible: 29 px above the ranged bar (17 px
+-- standard cast bar + 6 px BAR_GAP + 6 px HUNTER_GAP) so the 5 px debuff duration bar
+-- clears the 17 px Auto Shot cast bar by 7 px and never overlaps or jumps when Auto Shot
+-- starts/stops casting.
+A.HUNTER_RANGED_GAP = 29
 -- Clearance above the debuff row for the client's duration text (the reference's
 -- DEBUFF_TEXT_CLEARANCE; the buff row is anchored above this fixed band, never above a
 -- measured container).
@@ -152,7 +153,13 @@ A.TEMPLATE = "CustomAuraContainerTemplate, DisableUntrustedLayoutScriptsTemplate
 A.TEMPLATE_FALLBACK = "CustomAuraContainerTemplate"
 A.DRIVER_NAME = addon_name .. "AuraIconsDriver"
 A.ICON_TEXCOORD = { 0.07, 0.93, 0.07, 0.93 }
-A.BORDER_COLOR = { 0, 0, 0, 0.65 }
+A.BORDER_COLOR = { 0.05, 0.05, 0.05, 0.90 }
+A.DURATION_BAR_BG_COLOR = { 0.0, 0.0, 0.0, 0.75 }
+A.DURATION_BAR_COLOR = { 0.95, 0.25, 0.20, 0.95 }
+A.TEXT_FONT = "Fonts\\FRIZQT__.TTF"
+A.DURATION_FONT_SIZE = 12
+A.COUNT_FONT_SIZE = 11
+A.LOW_DURATION_THRESHOLD = 4.0
 
 -- One descriptor per row. `group` is the AddAuraGroup key (asserted unique by the
 -- client); `container` the global frame name (unique - a second init reuses the frame).
@@ -164,6 +171,7 @@ A.ROWS = {
 		filter = "HELPFUL",
 		container = addon_name .. "AuraIconsBuffs",
 		with_bar = false,
+		with_cooldown = true,
 		max_duration = A.BUFF_MAX_DURATION,
 	},
 	debuffs = {
@@ -173,6 +181,7 @@ A.ROWS = {
 		filter = "HARMFUL|PLAYER",
 		container = addon_name .. "AuraIconsDebuffs",
 		with_bar = true,
+		with_cooldown = false,
 	},
 }
 
@@ -225,7 +234,7 @@ A.BUFFS = {
 	WARRIOR = {
 		7384, 7887, 11584, 11585, -- Overpower r1-r4
 		2565, -- Shield Block (Forever: 7 s)
-		12319, 12320, -- Flurry talent + rank-1 buff aura
+		12319, 12320, 12966, 12967, 12968, 12969, 12970, -- Flurry talent + r1-r5 buff auras
 		12292, -- Death Wish (Forever: 30 s)
 		1719, -- Recklessness (Forever: 15 s)
 		12328, -- Sweeping Strikes
@@ -235,8 +244,8 @@ A.BUFFS = {
 		23920, -- Spell Reflection
 		18499, -- Berserker Rage
 		30033, -- Rampage
-		2687, -- Bloodrage
-		12317, -- Enrage
+		2687, 29131, -- Bloodrage cast + buff aura
+		12317, 12880, 14201, 14202, 14203, 14204, -- Enrage talent + r1-r5 buff auras
 		23881, 23892, 23893, 23894, -- Bloodthirst r1-r4 (Forever: new 10 s self buff)
 		1329555, -- Reckless Swings (Forever: new, 8 s)
 		402927, 1310222, 1240193, -- candidates
@@ -245,17 +254,23 @@ A.BUFFS = {
 		31884, -- Avenging Wrath
 		642, 1020, -- Divine Shield r1-r2
 		10278, 1022, 5599, -- Blessing of Protection r1-r3
+		1044, -- Blessing of Freedom
 		20925, 20927, 20928, 1239570, -- Holy Shield r1-r4 (r4 new in Forever)
 		498, 5573, -- Divine Protection r1-r2
-		20049, 20050, -- Vengeance talent + rank-1 buff aura
+		20049, 20050, 20052, 20053, 20054, 20055, -- Vengeance talent + r1-r5 buff auras
+		20178, -- Reckoning proc buff
+		20216, -- Divine Favor
 		1310735, -- Unsealed Wrath (Forever: new, 15 s / 3 stacks)
 		679, 1311606, -- candidates
 	},
 	SHAMAN = {
 		30823, -- Shamanistic Rage
-		16280, -- Flurry (Classic rank)
+		16280, 16257, 16277, 16278, 16279, -- Flurry r1-r5 buff auras
 		16256, -- Flurry (Forever talent; buff aura is server-side)
-		29180, -- Elemental Devastation
+		29180, 30165, 29177, 29178, 29179, -- Elemental Devastation r1-r3 buff auras
+		16166, -- Elemental Mastery
+		16188, -- Nature's Swiftness
+		16246, -- Clearcasting
 		425336, -- Rage of the Farseer (Forever: new, +30% attack speed, 25 s)
 		408505, -- Maelstrom Weapon aura (Instant, 30 s, -20% Lightning Bolt)
 		408498, -- Maelstrom Weapon talent/buff record (passive; harmless if not an aura)
@@ -264,9 +279,11 @@ A.BUFFS = {
 	},
 	DRUID = {
 		16870, -- Clearcasting
-		5217, -- Tiger's Fury
-		22842, -- Frenzied Regeneration
+		5217, 6793, 9845, 9846, -- Tiger's Fury r1-r4
+		22842, 22895, 22896, -- Frenzied Regeneration r1-r3
 		22812, -- Barkskin
+		16689, 16810, 16811, 16812, 16813, 17329, 27009, -- Nature's Grasp r1-r7
+		17116, -- Nature's Swiftness
 		1850, 9821, -- Dash r1-r2
 		5229, -- Enrage
 		29166, -- Innervate
@@ -277,11 +294,12 @@ A.BUFFS = {
 		13750, -- Adrenaline Rush
 		13877, -- Blade Flurry (Forever: +20% attack speed, 15 s)
 		14177, -- Cold Blood
-		5277, -- Evasion
+		5277, 26669, -- Evasion r1-r2
 		2983, 8696, 11305, -- Sprint r1-r3
 		1856, 1857, -- Vanish r1-r2
 		14179, -- Premeditation (Classic rank)
 		14183, -- Premeditation (Forever: 20 s)
+		14143, 14149, -- Remorseless Attacks r1-r2 proc buff
 		36554, -- Shadowstep
 		31209, -- Cloak of Shadows
 		14278, -- Ghostly Strike (Forever: 7 s)
@@ -291,9 +309,13 @@ A.BUFFS = {
 	HUNTER = {
 		19574, -- Bestial Wrath
 		3045, -- Rapid Fire
-		34692, -- The Beast Within
-		6150, -- Quick Shots
-		34949, -- Rapid Killing
+		34692, 34471, -- The Beast Within (34692 + 34471 player buff aura)
+		6150, -- Quick Shots (Improved Aspect of the Hawk proc)
+		34949, 35098, 35099, -- Rapid Killing talent + r1-r2 buff auras
+		19263, -- Deterrence
+		24604, 24597, 24603, 24605, -- Furious Howl r1-r4 pet buff
+		34501, -- Expose Weakness proc buff
+		34839, -- Master Tactician proc buff
 		34477, -- Misdirection
 		19552, -- Deadly Aspects (Forever: new, +30% melee haste, 12 s)
 		1317257, 19306, 1495, 2973, -- candidates
@@ -357,15 +379,35 @@ A.DEBUFFS = {
 }
 
 -- Shared buffs are merged into the BUFF row only, never into a class list (the
--- reference's deliberate rule). All five are absent from the 1.15.9 client data yet
--- shipped by the reference as Forever buffs - Forever is a custom server.
-A.SHARED = { 2825, 32182, 35476, 35477, 28507 }
+-- reference's deliberate rule). Includes Forever raid haste buffs plus Classic/Forever
+-- weapon/trinket/potion procs (Crusader, Mongoose, Earthstrike, Badge of the Swarmguard,
+-- Kiss of the Spider, Slayer's Crest, Jom Gabbar, Devilsaur Eye, ZHC, Diamond Flask, etc.).
+A.SHARED = {
+	2825, 32182, 35476, 35477, 28507,
+	20007, -- Holy Strength (Crusader)
+	28093, -- Lightning Speed (Mongoose)
+	25891, -- Earthstrike
+	26480, 26481, -- Badge of the Swarmguard
+	28866, -- Kiss of the Spider
+	28777, -- Slayer's Crest
+	29602, 29604, -- Jom Gabbar
+	24352, -- Devilsaur Fury (Devilsaur Eye)
+	24658, 24659, 24662, -- Zandalarian Hero Charm / Medallion
+	24427, -- Diamond Flask
+	21153, -- Bonereaver's Edge
+	24388, -- Brain Hacker / Fury of Forgewright
+	17528, -- Mighty Rage Potion
+	6615, -- Free Action Potion
+	24364, -- Living Action Potion
+}
 
 -- The player's OWN race only; `UnitRace`'s file token is probed first, then the
 -- localized name (clients disagree; `Scourge` and `Undead` are both Undead's tokens).
+-- Includes Classic 1.15 and Forever racial spell IDs (e.g. Troll Berserking melee 20554
+-- and ranged bow/gun/crossbow 26635).
 A.RACIAL = {
-	Orc = { 20572 },
-	Troll = { 26297 },
+	Orc = { 20572, 33697, 33702, 23234 },
+	Troll = { 26297, 20554, 26635, 20555, 20557, 20558 },
 	Draenei = { 28880 },
 	BloodElf = { 28730 },
 	Human = { 20600 },
@@ -373,7 +415,7 @@ A.RACIAL = {
 	Gnome = { 20589 },
 	Undead = { 7744 },
 	Scourge = { 7744 },
-	NightElf = { 58984 },
+	NightElf = { 58984, 20580 },
 }
 
 --=========================================================================================
@@ -686,10 +728,48 @@ local function add_border(button)
 	end
 end
 
+local function font_path()
+	local global_font = rawget(_G, "STANDARD_TEXT_FONT")
+	if type(global_font) == "string" and global_font ~= "" then
+		return global_font
+	end
+	return A.TEXT_FONT
+end
+
+local function duration_color_curve()
+	if A.state.color_curve ~= nil then
+		return A.state.color_curve
+	end
+	local curve_util = global_table("C_CurveUtil")
+	local enum = global_table("Enum")
+	local prop = enum and type(enum.DurationTextBindingProperty) == "table"
+		and enum.DurationTextBindingProperty.RemainingDuration or nil
+	if curve_util == nil or type(curve_util.CreateColorCurve) ~= "function" or prop == nil then
+		return nil
+	end
+	local ok, curve = pcall(function()
+		local c = curve_util.CreateColorCurve()
+		local create_color = rawget(_G, "CreateColor")
+		if type(create_color) == "function" and type(c.AddPoint) == "function" then
+			c:AddPoint(0.0, create_color(1.0, 0.25, 0.25, 1.0))
+			c:AddPoint(A.LOW_DURATION_THRESHOLD, create_color(1.0, 0.25, 0.25, 1.0))
+			c:AddPoint(A.LOW_DURATION_THRESHOLD + 0.01, create_color(1.0, 1.0, 1.0, 0.95))
+			c:AddPoint(3600.0, create_color(1.0, 1.0, 1.0, 0.95))
+			return { curve = c, property = prop }
+		end
+		return nil
+	end)
+	if ok and type(curve) == "table" then
+		A.state.color_curve = curve
+		return curve
+	end
+	return nil
+end
+
 -- The client calls this once per aura button it creates (through securecallfunction, with
 -- the button's object table). Nothing here reads aura data: the icon, duration text,
 -- stacks and bar are all written by the client's own binding afterwards.
-local function style_button(button, with_bar)
+local function style_button(button, with_bar, with_cooldown)
 	if type(button) ~= "table" then
 		return
 	end
@@ -707,15 +787,66 @@ local function style_button(button, with_bar)
 		icon:SetTexCoord(A.ICON_TEXCOORD[1], A.ICON_TEXCOORD[2], A.ICON_TEXCOORD[3], A.ICON_TEXCOORD[4])
 		button:SetIcon(icon)
 	end)
+	if with_cooldown and type(button.SetDurationCooldown) == "function" then
+		pcall(function()
+			local cd = CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
+			cd:SetAllPoints(button)
+			if type(cd.SetReverse) == "function" then
+				cd:SetReverse(true)
+			end
+			if type(cd.SetHideCountdownNumbers) == "function" then
+				cd:SetHideCountdownNumbers(true)
+			end
+			if type(cd.SetDrawEdge) == "function" then
+				cd:SetDrawEdge(true)
+			end
+			button:SetDurationCooldown(cd)
+		end)
+	end
 	pcall(add_border, button)
 	pcall(function()
 		local text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-		text:SetPoint("BOTTOM", button, "TOP", 0, 1)
+		if type(text.SetFont) == "function" then
+			pcall(text.SetFont, text, font_path(), A.DURATION_FONT_SIZE, "OUTLINE")
+		end
+		if type(text.SetTextColor) == "function" then
+			pcall(text.SetTextColor, text, 1.0, 1.0, 1.0, 0.95)
+		end
+		if type(text.SetShadowColor) == "function" then
+			pcall(text.SetShadowColor, text, 0, 0, 0, 1)
+		end
+		if type(text.SetShadowOffset) == "function" then
+			pcall(text.SetShadowOffset, text, 1, -1)
+		end
+		text:SetPoint("BOTTOM", button, "TOP", 0, 2)
 		text:SetJustifyH("CENTER")
-		button:SetDurationText(text)
+		local curve_info = duration_color_curve()
+		if curve_info ~= nil then
+			local ok_curve = pcall(button.SetDurationText, button, text, {
+				colorCurve = curve_info.curve,
+				colorBindingProperty = curve_info.property,
+			})
+			if not ok_curve then
+				button:SetDurationText(text)
+			end
+		else
+			button:SetDurationText(text)
+		end
 	end)
 	pcall(function()
 		local count = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		if type(count.SetFont) == "function" then
+			pcall(count.SetFont, count, font_path(), A.COUNT_FONT_SIZE, "OUTLINE")
+		end
+		if type(count.SetTextColor) == "function" then
+			pcall(count.SetTextColor, count, 1.0, 0.92, 0.25, 1.0)
+		end
+		if type(count.SetShadowColor) == "function" then
+			pcall(count.SetShadowColor, count, 0, 0, 0, 1)
+		end
+		if type(count.SetShadowOffset) == "function" then
+			pcall(count.SetShadowOffset, count, 1, -1)
+		end
 		count:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -1, 1)
 		count:SetJustifyH("RIGHT")
 		button:SetApplicationCount(count)
@@ -727,6 +858,20 @@ local function style_button(button, with_bar)
 			bar:SetPoint("TOPRIGHT", button, "BOTTOMRIGHT", 0, -A.DURATION_BAR_GAP)
 			bar:SetHeight(A.DURATION_BAR_HEIGHT)
 			bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+			if type(bar.SetStatusBarColor) == "function" then
+				pcall(bar.SetStatusBarColor, bar,
+					A.DURATION_BAR_COLOR[1], A.DURATION_BAR_COLOR[2],
+					A.DURATION_BAR_COLOR[3], A.DURATION_BAR_COLOR[4])
+			end
+			if type(bar.CreateTexture) == "function" then
+				pcall(function()
+					local bg = bar:CreateTexture(nil, "BACKGROUND")
+					bg:SetAllPoints(bar)
+					bg:SetColorTexture(
+						A.DURATION_BAR_BG_COLOR[1], A.DURATION_BAR_BG_COLOR[2],
+						A.DURATION_BAR_BG_COLOR[3], A.DURATION_BAR_BG_COLOR[4])
+				end)
+			end
 			bar:SetMinMaxValues(0, 1)
 			bar:SetValue(0)
 			local enum = rawget(_G, "Enum")
@@ -809,7 +954,7 @@ local function group_options(row_key, list)
 		maxFrameCount = math.min(#list, A.MAX_FRAMES),
 		layout = { elementWidth = size, elementHeight = size, elementSpacing = spacing },
 		initializeFrame = function(button)
-			style_button(button, row.with_bar)
+			style_button(button, row.with_bar, row.with_cooldown)
 		end,
 		sortMethod = sort_method and sort_method.Expiration or nil,
 		sortDirection = sort_direction and sort_direction.Normal or nil,
@@ -955,6 +1100,7 @@ local function build_row(ST, row_key)
 		end
 		local ok_setup = pcall(function()
 			container:SetSize(1, 1)
+			container:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
 			container:SetFrameStrata(strata_for(ST))
 			container:SetUnit(row.unit)
 		end)
@@ -987,8 +1133,26 @@ local function build_row(ST, row_key)
 	end
 	if not state.enabled then
 		state.enabled = (pcall(container.SetEnabled, container, true)) and true or nil
+		if type(container.SetAuraProcessingPolicy) == "function" then
+			pcall(container.SetAuraProcessingPolicy, container, 0)
+		end
+		if type(container.UpdateAllAuras) == "function" then
+			pcall(container.UpdateAllAuras, container)
+		end
 	end
 	return true, state.created == true, false
+end
+
+local function refresh_container_auras(container)
+	if container == nil then
+		return
+	end
+	if type(container.SetAuraProcessingPolicy) == "function" then
+		pcall(container.SetAuraProcessingPolicy, container, 0)
+	end
+	if type(container.UpdateAllAuras) == "function" then
+		pcall(container.UpdateAllAuras, container)
+	end
 end
 
 --=========================================================================================
@@ -997,11 +1161,11 @@ end
 -- The row must clear the hunter Auto Shot cast bar while it is SHOWN. When the visible
 -- cast/Rapid Fire/target-warning top is above the topmost swing bar, anchor above that
 -- widget (BAR_GAP + HUNTER_GAP). When no cast widget is visible, use the explicit
--- HUNTER_RANGED_GAP (15 px) above the ranged bar. Reading GetTop/IsShown is plain frame
+-- HUNTER_RANGED_GAP (29 px) above the ranged bar. Reading GetTop/IsShown is plain frame
 -- geometry (not aura-container geometry), so it is secret-safe and does not depend on a
 -- hard-coded cast-bar height.
 local function topmost_hunter_widget(ST)
-	local ui = type(ST) == "table" and ST.hunter_ui or nil
+	local ui = (type(ST) == "table" and ST.hunter_ui) or st.hunter_ui
 	if type(ui) ~= "table" then
 		return nil, nil
 	end
@@ -1009,14 +1173,10 @@ local function topmost_hunter_widget(ST)
 	local keys = { "cast_frame", "rapid_fire_bar", "target_warning" }
 	for index = 1, #keys do
 		local frame = ui[keys[index]]
-		if frame ~= nil and type(frame.IsShown) == "function"
-			and type(frame.GetTop) == "function" then
-			local shown_ok, shown = pcall(frame.IsShown, frame)
-			if shown_ok and shown == true then
-				local ok, top = pcall(frame.GetTop, frame)
-				if ok and type(top) == "number" and (best_top == nil or top > best_top) then
-					best, best_top = frame, top
-				end
+		if frame ~= nil and frame_is_shown(frame) then
+			local top = frame_top(frame)
+			if top ~= nil and (best_top == nil or top > best_top) then
+				best, best_top = frame, top
 			end
 		end
 	end
@@ -1079,13 +1239,13 @@ function A.anchor(ST, force)
 	local want_buffs = enabled and A.state.rows.buffs.container ~= nil and bar ~= nil
 	local want_debuffs = enabled and debuffs_on and A.state.rows.debuffs.container ~= nil and bar ~= nil
 	local ok = true
-	if A.state.shown.buffs ~= want_buffs then
-		ok = set_shown("buffs", want_buffs) and ok
-	end
-	if A.state.shown.debuffs ~= want_debuffs then
-		ok = set_shown("debuffs", want_debuffs) and ok
-	end
 	if not bar or (not want_buffs and not want_debuffs) then
+		if A.state.shown.buffs ~= want_buffs then
+			ok = set_shown("buffs", want_buffs) and ok
+		end
+		if A.state.shown.debuffs ~= want_debuffs then
+			ok = set_shown("debuffs", want_debuffs) and ok
+		end
 		A.state.last.bar, A.state.last.bar_top = nil, nil
 		A.state.last.buff_offset, A.state.last.debuff_offset = nil, nil
 		return ok
@@ -1095,30 +1255,52 @@ function A.anchor(ST, force)
 	-- row sits above a fixed band computed from the configured icon size.
 	local debuff_offset = base_gap
 	local buff_offset = base_gap + (want_debuffs and (size + A.TEXT_CLEARANCE) or 0)
+	local buffs_shown_changed = A.state.shown.buffs ~= want_buffs
+	local debuffs_shown_changed = A.state.shown.debuffs ~= want_debuffs
 	local changed = force == true
 		or A.state.last.bar ~= bar
 		or A.state.last.bar_top ~= bar_top
 		or A.state.last.buff_offset ~= buff_offset
 		or A.state.last.debuff_offset ~= debuff_offset
-	if not changed then
-		return ok
-	end
 	local anchor_ok = true
-	if want_debuffs then
-		anchor_ok = set_row_point(A.state.rows.debuffs.container, bar, debuff_offset) and anchor_ok
+	if changed then
+		if want_debuffs then
+			anchor_ok = set_row_point(A.state.rows.debuffs.container, bar, debuff_offset) and anchor_ok
+		end
+		if want_buffs then
+			anchor_ok = set_row_point(A.state.rows.buffs.container, bar, buff_offset) and anchor_ok
+		end
+		if anchor_ok then
+			A.state.last.bar, A.state.last.bar_top = bar, bar_top
+			A.state.last.buff_offset, A.state.last.debuff_offset = buff_offset, debuff_offset
+			A.state.anchor_error = nil
+		else
+			-- Taint rules can refuse a container SetPoint in combat; retry on the next pass.
+			A.state.anchor_error = "setpoint"
+		end
 	end
-	if want_buffs then
-		anchor_ok = set_row_point(A.state.rows.buffs.container, bar, buff_offset) and anchor_ok
+	if buffs_shown_changed then
+		ok = set_shown("buffs", want_buffs) and ok
 	end
-	if anchor_ok then
-		A.state.last.bar, A.state.last.bar_top = bar, bar_top
-		A.state.last.buff_offset, A.state.last.debuff_offset = buff_offset, debuff_offset
-		A.state.anchor_error = nil
-	else
-		-- Taint rules can refuse a container SetPoint in combat; retry on the next pass.
-		A.state.anchor_error = "setpoint"
+	if debuffs_shown_changed then
+		ok = set_shown("debuffs", want_debuffs) and ok
+	end
+	if force == true or (buffs_shown_changed and want_buffs) then
+		refresh_container_auras(A.state.rows.buffs.container)
+	end
+	if force == true or (debuffs_shown_changed and want_debuffs) then
+		refresh_container_auras(A.state.rows.debuffs.container)
 	end
 	return ok and anchor_ok
+end
+
+function A.on_target_changed()
+	if A.available ~= true or A.state.inert == true or A.state.ready ~= true then
+		return
+	end
+	if A.state.shown.debuffs == true then
+		refresh_container_auras(A.state.rows.debuffs.container)
+	end
 end
 
 --=========================================================================================

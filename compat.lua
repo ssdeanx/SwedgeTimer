@@ -1612,42 +1612,44 @@ end
 -- when the client actually checked it; this only fills the enemy case it refuses.
 local unit_distance_squared = UnitDistanceSquared
 local unit_position = rawget(_G, "UnitPosition")
+local closest_unit_position = rawget(_G, "ClosestUnitPosition")
+local unit_creature_id = rawget(_G, "UnitCreatureID")
 
 local function finite_number(value)
-	return type(value) == "number" and value == value
+	return type(value) == "number" and not is_secret(value) and value == value
 		and value ~= math.huge and value ~= -math.huge
 end
 
 -- Distance from the player's UnitPosition to `unit`'s, in yards (2D, the metric
--- Blizzard's own tutorial uses for a target). nil on any unreadable/secret/mismatched read.
+-- Blizzard's own tutorial uses for a target). Falls back to ClosestUnitPosition(creatureID)
+-- when UnitPosition is nil/restricted on Forever. nil on any unreadable/secret/mismatched read.
 local function position_distance(unit)
-	if st.family ~= "FOREVER" or type(unit_position) ~= "function" then
+	if st.family ~= "FOREVER" then
 		return nil
 	end
-	local ok_player, px, py, pz, pmap = pcall(unit_position, "player")
-	if not ok_player then
-		return nil
+	if type(unit_position) == "function" then
+		local ok_player, px, py, pz, pmap = pcall(unit_position, "player")
+		local ok_unit, ux, uy, uz, umap = pcall(unit_position, unit)
+		if ok_player and ok_unit
+			and not is_secret(px) and not is_secret(py) and not is_secret(pz) and not is_secret(pmap)
+			and not is_secret(ux) and not is_secret(uy) and not is_secret(uz) and not is_secret(umap)
+			and finite_number(px) and finite_number(py)
+			and finite_number(ux) and finite_number(uy)
+			and pmap == umap then
+			local dx, dy = px - ux, py - uy
+			return math.sqrt(dx * dx + dy * dy)
+		end
 	end
-	local ok_unit, ux, uy, uz, umap = pcall(unit_position, unit)
-	if not ok_unit then
-		return nil
+	if type(closest_unit_position) == "function" and type(unit_creature_id) == "function" then
+		local ok_cid, cid = pcall(unit_creature_id, unit)
+		if ok_cid and finite_number(cid) and cid > 0 then
+			local ok_pos, _, _, dist = pcall(closest_unit_position, cid)
+			if ok_pos and finite_number(dist) and dist >= 0 then
+				return dist
+			end
+		end
 	end
-	if is_secret(px) or is_secret(py) or is_secret(pz) or is_secret(pmap)
-		or is_secret(ux) or is_secret(uy) or is_secret(uz) or is_secret(umap) then
-		return nil
-	end
-	if not finite_number(px) or not finite_number(py)
-		or not finite_number(ux) or not finite_number(uy) then
-		return nil
-	end
-	-- A different map (or one unreadable map id) is not a distance. Both nil is allowed
-	-- only because some clients omit the map id; the coordinates are still the same unit
-	-- position space in that case.
-	if pmap ~= umap then
-		return nil
-	end
-	local dx, dy = px - ux, py - uy
-	return math.sqrt(dx * dx + dy * dy)
+	return nil
 end
 
 function api.UnitDistance(unit)

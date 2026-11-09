@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.1.9]
+
+### Fixed
+
+- **WoW Forever Hunter Cast Bar & Aura Icon Clearance (`aura_icons.lua`, `hunter_ui.lua`):**
+  - `topmost_hunter_widget` now resolves `st.hunter_ui` (the live addon table) in addition to `ST.hunter_ui`, and `hunter_ui.update` immediately invokes `st.aura_icons.anchor(self, false)` so cast bar / Rapid Fire / target-warning visibility changes re-anchor on the same frame without waiting for the 0.15 s poll.
+  - `A.HUNTER_RANGED_GAP` is raised from `15` to `29` px (`17` px Auto Shot cast bar + `6` px `BAR_GAP` + `6` px `HUNTER_GAP`), keeping the `27` px debuff icons and their `5` px duration bars `7` px clear above the `Auto Shot` cast bar without overlapping or jumping between shots.
+- **WoW Forever Buff & Cooldown Proc Icons Above Debuffs (`aura_icons.lua`, `main.lua`):**
+  - Native `AuraContainer` frames are pre-anchored before `SetUnit`/`AddAuraGroup` so `self:IsVisible()` is true when `ShouldRegisterForDynamicEvents()` registers `UNIT_AURA`, and `SetAuraProcessingPolicy(0)` + `UpdateAllAuras()` are invoked after enabling/showing and on `ST:UNIT_TARGET` (`player`) target switches.
+  - Added missing multi-rank buff/proc/cooldown/trinket/racial spell IDs across all 6 classes (`Rapid Killing` `35098`/`35099`, `The Beast Within` `34471`, `Deterrence` `19263`, `Furious Howl` `24604`/`24597`/`24603`/`24605`, `Expose Weakness` `34501`, `Master Tactician` `34839`, Warrior/Shaman `Flurry` ranks, `Enrage` ranks, `Bloodrage` `29131`, Paladin `Vengeance` ranks, `Reckoning` `20178`, `Blessing of Freedom` `1044`, `Divine Favor` `20216`, Shaman `Elemental Devastation` ranks / `Elemental Mastery` / `Clearcasting`, Druid `Tiger's Fury` / `Frenzied Regeneration` / `Nature's Grasp` ranks, Rogue `Evasion` R2 / `Remorseless Attacks`, Troll `Berserking` melee `20554` & ranged `26635`, Orc `Blood Fury` variants, and shared weapon/trinket procs).
+- **WoW Forever Horizontal Distance Range Bar (`weave_range.lua`, `hunter_ui.lua`, `compat.lua`):**
+  - Fixed `hunter_ui.spell_range_band()` and `weave_range.spell_band()` checking `== true` / `== false` against `compat.IsSpellInRange`, which normalizes `C_Spell.IsSpellInRange` to numeric `1` / `0`. Both now accept `1`/`true` and `0`/`false`, and fallback probes include numeric spell IDs (`2974`, `2973`, `75`).
+  - `weave_range.init` arms `C_SwingTimer.EnableRangeCheck` for `mainhand` and `ranged`, `compat.lua` `position_distance` adds a Forever-gated `ClosestUnitPosition(UnitCreatureID(unit))` fallback when `UnitPosition` is unavailable, and all `weave_range` layout/anchor geometry and distance reads are guarded against secret values.
+- **Visual Polish (`aura_icons.lua`, `weave_range.lua`):**
+  - Added outlined fonts (`OUTLINE`) with drop shadows, gold stack counters, a secret-safe `<4.0s` red `C_CurveUtil.CreateColorCurve` duration text binding, reverse `CooldownFrameTemplate` radial sweeps on buff icons (`SetDurationCooldown`), dark-backed crimson debuff duration bars, and outlined text on the horizontal distance bar.
+
 ## [2.1.8]
 
 **Verification status:** all WoW Forever changes in this release are verified offline only (red-first pins and mutation proofs; the final offline gate is green — `tests/run.sh` 58 steps / 0 failed, `luacheck` 2 warnings / 0 errors in 103 files, the standing floor). In-client behaviour on the Forever client — the real secret triggers and rendering, `StatusBar`/`SetAlphaFromBoolean` acceptance of restricted values, and the new `/st diag` counters and receipts — is UNCONFIRMED; no in-client pass is recorded for 2.1.8, and nothing here is a "verified in game" claim.

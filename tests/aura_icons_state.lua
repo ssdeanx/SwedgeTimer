@@ -456,27 +456,32 @@ end
 -- class prefix and appends the shared/racial ids at build time.
 local EXPECTED_BUFFS = {
     WARRIOR = {
-        7384, 7887, 11584, 11585, 2565, 12319, 12320, 12292, 1719, 12328, 20230, 871,
-        12975, 23920, 18499, 30033, 2687, 12317, 23881, 23892, 23893, 23894, 1329555,
+        7384, 7887, 11584, 11585, 2565, 12319, 12320, 12966, 12967, 12968, 12969, 12970,
+        12292, 1719, 12328, 20230, 871, 12975, 23920, 18499, 30033, 2687, 29131, 12317,
+        12880, 14201, 14202, 14203, 14204, 23881, 23892, 23893, 23894, 1329555,
         402927, 1310222, 1240193,
     },
     PALADIN = {
-        31884, 642, 1020, 10278, 1022, 5599, 20925, 20927, 20928, 1239570, 498, 5573,
-        20049, 20050, 1310735, 679, 1311606,
+        31884, 642, 1020, 10278, 1022, 5599, 1044, 20925, 20927, 20928, 1239570, 498, 5573,
+        20049, 20050, 20052, 20053, 20054, 20055, 20178, 20216, 1310735, 679, 1311606,
     },
     SHAMAN = {
-        30823, 16280, 16256, 29180, 425336, 408505, 408498, 1223031, 408341,
+        30823, 16280, 16257, 16277, 16278, 16279, 16256, 29180, 30165, 29177, 29178, 29179,
+        16166, 16188, 16246, 425336, 408505, 408498, 1223031, 408341,
     },
     DRUID = {
-        16870, 5217, 22842, 22812, 1850, 9821, 5229, 29166, 407995, 16958, 1223246,
-        417051,
+        16870, 5217, 6793, 9845, 9846, 22842, 22895, 22896, 22812, 16689, 16810, 16811,
+        16812, 16813, 17329, 27009, 17116, 1850, 9821, 5229, 29166, 407995, 16958,
+        1223246, 417051,
     },
     ROGUE = {
-        5171, 6774, 13750, 13877, 14177, 5277, 2983, 8696, 11305, 1856, 1857, 14179,
-        14183, 36554, 31209, 14278, 1329328, 1310703, 1329283, 399956, 1329256, 1328825,
+        5171, 6774, 13750, 13877, 14177, 5277, 26669, 2983, 8696, 11305, 1856, 1857, 14179,
+        14183, 14143, 14149, 36554, 31209, 14278, 1329328, 1310703, 1329283, 399956,
+        1329256, 1328825,
     },
     HUNTER = {
-        19574, 3045, 34692, 6150, 34949, 34477, 19552, 1317257, 19306, 1495, 2973,
+        19574, 3045, 34692, 34471, 6150, 34949, 35098, 35099, 19263, 24604, 24597, 24603,
+        24605, 34501, 34839, 34477, 19552, 1317257, 19306, 1495, 2973,
     },
 }
 
@@ -511,7 +516,11 @@ local EXPECTED_DEBUFFS = {
     },
 }
 
-local EXPECTED_SHARED = { 2825, 32182, 35476, 35477, 28507 }
+local EXPECTED_SHARED = {
+    2825, 32182, 35476, 35477, 28507,
+    20007, 28093, 25891, 26480, 26481, 28866, 28777, 29602, 29604,
+    24352, 24658, 24659, 24662, 24427, 21153, 24388, 17528, 6615, 24364,
+}
 
 -- The 18 FOREVER_NEW_ABILITY_CANDIDATES the reference merges into BOTH lists.
 local CANDIDATES_BY_CLASS = {
@@ -526,7 +535,7 @@ local CANDIDATES_BY_CLASS = {
 local CLASSES = { "WARRIOR", "PALADIN", "SHAMAN", "DRUID", "ROGUE", "HUNTER" }
 
 local EXPECTED_COUNTS = {
-    buffs = { WARRIOR = 26, PALADIN = 17, SHAMAN = 9, DRUID = 12, ROGUE = 22, HUNTER = 11 },
+    buffs = { WARRIOR = 37, PALADIN = 24, SHAMAN = 20, DRUID = 25, ROGUE = 25, HUNTER = 21 },
     debuffs = { WARRIOR = 29, PALADIN = 19, SHAMAN = 19, DRUID = 30, ROGUE = 19, HUNTER = 44 },
 }
 
@@ -712,7 +721,7 @@ end
 --=========================================================================================
 -- 4. Per-class includeSpellIDs: exact sets, shared/racial merge, no leak, purity
 --=========================================================================================
-eq(#EXPECTED_SHARED, 5, "reference: five shared buff ids")
+eq(#EXPECTED_SHARED, 24, "reference: shared buff ids (5 raid haste + 19 weapon/trinket/potion procs)")
 do
     local h = new_harness({})
     check(type(h.A.BUFFS) == "table" and type(h.A.DEBUFFS) == "table",
@@ -840,12 +849,12 @@ end
 -- races add nothing, and the class arrays stay pure (the merge never mutates them).
 do
     local h = new_harness({})
-    same_set(h.A.racial_ids("Orc"), { 20572 }, "racial: Orc -> Blood Fury")
-    same_set(h.A.racial_ids("Troll"), { 26297 }, "racial: Troll -> Berserking")
+    same_set(h.A.racial_ids("Orc"), { 20572, 33697, 33702, 23234 }, "racial: Orc -> Blood Fury")
+    same_set(h.A.racial_ids("Troll"), { 26297, 20554, 26635, 20555, 20557, 20558 }, "racial: Troll -> Berserking")
     same_set(h.A.racial_ids("Human"), { 20600 }, "racial: Human -> Perception")
     same_set(h.A.racial_ids("Dwarf"), { 20594 }, "racial: Dwarf -> Stoneform")
     same_set(h.A.racial_ids("Gnome"), { 20589 }, "racial: Gnome -> Escape Artist")
-    same_set(h.A.racial_ids("NightElf"), { 58984 }, "racial: NightElf -> Shadowmeld")
+    same_set(h.A.racial_ids("NightElf"), { 58984, 20580 }, "racial: NightElf -> Shadowmeld")
     same_set(h.A.racial_ids("Draenei"), { 28880 }, "racial: Draenei -> Gift of the Naaru")
     same_set(h.A.racial_ids("BloodElf"), { 28730 }, "racial: BloodElf -> Arcane Torrent")
     same_set(h.A.racial_ids("Undead"), { 7744 }, "racial: Undead -> Will of the Forsaken")
@@ -861,7 +870,9 @@ do
     check((set_of(list))[2825] == 1, "purity: the merged list carries each shared id once")
     same_set(h.A.build_debuff_list("WARRIOR"), EXPECTED_DEBUFFS.WARRIOR,
         "purity: build_debuff_list is the class list only")
-    same_set(h.A.build_buff_list("MAGE", "Human", "Human"), { 2825, 32182, 35476, 35477, 28507, 20600 },
+    local want_unknown = deep_copy(EXPECTED_SHARED)
+    want_unknown[#want_unknown + 1] = 20600
+    same_set(h.A.build_buff_list("MAGE", "Human", "Human"), want_unknown,
         "purity: an unknown class gets shared + racial, never another class's list")
     same_set(h.A.build_debuff_list("MAGE"), {}, "purity: an unknown class has an empty debuff list")
 end
@@ -872,7 +883,8 @@ do
     h.race_file, h.race_localized = "Scourge", "Undead"
     same_set(h.A.player_racial_ids(), { 7744 }, "player racial: Scourge/Undead resolves")
     h.race_file, h.race_localized = "Unknown", "Troll"
-    same_set(h.A.player_racial_ids(), { 26297 }, "player racial: unknown file token falls back to the localized name")
+    same_set(h.A.player_racial_ids(), { 26297, 20554, 26635, 20555, 20557, 20558 },
+        "player racial: unknown file token falls back to the localized name")
     h.race_file, h.race_localized = "Unknown", "Unknown"
     same_set(h.A.player_racial_ids(), {}, "player racial: an unknown race adds nothing")
     h.unit_race_raises = true
@@ -975,46 +987,46 @@ do
     eq(debuff_point.relative, h.bars.ranged, "anchor: the debuff row anchors to the topmost visible bar (ranged)")
     eq(debuff_point.relative_point, "TOP", "anchor: ... at that bar's TOP")
     eq(debuff_point.x, 0, "anchor: no horizontal nudge")
-    eq(debuff_point.y, 15, "anchor: no visible cast bar means at least 15 px above the ranged bar")
+    eq(debuff_point.y, 29, "anchor: no visible cast bar means 29 px above the ranged bar (clears Auto Shot cast bar)")
     eq(buff_point.relative, h.bars.ranged, "anchor: the buff row uses the same topmost bar")
-    eq(buff_point.y, 58, "anchor: the buff row reserves the debuff band above the 15 px gap")
+    eq(buff_point.y, 72, "anchor: the buff row reserves the debuff band above the 29 px gap")
     eq(h.container_geometry_reads, 0, "anchor: the containers are NEVER measured")
     eq(h.enumeration_reads, 0, "anchor: no aura-frame enumeration on a plain pass")
 
     -- The hunter Auto Shot cast bar / Rapid Fire / target warning is the anchor when its
     -- plain GetTop is above the topmost swing bar, so the aura row cannot cover it
-    -- (operator screenshot 2026-11-09). No cast-bar height is guessed.
+    -- (operator screenshot 2026-11-09). Also verify st.hunter_ui (the live namespace) works
+    -- when ST.hunter_ui is nil.
     clear_calls(h)
-    h.ST.hunter_ui = {
+    h.st.hunter_ui = {
         cast_frame = { IsShown = function() return true end, GetTop = function() return 900 end },
         rapid_fire_bar = { IsShown = function() return true end, GetTop = function() return 920 end },
         target_warning = { IsShown = function() return true end, GetTop = function() return 930 end },
     }
     h.A.anchor(h.ST, true)
-    eq(point_of(debuffs_row).relative, h.ST.hunter_ui.target_warning,
-        "anchor: the debuff row rides the highest hunter widget (target warning)")
+    eq(point_of(debuffs_row).relative, h.st.hunter_ui.target_warning,
+        "anchor: the debuff row rides the highest hunter widget on st.hunter_ui (target warning)")
     eq(point_of(debuffs_row).y, 12,
         "anchor: the debuff row adds the explicit hunter clearance")
-    eq(point_of(buffs_row).relative, h.ST.hunter_ui.target_warning,
+    eq(point_of(buffs_row).relative, h.st.hunter_ui.target_warning,
         "anchor: the buff row uses the same hunter anchor")
     eq(point_of(buffs_row).y, 55,
         "anchor: the buff row stacks above the debuff band")
     eq(h.container_geometry_reads, 0,
         "anchor: anchoring to the hunter widget never measures an aura container")
-    -- A hidden cast bar must not reserve space: the row falls back to 15 px above the
-    -- ranged bar (operator rule: only anchor to the Auto Shot bar while it is shown).
-    h.ST.hunter_ui.cast_frame.IsShown = function() return false end
-    h.ST.hunter_ui.rapid_fire_bar.IsShown = function() return false end
-    h.ST.hunter_ui.target_warning.IsShown = function() return false end
+    -- A hidden cast bar falls back to 29 px above the ranged bar (matching 17 px cast bar + 12 px clearance).
+    h.st.hunter_ui.cast_frame.IsShown = function() return false end
+    h.st.hunter_ui.rapid_fire_bar.IsShown = function() return false end
+    h.st.hunter_ui.target_warning.IsShown = function() return false end
     h.A.anchor(h.ST, true)
     eq(point_of(debuffs_row).relative, h.bars.ranged,
         "anchor: a hidden cast bar falls back to the ranged bar")
-    eq(point_of(debuffs_row).y, 15, "anchor: the fallback is the explicit 15 px gap")
-    h.ST.hunter_ui = nil
+    eq(point_of(debuffs_row).y, 29, "anchor: the fallback is the explicit 29 px gap")
+    h.st.hunter_ui = nil
     h.A.anchor(h.ST, true)
     eq(point_of(debuffs_row).relative, h.bars.ranged,
         "anchor: removing the hunter widgets restores the swing-bar anchor")
-    eq(point_of(debuffs_row).y, 15, "anchor: the hunter fallback gap stays 15 px")
+    eq(point_of(debuffs_row).y, 29, "anchor: the hunter fallback gap stays 29 px")
     clear_calls(h)
 
     -- Ranged hidden -> mainhand becomes the topmost visible bar.

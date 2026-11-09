@@ -463,6 +463,21 @@ tick()
 eq(bar.fontstrings[1].text, ">5 yd  OUT",
     "spell band: a nil ranged answer claims only the melee-free band")
 
+-- compat.lua normalises C_Spell.IsSpellInRange to 1/0 (numbers), not true/false:
+-- spell_band must handle 1/0 identically.
+spell_melee, spell_ranged = 0, 1
+tick()
+eq(bar.fontstrings[1].text, "5-35 yd  IN RANGE",
+    "spell band: numeric 1/0 from compat.IsSpellInRange paints IN RANGE")
+spell_melee, spell_ranged = 1, 1
+tick()
+eq(bar.fontstrings[1].text, "<=5 yd  MELEE",
+    "spell band: numeric 1 from compat.IsSpellInRange paints MELEE")
+spell_melee, spell_ranged = 0, 0
+tick()
+eq(bar.fontstrings[1].text, ">35 yd  OUT",
+    "spell band: numeric 0/0 from compat.IsSpellInRange paints OUT")
+
 st.hunter_ui = nil
 spell_melee, spell_ranged = nil, nil
 

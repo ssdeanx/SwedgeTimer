@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.1.8"
+local version = "2.1.9"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -2584,6 +2584,9 @@ function ST:UNIT_TARGET(event, unit_id)
 		self.has_attackable_target = true
 	else
 		self.has_attackable_target = false
+	end
+	if st.aura_icons and type(st.aura_icons.on_target_changed) == "function" then
+		pcall(st.aura_icons.on_target_changed)
 	end
 end
 

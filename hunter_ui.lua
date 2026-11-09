@@ -1191,14 +1191,22 @@ end
 -- not that the target is out of range; on a name family that is exactly when the
 -- approved id fallback is tried before the state is called unknown.
 local function probe_in_range(token, fallback_id)
-    if not token then
-        return nil
+    local answer
+    if token ~= nil then
+        answer = api.IsSpellInRange(token, "target")
     end
-    local answer = api.IsSpellInRange(token, "target")
     if answer == nil and fallback_id ~= nil and fallback_id ~= token then
         answer = api.IsSpellInRange(fallback_id, "target")
     end
     return answer
+end
+
+local function probe_is_true(value)
+    return value == true or value == 1
+end
+
+local function probe_is_false(value)
+    return value == false or value == 0
 end
 
 -- Direct band for the horizontal distance bar from the LEFT indicator's own computed
@@ -1227,16 +1235,16 @@ function ui.spell_range_band()
         melee = probe_in_range(ui.raptor_token, RAPTOR_STRIKE_ID)
     end
     local ranged = probe_in_range(ui.auto_shot_token, AUTO_SHOT_ID)
-    if melee == true then
+    if probe_is_true(melee) then
         return "melee"
     end
-    if ranged == true then
+    if probe_is_true(ranged) then
         return "in_range"
     end
-    if melee == false and ranged == false then
+    if probe_is_false(melee) and probe_is_false(ranged) then
         return "out"
     end
-    if melee == false or ranged == false then
+    if probe_is_false(melee) or probe_is_false(ranged) then
         return "out_melee"
     end
     return nil
@@ -1942,6 +1950,9 @@ function ui.update(self)
     st.guard.run(self, "hunter_ui:target_warning", ui.update_target_warning, self, db)
     st.guard.run(self, "hunter_ui:range_helper", ui.update_range_helper, self, db)
     st.guard.run(self, "hunter_ui:rapid_fire", ui.update_rapid_fire, self, db, now)
+    if st.aura_icons and type(st.aura_icons.anchor) == "function" then
+        pcall(st.aura_icons.anchor, self, false)
+    end
     st.guard.run(self, "hunter_ui:pet_badges", ui.update_pet_badges, self, db, now)
     st.guard.run(self, "hunter_ui:oom_viper", ui.update_oom_viper, self, db, now)
     st.guard.run(self, "hunter_ui:lnl_badge", ui.update_lnl_badge, self, db, now)
