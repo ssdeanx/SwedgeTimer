@@ -1,7 +1,7 @@
 # 20261109-0421-1ded-forever-距离条精确填充: Forever 距离条精确填充
 
 - **Tags**: 距离条, weave_range, Forever
-- **Status**: doing · 2026-11-09 04:21:20 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
+- **Status**: doing · 2026-11-09 04:21:45 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
 - **Created**: 2026-11-09 04:21:20 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
 
 <!-- Header lines are maintained by the script, fixed order: Tags → Status → Created → Sealed.
@@ -34,3 +34,4 @@
 <!-- Maintained by the script: appended by new / claim / set / release / log / close. Do not edit.
      Backfill with: progress log --id 20261109-0421-1ded-forever-距离条精确填充 --note "...". -->
 - 2026-11-09 04:21:20 · new · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · created and claimed
+- 2026-11-09 04:21:45 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Grey traced: weave_range.lua:589 only when UnitDistance and both C_SwingTimer queries are nil; main.lua:2879-2887 enables range checks but never registers PLAYER_SWING_RANGE_UPDATE. Next: pin exact-distance API surface + event cache.
