@@ -1,7 +1,7 @@
 # 20261109-0424-3f47-forever-ranged-distance-fill: Forever ranged distance fill
 
 - **Tags**: range, weave_range, Forever, exact-distance
-- **Status**: doing · 2026-11-09 04:42:10 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
+- **Status**: doing · 2026-11-09 14:40:23 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
 - **Created**: 2026-11-09 04:24:49 · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c
 
 <!-- Header lines are maintained by the script, fixed order: Tags → Status → Created → Sealed.
@@ -14,30 +14,34 @@
 Operator 2026-11-09: the horizontal range bar stayed grey and the previous pass did not
 find why. The bar must know exact yards, fill fully at melee range, and unfill with
 distance; WoW Forever only; no other client behavior change. The operator also asked
-whether the vendored LibRangeCheck could be guarded and used.
+whether the vendored LibRangeCheck could be guarded and used. Later the operator reported
+that the bar, anchored above the top bar, covered the aura icon row and asked for it to
+move below the power bar.
 
 ## To Do
 
+- In-client: after `/reload`, confirm the bar hangs BELOW the power bar and clear of the
+  aura icon row and the hunter Auto Shot/cast stack.
 - In-client: target an enemy at ~5 / 10 / 20 / 35 yd and confirm `/st diag` shows
-  `weave=on:yes:...:src=exact` with a real yard count; the fill is full at melee and
-  empty at the far bound.
+  `weave=on:yes:...:src=exact` with a real yard count; full at melee, empty at the far
+  bound.
 - In-client: repeat in a dungeon/instance. If `UnitPosition` is restricted there,
-  capture the `weave=` token and the three `/run` outputs; the native swing-range band
-  is the fallback, and grey is only the last resort.
-- Confirm no other client calls `UnitPosition` (pinned offline by
-  `range_source_state` §8f).
+  capture the `weave=` token and the three `/run` outputs; the native swing-range band is
+  the fallback, and grey is only the last resort.
+- Confirm no other client calls `UnitPosition` (pinned offline by `range_source_state` §8f).
 
 ## Next
 
-Run `/st diag` in the grey moment and read the `weave=` token. Expected: `src=exact`.
-If `src=none`, capture the three `/run` outputs (SwingTimer query, event validity,
-UnitDistanceSquared) and report. Source points: `compat.lua` `api.UnitDistance` /
-`position_distance`; `weave_range.lua:551`.
+`/reload`, then read `/st diag`'s `weave=` token and check the bar's position under the
+power bar. Expected `src=exact`; if `src=none`, capture the three `/run` outputs
+(SwingTimer query, event validity, UnitDistanceSquared). Source points:
+`weave_range.lua` `bottom_anchor` / `layout`; `compat.lua` `api.UnitDistance` /
+`position_distance`.
 
 ## Process
 
-- Root cause: `weave_range.lua:589` grey is reached only when both tiers are nil. Tier 1
-  `UnitDistanceSquared` is group-only/#noinstance (`checkedDistance` false for an
+- Root cause of grey: `weave_range.lua` grey is reached only when both tiers are nil.
+  Tier 1 `UnitDistanceSquared` is group-only/#noinstance (`checkedDistance` false for an
   enemy); tier 2 polls `C_SwingTimer.IsTargetWithinSwingRange`, which can be nil from
   addon code.
 - Exact source found: `origin/forever:…/UnitDocumentation.lua:2714 UnitPosition` returns
@@ -46,22 +50,27 @@ UnitDistanceSquared) and report. Source points: `compat.lua` `api.UnitDistance` 
   missing exact source.
 - Implemented in `compat.lua`: `position_distance` plus a Forever-gated fallback in
   `api.UnitDistance` (2D yards, same map, finite numbers, secret rejects, pcall).
-  Non-Forever clients never call `UnitPosition`. `weave_range.lua` and
-  `main.lua` consume `api.UnitDistance` unchanged.
+  Non-Forever clients never call `UnitPosition`.
+- Placement (2026-11-09): `weave_range.layout` now uses `bottom_anchor`: the shown
+  `st.power_bar.frame`, else the lowest visible melee bar; `TOPLEFT` anchors to its
+  `BOTTOMLEFT` at `-BAR_GAP`; width follows the anchor; top and bottom screen clamps.
+  The aura row above the top bar is no longer in the same space.
 - LRC: not used and not patched. Vendored `LibRangeCheck-2.0.lua` sets
   `modernSpellRange` true on Forever and deliberately builds no spell checkers; its
   interact ladder was removed because `CheckInteractDistance` is protected. `GetRange`
   returns nil. `Libs/` is untouched.
-- Tests: `range_source_state` 161/0 (new §8); mutation M1 exact fallback removed (2
-  fails), M5 map guard disabled (1 fail); full harness 59/0; luacheck 2/0 tree floor.
-- UNCONFIRMED: `UnitPosition` availability/values in a live instance; the in-client test
-  is the only close.
+- Tests: `range_source_state` 161/0; `weave_bar_state` 170/0 (below-power anchor,
+  hidden-power fallback, clamp); mutations M6 old above-anchor (4 fails), M1 exact
+  fallback removed (2), M5 map guard disabled (1); full harness 59/0; luacheck 2/0.
+- UNCONFIRMED: `UnitPosition` availability/values in a live instance and the exact
+  on-screen placement; the in-client test is the only close.
 
 ## Conclusion
 
-Offline exact-yard path implemented and Forever-gated. The grey face remains only when
-both the exact and native-band sources are silent. In-client verification is pending.
-LibRangeCheck is not a viable source as vendored and was not modified.
+Offline exact-yard path and the below-power placement are implemented and Forever-gated.
+The grey face remains only when both the exact and native-band sources are silent.
+In-client verification is pending. LibRangeCheck is not a viable source as vendored and
+was not modified.
 
 ## Execution Log
 
@@ -69,3 +78,4 @@ LibRangeCheck is not a viable source as vendored and was not modified.
      Backfill with: progress log --id 20261109-0424-3f47-forever-ranged-distance-fill --note "...". -->
 - 2026-11-09 04:24:49 · new · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · created and claimed
 - 2026-11-09 04:42:10 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Exact source implemented: UnitPosition fallback in compat.lua api.UnitDistance (2D yards, same-map/non-finite/secret guards, Forever only); range_source_state 161/0, mutants M1/M5 killed, full 59/0. LRC not used, Libs untouched. Next: in-client /st diag weave= token.
+- 2026-11-09 14:40:23 · log · @taskmaster · eca46018-7d91-4ccd-92cf-2be388cff71c · Placed below the power bar via bottom_anchor (shown power frame, else lowest visible melee bar); TOPLEFT/BOTTOMLEFT -BAR_GAP; width follows anchor; top+bottom screen clamp. weave_bar_state 170/0, mutant M6 killed, full 59/0. Next: reload + in-client bar position and /st diag src=exact.
