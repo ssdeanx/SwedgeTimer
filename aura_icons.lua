@@ -24,12 +24,12 @@
 -- OnLayoutComplete -> `container:SetSize(secretwrap(width, height))`), so a container's
 -- height/top/width can be a SECRET value: measuring one would raise or produce an
 -- unusable number. The module NEVER measures an aura container. It reserves a fixed band
--- from the configured icon size instead:
+-- from the configured icon width/height instead:
 --
 --        +------------------ buff row (HELPFUL, player) ------------------+
 --        +------------------ debuff row (HARMFUL|PLAYER) -----------------+   bottom = anchor top + BAR_GAP + (hunter anchor ? HUNTER_GAP : 0)
 --        ======================= topmost visible swing bar =====================
---   buff bottom = anchor top + BAR_GAP + hunter gap + (debuff row visible ? icon size + TEXT_CLEARANCE : 0)
+--   buff bottom = anchor top + BAR_GAP + hunter gap + (debuff row visible ? icon height + TEXT_CLEARANCE : 0)
 --   anchor = topmost of the visible swing bar, hunter cast bar, Rapid Fire bar and target warning
 --
 -- Cosmetic consequence (documented, not a bug): with the debuff row hidden the buff row
@@ -42,7 +42,7 @@
 -- Rapid Fire / target-warning top is higher, that widget becomes the anchor (plain
 -- `GetTop`; aura-container geometry is still never read). A secret or unreadable
 -- `GetTop`/`IsShown` is skipped, never compared. A throttled 0.15 s pass re-anchors when
--- the anchor identity/top, the icon size or a toggle changed; a 0.5 s retry builds
+-- the anchor identity/top, the icon width/height or a toggle changed; a 0.5 s retry builds
 -- the containers when the first attempt failed or was deferred by combat lockdown. The
 -- driver is a plain (non-secure) Frame: it is the only frame created while locked down,
 -- and it exists precisely so the native containers are never created inside combat.
@@ -113,7 +113,8 @@ end
 A.DEFAULTS = {
 	enabled = true, -- operator order 2026-11-08: the Forever row ships ON
 	show_debuffs = true,
-	size = 27,
+	size = 27, -- width (px); the option label is "Icon width"
+	height = 20, -- height (px); the option label is "Icon height"
 	spacing = 3,
 	grow = "right",
 }
@@ -574,6 +575,11 @@ function A.option_size(db)
 	return clamped_number(value, A.DEFAULTS.size, 12, 48)
 end
 
+function A.option_height(db)
+	local value = type(db) == "table" and db.aura_icons_height or nil
+	return clamped_number(value, A.DEFAULTS.height, 12, 48)
+end
+
 function A.option_spacing(db)
 	local value = type(db) == "table" and db.aura_icons_spacing or nil
 	return clamped_number(value, A.DEFAULTS.spacing, 0, 12)
@@ -699,6 +705,10 @@ local function current_icon_size()
 	return A.option_size(class_db(A.state.addon))
 end
 
+local function current_icon_height()
+	return A.option_height(class_db(A.state.addon))
+end
+
 local function current_spacing()
 	return A.option_spacing(class_db(A.state.addon))
 end
@@ -773,9 +783,10 @@ local function style_button(button, with_bar, with_cooldown)
 	if type(button) ~= "table" then
 		return
 	end
-	local size = current_icon_size()
+	local width = current_icon_size()
+	local height = current_icon_height()
 	local ok_size = pcall(function()
-		button:SetSize(size, size)
+		button:SetSize(width, height)
 	end)
 	if not ok_size then
 		-- A button that cannot be sized would render as an unanchored blob; leave it bare.
@@ -944,7 +955,8 @@ local function group_options(row_key, list)
 	if row == nil then
 		return nil
 	end
-	local size = current_icon_size()
+	local width = current_icon_size()
+	local height = current_icon_height()
 	local spacing = current_spacing()
 	local candidate_filters = { includeSpellIDs = A.spell_set(list) }
 	if row.max_duration ~= nil then
@@ -955,7 +967,7 @@ local function group_options(row_key, list)
 	return {
 		candidateFilters = candidate_filters,
 		maxFrameCount = math.min(#list, A.MAX_FRAMES),
-		layout = { elementWidth = size, elementHeight = size, elementSpacing = spacing },
+		layout = { elementWidth = width, elementHeight = height, elementSpacing = spacing },
 		initializeFrame = function(button)
 			style_button(button, row.with_bar, row.with_cooldown)
 		end,
@@ -964,10 +976,10 @@ local function group_options(row_key, list)
 	}
 end
 
--- The client's frame provider allocates a batch of buttons up-front; a size change has to
+-- The client's frame provider allocates a batch of buttons up-front; a layout change has to
 -- resize the ones that already exist (the group layout only positions them). The count is
 -- derived from aura frames and can be secret - skip it, never compare it.
-local function resize_group_frames(container, group_key, size)
+local function resize_group_frames(container, group_key, width, height)
 	if container == nil or type(container.GetAuraGroupFrameCount) ~= "function" then
 		return true
 	end
@@ -980,7 +992,7 @@ local function resize_group_frames(container, group_key, size)
 		local ok_frame, frame = pcall(container.GetAuraGroupFrame, container, group_key, index)
 		if ok_frame and frame ~= nil then
 			local ok_size = pcall(function()
-				frame:SetSize(size, size)
+				frame:SetSize(width, height)
 			end)
 			ok_all = ok_all and ok_size
 		end
@@ -1023,14 +1035,16 @@ end
 
 -- Push the wanted icon layout to every existing row; returns true when nothing was due.
 local function sync_layout(ST)
-	local size = A.option_size(class_db(ST))
+	local width = A.option_size(class_db(ST))
+	local height = A.option_height(class_db(ST))
 	local spacing = A.option_spacing(class_db(ST))
 	local grow = A.option_grow(class_db(ST))
 	local current = A.state.layout
-	if current ~= nil and current.size == size and current.spacing == spacing and current.grow == grow then
+	if current ~= nil and current.width == width and current.height == height
+		and current.spacing == spacing and current.grow == grow then
 		return false
 	end
-	local size_changed = current ~= nil and current.size ~= size
+	local size_changed = current ~= nil and (current.width ~= width or current.height ~= height)
 	local grow_changed = current == nil or current.grow ~= grow
 	local ok_all = true
 	for index = 1, #ROW_KEYS do
@@ -1039,8 +1053,8 @@ local function sync_layout(ST)
 		local row = A.ROWS[key]
 		if container ~= nil and row ~= nil and row.group ~= nil then
 			local ok_layout = pcall(container.SetAuraGroupLayout, container, row.group, {
-				elementWidth = size,
-				elementHeight = size,
+				elementWidth = width,
+				elementHeight = height,
 				elementSpacing = spacing,
 			})
 			ok_all = ok_all and ok_layout
@@ -1048,11 +1062,11 @@ local function sync_layout(ST)
 				ok_all = apply_flow(container, grow) and ok_all
 			end
 			if size_changed then
-				ok_all = resize_group_frames(container, row.group, size) and ok_all
+				ok_all = resize_group_frames(container, row.group, width, height) and ok_all
 			end
 		end
 	end
-	A.state.layout = { size = size, spacing = spacing, grow = grow }
+	A.state.layout = { width = width, height = height, spacing = spacing, grow = grow }
 	A.state.layout_error = ok_all and nil or "layout"
 	return true
 end
@@ -1230,7 +1244,7 @@ function A.anchor(ST, force)
 	local db = class_db(ST)
 	local enabled = A.option_enabled(db)
 	local debuffs_on = A.option_debuffs(db)
-	local size = A.option_size(db)
+	local height = A.option_height(db)
 	local bar, bar_top = A.topmost_visible_bar(ST)
 	local hunter_anchor, hunter_top = topmost_hunter_widget(ST)
 	local hunter_anchored = hunter_top ~= nil and (bar_top == nil or hunter_top > bar_top)
@@ -1265,9 +1279,9 @@ function A.anchor(ST, force)
 	end
 
 	-- RESERVED BAND: never measure the debuff row (its geometry can be secret); the buff
-	-- row sits above a fixed band computed from the configured icon size.
+	-- row sits above a fixed band computed from the configured icon height.
 	local debuff_offset = base_gap
-	local buff_offset = base_gap + (want_debuffs and (size + A.TEXT_CLEARANCE) or 0)
+	local buff_offset = base_gap + (want_debuffs and (height + A.TEXT_CLEARANCE) or 0)
 	local buffs_shown_changed = A.state.shown.buffs ~= want_buffs
 	local debuffs_shown_changed = A.state.shown.debuffs ~= want_debuffs
 	local changed = force == true
@@ -1351,8 +1365,8 @@ function A.init(ST)
 	if type(ST) ~= "table" then
 		return false
 	end
-	-- 2026-11-09 operator: the aura icons are 5 px larger in both dimensions. A profile
-	-- saved under the old 22 px default is migrated once; a later explicit size is kept.
+	-- 2026-11-09 operator: the aura icon width was raised by 5 px (22 -> 27). A profile
+	-- saved under the old 22 px width default is migrated once; a later explicit width is kept.
 	local size_db = class_db(ST)
 	if type(size_db) == "table" and tonumber(size_db.aura_icons_size) == 22
 		and size_db.aura_icons_size_27 ~= true then
@@ -1531,6 +1545,7 @@ function A.diagnostics()
 		layout_error = A.state.layout_error,
 		aura_secret = A.aura_data_secret(),
 		size = A.option_size(db),
+		height = A.option_height(db),
 		spacing = A.option_spacing(db),
 		grow = A.option_grow(db),
 	}

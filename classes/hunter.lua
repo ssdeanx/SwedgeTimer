@@ -1247,9 +1247,9 @@ function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
     -- Only run the raptor logic if special on-next-attack colors are enabled in
     -- the hunter settings.
     if db.enable_raptor_strike_color then
-        local current_spell = api.IsCurrentSpell()
         for _, token in ipairs(queue_tokens(raptor_strike_ids)) do
-            if current_spell == token then
+            local result = api.IsCurrentSpell(token)
+            if result then
                 self.raptor_strike_queued = true
                 self:set_bar_color("mainhand")
                 return
@@ -1271,9 +1271,9 @@ function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
     -- also counts as queued. The rank ids still need in-client confirmation: an id
     -- missing from the table is simply never detected, so the feature stays inert.
     if db.enable_steady_shot_color then
-        local current_spell = api.IsCurrentSpell()
         for _, token in ipairs(queue_tokens(steady_shot_ids)) do
-            if current_spell == token then
+            local result = api.IsCurrentSpell(token)
+            if result then
                 self.steady_shot_queued = true
                 self:set_bar_color("mainhand")
                 return

@@ -47,7 +47,10 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 
 ### ⏱️ Bar Tick & UI Polish (v2.2.0)
 
+- **Queue probes use the client predicate:** Raptor Strike / Steady Shot / Maul detection passes the spell token to `IsCurrentSpell`; calling it with no argument throws `bad argument #1` on Forever when a macro queues the shot.
+
 - **Live tick clock:** `bars.lua` reads the client clock exactly once per tick and shares that reading with the no-cycle early-return paint and the timer text. The OnUpdate delta is deliberately **not** accumulated: a bar's OnUpdate pauses while its frame is hidden, so a cached clock resumes stale and the fill sits at zero until it replays the hidden gap. The install boundary in `main.lua` adapts the client's `(frame, elapsed)` call to the hand handler's `elapsed` argument. The fill-last and resize-repaint guarantees are unchanged.
+- **Aura icon sizing:** the Forever buff/debuff rows now default to **27 px wide × 20 px high** (previously square 27 × 27), with separate "Icon width" and "Icon height" controls (12–48 px). The row band uses the height, so narrowing the icons does not move the rows.
 - **Design-mode reset:** the bar reset seam now targets the class defaults row and hands the live row to `LibWindow.RestorePosition`; option generation tolerates an unknown hand row and a nil order offset.
 
 ### 🧪 Test Suite (v2.2.0)

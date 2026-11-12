@@ -642,9 +642,10 @@ local function assert_happy_path(h, label)
     check(buff_options.candidateFilters.includeSpellIDs[7384] == true, label .. ": buff includeSpellIDs is keyed by id")
     eq(buff_options.candidateFilters.includeSpellIDs[1], nil, label .. ": includeSpellIDs is a map, not an array")
     eq(buff_options.layout.elementWidth, 27, label .. ": buff element width is the default 27")
-    eq(buff_options.layout.elementHeight, 27, label .. ": buff element height is the default 27")
+    eq(buff_options.layout.elementHeight, 20, label .. ": buff element height is the default 20")
     eq(buff_options.layout.elementSpacing, 3, label .. ": buff element spacing is the default 3")
     eq(debuff_options.layout.elementWidth, 27, label .. ": debuff element width is 27")
+    eq(debuff_options.layout.elementHeight, 20, label .. ": debuff element height is 20")
     eq(debuff_options.layout.elementSpacing, 3, label .. ": debuff element spacing is 3")
     eq(buff_options.sortMethod, h.env.AuraContainerSortMethod.Expiration, label .. ": buffs sort by expiration")
     eq(buff_options.sortDirection, h.env.AuraContainerSortDirection.Normal, label .. ": buffs sort normal")
@@ -990,7 +991,7 @@ do
     eq(debuff_point.x, 0, "anchor: no horizontal nudge")
     eq(debuff_point.y, 29, "anchor: no visible cast bar means 29 px above the ranged bar (clears Auto Shot cast bar)")
     eq(buff_point.relative, h.bars.ranged, "anchor: the buff row uses the same topmost bar")
-    eq(buff_point.y, 72, "anchor: the buff row reserves the debuff band above the 29 px gap")
+    eq(buff_point.y, 65, "anchor: the buff row reserves the debuff band above the 29 px gap")
     eq(h.container_geometry_reads, 0, "anchor: the containers are NEVER measured")
     eq(h.enumeration_reads, 0, "anchor: no aura-frame enumeration on a plain pass")
 
@@ -1011,7 +1012,7 @@ do
         "anchor: the debuff row adds the explicit hunter clearance")
     eq(point_of(buffs_row).relative, h.st.hunter_ui.target_warning,
         "anchor: the buff row uses the same hunter anchor")
-    eq(point_of(buffs_row).y, 55,
+    eq(point_of(buffs_row).y, 48,
         "anchor: the buff row stacks above the debuff band")
     eq(h.container_geometry_reads, 0,
         "anchor: anchoring to the hunter widget never measures an aura container")
@@ -1141,10 +1142,14 @@ do
     eq(h.A.option_enabled(nil), true, "options: nil enabled follows the shipped default (on)")
     eq(h.A.option_enabled({ aura_icons_enabled = false }), false, "options: explicit false disables")
     eq(h.A.option_debuffs(nil), true, "options: nil show_debuffs follows the shipped default (on)")
-    eq(h.A.option_size(nil), 27, "options: nil size is the shipped 27")
-    eq(h.A.option_size({ aura_icons_size = 30 }), 30, "options: a stored size is honoured")
-    eq(h.A.option_size({ aura_icons_size = 1 }), 12, "options: a too-small size clamps to 12")
-    eq(h.A.option_size({ aura_icons_size = 500 }), 48, "options: a too-large size clamps to 48")
+    eq(h.A.option_size(nil), 27, "options: nil width is the shipped 27")
+    eq(h.A.option_size({ aura_icons_size = 30 }), 30, "options: a stored width is honoured")
+    eq(h.A.option_size({ aura_icons_size = 1 }), 12, "options: a too-small width clamps to 12")
+    eq(h.A.option_size({ aura_icons_size = 500 }), 48, "options: a too-large width clamps to 48")
+    eq(h.A.option_height(nil), 20, "options: nil height is the shipped 20")
+    eq(h.A.option_height({ aura_icons_height = 28 }), 28, "options: a stored height is honoured")
+    eq(h.A.option_height({ aura_icons_height = 1 }), 12, "options: a too-small height clamps to 12")
+    eq(h.A.option_height({ aura_icons_height = 500 }), 48, "options: a too-large height clamps to 48")
     eq(h.A.option_spacing(nil), 3, "options: nil spacing is the shipped 3")
     eq(h.A.option_spacing({ aura_icons_spacing = -4 }), 0, "options: negative spacing clamps to 0")
     eq(h.A.option_grow({ aura_icons_grow = "left" }), "left", "options: grow left is honoured")
@@ -1179,7 +1184,7 @@ do
     clear_calls(h)
     pass(h)
     eq(debuffs_row.shown, true, "options: nil show_debuffs shows the debuff row again")
-    eq(point_of(buffs_row).y, 49, "options: the band is reserved again")
+    eq(point_of(buffs_row).y, 42, "options: the band is reserved again")
 
     -- Size change: layout pushed to both containers, frames resized, band re-anchored.
     clear_calls(h)
@@ -1188,14 +1193,25 @@ do
     eq(#buffs_row.layout_calls, 1, "options: a size change pushes the buff layout once")
     eq(#debuffs_row.layout_calls, 1, "options: a size change pushes the debuff layout once")
     eq(buffs_row.layout_calls[1].options.elementWidth, 30, "options: the pushed element width is 30")
+    eq(buffs_row.layout_calls[1].options.elementHeight, 20, "options: a width change keeps the height")
     eq(buffs_row.layout_calls[1].options.elementSpacing, 3, "options: the pushed spacing is unchanged")
     eq(buffs_row.children.buffs[1].calls.SetSize or 0, 2,
         "options: existing buff buttons are resized (init + resize)")
     eq(debuffs_row.children.debuffs[1].calls.SetSize or 0, 2,
         "options: existing debuff buttons are resized (init + resize)")
-    eq(point_of(buffs_row).y, 52, "options: the buff band follows the new icon size")
+    eq(point_of(buffs_row).y, 42, "options: a width-only change does not move the band")
     eq(h.enumeration_reads, 6, "options: the resize enumerates each group once (1 count + 2 frames per row)")
     eq(h.container_geometry_reads, 0, "options: the resize never measures the container")
+
+    -- Height change: layout pushed and the band re-anchored; the width is untouched.
+    clear_calls(h)
+    h.class_db.aura_icons_height = 30
+    pass(h)
+    eq(#buffs_row.layout_calls, 1, "options: a height change pushes the buff layout once")
+    eq(buffs_row.layout_calls[1].options.elementWidth, 30, "options: a height change keeps the width")
+    eq(buffs_row.layout_calls[1].options.elementHeight, 30, "options: the pushed element height is 30")
+    eq(point_of(buffs_row).y, 52, "options: the buff band follows the new icon height")
+    eq(h.enumeration_reads, 6, "options: the height resize enumerates each group once")
 
     -- Spacing-only change: layout pushed, but no re-anchor (the band did not change).
     clear_calls(h)
@@ -1348,8 +1364,8 @@ do
     local button = new_button()
     buff_style(button)
     eq(button.calls.SetSize or 0, 1, "style: the buff button is sized once")
-    eq(button.width, 27, "style: the buff button uses the configured icon edge")
-    eq(button.height, 27, "style: the buff button is square")
+    eq(button.width, 27, "style: the buff button uses the configured icon width")
+    eq(button.height, 20, "style: the buff button uses the configured icon height")
     eq(button.calls.SetIcon or 0, 1, "style: the buff button hands the client an icon texture")
     check(button.icon ~= nil, "style: the icon texture was registered")
     check(#button.textures >= 2, "style: the button carries the icon and its border")
@@ -1362,14 +1378,16 @@ do
     eq(dbutton.calls.SetDurationBar or 0, 1, "style: the debuff button carries the duration bar")
     eq(dbutton.duration_bar_options and dbutton.duration_bar_options.direction, 3,
         "style: the debuff duration bar counts remaining time")
-    eq(dbutton.width, 27, "style: the debuff button is the same edge")
+    eq(dbutton.width, 27, "style: the debuff button is the same width")
+    eq(dbutton.height, 20, "style: the debuff button is the same height")
 
     -- The callback reads the CURRENT size, so buttons the client creates after a
     -- settings change are styled with the new edge (not a capture-time constant).
     h.class_db.aura_icons_size = 30
     local later = new_button()
     buff_style(later)
-    eq(later.width, 30, "style: a later button is styled with the current icon size")
+    eq(later.width, 30, "style: a later button is styled with the current icon width")
+    eq(later.height, 20, "style: a later button keeps the current icon height")
 
     -- Every style step is isolated: a throwing setters aborts styling, never the init.
     check(pcall(buff_style, { SetSize = function() error("injected SetSize failure") end }),
@@ -1403,7 +1421,8 @@ do
     eq(d.debuff_shown, true, "diagnostics: debuff row shown")
     eq(d.attempts, 1, "diagnostics: one attempt")
     eq(d.aura_secret, true, "diagnostics: the aura secrecy state is reported")
-    eq(d.size, 27, "diagnostics: the effective icon size is reported")
+    eq(d.size, 27, "diagnostics: the effective icon width is reported")
+    eq(d.height, 20, "diagnostics: the effective icon height is reported")
     eq(d.spacing, 3, "diagnostics: the effective spacing is reported")
     eq(d.grow, "right", "diagnostics: the effective grow direction is reported")
     eq(d.bar, true, "diagnostics: the top bar was resolved")
@@ -1446,14 +1465,14 @@ do
 
     for _, key in ipairs({
         "aura_icons_desc", "aura_icons_header", "aura_icons_enabled",
-        "aura_icons_show_debuffs", "aura_icons_size", "aura_icons_spacing",
-        "aura_icons_grow",
+        "aura_icons_show_debuffs", "aura_icons_size", "aura_icons_height",
+        "aura_icons_spacing", "aura_icons_grow",
     }) do
         check(args[key] ~= nil, "options: the '" .. key .. "' widget exists")
     end
 
     local widgets = { "aura_icons_enabled", "aura_icons_show_debuffs", "aura_icons_size",
-        "aura_icons_spacing", "aura_icons_grow" }
+        "aura_icons_height", "aura_icons_spacing", "aura_icons_grow" }
     for _, key in ipairs(widgets) do
         local widget = args[key]
         check(widget ~= nil and type(widget.hidden) == "function",
@@ -1470,6 +1489,10 @@ do
     eq(args.aura_icons_size.min, 12, "options: the size range starts at 12 px")
     eq(args.aura_icons_size.max, 48, "options: the size range ends at 48 px")
     eq(args.aura_icons_size.step, 1, "options: the size range steps by 1 px")
+    eq(args.aura_icons_height.type, "range", "options: the height widget is a range")
+    eq(args.aura_icons_height.min, 12, "options: the height range starts at 12 px")
+    eq(args.aura_icons_height.max, 48, "options: the height range ends at 48 px")
+    eq(args.aura_icons_height.step, 1, "options: the height range steps by 1 px")
     eq(args.aura_icons_spacing.min, 0, "options: the spacing range starts at 0 px")
     eq(args.aura_icons_spacing.max, 12, "options: the spacing range ends at 12 px")
     eq(args.aura_icons_grow.type, "select", "options: the grow widget is a select")
@@ -1497,7 +1520,8 @@ do
     -- Getters answer the shipped defaults through a nil class row.
     eq(args.aura_icons_enabled.get(), true, "options: enabled defaults on")
     eq(args.aura_icons_show_debuffs.get(), true, "options: show_debuffs defaults on")
-    eq(args.aura_icons_size.get(), 27, "options: size defaults to 27")
+    eq(args.aura_icons_size.get(), 27, "options: width defaults to 27")
+    eq(args.aura_icons_height.get(), 20, "options: height defaults to 20")
     eq(args.aura_icons_spacing.get(), 3, "options: spacing defaults to 3")
     eq(args.aura_icons_grow.get(), "right", "options: grow defaults to right")
 
@@ -1522,9 +1546,17 @@ do
     args.aura_icons_size.set(nil, 30)
     eq(h.class_db.aura_icons_size, 30, "options: the size setter writes the db key")
     eq(find_frame(h, "SwedgeTimerAuraIconsBuffs").layout_calls[1].options.elementWidth, 30,
-        "options: the size setter pushes the layout through apply_settings")
+        "options: the width setter pushes the layout through apply_settings")
+    eq(point_of(find_frame(h, "SwedgeTimerAuraIconsBuffs")).y, 42,
+        "options: a width setter does not move the band")
+
+    clear_calls(h)
+    args.aura_icons_height.set(nil, 30)
+    eq(h.class_db.aura_icons_height, 30, "options: the height setter writes the db key")
+    eq(find_frame(h, "SwedgeTimerAuraIconsBuffs").layout_calls[1].options.elementHeight, 30,
+        "options: the height setter pushes the layout through apply_settings")
     eq(point_of(find_frame(h, "SwedgeTimerAuraIconsBuffs")).y, 52,
-        "options: the size setter re-anchors the row immediately")
+        "options: the height setter re-anchors the row immediately")
 
     args.aura_icons_spacing.set(nil, 5)
     eq(h.class_db.aura_icons_spacing, 5, "options: the spacing setter writes the db key")
@@ -1565,7 +1597,8 @@ do
     check(type(defaults) == "table", "defaults: ST.class_defaults exists")
     eq(defaults.aura_icons_enabled, true, "defaults: the aura row ships ON for Forever")
     eq(defaults.aura_icons_show_debuffs, true, "defaults: the debuff row ships ON")
-    eq(defaults.aura_icons_size, 27, "defaults: the icon edge ships at 27 px")
+    eq(defaults.aura_icons_size, 27, "defaults: the icon width ships at 27 px")
+    eq(defaults.aura_icons_height, 20, "defaults: the icon height ships at 20 px")
     eq(defaults.aura_icons_spacing, 3, "defaults: the icon spacing ships at 3 px")
     eq(defaults.aura_icons_grow, "right", "defaults: the row grows right")
 
@@ -1575,7 +1608,9 @@ do
     eq(defaults.aura_icons_show_debuffs, h.A.DEFAULTS.show_debuffs,
         "defaults: config_presets and the module agree on show_debuffs")
     eq(defaults.aura_icons_size, h.A.DEFAULTS.size,
-        "defaults: config_presets and the module agree on size")
+        "defaults: config_presets and the module agree on width")
+    eq(defaults.aura_icons_height, h.A.DEFAULTS.height,
+        "defaults: config_presets and the module agree on height")
 
     -- A profile saved under the old 22 px default migrates once to the new 27 px edge.
     local mh = new_harness({})

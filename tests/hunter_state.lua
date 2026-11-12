@@ -300,6 +300,9 @@ local function build(opts)
         return value == sb.secret_marker
     end
     env.IsCurrentSpell = function(id)
+        if id == nil then
+            error("bad argument #1 to 'IsCurrentSpell' (a spell token is required)", 2)
+        end
         sb.is_current_spell_calls = sb.is_current_spell_calls + 1
         sb.is_current_spell_tokens[#sb.is_current_spell_tokens + 1] = id
         return id == sb.current_spell

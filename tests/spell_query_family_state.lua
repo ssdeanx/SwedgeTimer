@@ -233,8 +233,11 @@ local function hunter_profile(opts)
     -- BOTH probes are captured by compat.lua at load, so the recorders must be in
     -- place BEFORE the compat load (the shipped load order: compat first).
     env.IsCurrentSpell = function(token)
+        if token == nil then
+            error("bad argument #1 to 'IsCurrentSpell' (a spell token is required)", 2)
+        end
         tokens.current[#tokens.current + 1] = token
-        return token ~= nil and token == opts.current_spell
+        return token == opts.current_spell
     end
     env.IsSpellKnown = function(token)
         tokens.known[#tokens.known + 1] = token

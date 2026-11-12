@@ -140,7 +140,8 @@ ST.class_defaults = {
     -- pins the two sources against each other so they cannot drift.
     aura_icons_enabled = true, -- operator order 2026-11-08: the Forever row ships ON
     aura_icons_show_debuffs = true, -- own-caster target debuffs ("HARMFUL|PLAYER")
-    aura_icons_size = 27, -- square icon edge, px (operator +5 on 2026-11-09)
+    aura_icons_size = 27, -- icon WIDTH, px (operator +5 on 2026-11-09); height is separate
+    aura_icons_height = 20, -- icon HEIGHT, px (operator order 2026-11-12: 20h x 27w)
     aura_icons_spacing = 3, -- px between icons (reference elementSpacing = 3)
     aura_icons_grow = "right", -- "right" | "left": the row's internal growth direction
 

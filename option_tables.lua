@@ -258,7 +258,8 @@ function ST:aura_icon_options_args()
 
     local enabled_default = module_default("enabled", true)
     local debuffs_default = module_default("show_debuffs", true)
-    local size_default = module_default("size", 22)
+    local size_default = module_default("size", 27)
+    local height_default = module_default("height", 20)
     local spacing_default = module_default("spacing", 3)
     local grow_default = module_default("grow", "right")
 
@@ -326,8 +327,8 @@ function ST:aura_icon_options_args()
         aura_icons_size = {
             type = "range",
             order = 2.94,
-            name = "Icon size",
-            desc = "Edge length of one aura icon, in pixels.",
+            name = "Icon width",
+            desc = "Width of one aura icon, in pixels.",
             min = 12, max = 48, step = 1,
             get = function()
                 local class_db = class_row()
@@ -340,6 +341,27 @@ function ST:aura_icon_options_args()
                     return
                 end
                 class_db.aura_icons_size = tonumber(value) or size_default
+                apply()
+            end,
+            hidden = hidden,
+        },
+        aura_icons_height = {
+            type = "range",
+            order = 2.945,
+            name = "Icon height",
+            desc = "Height of one aura icon, in pixels.",
+            min = 12, max = 48, step = 1,
+            get = function()
+                local class_db = class_row()
+                local value = class_db and tonumber(class_db.aura_icons_height) or nil
+                return value or height_default
+            end,
+            set = function(_, value)
+                local class_db = class_row()
+                if class_db == nil then
+                    return
+                end
+                class_db.aura_icons_height = tonumber(value) or height_default
                 apply()
             end,
             hidden = hidden,

@@ -270,6 +270,9 @@ local function build(opts)
             entry.source, nil, nil, entry.spell_id
     end
     env.IsCurrentSpell = function(id)
+        if id == nil then
+            error("bad argument #1 to 'IsCurrentSpell' (a spell token is required)", 2)
+        end
         sb.is_current_spell_calls = sb.is_current_spell_calls + 1
         return id == sb.current_spell
     end

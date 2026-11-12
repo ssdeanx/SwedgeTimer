@@ -502,11 +502,13 @@ end
 -- form, but in cat / travel form UnitPower("player") is not rage at all, so the
 -- comparison is meaningless there and can only ever report "sufficient".
 local function update_rage_state(self, spell_id)
-    local ok, costs = pcall(api.GetSpellPowerCost, spell_id)
-    if not ok then
-        costs = nil
+    local costs
+    if spell_id then
+        local ok, result = pcall(api.GetSpellPowerCost, spell_id)
+        if ok then
+            costs = result
+        end
     end
-    costs = spell_id and costs or nil
     local rage_cost = rage_cost_of(costs)
     local power = api.UnitPower("player")
     -- No cost data (unlearned spell, client we cannot read) means we cannot claim the
@@ -694,7 +696,7 @@ function ST.DRUID.on_current_spell_cast_changed(self, is_cancelled)
         -- Name-vs-id: a single NAME probe covers all Maul ranks on TBC Anniversary
         -- and on Wrath/Titanforge (state queries take names there, one gate per
         -- family).
-        if api.IsCurrentSpell() == MAUL_NAME then
+        if api.IsCurrentSpell(MAUL_NAME) then
             self.maul_queued = true
             self:set_bar_color("mainhand")
             return
@@ -703,8 +705,8 @@ function ST.DRUID.on_current_spell_cast_changed(self, is_cancelled)
         return
     end
     for spell_id in pairs(maul_ids) do
-        local result = api.IsCurrentSpell()
-        if result == spell_id then
+        local result = api.IsCurrentSpell(spell_id)
+        if result then
             self.maul_queued = true
             self:set_bar_color("mainhand")
             return
