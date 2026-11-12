@@ -12,7 +12,8 @@ local addon_name, st = ...
 ---@field opts_funcs table
 ---@field set_adjusted_latencies fun(self: ST)
 ---@field set_gcd_times_before_swing_seconds fun(self: ST)
----@field iter_hands fun(self: ST):any
+---@field iter_hands fun(self: ST):fun():string
+---@field get_class_hands fun(self: ST):string[]
 ---@field generic_iter fun(self: ST, hands: any):any
 ---@field set_deadzone_width fun(self: ST, hand: any)
 ---@field set_gcd_marker_positions fun(self: ST, hand: any)
@@ -125,7 +126,7 @@ local function hud_slot_toggles_for(class_token, fallback)
         return fallback
     end
     local slots = fg.get_hud_slots(class_token or ST.player_class)
-    if type(slots) ~= "table" or #slots == 0 then
+    if type(slots) ~= "table" or #(slots or {}) == 0 then
         return fallback
     end
     local toggles = {}
@@ -2034,8 +2035,9 @@ ST.class_opts_funcs = {}
 function ST:generate_class_options_table()
     self:generate_class_getters_setters()
     -- Function to generate the per-class settings.
-    if ST.class_opts_funcs[self.player_class] then
-        local args = self.class_opts_funcs[self.player_class](self)
+    local class_opts_func = ST.class_opts_funcs[self.player_class]
+    if class_opts_func then
+        local args = class_opts_func(self)
         ST.opts_table.args.class = {
             name = string.format("%s Configuration", self.player_class_pretty),
             type = "group",
@@ -7565,12 +7567,12 @@ function ST:generate_bar_position_options_table()
         local g = {
             [hand .. "_header"] = {
                 type = "header",
-                order = 1.0 + offset,
+                order = 1.0 + (offset or 0),
                 name = name_pretty,
             },
             [hand .. "bar_width"] = {
                 type = "range",
-                order = 1.01 + offset,
+                order = 1.01 + (offset or 0),
                 name = "Width",
                 -- Honest per-hand width (operator order 2026-10-28: "off hand should always be
                 -- same width as main hand"; publish-audit E1). bars.lua's size invariant
@@ -7636,7 +7638,7 @@ function ST:generate_bar_position_options_table()
             },
             [hand .. "bar_height"] = {
                 type = "range",
-                order = 1.02 + offset,
+                order = 1.02 + (offset or 0),
                 name = "Height",
                 -- Honest per-hand height (operator order 2026-10-28; brief L3). Two rules
                 -- decide what this widget may show:
@@ -7704,7 +7706,7 @@ function ST:generate_bar_position_options_table()
             },
             [hand .. "_x"] = {
                 type = "range",
-                order = 1.1 + offset,
+                order = 1.1 + (offset or 0),
                 name = "x coord",
                 min = -2000, max = 2000, step = 1,
                 softMin = -1000, softMax = 1000,
@@ -7718,7 +7720,7 @@ function ST:generate_bar_position_options_table()
             },
             [hand .. "_y"] = {
                 type = "range",
-                order = 1.2 + offset,
+                order = 1.2 + (offset or 0),
                 name = "y coord",
                 min = -2000, max = 2000, step = 1,
                 softMin = -800, softMax = 800,
@@ -7732,7 +7734,7 @@ function ST:generate_bar_position_options_table()
             },
             [hand .. "_point"] = {
                 type = "select",
-                order = 1.3 + offset,
+                order = 1.3 + (offset or 0),
                 name = "Anchor Point",
                 desc = "The anchor point to the Parent UI.",
                 values = ST.valid_anchor_points,
@@ -7746,7 +7748,7 @@ function ST:generate_bar_position_options_table()
             },
             [hand .. "_scale"] = {
                 type = "range",
-                order = 1.4 + offset,
+                order = 1.4 + (offset or 0),
                 name = "Scale",
                 min = 0.1, max = 2.0, step = 0.01,
                 get = function()
@@ -7860,6 +7862,9 @@ end
 function ST:generate_hand_options_table(hand)
     -- Function to generate an options table for a hand object.
     local settings = ST.opts_case_dict[hand]
+    if not settings then
+        return
+    end
     local offset = settings.order_offset
     -- NOTE: no `title` local here: the group name comes from settings.panel_title
     -- below; settings.title has no other reader, so fetching it was dead.
@@ -8116,6 +8121,7 @@ function ST:generate_hand_options_table(hand)
         self.opts_table.args.multi_control.args[hand] = opts_group
     end
 end
+
 
 function ST:set_opts()
     -- Finally, a function to be run on init that will dynamically generate

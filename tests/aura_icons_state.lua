@@ -659,7 +659,8 @@ local function assert_happy_path(h, label)
         label .. ": the debuff row grows right/down")
     check(buffs.shown == true, label .. ": the buff row is shown out of combat with a visible bar")
     check(debuffs.shown == true, label .. ": the debuff row is shown out of combat with a visible bar")
-    eq(buffs.strata, "MEDIUM", label .. ": the container inherits the profile frame strata")
+    eq(buffs.calls.SetFrameStrata or 0, 0, label .. ": the container sets no explicit frame strata")
+    eq(buffs.strata, nil, label .. ": the container strata stays the client default")
     -- The placeholder size the client replaces through its own layout pass.
     eq(buffs.calls.SetSize or 0, 1, label .. ": the buff container is sized once at creation")
 end

@@ -34,6 +34,26 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 
 ---
 
+## 🚀 What's New in v2.2.0
+
+> [!IMPORTANT]
+> **<span style="color:#FFD700">Secret-Value Access Hardening & Release Refresh!</span>** SwedgeTimer v2.2.0 puts every client read that feeds a comparison, an arithmetic step, text formatting or a timer behind the client's own `canaccessvalue`/`canaccessallvalues` probes (cooldown start/duration, cast start/end, attack speeds, target name/GUID, the cast-bar key), nil-hardens the UI, practice and options paths, and moves the bar tick to an accumulated OnUpdate clock so a frame costs no repeated client clock call. The offline suite is refreshed for these contracts: **59 steps / 0 failed**.
+
+### 🔒 Secret-Value Access Hardening (v2.2.0)
+
+- 🛡️ **Probe before compare:** `compat.lua`, `hunter_ui.lua`, `enemy_swing.lua`, `forever_guide.lua`, `swing_source.lua`, `LibGlobalCooldown.lua` and the vendored swing library now call `canaccessvalue`/`canaccessallvalues` before touching a client-provided cooldown, cast, attack-speed, target-name/GUID or cast-bar key. A restricted read is treated as unknown instead of reaching arithmetic or a timer.
+- 🧱 **Nil-safe seams:** missing profile rows, hand tables, aura rows, option entries and guide inputs now return early across `aura_icons.lua`, `bars.lua`, `designmode.lua`, `diag.lua`, `main.lua`, `option_tables.lua`, `power_bar.lua`, the practice modules, `rogue_guide.lua`, `weave_range.lua` and `widgets.lua`.
+- 🎨 **Aura row strata:** native `AuraContainer` rows no longer set an explicit frame strata at creation; the client default applies.
+
+### ⏱️ Bar Tick & UI Polish (v2.2.0)
+
+- **Live tick clock:** `bars.lua` reads the client clock exactly once per tick and shares that reading with the no-cycle early-return paint and the timer text. The OnUpdate delta is deliberately **not** accumulated: a bar's OnUpdate pauses while its frame is hidden, so a cached clock resumes stale and the fill sits at zero until it replays the hidden gap. The install boundary in `main.lua` adapts the client's `(frame, elapsed)` call to the hand handler's `elapsed` argument. The fill-last and resize-repaint guarantees are unchanged.
+- **Design-mode reset:** the bar reset seam now targets the class defaults row and hands the live row to `LibWindow.RestorePosition`; option generation tolerates an unknown hand row and a nil order offset.
+
+### 🧪 Test Suite (v2.2.0)
+
+- **Client probes in every sandbox:** 27 suites now provide `canaccessvalue`/`canaccessallvalues` (secret-aware where restricted values are modelled), the strict `forever_guide.lua` allow-list includes `tonumber` and both probes, the `bars.lua` tick pins the cold/warm cached-clock reads, and the `aura_icons.lua`, `designmode.lua` and `main.lua` pins follow the current contracts.
+
 ## 🚀 What's New in v2.1.9
 
 > [!IMPORTANT]

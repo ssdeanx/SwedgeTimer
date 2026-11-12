@@ -107,6 +107,9 @@ _G.UIParent = make_frame("UIParent")
 _G.InCombatLockdown = function() return false end
 _G.UnitExists = function() return true end
 _G.UnitCanAttack = function() return true end
+-- WoW client secret-value access probes (the 2.2.0 hardening calls them directly).
+_G.canaccessvalue = function() return true end
+_G.canaccessallvalues = function() return true end
 
 local known_spells = {}
 local spell_cooldowns = {}

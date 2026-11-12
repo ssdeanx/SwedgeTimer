@@ -196,8 +196,9 @@ do
         local widget = AceGUI:Create("Dropdown")
 
         -- Left-align the selected text.
-        if widget.text then
-            widget.text:SetJustifyH("LEFT")
+        local w = widget --[[@as any]]
+        if w.text then
+            w.text:SetJustifyH("LEFT")
         end
 
         widget.type = widgetType

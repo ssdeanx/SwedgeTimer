@@ -266,6 +266,9 @@ end
 -- the frame to the anchor tick rather than going blank.
 local function ranged_tick_is_live()
     local frame = ui.ranged_frame
+    if not frame then
+        return false
+    end
     if not frame_visible(frame) then
         return false
     end
@@ -810,8 +813,10 @@ local function read_live_cast()
     -- the hidden window. The English fallback covers a cold cache the same way
     -- the reference's `or "Auto Shot"` does.
     local auto_name = ui.auto_shot_name or "Auto Shot"
-    if spell_id == AUTO_SHOT_ID or name == auto_name then
-        return nil
+    if canaccessallvalues(spell_id, name) then
+        if spell_id == AUTO_SHOT_ID or name == auto_name then
+            return nil
+        end
     end
     if type(cast_start) ~= "number" or type(cast_end) ~= "number" or cast_end <= cast_start then
         return nil
@@ -937,7 +942,7 @@ function ui.update_cast_bar(self, db, now)
     -- Progress through the active face, clamped like the reference before it is drawn.
     local duration, elapsed
     if mode == "cast" then
-        duration = cast_end - cast_start
+        duration = (cast_end or 0) - (cast_start or 0)
         -- Fill anchor on OUR clock. The cast's absolute start stamp sits on the client
         -- clock; when that axis sits at any offset from api.get_time(), now - cast_start
         -- is negative and the bar freezes at zero while the label sits on the full
@@ -946,13 +951,17 @@ function ui.update_cast_bar(self, db, now)
         -- elapsed the two clocks agree on, or starts now when they do not.
         local cast_key = tostring(cast_name) .. "|" .. tostring(cast_spell_id)
             .. "|" .. tostring(cast_end)
-        if ui.cast_key ~= cast_key then
-            ui.cast_key = cast_key
-            local stamped = now - cast_start
-            if type(stamped) == "number" and stamped > 0 and stamped <= duration then
-                ui.cast_anchor = now - stamped
-            else
-                ui.cast_anchor = now
+        if canaccessvalue(ui.cast_key) then
+            if canaccessvalue(cast_key) then
+                if ui.cast_key ~= cast_key then
+                    ui.cast_key = cast_key
+                    local stamped = now - cast_start
+                    if type(stamped) == "number" and stamped > 0 and stamped <= duration then
+                        ui.cast_anchor = now - stamped
+                    else
+                        ui.cast_anchor = now
+                    end
+                end
             end
         end
         elapsed = now - (ui.cast_anchor or now)
@@ -1445,7 +1454,7 @@ local function update_bw_badge()
     local remaining = api.scan_player_aura(function(spell_id, name)
         return spell_id == BW_SPELL_ID or (ui.bw_name ~= nil and name == ui.bw_name)
     end)
-    if type(remaining) ~= "number" or remaining <= 0 then
+    if type(remaining) ~= "number" or (remaining or 0) <= 0 then
         badge.glow:Hide()
         if badge:IsShown() then
             badge:Hide()

@@ -254,22 +254,27 @@ end
 local function read_equipped_speed(hand)
 	local speed
 	if type(UnitAttackSpeed) == "function" then
-		local ok, main_speed, off_speed, ranged_speed = pcall(UnitAttackSpeed, "player")
-		if ok then
-			if hand == "offhand" then
-				speed = off_speed
-			elseif hand == "ranged" then
-				speed = ranged_speed
-			else
-				speed = main_speed
-			end
+		local ok, speeds = pcall(function()
+		return { UnitAttackSpeed("player") }
+	end)
+	if ok and type(speeds) == "table" then
+		local main_speed, off_speed, ranged_speed = speeds[1], speeds[2], speeds[3]
+		if hand == "offhand" then
+			speed = off_speed
+		elseif hand == "ranged" then
+			speed = ranged_speed
+		else
+			speed = main_speed
 		end
 	end
-	if is_restricted(speed) or type(speed) ~= "number" or speed <= 0 then
-		if hand == "ranged" and type(UnitRangedDamage) == "function" then
-			local ok, damage = pcall(UnitRangedDamage, "player")
-			if ok then
-				speed = damage
+	end
+	if canaccessvalue(speed) then
+		if is_restricted(speed) or type(speed) ~= "number" or (speed or 0) <= 0 then
+			if hand == "ranged" and type(UnitRangedDamage) == "function" then
+				local ok, damage = pcall(UnitRangedDamage, "player")
+				if ok then
+					speed = damage
+				end
 			end
 		end
 	end
@@ -330,7 +335,11 @@ local function on_unit_attack_speed(unit)
 		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
 	end
-	local ok, main_speed, off_speed, ranged_speed = pcall(UnitAttackSpeed, "player")
+	local results = {pcall(UnitAttackSpeed, "player")}
+	local ok = results[1]
+	local main_speed = results[2]
+	local off_speed = results[3]
+	local ranged_speed = results[4]
 	if not ok then
 		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
@@ -350,7 +359,11 @@ local function on_unit_attack_speed(unit)
 		local new_speed = speeds[hand]
 		-- Only usable positive readings; a nil/zero read (weapon removed) leaves the
 		-- cycle to its scheduled stop.
-		if new_speed and new_speed > 0 and new_speed ~= cycle.speed then
+		local usable = type(new_speed) == "number"
+			and not is_secret(new_speed)
+			and canaccessvalue(new_speed)
+			and new_speed > 0
+		if usable and new_speed ~= cycle.speed then
 			-- Match the library's attack-speed rescale: the REMAINING time scales by
 			-- new/old instead of moving the whole cycle to the new absolute speed.
 			local t = now()
@@ -362,9 +375,9 @@ local function on_unit_attack_speed(unit)
 			cycle.speed = new_speed
 			cycle.expiration = t + remaining * (new_speed / old_speed)
 			callbacks:Fire("SWING_TIMER_UPDATE", cycle.speed, cycle.expiration, hand)
-		elseif not new_speed or new_speed <= 0 then
-			-- The read could not describe this hand (nil/zero): the cycle keeps its
-			-- schedule, and the keep is counted for /st diag (H5).
+		elseif not usable then
+			-- The read could not describe this hand (nil/zero/non-numeric): the cycle
+			-- keeps its schedule, and the keep is counted for /st diag (H5).
 			stats.speed_read_keeps = stats.speed_read_keeps + 1
 		end
 	end
@@ -385,7 +398,11 @@ local function on_weapon_slot_changed()
 		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
 	end
-	local ok, main_speed, off_speed, ranged_speed = pcall(UnitAttackSpeed, "player")
+	local results = {pcall(UnitAttackSpeed, "player")}
+	local ok = results[1]
+	local main_speed = results[2]
+	local off_speed = results[3]
+	local ranged_speed = results[4]
 	if not ok then
 		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
@@ -406,7 +423,7 @@ local function on_weapon_slot_changed()
 		local cycle = active_cycles[hand]
 		if cycle then
 			local new_speed = speeds[hand]
-			if new_speed and new_speed > 0 then
+			if type(new_speed) == "number" and new_speed > 0 then
 				-- Restart, not rescale: equipping a weapon resets the client's swing
 				-- cycle, so the bar must show a full cycle of the equipped speed.
 				local t = now()

@@ -221,10 +221,10 @@ function wr.range_state(distance, near_yards, far_yards)
     local yards = tonumber(distance)
     local near = tonumber(near_yards) or wr.NEAR_YARDS
     local far = tonumber(far_yards) or wr.FAR_YARDS
-    if yards <= near then
+    if (yards or 0) <= near then
         return "melee"
     end
-    if yards >= far then
+    if (yards or 0) >= far then
         return "out"
     end
     return "in_range"

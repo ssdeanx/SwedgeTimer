@@ -92,6 +92,18 @@ end
 -- Sandbox -------------------------------------------------------------------------------
 local env = {}
 for k, v in pairs(_G) do env[k] = v end
+-- WoW client secret-value access probes: the hardening calls these directly.
+env.canaccessvalue = function(value)
+    local probe = env.issecretvalue
+    return not (probe and probe(value))
+end
+env.canaccessallvalues = function(...)
+    local probe = env.issecretvalue
+    for i = 1, select("#", ...) do
+        if probe and probe((select(i, ...))) then return false end
+    end
+    return true
+end
 env.LibStub = function(major)
     if major == "CallbackHandler-1.0" then
         return { New = function(_, target) return registry end }

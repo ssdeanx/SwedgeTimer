@@ -715,7 +715,7 @@ local function bar_line(self, hand)
         gate_text(self, hand),
         yes_no(read(state, "has_activity")),
         window_text(self, hand),
-        window_left_text(state, window, now),
+        window_left_text(state, window, now --[[@as number]]),
         receipt_source_text(state, hand),
         number_text(alpha),
         yes_no(tick),
@@ -783,8 +783,8 @@ local function secrets_line()
     local parts = { "secrets api=yes" }
     for i = 1, #SECRET_PROBES do
         local probe = SECRET_PROBES[i]
-        parts[#parts + 1] = probe[1] .. "="
-            .. secret_probe_flag(c_secrets, probe[2], probe[3])
+        parts[#parts + 1] = (probe[1] --[[@as string]]) .. "="
+            .. secret_probe_flag(c_secrets, probe[2], probe[3] --[[@as table]])
     end
     return PREFIX .. " " .. table.concat(parts, " ")
 end
@@ -1184,7 +1184,11 @@ end
 
 local function error_lines()
     local ring = read(diag, "error_ring")
-    if type(ring) ~= "table" or #ring == 0 then
+    local ring_len = 0
+    if type(ring) == "table" then
+        ring_len = #ring
+    end
+    if ring_len == 0 then
         -- F1 (deep audit 2026-10-19): an empty ring means two different things and
         -- the report must say which one it is. With the chained handler installed,
         -- "none" means nothing threw; without it, nothing could have been observed
@@ -1195,7 +1199,10 @@ local function error_lines()
         return { PREFIX .. " errors not observed (no error handler installed)" }
     end
     local out = {}
-    for i = 1, #ring do
+    if type(ring) ~= "table" then
+        return out
+    end
+    for i = 1, ring_len do
         local msg = ring[i]
         if type(msg) ~= "string" then
             msg = "?"

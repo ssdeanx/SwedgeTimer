@@ -190,7 +190,7 @@ function st.practice.shorten_keybind(key)
     elseif base == "MOUSEWHEELDOWN" then
         base = "MD"
     elseif base:match("^BUTTON(%d)") then
-        base = "M" .. base:match("^BUTTON(%d)")
+        base = "M" .. (base:match("^BUTTON(%d)") or "")
     end
 
     local pad_map = {
@@ -1081,6 +1081,9 @@ end
 -- `elapsed` is accepted for call-site parity with the archive's frame delta but the
 -- simulation is driven by absolute `now` values. See the header for the out contract.
 function st.practice.tick(sim, now, elapsed, out)
+    -- `elapsed` is the frame delta; the simulation is driven by absolute `now`,
+    -- but it is retained (and validated) for call-site parity with the archive.
+    if type(elapsed) ~= "number" then elapsed = 0 end
     out.seal_faded = false
     out.buffs_changed = false
     out.bl_fired = false
@@ -1179,7 +1182,7 @@ function st.practice.tick(sim, now, elapsed, out)
             if sim.fight_active and not sim.attack_paused and st.practice.ABILITIES[queued] then
                 local fire = true
                 local ab = st.practice.ABILITIES[queued]
-                if ab.type == "ability" then
+                if ab and ab.type == "ability" then
                     local cd_key = queued .. "_cooldown_expires"
                     if sim[cd_key] and sim[cd_key] > now then
                         fire = false
@@ -1979,8 +1982,9 @@ function H.window_at(windows, t)
     if type(t) ~= "number" then
         return nil
     end
-    for i = 1, #(windows or {}) do
-        local w = windows[i]
+    local ws = windows or {}
+    for i = 1, #ws do
+        local w = ws[i]
         if w and w.start_time and w.end_time and t >= w.start_time and t < w.end_time then
             return w
         end
@@ -1993,8 +1997,9 @@ function H.next_window(windows, t)
     if type(t) ~= "number" then
         return nil
     end
-    for i = 1, #(windows or {}) do
-        local w = windows[i]
+    local ws = windows or {}
+    for i = 1, #ws do
+        local w = ws[i]
         if w and w.end_time and t < w.end_time then
             return w
         end
@@ -2025,15 +2030,20 @@ end
 
 -- Total seconds of [from, to] covered by windows. Windows are expected sorted by
 -- start_time; overlapping entries are merged so the span is counted once.
+--- Total seconds of [from, to] covered by windows.
+--- @param windows table|nil
+--- @param from number
+--- @param to number
+--- @return number
 function H.overlap_seconds(windows, from, to)
-    if type(from) ~= "number" or type(to) ~= "number" or to <= from then
+    if type(windows) ~= "table" or type(from) ~= "number" or type(to) ~= "number" or to <= from then
         return 0
     end
     local total = 0
     local cursor = from
-    for i = 1, #(windows or {}) do
+    for i = 1, #windows do
         local w = windows[i]
-        if w and w.start_time and w.end_time then
+        if type(w) == "table" and type(w.start_time) == "number" and type(w.end_time) == "number" then
             local s = math.max(w.start_time, cursor)
             local e = math.min(w.end_time, to)
             if e > s then

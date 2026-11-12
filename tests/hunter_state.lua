@@ -166,6 +166,18 @@ local function build(opts)
     }
 
     local env = setmetatable({}, { __index = _G })
+    -- WoW client secret-value access probes: the hardening calls these directly.
+    env.canaccessvalue = function(value)
+        local probe = env.issecretvalue
+        return not (probe and probe(value))
+    end
+    env.canaccessallvalues = function(...)
+        local probe = env.issecretvalue
+        for i = 1, select("#", ...) do
+            if probe and probe((select(i, ...))) then return false end
+        end
+        return true
+    end
     env.WOW_PROJECT_ID = opts.project or 11
     env.WOW_PROJECT_CLASSIC = 2
     env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5
@@ -2019,6 +2031,18 @@ do
         }
 
         local env = setmetatable({}, { __index = _G })
+    -- WoW client secret-value access probes: the hardening calls these directly.
+    env.canaccessvalue = function(value)
+        local probe = env.issecretvalue
+        return not (probe and probe(value))
+    end
+    env.canaccessallvalues = function(...)
+        local probe = env.issecretvalue
+        for i = 1, select("#", ...) do
+            if probe and probe((select(i, ...))) then return false end
+        end
+        return true
+    end
         env.WOW_PROJECT_ID = 11
         env.WOW_PROJECT_CLASSIC = 2
         env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5
@@ -3109,6 +3133,18 @@ do
     do
         local function real_engine()
             local env = setmetatable({}, { __index = _G })
+    -- WoW client secret-value access probes: the hardening calls these directly.
+    env.canaccessvalue = function(value)
+        local probe = env.issecretvalue
+        return not (probe and probe(value))
+    end
+    env.canaccessallvalues = function(...)
+        local probe = env.issecretvalue
+        for i = 1, select("#", ...) do
+            if probe and probe((select(i, ...))) then return false end
+        end
+        return true
+    end
             env._G = env
             env.strmatch = string.match
             local real_xpcall = xpcall

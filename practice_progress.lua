@@ -687,7 +687,15 @@ function P.record_attempt(progress, session, class_key, drill_id, grade, day)
     -- day; an earlier or the same day leaves the day's XP alone.
     local ordinal = day_ordinal(day)
     local stored = drill.daily_day
-    if ordinal ~= nil and (type(stored) ~= "number" or ordinal > stored) then
+    local rollover = false
+    if ordinal ~= nil then
+        if type(stored) ~= "number" then
+            rollover = true
+        elseif ordinal > stored then
+            rollover = true
+        end
+    end
+    if rollover then
         drill.daily_xp = 0
         drill.daily_day = ordinal
     end

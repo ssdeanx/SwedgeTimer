@@ -126,6 +126,18 @@ local function build(opts)
     }
 
     local env = setmetatable({}, { __index = _G })
+    -- WoW client secret-value access probes: the hardening calls these directly.
+    env.canaccessvalue = function(value)
+        local probe = env.issecretvalue
+        return not (probe and probe(value))
+    end
+    env.canaccessallvalues = function(...)
+        local probe = env.issecretvalue
+        for i = 1, select("#", ...) do
+            if probe and probe((select(i, ...))) then return false end
+        end
+        return true
+    end
     -- D1 TTD sampler reads target identity/health through compat (raw _G at load,
     -- like smoke.lua): mirror per-build stubs, restoring the previous build's
     -- first so sequential builds never leak into each other.

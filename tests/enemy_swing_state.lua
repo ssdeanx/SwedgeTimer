@@ -287,6 +287,18 @@ local function make_client(opts)
     c.mh_bar.frame_level = 5
 
     local env = setmetatable({}, { __index = _G })
+    -- WoW client secret-value access probes: the hardening calls these directly.
+    env.canaccessvalue = function(value)
+        local probe = env.issecretvalue
+        return not (probe and probe(value))
+    end
+    env.canaccessallvalues = function(...)
+        local probe = env.issecretvalue
+        for i = 1, select("#", ...) do
+            if probe and probe((select(i, ...))) then return false end
+        end
+        return true
+    end
     if opts.with_frames ~= false then
         env.CreateFrame = function(_, name, parent)
             local f = make_frame(name, parent)

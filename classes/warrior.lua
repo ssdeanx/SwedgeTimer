@@ -1376,7 +1376,11 @@ st.class_loaders["WARRIOR"] = function()
             for spell_id in pairs(hs_ids) do
                 -- Name-vs-id rule: the query is the localized name on TBC.
                 local query = spell_query(spell_id)
-                local result = query ~= nil and api.IsCurrentSpell(query)
+                local result = false
+                if query ~= nil then
+                    local ok, r = pcall(api.IsCurrentSpell, query)
+                    result = ok and r == true
+                end
                 if result then
                     -- print('matched HS id: '..tostring(spell_id))
                     self.hs_queued = true
@@ -4493,7 +4497,7 @@ st.class_loaders["WARRIOR"] = function()
             inputs[buff_name] = nil
             inputs[known_name] = nil
             inputs[rage_max_name] = nil
-            if line.engine ~= false and utility_family
+            if line and line.engine ~= false and utility_family
                 and ST.WARRIOR.utility_carries(line, utility_family, self) then
                 local id = line.ids and line.ids[utility_family] or line.id
                 if id then
@@ -5628,25 +5632,29 @@ st.class_loaders["WARRIOR"] = function()
         for i = 1, #WARRIOR_UTILITY.keys do
             local key = WARRIOR_UTILITY.keys[i]
             local line = WARRIOR_UTILITY[key]
-            local entry = {
-                action = key,
-                label = line.label,
-                reason = line.reason,
-                spell_name = line.spell_name,
-                families = line.families,
-                live = line.live,
-                engine = line.engine,
-                source = line.source,
-            }
-            if line.ids then
-                entry.spell_ids = line.ids
+            if not line then
+                -- skip missing utility entries
             else
-                entry.spell_id = line.id
+                local entry = {
+                    action = key,
+                    label = line.label,
+                    reason = line.reason,
+                    spell_name = line.spell_name,
+                    families = line.families,
+                    live = line.live,
+                    engine = line.engine,
+                    source = line.source,
+                }
+                if line.ids then
+                    entry.spell_ids = line.ids
+                else
+                    entry.spell_id = line.id
+                end
+                if line.needs then
+                    entry.needs = line.needs
+                end
+                rotation[#rotation + 1] = entry
             end
-            if line.needs then
-                entry.needs = line.needs
-            end
-            rotation[#rotation + 1] = entry
         end
         return rotation
     end

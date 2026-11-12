@@ -536,6 +536,18 @@ local function build(opts)
 
     local env = setmetatable({}, { __index = _G })
     env._G = env
+    -- WoW client secret-value access probes: the hardening calls these directly.
+    env.canaccessvalue = function(value)
+        local probe = env.issecretvalue
+        return not (probe and probe(value))
+    end
+    env.canaccessallvalues = function(...)
+        local probe = env.issecretvalue
+        for i = 1, select("#", ...) do
+            if probe and probe((select(i, ...))) then return false end
+        end
+        return true
+    end
     env.WOW_PROJECT_ID = sb.project
     env.WOW_PROJECT_CLASSIC = 2
     env.WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5
@@ -897,8 +909,10 @@ local function boot(opts)
     return b
 end
 
--- Drives the OnUpdate script bars.lua registered on the hand's bar frame, exactly as the
--- client does: script(frame, elapsed).
+-- Drives the installed OnUpdate script exactly as the client does: script(frame, elapsed).
+-- main.lua's install adapter forwards the elapsed to the hand's one-argument handler; the
+-- handler reads the live client clock inside the tick (bars.lua's A1), so the suite's
+-- scripted sb.clock is authoritative.
 local function tick(b, hand, elapsed)
     local frame = b.ST:get_bar_frame(hand)
     local script = frame and frame:GetScript("OnUpdate")
@@ -1102,7 +1116,10 @@ for i = 1, #CLASSES do
             end
             check(type(state.onupdate) == "function", spec.key .. " " .. hand .. ": onupdate exists")
             local script = b.ST:get_bar_frame(hand):GetScript("OnUpdate")
-            eq(script, state.onupdate, spec.key .. " " .. hand .. ": OnUpdate script is the hand's onupdate")
+            check(type(script) == "function",
+                spec.key .. " " .. hand .. ": the OnUpdate script is installed")
+            check(script ~= state.onupdate,
+                spec.key .. " " .. hand .. ": the client-signature adapter is installed")
         end
 
         -- The classes really loaded and their post_init ran through main.lua's post_init.
@@ -1223,7 +1240,8 @@ do
         T:PLAYER_EQUIPMENT_CHANGED("PLAYER_EQUIPMENT_CHANGED", 18, true)
         eq(T:bar_is_built("ranged"), true, cls .. ": the equip build point builds the enabled hand")
         local script = T:get_bar_frame("ranged"):GetScript("OnUpdate")
-        eq(script, T.ranged.onupdate, cls .. ": the built hand's tick is installed")
+        check(type(script) == "function" and script ~= T.ranged.onupdate,
+            cls .. ": the built hand's client-signature tick adapter is installed")
     end
 end
 
@@ -1518,8 +1536,8 @@ do
     -- ---- A1: the tick clock ----------------------------------------------------------
     -- The offhand tick is the clean probe: the LibDataBroker feed is mainhand-only and the
     -- warrior's class hook returns for the offhand, so every clock read in this tick comes
-    -- from the tick path itself. Before A1 a tick read the clock twice (onupdate_common +
-    -- set_bar_texts); after it reads once.
+    -- from the tick path itself. The tick reads the live clock exactly once; the no-cycle
+    -- early-return paint reuses that reading instead of re-reading.
     do
         local b = boot({ class = "WARRIOR" })
         local sb, ST = b.sb, b.ST
@@ -1550,6 +1568,23 @@ do
         eq(vf.right_text.text, "1.0", "text clock: set_bar_texts uses the clock it is given")
         eq(sb.time_precise_reads - reads_before, 0,
             "text clock: set_bar_texts does not re-read the clock when handed one")
+    end
+
+    -- ---- A1b: the tick never resumes on a stale cached clock --------------------------
+    -- OnUpdate pauses while the frame is hidden. The tick must read live absolute time on
+    -- resume: an accumulated delta would sit at zero until it replayed the hidden gap.
+    do
+        local b = boot({ class = "WARRIOR" })
+        local sb, ST = b.sb, b.ST
+        sb.clock = 10
+        start_swing(b, "offhand", 2.6, 2.6) -- ends at 12.6
+        sb.clock = 10.5
+        tick(b, "offhand")
+        -- 30 seconds pass with the bar hidden (no OnUpdate calls).
+        sb.clock = 40.5
+        tick(b, "offhand")
+        eq(ST.offhand.current_progress, 1,
+            "tick clock: a hidden gap resumes on the live clock (not a stale delta)")
     end
 
     -- ---- A2: the spark is a configured decoration ------------------------------------

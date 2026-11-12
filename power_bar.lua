@@ -241,7 +241,7 @@ local function usable_hand_frame(ST, hand)
     if frame == nil then
         return nil
     end
-    if type(ST.bar_is_enabled) == "function" and ST:bar_is_enabled(hand) ~= true then
+    if ST ~= nil and type(ST.bar_is_enabled) == "function" and ST:bar_is_enabled(hand) ~= true then
         return nil
     end
     return frame

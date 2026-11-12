@@ -395,7 +395,7 @@ function ST:saved_row_extent(hand)
         -- LibWindow restores a missing/garbage scale with the frame's own (1 at creation).
         scale = 1
     end
-    local row_height = height * scale
+    local row_height = height * (scale or 0)
     local vertical = nil
     if type(db.point) == "string" then
         vertical = db.point:match("^TOP") or db.point:match("^BOTTOM")
@@ -452,7 +452,7 @@ function ST:melee_reserved_band()
             end
         end
     end
-    return top, bottom - gap - power_height
+    return top, bottom - (gap or 0) - (power_height or 0)
 end
 
 -- Does a row (top, bottom) intersect a band (band_top, band_bottom)? Touching edges do not
@@ -1136,9 +1136,11 @@ function ST:onupdate_common(hand, elapsed)
     if type(d) ~= "table" then
         return
     end
-    -- One clock read for the whole tick. Everything below (the flash fade, the text
-    -- timers) and every paint path that formats a timer uses this reading; a second
-    -- st.api.get_time() per tick costs a second pair of client clock calls (A1).
+    -- One live clock read for the whole tick (A1). Do NOT accumulate the OnUpdate delta:
+    -- a bar's OnUpdate pauses while its frame is hidden (and across loading screens), so a
+    -- cached delta resumes stale and the fill sits at zero until it replays the hidden
+    -- gap. Absolute client time is the only correct source; the read is shared by the
+    -- flash fade, the text timers and every paint path in this tick.
     local t = st.api.get_time()
     local db = self:get_hand_table(hand)
     if type(db) ~= "table" then
@@ -1203,11 +1205,12 @@ function ST:onupdate_common(hand, elapsed)
                 frame.spark:SetSize(spark_w, spark_h)
                 frame.spark:ClearAllPoints()
                 frame.spark:SetPoint("CENTER", frame.bar, "RIGHT", 0, 0)
-                local sr, sg, sb, sa
+                local sr, sg, sb, sa = 1, 1, 1, 1
                 if type(sc) == "table" then
+                    -- select(1, ...) presents convert_color's returns as varargs, matching
+                    -- the file's existing colour call sites (the linter reads the cross-
+                    -- module definition as a single return).
                     sr, sg, sb, sa = self:convert_color(sc)
-                else
-                    sr, sg, sb, sa = 1, 1, 1, 1
                 end
                 frame.spark:SetVertexColor(sr, sg, sb, sa)
                 d.spark_deco_applied = true
@@ -1237,7 +1240,7 @@ function ST:onupdate_common(hand, elapsed)
             local alpha_pct = 1 - (flash_elapsed / dur)
             local fc = db.flash_color or {255, 255, 255, 0.6}
             local fr, fg, fb, fa = self:convert_color(fc)
-            frame.flash:SetVertexColor(fr, fg, fb, fa * alpha_pct)
+            frame.flash:SetVertexColor(fr or 1, fg or 1, fb or 1, (fa or 1) * alpha_pct)
         end
     end
 

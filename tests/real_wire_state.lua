@@ -236,6 +236,18 @@ local function build(opts)
 
     local env = setmetatable({}, { __index = _G })
     env._G = env -- this client's globals table: LibStub instances stay per-sandbox
+    -- WoW client secret-value access probes: the hardening calls these directly.
+    env.canaccessvalue = function(value)
+        local probe = env.issecretvalue
+        return not (probe and probe(value))
+    end
+    env.canaccessallvalues = function(...)
+        local probe = env.issecretvalue
+        for i = 1, select("#", ...) do
+            if probe and probe((select(i, ...))) then return false end
+        end
+        return true
+    end
     env.strmatch = string.match -- WoW client global LibStub.lua needs
     -- The WoW client forwards xpcall's trailing arguments to the called function;
     -- stock Lua 5.1 drops them (verified nargs=0). The shipped AceAddon-3.0,

@@ -323,8 +323,10 @@ function lib:UNIT_SPELLCAST_INTERRUPTED()
         -- warning - that this must not become the only release path once the GCD works -
         -- is honoured by the object channel, which releases from the plain GCD state.
         local duration_reported = select(2, GetSpellCooldown(gcd_probe_spell_id))
-        if duration_reported == 0 then
-            self:release_gcd_lock()
+        if canaccessvalue(duration_reported) then
+            if duration_reported == 0 then
+                self:release_gcd_lock()
+            end
         end
     end
 end

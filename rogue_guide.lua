@@ -1079,7 +1079,10 @@ function st.rogue_guide.ea_wait_verdict(family, args, band, ea_window)
     if not is_num(energy) then
         return nil
     end
-    if type(band) ~= "table" or not is_num(band.post) then
+    if type(band) ~= "table" then
+        return nil
+    end
+    if not is_num(band.post) then
         return nil
     end
     if energy >= band.post then
@@ -1788,7 +1791,7 @@ function st.rogue_guide.evaluate(inputs, out)
             action = forever_opener
         elseif not ea_wait_hold and not ea_lockout
             and inputs.snd_known ~= false
-            and not (is_num(ttd) and ttd <= min_ttd)
+            and not (is_num(ttd) and ttd <= (min_ttd or 0))
             and st.rogue_guide.snd_verdict(env_family, inputs) ~= nil then
             -- 1b. SnD upkeep before every spender (slot-less until icons land).
             -- SoD rides the SOD rows (4+CP, <=1 s) through the latch.
@@ -1797,7 +1800,7 @@ function st.rogue_guide.evaluate(inputs, out)
             -- the 1a hold and to the Forever lockout (both sim-literal).
             action = "snd"
         elseif not ea_wait_hold and not ea_lockout
-            and not (is_num(ttd) and ttd <= min_ttd)
+            and not (is_num(ttd) and ttd <= (min_ttd or 0))
             and st.rogue_guide.hfb_verdict(family, inputs) ~= nil then
             -- 1c. Hunger for Blood upkeep (Wrath sin, the wotlk APL's <= 1 s
             -- refresh). Slot-less like snd/ar/bf/coldblood: the slot contract
@@ -1840,17 +1843,17 @@ function st.rogue_guide.evaluate(inputs, out)
             -- casts it (i=19) before its Rupture row (i=20).
             action = "venom"
         elseif not ea_wait_hold and not ea_lockout
-            and is_num(ttd) and ttd <= min_ttd and is_num(cp) and cp >= dump_cp then
+            and is_num(ttd) and ttd <= (min_ttd or 0) and is_num(cp) and cp >= (dump_cp or 0) then
             -- 4. Dying-target dump (per-family CP floor: ERA any-CP, TBC 5CP,
             -- WRATH 4CP, FOREVER 3CP).
             action = "eviscerate"
         elseif not ea_wait_hold and not ea_lockout
-            and is_num(cp) and cp >= min_cp then
+            and is_num(cp) and cp >= (min_cp or 0) then
             -- 5. Planned finisher: ERA Eviscerate-first (E-C1), rupture-first
             -- elsewhere via the TTD decider (unknown TTD yields nil and falls
             -- through - never a guessed finisher).
             if finisher_mode == "eviscerate" then
-                if is_num(ttd) and ttd > min_ttd then
+                if is_num(ttd) and ttd > (min_ttd or 0) then
                     action = "eviscerate"
                 end
             else
@@ -2569,13 +2572,15 @@ function st.rogue_guide.grade_opener(ctx)
             end
         end
     end
-    if not prepull and is_num(now) and pull_at > now
-        and guide.PREPULL_FAMILIES[guide.get_practice_family(ctx)]
-        and guide.practice_flag(ctx, "ar_ready") == true then
+    if not prepull and is_num(now) and pull_at > now then
+        local family = guide.get_practice_family(ctx)
+        if type(family) == "string" and guide.PREPULL_FAMILIES[family]
+            and guide.practice_flag(ctx, "ar_ready") == true then
         -- The sim's prepull cooldown (the TBC Adrenaline Rush at -1 s).
         expected = "ar"
         prepull = true
         prepull_at = -guide.PREPULL_LEAD_SECONDS
+        end
     end
     if type(expected) ~= "string" or expected == "" then
         return nil

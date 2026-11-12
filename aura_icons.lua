@@ -941,6 +941,9 @@ end
 
 local function group_options(row_key, list)
 	local row = A.ROWS[row_key]
+	if row == nil then
+		return nil
+	end
 	local size = current_icon_size()
 	local spacing = current_spacing()
 	local candidate_filters = { includeSpellIDs = A.spell_set(list) }
@@ -987,6 +990,10 @@ end
 
 local function set_shown(row_key, want)
 	local state = A.state.rows[row_key]
+	if state == nil then
+		A.state.shown[row_key] = false
+		return true
+	end
 	local container = state.container
 	if container == nil then
 		A.state.shown[row_key] = false
@@ -1029,8 +1036,9 @@ local function sync_layout(ST)
 	for index = 1, #ROW_KEYS do
 		local key = ROW_KEYS[index]
 		local container = A.state.rows[key].container
-		if container ~= nil then
-			local ok_layout = pcall(container.SetAuraGroupLayout, container, A.ROWS[key].group, {
+		local row = A.ROWS[key]
+		if container ~= nil and row ~= nil and row.group ~= nil then
+			local ok_layout = pcall(container.SetAuraGroupLayout, container, row.group, {
 				elementWidth = size,
 				elementHeight = size,
 				elementSpacing = spacing,
@@ -1040,7 +1048,7 @@ local function sync_layout(ST)
 				ok_all = apply_flow(container, grow) and ok_all
 			end
 			if size_changed then
-				ok_all = resize_group_frames(container, A.ROWS[key].group, size) and ok_all
+				ok_all = resize_group_frames(container, row.group, size) and ok_all
 			end
 		end
 	end
@@ -1086,8 +1094,14 @@ end
 -- Row construction (resumable: a failed attempt retries the same frame, never a latch)
 --=========================================================================================
 local function build_row(ST, row_key)
-	local row = A.ROWS[row_key]
-	local state = A.state.rows[row_key]
+	local row = A.ROWS and A.ROWS[row_key] or nil
+	if type(row) ~= "table" then
+		return true, false, false
+	end
+	local state = A.state.rows and A.state.rows[row_key] or nil
+	if type(state) ~= "table" then
+		return true, false, false
+	end
 	local list = A.state.lists and A.state.lists[row_key] or nil
 	if type(list) ~= "table" or #list == 0 then
 		return true, false, false
@@ -1101,7 +1115,6 @@ local function build_row(ST, row_key)
 		local ok_setup = pcall(function()
 			container:SetSize(1, 1)
 			container:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
-			container:SetFrameStrata(strata_for(ST))
 			container:SetUnit(row.unit)
 		end)
 		if not ok_setup then

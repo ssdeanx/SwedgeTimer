@@ -982,7 +982,11 @@ function ST.HUNTER.suppress_shot_melee_reset(self)
         return
     end
     local unit = swing_player_unit()
-    if type(unit) ~= "table" or unit.casting ~= true then
+    if type(unit) ~= "table" then
+        return
+    end
+    ---@cast unit table
+    if unit.casting ~= true then
         return
     end
     ST.HUNTER.arm_shot_melee_reset_guard(self, unit, unit.lastCastSpellId, unit.lastCastName)
@@ -1243,9 +1247,9 @@ function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
     -- Only run the raptor logic if special on-next-attack colors are enabled in
     -- the hunter settings.
     if db.enable_raptor_strike_color then
+        local current_spell = api.IsCurrentSpell()
         for _, token in ipairs(queue_tokens(raptor_strike_ids)) do
-            local result = api.IsCurrentSpell(token)
-            if result then
+            if current_spell == token then
                 self.raptor_strike_queued = true
                 self:set_bar_color("mainhand")
                 return
@@ -1267,9 +1271,9 @@ function ST.HUNTER.on_current_spell_cast_changed(self, is_cancelled)
     -- also counts as queued. The rank ids still need in-client confirmation: an id
     -- missing from the table is simply never detected, so the feature stays inert.
     if db.enable_steady_shot_color then
+        local current_spell = api.IsCurrentSpell()
         for _, token in ipairs(queue_tokens(steady_shot_ids)) do
-            local result = api.IsCurrentSpell(token)
-            if result then
+            if current_spell == token then
                 self.steady_shot_queued = true
                 self:set_bar_color("mainhand")
                 return

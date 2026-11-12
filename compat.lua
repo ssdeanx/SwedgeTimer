@@ -507,16 +507,22 @@ function api.GetSpellCooldown(spell, fallback_id)
 		end
 	end
 	local start_time, duration, enabled, mod_rate, restricted = raw_query_spell_cooldown(spell)
-	if duration and duration > 0 then
-		return start_time, duration, enabled, mod_rate
+	if canaccessvalue(duration) then
+		if duration and duration > 0 then
+			return start_time, duration, enabled, mod_rate
+		end
 	end
 	if fallback_id and fallback_id ~= spell then
 		local fb_s, fb_d, fb_e, fb_m, fb_restricted = raw_query_spell_cooldown(fallback_id)
-		if fb_d and fb_d > 0 then
-			return fb_s, fb_d, fb_e, fb_m
+		if canaccessvalue(fb_d) then
+			if fb_d and fb_d > 0 then
+				return fb_s, fb_d, fb_e, fb_m
+			end
 		end
-		if start_time == 0 and fb_s and fb_s > 0 then
-			return fb_s, fb_d, fb_e, fb_m
+		if canaccessallvalues(start_time, fb_s) then
+			if start_time == 0 and fb_s and fb_s > 0 then
+				return fb_s, fb_d, fb_e, fb_m
+			end
 		end
 		if restricted then
 			-- Only a restricted primary defers to the fallback's verdict: a readable
@@ -549,6 +555,9 @@ function api.get_cooldown_remaining(spell, fallback_id)
 	local now = api.get_time()
 	if type(now) ~= "number" then
 		return nil, nil, false
+	end
+	if not (canaccessvalue and canaccessvalue(start_time)) or not (canaccessvalue and canaccessvalue(duration)) or not (canaccessvalue and canaccessvalue(now)) then
+		return nil, nil, true
 	end
 	local remaining = start_time + duration - now
 	if remaining < 0 then
@@ -729,7 +738,10 @@ function api.create_duration_text_color_curve(warn_seconds, warn_color, normal_c
 	end
 	local enum = rawget(_G, "Enum")
 	local property = enum and enum.DurationTextBindingProperty
-	if type(property) ~= "table" or property.RemainingDuration == nil then
+	if type(property) ~= "table" then
+		return nil, nil
+	end
+	if rawget(property, "RemainingDuration") == nil then
 		return nil, nil
 	end
 	local function plain_color(color)
@@ -1345,11 +1357,15 @@ function api.UnitCastingSpell(unit)
 	end
 	local start_seconds
 	if type(start_ms) == "number" then
-		start_seconds = start_ms / 1000
+		if canaccessvalue(start_ms) then
+			start_seconds = start_ms / 1000
+		end
 	end
 	local end_seconds
 	if type(end_ms) == "number" then
-		end_seconds = end_ms / 1000
+		if canaccessvalue(end_ms) then
+			end_seconds = end_ms / 1000
+		end
 	end
 	return name, spell_id, start_seconds, end_seconds
 end
@@ -1462,13 +1478,13 @@ end
 
 if UnitAttackSpeed then
 	api.UnitAttackSpeed = function(unit)
-		local main_speed, off_speed, ranged_speed = UnitAttackSpeed(unit)
+		local main_speed, off_speed = UnitAttackSpeed(unit)
 		-- Any restricted speed fails the whole read (nil): an unknown read must never be
 		-- mistaken for a weapon reading either way.
-		if is_secret(main_speed) or is_secret(off_speed) or is_secret(ranged_speed) then
+		if is_secret(main_speed) or is_secret(off_speed) then
 			return nil
 		end
-		return main_speed, off_speed, ranged_speed
+		return main_speed, off_speed
 	end
 else
 	api.UnitAttackSpeed = function()
@@ -1644,7 +1660,7 @@ local function position_distance(unit)
 		local ok_cid, cid = pcall(unit_creature_id, unit)
 		if ok_cid and finite_number(cid) and cid > 0 then
 			local ok_pos, _, _, dist = pcall(closest_unit_position, cid)
-			if ok_pos and finite_number(dist) and dist >= 0 then
+			if ok_pos and type(dist) == "number" and finite_number(dist) then
 				return dist
 			end
 		end

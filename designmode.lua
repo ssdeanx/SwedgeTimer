@@ -207,7 +207,7 @@ local function move_centre(frame, x, y)
         s = 1
     end
     frame:ClearAllPoints()
-    frame:SetPoint("CENTER", UIParent, "CENTER", x / s, y / s)
+    frame:SetPoint("CENTER", UIParent, "CENTER", (x or 0) / s, (y or 0) / s)
 end
 
 --=========================================================================================
@@ -489,6 +489,7 @@ local function make_overlay(i)
     o:RegisterForClicks("LeftButtonUp")
     o:SetScript("OnEnter", function(self)
         overlay_paint(self, true)
+        ---@cast self any
         local d = self.desc
         if d then
             GameTooltip:SetOwner(self, "ANCHOR_TOP")
@@ -510,6 +511,7 @@ local function make_overlay(i)
         GameTooltip:Hide()
     end)
     o:SetScript("OnDragStart", function(self)
+        ---@cast self any
         if DM.is_locked() then return end -- frozen: visible, but not draggable
         local d, f = self.desc, self.target
         if not (d and f) then return end
@@ -528,6 +530,7 @@ local function make_overlay(i)
         drag_tick(self)
     end)
     o:SetScript("OnDragStop", function(self)
+        ---@cast self any
         if not self.dragging then return end
         self.dragging = nil
         self:SetScript("OnUpdate", nil)
@@ -710,7 +713,8 @@ local function bar_descriptor(hand)
         title = HAND_TITLES[hand] or (hand .. " bar"),
         get_frame = function()
             if not ST.interfaces_are_initialised then return nil end
-            return ST:get_anchor_frame(hand)
+            local hand_tbl = ST[hand]
+            return hand_tbl and hand_tbl.anchor_frame
         end,
         save = function(x, y)
             local frame = ST[hand] and ST[hand].anchor_frame
@@ -723,9 +727,10 @@ local function bar_descriptor(hand)
         reset = function()
             local frame = ST[hand] and ST[hand].anchor_frame
             if not frame then return end
-            local hand_db = ST:get_hand_table(hand)
+            local cls = ST.defaults and ST.defaults.profile and ST.defaults.profile[ST.player_class]
+            local hand_db = cls and cls[hand]
             -- No hand row means no stored position to reset (the frame can only
-            -- exist for a hand that was configured, but the accessor's nil
+            -- exist for a hand that was configured, but the lookup's nil
             -- contract is explicit: reset nothing rather than throw).
             if type(hand_db) ~= "table" then return end
             hand_db.x = hand_default(hand, "x")

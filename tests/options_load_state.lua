@@ -2971,7 +2971,7 @@ do
     -- (b2) Each moved widget keeps its live consumer (source pins; the consumer
     -- files are out of this lane, so the pins cite file:line, not behaviour).
     local main_src = read_source_17("main.lua")
-    check(main_src:find("db_class.timers_locked", 1, true) ~= nil,
+    check(main_src:find("(db_class or {}).timers_locked", 1, true) ~= nil,
         "ONBYDEFAULT: main.lua reads timers_locked (lock consumer cited)")
     check(main_src:find("handle_bar_visibility", 1, true) ~= nil,
         "ONBYDEFAULT: main.lua reads handle_bar_visibility (visibility consumer cited)")

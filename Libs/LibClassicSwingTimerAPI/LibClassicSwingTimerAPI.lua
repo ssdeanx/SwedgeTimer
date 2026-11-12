@@ -112,8 +112,10 @@ function Unit:new(obj)
 end
 
 function Unit:CalculateDelta()
-	if self.offSpeed > 0 and self.mainExpirationTime ~= nil and self.offExpirationTime ~= nil then
-		self.callbacks:Fire("UNIT_SWING_TIMER_DELTA", self.id, self.mainExpirationTime - self.offExpirationTime)
+	if canaccessvalue(self.offSpeed) then
+		if self.offSpeed > 0 and self.mainExpirationTime ~= nil and self.offExpirationTime ~= nil then
+			self.callbacks:Fire("UNIT_SWING_TIMER_DELTA", self.id, self.mainExpirationTime - self.offExpirationTime)
+		end
 	end
 end
 
@@ -126,14 +128,18 @@ function Unit:SwingStart(hand, startTime, isReset)
 			end
 		end
 		self.lastMainSwing = startTime
-		local mainSpeed, _ = UnitAttackSpeed(self.id)
+		local mainSpeed, _ = UnitAttackSpeed(self.id --[[@as string]])
 		self.mainSpeed = mainSpeed
-		self.mainExpirationTime = self.lastMainSwing + self.mainSpeed
+		if canaccessvalue(self.mainSpeed) then
+			self.mainExpirationTime = self.lastMainSwing + self.mainSpeed
+		end
 		self.callbacks:Fire("UNIT_SWING_TIMER_START", self.id, self.mainSpeed, self.mainExpirationTime, hand)
-		if self.mainSpeed > 0 and self.mainExpirationTime - GetTime() > 0 then
-			self.mainTimer = C_Timer.NewTimer(self.mainExpirationTime - GetTime(), function()
-				self:SwingEnd("mainhand")
-			end)
+		if canaccessvalue(self.mainSpeed) then
+			if self.mainSpeed > 0 and self.mainExpirationTime - GetTime() > 0 then
+				self.mainTimer = C_Timer.NewTimer(self.mainExpirationTime - GetTime(), function()
+					self:SwingEnd("mainhand")
+				end)
+			end
 		end
 	elseif hand == "offhand" then
 		if self.offTimer and not self.offTimer:IsCancelled() then
@@ -143,29 +149,35 @@ function Unit:SwingStart(hand, startTime, isReset)
 			end
 		end
 		self.lastOffSwing = startTime
-		local _, offSpeed = UnitAttackSpeed(self.id)
+		local _, offSpeed = UnitAttackSpeed(self.id --[[@as string]])
 		if (self.id == "target" and not self.isPlayer) then
 			offSpeed = UnitAttackSpeed(self.id)
 		end
 		self.offSpeed = offSpeed or 0
-		self.offExpirationTime = self.lastOffSwing + self.offSpeed
+		if canaccessvalue(self.offSpeed) then
+			self.offExpirationTime = self.lastOffSwing + self.offSpeed
+		end
 		if self.calculaDeltaTimer then
 			self.calculaDeltaTimer:Cancel()
 		end
-		if self.offSpeed > 0 and self.firstOffSwing == false and self.isAttacking then
-			self.offExpirationTime = self.lastOffSwing + (self.offSpeed / 2)
-			self:CalculateDelta()
-			self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", self.id, self.offSpeed, self.offExpirationTime, hand)
-		elseif self.offSpeed > 0 then
-			self.callbacks:Fire("UNIT_SWING_TIMER_START", self.id, self.offSpeed, self.offExpirationTime, hand)
-			self.calculaDeltaTimer = C_Timer.NewTimer(self.offSpeed / 2, function()
+		if canaccessvalue(self.offSpeed) then
+			if self.offSpeed > 0 and self.firstOffSwing == false and self.isAttacking then
+				self.offExpirationTime = self.lastOffSwing + (self.offSpeed / 2)
 				self:CalculateDelta()
-			end)
+				self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", self.id, self.offSpeed, self.offExpirationTime, hand)
+			elseif self.offSpeed > 0 then
+				self.callbacks:Fire("UNIT_SWING_TIMER_START", self.id, self.offSpeed, self.offExpirationTime, hand)
+				self.calculaDeltaTimer = C_Timer.NewTimer(self.offSpeed / 2, function()
+					self:CalculateDelta()
+				end)
+			end
 		end
-		if self.offSpeed > 0 and self.offExpirationTime - GetTime() > 0 then
-			self.offTimer = C_Timer.NewTimer(self.offExpirationTime - GetTime(), function()
-				self:SwingEnd("offhand")
-			end)
+		if canaccessvalue(self.offSpeed) then
+			if self.offSpeed > 0 and self.offExpirationTime - GetTime() > 0 then
+				self.offTimer = C_Timer.NewTimer(self.offExpirationTime - GetTime(), function()
+					self:SwingEnd("offhand")
+				end)
+			end
 		end
 	elseif hand == "ranged" then
 		if self.rangedTimer and not self.rangedTimer:IsCancelled() then
@@ -175,15 +187,17 @@ function Unit:SwingStart(hand, startTime, isReset)
 			end
 		end
 		self.rangedSpeed = UnitRangedDamage("player") or 0
-		if self.rangedSpeed ~= nil and self.rangedSpeed > 0 then
-			self.lastRangedSwing = startTime
-			self.rangedExpirationTime = self.lastRangedSwing + self.rangedSpeed
-			self.autoShotCastTime = 0.52 * (self.rangedSpeed / self.rangedBaseSpeed)
-			self.callbacks:Fire("UNIT_SWING_TIMER_START", self.id, self.rangedSpeed, self.rangedExpirationTime, hand)
-			if self.rangedExpirationTime - GetTime() > 0 then
-				self.rangedTimer = C_Timer.NewTimer(self.rangedExpirationTime - GetTime(), function()
-					self:SwingEnd("ranged")
-				end)
+		if canaccessvalue(self.rangedSpeed) then
+			if self.rangedSpeed ~= nil and self.rangedSpeed > 0 then
+				self.lastRangedSwing = startTime
+				self.rangedExpirationTime = self.lastRangedSwing + self.rangedSpeed
+				self.autoShotCastTime = 0.52 * (self.rangedSpeed / self.rangedBaseSpeed)
+				self.callbacks:Fire("UNIT_SWING_TIMER_START", self.id, self.rangedSpeed, self.rangedExpirationTime, hand)
+				if self.rangedExpirationTime - GetTime() > 0 then
+					self.rangedTimer = C_Timer.NewTimer(self.rangedExpirationTime - GetTime(), function()
+						self:SwingEnd("ranged")
+					end)
+				end
 			end
 		end
 	end
@@ -489,53 +503,59 @@ function lib:UNIT_ATTACK_SPEED(_, unitGUID)
 		offSpeedNew = mainSpeedNew
 	end
 	offSpeedNew = offSpeedNew or 0
-	if mainSpeedNew > 0 and unit.mainSpeed > 0 and mainSpeedNew ~= unit.mainSpeed then
-		if unit.mainTimer then
-			unit.mainTimer:Cancel()
-		end
-		local multiplier = mainSpeedNew / unit.mainSpeed
-		local timeLeft = (unit.lastMainSwing + unit.mainSpeed - now) * multiplier
-		unit.mainSpeed = mainSpeedNew
-		unit.mainExpirationTime = now + timeLeft
-		self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", unit.id, unit.mainSpeed, unit.mainExpirationTime, "mainhand")
-		if unit.mainSpeed > 0 and unit.mainExpirationTime - GetTime() > 0 then
-			unit.mainTimer = C_Timer.NewTimer(unit.mainExpirationTime - GetTime(), function()
-				unit:SwingEnd("mainhand")
-			end)
+	if canaccessvalue(mainSpeedNew) then
+		if mainSpeedNew > 0 and unit.mainSpeed > 0 and mainSpeedNew ~= unit.mainSpeed then
+			if unit.mainTimer then
+				unit.mainTimer:Cancel()
+			end
+			local multiplier = mainSpeedNew / unit.mainSpeed
+			local timeLeft = (unit.lastMainSwing + unit.mainSpeed - now) * multiplier
+			unit.mainSpeed = mainSpeedNew
+			unit.mainExpirationTime = now + timeLeft
+			self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", unit.id, unit.mainSpeed, unit.mainExpirationTime, "mainhand")
+			if unit.mainSpeed > 0 and unit.mainExpirationTime - GetTime() > 0 then
+				unit.mainTimer = C_Timer.NewTimer(unit.mainExpirationTime - GetTime(), function()
+					unit:SwingEnd("mainhand")
+				end)
+			end
 		end
 	end
-	if offSpeedNew > 0 and unit.offSpeed > 0 and offSpeedNew ~= unit.offSpeed then
-		if unit.offTimer then
-			unit.offTimer:Cancel()
-		end
-		local multiplier = offSpeedNew / unit.offSpeed
-		local timeLeft = (unit.lastOffSwing + unit.offSpeed - now) * multiplier
-		unit.offSpeed = offSpeedNew
-		unit.offExpirationTime = now + timeLeft
-		if unit.calculaDeltaTimer ~= nil then
-			unit.calculaDeltaTimer:Cancel()
-		end
-		self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", unit.id, unit.offSpeed, unit.offExpirationTime, "offhand")
-		if unit.offSpeed > 0 and unit.offExpirationTime - GetTime() > 0 then
-			unit.offTimer = C_Timer.NewTimer(unit.offExpirationTime - GetTime(), function()
-				unit:SwingEnd("offhand")
-			end)
+	if canaccessvalue(offSpeedNew) then
+		if offSpeedNew > 0 and unit.offSpeed > 0 and offSpeedNew ~= unit.offSpeed then
+			if unit.offTimer then
+				unit.offTimer:Cancel()
+			end
+			local multiplier = offSpeedNew / unit.offSpeed
+			local timeLeft = (unit.lastOffSwing + unit.offSpeed - now) * multiplier
+			unit.offSpeed = offSpeedNew
+			unit.offExpirationTime = now + timeLeft
+			if unit.calculaDeltaTimer ~= nil then
+				unit.calculaDeltaTimer:Cancel()
+			end
+			self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", unit.id, unit.offSpeed, unit.offExpirationTime, "offhand")
+			if unit.offSpeed > 0 and unit.offExpirationTime - GetTime() > 0 then
+				unit.offTimer = C_Timer.NewTimer(unit.offExpirationTime - GetTime(), function()
+					unit:SwingEnd("offhand")
+				end)
+			end
 		end
 	end
 	local rangedSpeedNew = UnitRangedDamage("player") or 0
-	if rangedSpeedNew > 0 and unit.rangedSpeed > 0 and rangedSpeedNew ~= unit.rangedSpeed then
-		if unit.rangedTimer then
-			unit.rangedTimer:Cancel()
-		end
-		local multiplier = rangedSpeedNew / unit.rangedSpeed
-		local timeLeft = (unit.lastRangedSwing + unit.rangedSpeed - now) * multiplier
-		unit.rangedSpeed = rangedSpeedNew
-		unit.rangedExpirationTime = now + timeLeft
-		self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", unit.id, unit.rangedSpeed, unit.rangedExpirationTime, "ranged")
-		if unit.rangedSpeed > 0 and unit.rangedExpirationTime - GetTime() > 0 then
-			unit.rangedTimer = C_Timer.NewTimer(unit.rangedExpirationTime - GetTime(), function()
-				unit:SwingEnd("ranged")
-			end)
+	if canaccessvalue(rangedSpeedNew) then
+		if rangedSpeedNew > 0 and unit.rangedSpeed > 0 and rangedSpeedNew ~= unit.rangedSpeed then
+			if unit.rangedTimer then
+				unit.rangedTimer:Cancel()
+			end
+			local multiplier = rangedSpeedNew / unit.rangedSpeed
+			local timeLeft = (unit.lastRangedSwing + unit.rangedSpeed - now) * multiplier
+			unit.rangedSpeed = rangedSpeedNew
+			unit.rangedExpirationTime = now + timeLeft
+			self.callbacks:Fire("UNIT_SWING_TIMER_UPDATE", unit.id, unit.rangedSpeed, unit.rangedExpirationTime, "ranged")
+			if unit.rangedSpeed > 0 and unit.rangedExpirationTime - GetTime() > 0 then
+				unit.rangedTimer = C_Timer.NewTimer(unit.rangedExpirationTime - GetTime(), function()
+					unit:SwingEnd("ranged")
+				end)
+			end
 		end
 	end
 end

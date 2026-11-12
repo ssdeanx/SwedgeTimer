@@ -21,9 +21,13 @@ local function is_ready(cd, spell_name)
             local sp_def = FG.SPELLS_BY_NAME and FG.SPELLS_BY_NAME[spell_name]
             local query = (sp_def and sp_def.id) or spell_name
             local ok, start, duration = pcall(api.GetSpellCooldown, query)
-            if ok and start and duration and duration > 1.51 and start > 0 then
-                local now = api.get_time and api.get_time() or 0
-                return (start + duration - now) <= 0
+            if canaccessallvalues(duration, start) then
+                local dur_n = tonumber(duration)
+                local start_n = tonumber(start)
+                if ok and start_n and dur_n and dur_n > 1.51 and start_n > 0 then
+                    local now = api.get_time and api.get_time() or 0
+                    return (start_n + dur_n - now) <= 0
+                end
             end
             return true
         end
@@ -477,20 +481,24 @@ function FG.get_hud_state(class, self, slot, now)
     local restricted, _
     if api.GetSpellCooldown then
         start, duration, _, _, restricted = api.GetSpellCooldown(spell_query)
-        if (not start or duration == 0) and slot.spell then
-            local fb_restricted
-            start, duration, _, _, fb_restricted = api.GetSpellCooldown(slot.spell)
-            -- This slot's own spell id is the final answer for the slot: a readable
-            -- fallback (zeros included) means the timing IS known, so its verdict
-            -- replaces the name query's flag instead of only ever setting it.
-            if restricted then
-                restricted = fb_restricted == true
+        if canaccessvalue(duration) then
+            if (not start or duration == 0) and slot.spell then
+                local fb_restricted
+                start, duration, _, _, fb_restricted = api.GetSpellCooldown(slot.spell)
+                -- This slot's own spell id is the final answer for the slot: a readable
+                -- fallback (zeros included) means the timing IS known, so its verdict
+                -- replaces the name query's flag instead of only ever setting it.
+                if restricted then
+                    restricted = fb_restricted == true
+                end
             end
         end
-        if start and duration and duration > 0 and start > 0 then
-            rem = (start + duration) - now
-            if rem < 0 then rem = 0 end
-            dur = duration
+        if canaccessallvalues(duration, start) then
+            if start and duration and duration > 0 and start > 0 then
+                rem = (start + duration) - now
+                if rem < 0 then rem = 0 end
+                dur = duration
+            end
         end
     end
     -- A restricted read with no readable duration is unknown, not ready: rem/dur stay
@@ -522,11 +530,13 @@ function FG.get_hud_state(class, self, slot, now)
         elseif api.GetSpellCooldown then
             local g_probe = (st and st.gcd_probe_spell_id) or 61304
             local g_start, g_dur = api.GetSpellCooldown(g_probe)
-            if g_start and g_dur and g_dur > 0 and g_dur <= 1.51 and g_start > 0 then
-                local g_rem = (g_start + g_dur) - now
-                if g_rem > 0 then
-                    rem = g_rem
-                    dur = g_dur
+            if canaccessallvalues(g_dur, g_start) then
+                if g_start and g_dur and g_dur > 0 and g_dur <= 1.51 and g_start > 0 then
+                    local g_rem = (g_start + g_dur) - now
+                    if g_rem > 0 then
+                        rem = g_rem
+                        dur = g_dur
+                    end
                 end
             end
         end
@@ -1481,11 +1491,13 @@ local function live_cooldown(spell_name)
     if not ok or type(start) ~= "number" or type(duration) ~= "number" then
         return nil
     end
-    if duration > 1.51 and start > 0 then
-        local now = api.get_time and api.get_time() or 0
-        local remaining = start + duration - now
-        if remaining > 0 then
-            return remaining
+    if canaccessallvalues(duration, start) then
+        if duration > 1.51 and start > 0 then
+            local now = api.get_time and api.get_time() or 0
+            local remaining = start + duration - now
+            if remaining > 0 then
+                return remaining
+            end
         end
     end
     return 0

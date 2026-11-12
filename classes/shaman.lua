@@ -1808,6 +1808,7 @@ end
 -- audit 2026-10-19 §5): every strip/badge/wash/hold read shares it, so the visuals
 -- and the guide rule can never disagree about when the ICD clears.
 local function windfury_window()
+	if not (st.weave and st.weave.get_windfury_icd_seconds) then return nil end
 	return st.weave.get_windfury_icd_seconds(st.family)
 end
 
@@ -1825,22 +1826,43 @@ local function update_windfury_icd(self, vf, d, db, now, h)
 		fill:Hide()
 		return
 	end
-	local remaining = st.weave.get_windfury_icd_remaining(d.start, now, windfury_window())
+	local weave = st.weave
+	if type(weave) ~= "table"
+		or type(weave.get_windfury_icd_remaining) ~= "function"
+		or type(weave.clamp_fraction) ~= "function" then
+		bg:Hide()
+		fill:Hide()
+		return
+	end
+	local window = windfury_window()
+	if not window then
+		bg:Hide()
+		fill:Hide()
+		return
+	end
+	if type(d) ~= "table" then
+		bg:Hide()
+		fill:Hide()
+		return
+	end
+	local remaining = weave.get_windfury_icd_remaining(d.start, now, window)
 	if not remaining then
 		bg:Hide()
 		fill:Hide()
 		return
 	end
-	local fraction = st.weave.clamp_fraction(remaining / windfury_window())
+	local fraction = weave.clamp_fraction(remaining / window)
 	bg:SetWidth(WEAVE_WINDFURY_STRIP_WIDTH)
 	bg:SetHeight(h)
 	fill:SetWidth(WEAVE_WINDFURY_STRIP_WIDTH * fraction)
 	fill:SetHeight(h)
-	local bucket = st.weave.get_windfury_tint_bucket(remaining)
+	local bucket = weave.get_windfury_tint_bucket(remaining)
 	if self.weave_windfury_bucket ~= bucket then
 		self.weave_windfury_bucket = bucket
-		local color = WEAVE_WINDFURY_COLORS[bucket]
-		fill:SetVertexColor(color[1], color[2], color[3], color[4])
+		local color = WEAVE_WINDFURY_COLORS and WEAVE_WINDFURY_COLORS[bucket]
+		if color then
+			fill:SetVertexColor(color[1], color[2], color[3], color[4])
+		end
 	end
 	bg:Show()
 	fill:Show()
@@ -2495,7 +2517,7 @@ local function update_spell_positions(self, vf, db, now, d, w)
 				local state = st.weave.get_spell_position_state(stacks, now_fraction, safe_start)
 				count = count + 1
 				starts[count] = safe_start
-				local color = get_position_color(state, key)
+				local color = get_position_color(state, key) or { 1, 1, 1, 1 }
 				icon:ClearAllPoints()
 				icon:SetPoint("CENTER", vf, "TOPLEFT", safe_start * w, center_y)
 				-- Cached per slot: the per-tick path re-sets only what changed, so a
@@ -4332,7 +4354,11 @@ function ST.SHAMAN.new_practice_session(now, opts)
 				if type(drill_key) ~= "string" or drill_key == "" then
 					return nil
 				end
-				local ctx = H.drill_context(sess.state, event_now, event_key)
+				local sess_state = sess and sess.state
+				if not sess_state then
+					return nil
+				end
+				local ctx = H.drill_context(sess_state, event_now, event_key)
 				return H.practice_drill_grade(ST.SHAMAN, drill_key, ST, ctx)
 			end,
 			-- The weave drill keeps no tick of its own (the swing clock is
@@ -4392,7 +4418,7 @@ function ST.SHAMAN.practice_cast(session, swing, now, key)
 	-- The class's own drill grades the weave decision: the session's state carries
 	-- the swing the drill reads (the drill measures the clip itself), and the pick
 	-- under test is the weave. The retired built-in's model never grades here.
-	local state = session.state
+	local state = session and session.state
 	if type(state) == "table" then
 		state.swing_duration = duration
 		state.swing_remaining = nil

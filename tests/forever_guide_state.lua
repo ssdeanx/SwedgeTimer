@@ -29,6 +29,10 @@ env.pcall = pcall
 env.string = string
 env.select = select
 env.setmetatable = setmetatable
+env.tonumber = tonumber
+-- WoW client secret-value access probes (the 2.2.0 hardening calls them directly).
+env.canaccessvalue = function() return true end
+env.canaccessallvalues = function() return true end
 
 local chunk, err = loadfile(ROOT .. "forever_guide.lua")
 if not chunk then error("could not load forever_guide.lua: " .. tostring(err)) end

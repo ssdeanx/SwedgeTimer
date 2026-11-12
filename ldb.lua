@@ -31,6 +31,12 @@
 -- cross-client API is called outside compat.
 --=========================================================================================
 local addon_name, st = ...
+---@class SwedgeTimer
+---@field get_class_table fun(self: SwedgeTimer): table
+---@field set_bar_visibilities fun(self: SwedgeTimer)
+---@field db table
+---@field interfaces_are_initialised boolean
+---@field options_table_name string
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 -- Cross-client API wrappers (see compat.lua).
 local api = st.api

@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.1.9"
+local version = "2.2.0"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -16,6 +16,7 @@ local STL = LibStub("LibClassicSwingTimerAPI", true)
 -- TOC line. A tagged stub is NOT an engine - treat it as absent so the client selects
 -- its own path below.
 if STL ~= nil and STL.__st_gate_stub == true then
+	---@cast STL any
 	STL = nil
 end
 -- WoW Forever has no classic combat log but exposes PLAYER_SWING, so swing_source.lua
@@ -333,13 +334,14 @@ function ST:show_bar(hand)
 	local db_class = self:get_class_table()
 	-- HU-22 lazy bars: an unbuilt hand behaves exactly like a disabled bar -
 	-- nothing to show (its gate failed, so the check below would hide it).
-	if self:get_bar_frame(hand) == nil then
+	local bar_frame = self:get_bar_frame(hand)
+	if bar_frame == nil then
 		return
 	end
 	if self:check_bar_enable_settings(db_class, hand) then
 		if self.player_class == "DRUID" then
 			if self.should_show_bar_this_form then
-				self:get_bar_frame(hand):Show()
+				bar_frame:Show()
 				local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
 				if hiding_anchor_frame ~= nil then
 					hiding_anchor_frame:Show()
@@ -356,18 +358,18 @@ function ST:show_bar(hand)
 				self:note_hand_hide_reason(hand, "spec")
 				self:hide_bar(hand)
 			else
-				self:get_bar_frame(hand):Show()
+				bar_frame:Show()
 				local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
 				if hiding_anchor_frame ~= nil then
 					hiding_anchor_frame:Show()
 				end
 			end
 		else
-			self:get_bar_frame(hand):Show()
-			local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
-			if hiding_anchor_frame ~= nil then
-				hiding_anchor_frame:Show()
-			end
+				bar_frame:Show()
+				local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
+				if hiding_anchor_frame ~= nil then
+					hiding_anchor_frame:Show()
+				end
 		end
 	else
 		-- check_bar_enable_settings refused after the poll above already cleared the class
@@ -499,6 +501,7 @@ function ST:OnInitialize()
 		self:init_libs()
 	end
 	)
+	---@cast STL any
 	STL.RegisterCallback(self, "SWING_TIMER_INFO_INITIALIZED", function()
 		self.stl_ready = true
 		-- D8 rewire (2026-10-22): the init deadline below may have substituted
@@ -952,7 +955,12 @@ function ST:bring_up_hand(hand)
 	if st.diag and st.diag.wrap_onupdate then
 		onupdate = st.diag.wrap_onupdate(self, hand, onupdate)
 	end
-	bar_frame:SetScript("OnUpdate", onupdate)
+	-- The client invokes frame scripts as (frame, elapsed); the hand handlers take the
+	-- elapsed only, so adapt once here at the install boundary (diag's wrapper keeps the
+	-- same one-argument contract).
+	bar_frame:SetScript("OnUpdate", function(_, elapsed)
+		onupdate(elapsed)
+	end)
 	return true
 end
 
@@ -1128,7 +1136,7 @@ function ST:post_init()
 	-- timers_locked = true): keep the frames locked rather than invent an
 	-- unlocked state the user never chose.
 	local db_class = self:get_class_table()
-	if type(db_class) ~= "table" or db_class.timers_locked then
+	if type(db_class) ~= "table" or (db_class or {}).timers_locked then
 		self:lock_frames()
 	else
 		self:unlock_frames()
@@ -1301,7 +1309,13 @@ function ST:apply_parry_haste()
 	end
 	local speed = bar.speed
 	local ends_at = bar.ends_at
-	if type(speed) ~= "number" or speed <= 0 or type(ends_at) ~= "number" then
+	if type(speed) ~= "number" then
+		return
+	end
+	if speed <= 0 then
+		return
+	end
+	if type(ends_at) ~= "number" then
 		return
 	end
 	local get_time = api and api.get_time
@@ -2260,7 +2274,7 @@ function ST:swing_player_unit()
 	if type(cached) == "table" then
 		return cached
 	end
-	if type(STL) ~= "table" or type(STL.getUnit) ~= "function" then
+	if STL == nil or type(STL) ~= "table" or type(STL.getUnit) ~= "function" then
 		return nil
 	end
 	local ok, unit = pcall(STL.getUnit, STL, "player")
@@ -2303,6 +2317,9 @@ function ST:arm_ranged_shot_reset_guard_tick()
 		return false
 	end
 	local unit = self:swing_player_unit()
+	if unit == nil then
+		return false
+	end
 	if type(unit) ~= "table" or unit.casting ~= true then
 		return false
 	end
@@ -2328,7 +2345,7 @@ local function restart_swing_for_reset(self, hand, now)
 			speed = mh_speed
 		end
 	end
-	if type(speed) ~= "number" or speed <= 0 then
+	if type(speed) ~= "number" or (speed or 0) <= 0 then
 		return
 	end
 	if bar.is_full_timer ~= nil then
@@ -2472,10 +2489,10 @@ function ST:maybe_drive_ranged_fallback(spell_id)
 		return
 	end
 	local speed = api.UnitRangedDamage("player")
-	if type(speed) ~= "number" or speed <= 0 then
+	if type(speed) ~= "number" or (speed or 0) <= 0 then
 		speed = ranged.synced_duration
 	end
-	if type(speed) ~= "number" or speed <= 0 then
+	if type(speed) ~= "number" or (speed or 0) <= 0 then
 		return
 	end
 	local stamp = self.ranged_engine_stamp
@@ -3278,7 +3295,10 @@ end
 -- that function's own branches (missing row / hand toggle / missing weapon).
 function ST:hand_disabled_reason(hand)
 	local db = self:get_hand_table(hand)
-	if type(db) ~= "table" or not db.enabled then
+	if type(db) ~= "table" then
+		return "off"
+	end
+	if not db.enabled then
 		return "off"
 	end
 	local state = self[hand]
@@ -3515,7 +3535,7 @@ function ST:open_menu(input)
 		if st.designmode then
 			-- Never in combat: design mode refuses under lockdown itself (no protected
 			-- calls anywhere in its path).
-			st.designmode.toggle(self)
+			st.designmode.toggle()
 		else
 			self:Print("Design mode is not available on this client.")
 		end

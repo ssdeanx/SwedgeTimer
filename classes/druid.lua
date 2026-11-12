@@ -502,7 +502,11 @@ end
 -- form, but in cat / travel form UnitPower("player") is not rage at all, so the
 -- comparison is meaningless there and can only ever report "sufficient".
 local function update_rage_state(self, spell_id)
-    local costs = spell_id and api.GetSpellPowerCost(spell_id)
+    local ok, costs = pcall(api.GetSpellPowerCost, spell_id)
+    if not ok then
+        costs = nil
+    end
+    costs = spell_id and costs or nil
     local rage_cost = rage_cost_of(costs)
     local power = api.UnitPower("player")
     -- No cost data (unlearned spell, client we cannot read) means we cannot claim the
@@ -690,7 +694,7 @@ function ST.DRUID.on_current_spell_cast_changed(self, is_cancelled)
         -- Name-vs-id: a single NAME probe covers all Maul ranks on TBC Anniversary
         -- and on Wrath/Titanforge (state queries take names there, one gate per
         -- family).
-        if api.IsCurrentSpell(MAUL_NAME) then
+        if api.IsCurrentSpell() == MAUL_NAME then
             self.maul_queued = true
             self:set_bar_color("mainhand")
             return
@@ -699,8 +703,8 @@ function ST.DRUID.on_current_spell_cast_changed(self, is_cancelled)
         return
     end
     for spell_id in pairs(maul_ids) do
-        local result = api.IsCurrentSpell(spell_id)
-        if result then
+        local result = api.IsCurrentSpell()
+        if result == spell_id then
             self.maul_queued = true
             self:set_bar_color("mainhand")
             return
@@ -3584,14 +3588,27 @@ end
 local function druid_grade_drill(session, now, last_action)
     local pr = st.practice
     local H = pr and pr.harness
-    if not (session and H and H.drill_context and H.practice_drill_grade) then
+    if not session then
+        return nil
+    end
+    if not H then
+        return nil
+    end
+    if not H.drill_context then
+        return nil
+    end
+    if not H.practice_drill_grade then
         return nil
     end
     local key = session.key
     if type(key) ~= "string" or key == "" then
         return nil
     end
-    local ctx = H.drill_context(session.state, now, last_action)
+    local state = session.state
+    if type(state) ~= "table" then
+        return nil
+    end
+    local ctx = H.drill_context(state, now, last_action)
     return H.practice_drill_grade(ST.DRUID, key, ST, ctx)
 end
 
@@ -3601,7 +3618,7 @@ end
 local function druid_apply_shift(session)
     local pr = st.practice
     local H = pr and pr.harness
-    if not (session and H) then
+    if type(session) ~= "table" or not H then
         return
     end
     local state = session.state
@@ -4170,10 +4187,15 @@ function ST.DRUID.practice_rotation_for(family)
     if type(want) ~= "string" then
         want = druid_rotation_family()
     end
+    if type(want) ~= "string" then
+        return out
+    end
     for i = 1, #ST.DRUID.practice_rotation do
         local entry = ST.DRUID.practice_rotation[i]
         local families = entry.families
-        if entry.family == want
+        -- Citation-only rows (live=false/engine=false, e.g. bloodlust, claw) intentionally
+        -- join this slice for citation purposes; panel-facing sets filter on engine==true.
+        if (entry.family ~= nil and entry.family == want)
             or (type(families) == "table" and families[want] == true) then
             out[#out + 1] = entry
         end
@@ -5057,7 +5079,10 @@ function ST.DRUID.practice_rotation_action_set()
     end
     for i = 1, #entries do
         local entry = entries[i]
-        if type(entry) == "table" and type(entry.action) == "string" and entry.action ~= "" then
+        -- Citation-only rows (live=false/engine=false, e.g. bloodlust, claw) are
+        -- excluded from the offer gate: a druid cannot cast them / has no read.
+        if type(entry) == "table" and type(entry.action) == "string" and entry.action ~= ""
+            and entry.engine == true then
             out[entry.action] = true
         end
     end

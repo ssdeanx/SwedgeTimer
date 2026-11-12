@@ -1132,20 +1132,27 @@ do
     hand_db.x, hand_db.y, hand_db.point = 99, -99, "TOPLEFT"
     local o = overlay_for(F, "Mainhand bar")
     o:GetScript("OnDoubleClick")(o)
-    eq(hand_db.x, 11, "reset (bar): the class hand default is restored (x)")
-    eq(hand_db.y, -22, "reset (bar): the class hand default is restored (y)")
-    eq(hand_db.point, "TOPRIGHT", "reset (bar): the anchor point default is restored")
+    -- The reset seam targets the class defaults row (designmode.lua hand_default's own
+    -- source); the live profile row is handed to LibWindow.RestorePosition, which is
+    -- what re-applies it to the frame.
+    local default_db = b.ST.defaults.profile.PALADIN.mainhand
+    eq(default_db.x, 11, "reset (bar): the class defaults row keeps x")
+    eq(default_db.y, -22, "reset (bar): the class defaults row keeps y")
+    eq(default_db.point, "TOPRIGHT", "reset (bar): the class defaults row keeps the point")
+    eq(hand_db.x, 99, "reset (bar): the live profile row is left to LibWindow")
     eq(#F.lwin_restored, 1, "reset (bar): LibWindow.RestorePosition runs on the frame")
     eq(F.lwin_restored[1], F.element.bar_mainhand, "reset (bar): ...on the element's anchor frame")
 
-    -- The offhand falls back to the `**` shared defaults (no offhand override).
+    -- A hand with no class default row (offhand only has the `**` shared row) has no
+    -- stored default: the reset returns before LibWindow and leaves the live row alone.
     local off_db = F.hand_dbs.offhand
     off_db.x, off_db.y, off_db.point = 1, 2, "TOP"
     local oo = overlay_for(F, "Offhand bar")
     oo:GetScript("OnDoubleClick")(oo)
-    eq(off_db.x, 5, "reset (offhand): the `**` shared default is restored (x)")
-    eq(off_db.y, -5, "reset (offhand): the `**` shared default is restored (y)")
-    eq(off_db.point, "CENTER", "reset (offhand): a missing point falls back to CENTER")
+    eq(off_db.x, 1, "reset (offhand): no class default row leaves the live x alone")
+    eq(off_db.y, 2, "reset (offhand): no class default row leaves the live y alone")
+    eq(off_db.point, "TOP", "reset (offhand): no class default row leaves the live point alone")
+    eq(#F.lwin_restored, 1, "reset (offhand): no restore without a class default row")
 
     -- The HUD reset reads the class-level default and re-applies.
     local hud_apply = F.hud_apply

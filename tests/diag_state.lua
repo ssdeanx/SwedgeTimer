@@ -1093,7 +1093,7 @@ do
         "main.lua's OnUpdate hook line gates the counting wrapper on st.diag")
     check(main:find('st.diag.wrap_onupdate(self, hand, onupdate)', 1, true) ~= nil,
         "main.lua passes the addon self, the hand and the original to wrap_onupdate")
-    check(main:find('SetScript("OnUpdate", onupdate)', 1, true) ~= nil,
+    check(main:find('SetScript("OnUpdate", function(_, elapsed)', 1, true) ~= nil,
         "main.lua installs the (possibly counted) onupdate as the bar frame's script")
     -- F1: the error-handler chain has one installer and one remover, both in main.lua.
     check(main:find("st.diag.install_error_handler()", 1, true) ~= nil,

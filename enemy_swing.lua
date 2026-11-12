@@ -265,7 +265,13 @@ end
 -- order), so nothing may be cached at file scope. nil on any client where the AceAddon
 -- registry is not up yet - every caller then degrades to "off" instead of erroring.
 local function get_addon()
-    local ace_addon = LibStub and LibStub("AceAddon-3.0", true)
+    if type(LibStub) ~= "function" then
+        return nil
+    end
+    local ace_addon = LibStub("AceAddon-3.0", true)
+    if ace_addon == nil then
+        return nil
+    end
     if type(ace_addon) ~= "table" or type(ace_addon.GetAddon) ~= "function" then
         return nil
     end
@@ -316,8 +322,10 @@ local function read_target()
     if type(UnitName) == "function" then
         name = UnitName("target")
     end
-    if type(name) ~= "string" or name == "" then
-        name = nil
+    if canaccessvalue(name) then
+        if type(name) ~= "string" or name == "" then
+            name = nil
+        end
     end
     return guid, name
 end
@@ -327,11 +335,15 @@ end
 -- the name (reference RefreshEnemyTarget, SuperSwingTimer_State.lua:521-564).
 function enemy_swing.refresh_target()
     local guid, name = read_target()
-    if guid == runtime.tracked_guid then
-        if name ~= nil then
-            runtime.tracked_name = name
+    if canaccessvalue(guid) then
+        if canaccessvalue(runtime.tracked_guid) then
+            if guid == runtime.tracked_guid then
+                if name ~= nil then
+                    runtime.tracked_name = name
+                end
+                return false
+            end
         end
-        return false
     end
     runtime.tracked_guid = guid
     runtime.tracked_name = name

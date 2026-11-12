@@ -678,7 +678,10 @@ end
 -- keeps the guide slot vocabulary.
 local function practice_rotation_entries()
     local module = practice_class_module()
-    if type(module) ~= "table" or type(module.practice_rotation_for) ~= "function" then
+    if type(module) ~= "table" then
+        return nil
+    end
+    if type(module.practice_rotation_for) ~= "function" then
         return nil
     end
     -- The call is argument-free on purpose: the class picks its own slice (the
@@ -710,7 +713,10 @@ end
 -- which rotation the scenario is grading against.
 local function practice_rotation_family()
     local module = practice_class_module()
-    if type(module) ~= "table" or type(module.practice_rotation_family) ~= "function" then
+    if type(module) ~= "table" then
+        return nil
+    end
+    if type(module.practice_rotation_family) ~= "function" then
         return nil
     end
     local ok, family = pcall(function() return module.practice_rotation_family() end)
@@ -888,8 +894,8 @@ function ui.practice_start_drill(self, now)
     -- The panel order must resolve key-for-key (unknown-hide in build): a drill
     -- whose icons cannot resolve refuses to start (fail-loud) rather than
     -- running a session whose casts never score.
-    local order = ui.practice_class_order()
-    if type(order) ~= "table" or #order == 0 then
+    local order = ui.practice_class_order() or {}
+    if #order == 0 then
         return false
     end
     for i = 1, #order do
@@ -1233,10 +1239,10 @@ function ui.ensure_progress_profile(self)
         ui.announce_not_persistable(self)
         return ui.progress_profile
     end
-    if type(migrated.progress) ~= "table" then
+    if type(migrated) == "table" and type(migrated.progress) ~= "table" then
         migrated.progress = P.new_state()
     end
-    if type(migrated.stats) ~= "table" then
+    if type(migrated) == "table" and type(migrated.stats) ~= "table" then
         migrated.stats = S.new_state()
     end
     -- REPLACE the profile key with the repaired blob: the AceDB default table is
@@ -1340,7 +1346,7 @@ local function announce_level_up(self, info)
     end
     if (info.renown or 0) > 0 then
         announce(self, string.format("Practice level up: renown %d (level %d).",
-            info.renown, info.level))
+            info.renown, info.level) --[[@as Frame]])
     else
         announce(self, string.format("Practice level up: level %d.", info.level))
     end
@@ -1453,7 +1459,7 @@ function ui.record_progress_attempt(self, grade)
     -- M4: the daily cap must never freeze SILENTLY. With no calendar day the cap's
     -- counter cannot reset, so the drill's XP is swallowed for good - the player is
     -- told (once per session) instead of watching the numbers quietly stop.
-    if day == nil and swallowed and points > 0 and not ui.progress_cap_notice then
+    if day == nil and swallowed and (points or 0) > 0 and not ui.progress_cap_notice then
         ui.progress_cap_notice = true
         if type(self) == "table" and type(self.Print) == "function" then
             self:Print("Practice XP: this client reports no calendar date, so the daily XP "
@@ -1470,14 +1476,14 @@ function ui.record_progress_attempt(self, grade)
     -- tells it again. It is printed through self:Print and NOT through the
     -- badge-gated announce(): a progression dead end must be reported even when
     -- the badge is off.
-    if day ~= nil and swallowed and points > 0 then
+    if day ~= nil and swallowed and (points or 0) > 0 then
         local notices = ui.progress_cap_notice_days
         if type(notices) ~= "table" then
             notices = {}
             ui.progress_cap_notice_days = notices
         end
-        if notices[bucket] ~= day then
-            notices[bucket] = day
+        if (notices or {})[bucket] ~= day then
+            if notices then notices[bucket] = day end
             if type(self) == "table" and type(self.Print) == "function" then
                 self:Print("Practice XP: this drill has reached today's XP cap (3x its median "
                     .. "hit XP); it earns again after the next day.")
@@ -4313,10 +4319,16 @@ function ui.playhead_draw(now)
     if frame.band_rotation ~= band_rotation then
         frame.band_rotation = band_rotation
         local na = st.nextaction
-        local band_name = (na and na.display_names and na.display_names[band_rotation])
-            or band_rotation
+        local band_name
+        if band_rotation ~= nil and na and na.display_names then
+            band_name = na.display_names[band_rotation]
+        end
+        band_name = band_name or band_rotation
         frame.band_label:SetText(band_name and tostring(band_name) or "")
-        local sequence = (na and na.sequences and na.sequences[band_rotation]) or {}
+        local sequence = {}
+        if band_rotation ~= nil and na and na.sequences then
+            sequence = na.sequences[band_rotation] or {}
+        end
         local shown = math.min(#sequence, 5)
         local total = shown * 16 + math.max(shown - 1, 0) * 2
         for i = 1, 5 do
@@ -4346,15 +4358,15 @@ function ui.playhead_draw(now)
     local ruler = ui.playhead_ruler_pool
     local ruler_used = 0
     if ruler and frame.track then
-        local first_sec = math.floor(from_at - origin)
-        local last_sec = math.ceil(to_at - origin)
+        local first_sec = math.floor(from_at - (origin or 0))
+        local last_sec = math.ceil(to_at - (origin or 0))
         if last_sec - first_sec > PLAYHEAD_RULER_POOL then
             first_sec = last_sec - PLAYHEAD_RULER_POOL
         end
         for sec = first_sec, last_sec do
             if sec >= 0 then
-                local x = st.practice.timeline_event_x(playhead_x, origin + sec, now, pps)
-                if x >= -2 and x <= width + 2 and ruler_used < PLAYHEAD_RULER_POOL then
+                local x = st.practice.timeline_event_x(playhead_x, (origin or 0) + sec, now, pps)
+                if (x or 0) >= -2 and (x or 0) <= width + 2 and ruler_used < PLAYHEAD_RULER_POOL then
                     ruler_used = ruler_used + 1
                     local entry = ruler[ruler_used]
                     entry.x = x
@@ -4815,8 +4827,8 @@ function ui.update_overlays(self, now)
             end
         end
         if overlay.gcd_dim then
-            local gated = not (key == "judge" or ab.type == "buff"
-                or ab.type == "haste_trinket" or ab.type == "stopattack")
+            local gated = not (key == "judge" or (ab and (ab.type == "buff"
+                or ab.type == "haste_trinket" or ab.type == "stopattack")))
             if gated then
                 set_swipe(overlay.gcd_state, overlay.gcd_cooldown, gcd_remaining,
                     sim.effective_gcd)
@@ -5028,7 +5040,10 @@ local function scenario_context(now, last_action)
         resources = nil,
         cooldowns = nil,
     }
-    if type(module) ~= "table" or type(module.gather_guide_inputs) ~= "function" then
+    if type(module) ~= "table" then
+        return apply_pull_clock(ctx, now)
+    end
+    if type(module.gather_guide_inputs) ~= "function" then
         return apply_pull_clock(ctx, now)
     end
     ui.scenario_inputs = ui.scenario_inputs or {}
@@ -5158,8 +5173,11 @@ local function scenario_action_order()
             end
         end
     end
-    for i = 1, #(ui.scenario_actions or {}) do
-        push(ui.scenario_actions[i])
+    local scenario_actions = ui.scenario_actions
+    if scenario_actions then
+        for i = 1, #scenario_actions do
+            push(scenario_actions[i])
+        end
     end
     return out, labels
 end
@@ -5412,8 +5430,14 @@ local scenario_finish
 -- a hold (HU-8): casting during it is an illegal cast, doing nothing is correct.
 local function scenario_open_step(self, now)
     local H = practice_harness()
+    if not ui then
+        return nil
+    end
     local run = ui.scenario_run
-    if not H or type(run) ~= "table" or run.finished == true then
+    if not H or type(run) ~= "table" then
+        return nil
+    end
+    if run.finished == true then
         return nil
     end
     local ctx = scenario_context(now, ui.scenario_last_action)
@@ -5466,7 +5490,11 @@ local function scenario_close_step(self, expected, actual, hold, reason)
     -- alias of a rotation action (the closed-list suite holds that).
     local neutral = ui.scenario_neutral
     if type(actual) == "string" and actual ~= "" then
-        if type(neutral) ~= "table" or neutral[actual] ~= true then
+        local is_neutral = false
+        if type(neutral) == "table" then
+            is_neutral = (neutral[actual] == true)
+        end
+        if not is_neutral then
             actual = ui.canonical_key(actual)
         end
     end
@@ -5662,10 +5690,13 @@ local function scenario_start_session(self, now)
         return false
     end
     local module = practice_class_module()
-    if not H.practice_scenario_available(module) then
+    if not (H and H.practice_scenario_available and H.practice_scenario_available(module)) then
         return false
     end
     ui.scenario_class = module
+    if not H then
+        return false
+    end
     ui.scenario_run = H.new_rotation_run()
     ui.scenario_step = nil
     ui.scenario_last_action = nil
@@ -5677,7 +5708,7 @@ local function scenario_start_session(self, now)
     -- not ask for: a heal, a shield, food...). Nil when the class publishes
     -- none - then every non-rotation press stays a mis-pick, exactly as before.
     ui.scenario_neutral = nil
-    if type(H.practice_neutral_actions) == "function" then
+    if H and type(H.practice_neutral_actions) == "function" then
         ui.scenario_neutral = H.practice_neutral_actions(module)
     end
     ui.active = true
@@ -5727,7 +5758,7 @@ local function scenario_start_session(self, now)
     ui.panel:Show()
     ui.driver:Show()
     self:Print("Practice scenario started. Type /st practice to stop.")
-    return true
+    do return true end
 end
 
 --=========================================================================================
@@ -5774,8 +5805,9 @@ local function drill_row_sync(self)
     if practice_owns_twist_drill() then
         drill_entries[#drill_entries + 1] = { key = TWIST_DRILL_KEY, label = "Twist timing" }
     end
-    for i = 1, #(ui.drill_list or {}) do
-        local drill = ui.drill_list[i]
+    local drill_list = ui.drill_list or {}
+    for i = 1, #drill_list do
+        local drill = drill_list[i]
         if type(drill) == "table" and type(drill.key) == "string" and drill.key ~= ""
             and drill.key ~= TWIST_DRILL_KEY then
             drill_entries[#drill_entries + 1] = { key = drill.key, label = drill.label }
@@ -5915,7 +5947,10 @@ end
 local function drill_list_start_session(self, now)
     local H = practice_harness()
     local pr = st.practice
-    if not (H and pr) then
+    if not H then
+        return false
+    end
+    if not pr then
         return false
     end
     local module = practice_class_module()
@@ -7019,7 +7054,7 @@ function ui.cast_key(self, key)
     if lane and sim.fight_active then
         local ab = pr.ABILITIES[key]
         local seal_active = nil
-        if ab.type == "seal" then
+        if ab and ab.type == "seal" then
             seal_active = ab.seal_label
         elseif key == "judge" then
             seal_active = out.judged_seal

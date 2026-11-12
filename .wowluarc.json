@@ -1,20 +1,139 @@
 {
-    "ignore": [
-        "Libs/",
-        "docs/",
-        "tests/",
-        "Media/"
-    ],
+    "$schema": "https://raw.githubusercontent.com/TradeSkillMaster/wowlua-ls/main/editors/vscode/wowluarc.schema.json",
     "flavors": [
         "retail",
+        "mainline",
         "classic",
-        "classic_anniversary",
-        "titanforge",
+        "classic_era",
         "forever"
     ],
+    "library": [
+        "Libs/LibStub/",
+        "Libs/CallbackHandler-1.0/",
+        "Libs/LibDetours-1.0/",
+        "Libs/LibForeverInspector/"
+    ],
+    "ignore": [
+        "docs/",
+        "Tests/",
+        "Media/",
+        "OLD/",
+        "bench/",
+        "desks/",
+        "mnemon-mirror/",
+        "Libs/LibDataBroker-1.1/",
+        "Libs/LibDBIcon-1.0/",
+        "Libs/LibRangeCheck-2.0/",
+        "Libs/LibSharedMedia-3.0/"
+    ],
+    "globals": {
+        "read": [
+            "*"
+        ],
+        "write": [
+            "*"
+        ],
+        "allowBindingGlobals": true
+    },
+    "hint": {
+        "enable": true,
+        "chainedReturnTypes": true,
+        "parameterTypes": true,
+        "forVariableTypes": true,
+        "parameterNames": true,
+        "functionReturnTypes": true,
+        "variableTypes": true
+    },
+    "codeLens": {
+        "enable": true,
+        "implementations": true,
+        "references": true,
+        "overrides": true
+    },
     "diagnostics": {
         "enable": [
-            "need-check-nil"
-        ]
+            "access-private",
+            "access-protected",
+            "assign-type-mismatch",
+            "builds-field-not-self",
+            "cannot-call",
+            "circle-doc-class",
+            "class-shadows-builtin",
+            "code-after-break",
+            "constructor-return",
+            "count-down-loop",
+            "create-global",
+            "deprecated",
+            "discard-returns",
+            "duplicate-constructor",
+            "duplicate-index",
+            "duplicate-set-field",
+            "empty-block",
+            "field-type-mismatch",
+            "generic-constraint-mismatch",
+            "grouped-return-mismatch",
+            "implicit-nil-return",
+            "incomplete-signature-doc",
+            "inject-field",
+            "invalid-class-parent",
+            "invalid-op",
+            "malformed-annotation",
+            "missing-fields",
+            "missing-param-annotation",
+            "missing-parameter",
+            "missing-return",
+            "missing-return-annotation",
+            "missing-return-value",
+            "mixed-enum-values",
+            "multi-return-projection",
+            "need-check-nil",
+            "nil-index",
+            "nil-table-key",
+            "not-precedence",
+            "param-constraint-mismatch",
+            "redundant-and",
+            "redundant-class-generic",
+            "redundant-condition",
+            "redundant-or",
+            "redundant-parameter",
+            "redundant-return",
+            "redundant-return-value",
+            "redundant-value",
+            "redefined-local",
+            "return-mismatch",
+            "return-self-class-name",
+            "safety-limit",
+            "secret-access",
+            "secret-argument",
+            "secret-arithmetic",
+            "secret-comparison",
+            "secret-condition",
+            "secret-table-key",
+            "shadowed-local",
+            "trailing-space",
+            "type-mismatch",
+            "unbalanced-assignments",
+            "undefined-global",
+            "unknown-callback-event",
+            "unknown-cast-variable",
+            "unknown-diag-code",
+            "unknown-field-type",
+            "unknown-local-type",
+            "unknown-param-type",
+            "unknown-return-type",
+            "unreachable-code",
+            "unused-function",
+            "unused-local",
+            "unused-vararg",
+            "wrong-flavor-api"
+        ],
+        "severity": {
+            "secret-arithmetic": "error",
+            "secret-comparison": "error",
+            "secret-condition": "error",
+            "secret-table-key": "error",
+            "secret-access": "error",
+            "secret-argument": "error"
+        }
     }
 }

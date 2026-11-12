@@ -1092,7 +1092,8 @@ function ui.render_sparkline(model)
         marker:Show()
         bar:SetSize(bar_width, height)
         bar:SetPoint("BOTTOMLEFT", ui.spark, "BOTTOMLEFT", x, 0)
-        local r, g, b = spark_color(accuracy)
+        local color = spark_color(accuracy)
+        local r, g, b = color[1], color[2], color[3]
         bar:SetColorTexture(r, g, b, 0.85)
         marker:SetSize(SPARK_MARKER_SIZE, SPARK_MARKER_SIZE)
         marker:SetPoint("BOTTOMLEFT", ui.spark, "BOTTOMLEFT",

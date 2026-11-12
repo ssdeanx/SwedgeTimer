@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.2.0]
+
+**Verification status:** offline gate only — `bash tests/run.sh` **59 steps / 0 failed**; `luacheck .` **4 warnings / 0 errors in 105 files**. In-client behaviour on the Forever client is **UNCONFIRMED**; no in-client pass is recorded for 2.2.0.
+
+### Changed
+
+- **Version 2.2.0:** `SwedgeTimer.toc` and `main.lua` report version `2.2.0` (the TOC remains the single load order for every client).
+- **Bar tick clock (`bars.lua`):** the tick reads the live client clock (`st.api.get_time()`) exactly once per tick. Accumulating the `OnUpdate` delta into a cached clock was removed: a bar's `OnUpdate` pauses while its frame is hidden and across loading screens, so the cached reading resumes stale and the fill sits at zero until it replays the hidden gap (the "bars display but never function" symptom). The single live reading is shared by the flash fade, the text timers and every paint path; the no-cycle early-return paint reuses it. The fill-last and 2026-10-28 resize-repaint guarantees are unchanged.
+- **OnUpdate call contract (`main.lua`):** the installed frame script now adapts the client's `(frame, elapsed)` calling convention to the hand handler's single `elapsed` argument (`function(_, elapsed) onupdate(elapsed) end`). The previous direct install passed the frame as `elapsed`, which threw `attempt to perform arithmetic on a table value` at `bars.lua:1145` on the first warm tick in game. The diag counter wrapper keeps its one-argument contract and is adapted at the same boundary.
+- **Vendored swing library (`Libs/LibClassicSwingTimerAPI/LibClassicSwingTimerAPI.lua`):** every attack-speed/timer read is now probed with `canaccessvalue` before arithmetic or `C_Timer` scheduling, so a restricted speed read leaves the cycle on its scheduled stop instead of throwing. This is a local patch to a vendored file; see the 2.2.0 audit note about keeping `Libs/` upstream-clean.
+- **Compat (`compat.lua`):** `api.UnitAttackSpeed` now returns only the main-hand and off-hand speeds (the ranged speed had no consumer; `swing_source.lua` keeps reading the raw client triple).
+
+### Hardening
+
+- **Secret-value access probes:** `compat.lua`, `hunter_ui.lua`, `enemy_swing.lua`, `forever_guide.lua`, `swing_source.lua`, `LibGlobalCooldown.lua` and the vendored swing library call `canaccessvalue`/`canaccessallvalues` before comparing, formatting or doing arithmetic on client reads (cooldown start/duration, cast start/end, attack speeds, target name/GUID, the cast-bar key).
+- **Nil-safe guards:** broad nil/type guards across `aura_icons.lua`, `bars.lua`, `designmode.lua`, `diag.lua`, `main.lua`, `option_tables.lua`, `power_bar.lua`, `practice.lua`, `practice_progress.lua`, `practice_progress_ui.lua`, `practice_ui.lua`, `rogue_guide.lua`, `weave_range.lua` and `widgets.lua` so a missing profile row, table or client answer returns early instead of throwing.
+- **Aura rows (`aura_icons.lua`):** row construction tolerates a missing row/state/list and no longer sets an explicit frame strata on the native container at creation; the client default applies.
+- **Design-mode reset (`designmode.lua`):** the bar reset seam targets the class defaults row (the same source `hand_default` reads) and hands the live row to `LibWindow.RestorePosition`.
+- **Options (`option_tables.lua`):** hand option generation returns early for an unknown hand row, and order offsets tolerate a nil offset.
+
+### Tests
+
+- **27 suites refreshed for the new contracts:** every sandbox that loads `compat.lua`/`swing_source.lua`/`forever_guide.lua` now provides the client's `canaccessvalue`/`canaccessallvalues` probes (secret-aware where the suite models restricted values), the strict `forever_guide.lua` allow-list includes `tonumber` and both probes, the `bars.lua` tick drives the handler's declared single-`elapsed` contract and pins the cold/warm cached-clock reads, the `aura_icons.lua` strata expectation follows the removed explicit set, the `designmode.lua` reset checks follow the class-defaults-row target, and the `main.lua` `timers_locked` source pin follows the current `(db_class or {})` read.
+
 ## [2.1.9]
 
 ### Fixed

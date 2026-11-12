@@ -61,6 +61,18 @@ local ST = {
 local st = { debug = false }
 
 local env = setmetatable({}, { __index = _G })
+-- WoW client secret-value access probes: the hardening calls these directly.
+env.canaccessvalue = function(value)
+    local probe = env.issecretvalue
+    return not (probe and probe(value))
+end
+env.canaccessallvalues = function(...)
+    local probe = env.issecretvalue
+    for i = 1, select("#", ...) do
+        if probe and probe((select(i, ...))) then return false end
+    end
+    return true
+end
 env.LibStub = function(major)
     if major == "AceAddon-3.0" then
         return { GetAddon = function() return ST end }
@@ -756,6 +768,18 @@ do
 
     local cst = { debug = false }
     local cenv = setmetatable({}, { __index = _G })
+    -- WoW client secret-value access probes: compat's cooldown reads call them.
+    cenv.canaccessvalue = function(value)
+        local probe = cenv.issecretvalue
+        return not (probe and probe(value))
+    end
+    cenv.canaccessallvalues = function(...)
+        local probe = cenv.issecretvalue
+        for i = 1, select("#", ...) do
+            if probe and probe((select(i, ...))) then return false end
+        end
+        return true
+    end
     cenv._G = cenv
     cenv.LibStub = function(major)
         if major == "AceAddon-3.0" then
