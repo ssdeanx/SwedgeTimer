@@ -1318,13 +1318,18 @@ function ST.PALADIN.update_judgement_marker(self, hand)
         and not d.is_full
         and (self.has_sob or self.has_sor or self.has_sov or self.has_soj) then
         local swing_remaining = math.max(0, d.ends_at - now)
-        local start_time, duration = api.GetSpellCooldown(spell_query(JUDGEMENT_SPELL_ID))
-        if duration and duration > 1.51 then
-            local cd_remaining = start_time + duration - now
-            if cd_remaining > 0 and cd_remaining < swing_remaining then
-                local elapsed = d.speed - swing_remaining
-                local w = self:get_bar_visuals_width_and_height(hand)
-                offset = ((cd_remaining + elapsed) / d.speed) * w
+        local ok, start_time, duration = pcall(api.GetSpellCooldown, spell_query(JUDGEMENT_SPELL_ID))
+        if not ok then
+            start_time, duration = nil, nil
+        end
+        if canaccessallvalues(duration, start_time) then
+            if duration and duration > 1.51 and canaccessvalue(start_time) and canaccessvalue(duration) and canaccessvalue(now) then
+                local cd_remaining = (tonumber(start_time) or 0) + duration - now
+                if cd_remaining and cd_remaining > 0 and cd_remaining < swing_remaining then
+                    local elapsed = d.speed - swing_remaining
+                    local w = self:get_bar_visuals_width_and_height(hand)
+                    offset = ((cd_remaining + elapsed) / d.speed) * w
+                end
             end
         end
     end
@@ -3085,12 +3090,20 @@ local function cd_slot_remaining(slot, spell_id, now)
     if slot.scan_at == nil or (now - slot.scan_at) >= CD_RESCAN_INTERVAL then
         slot.scan_at = now
         local start_time, duration = api.GetSpellCooldown(spell_query(spell_id))
-        if start_time and type(duration) == "number" and duration > 1.51 then
-            slot.cd_expires = start_time + duration
-            slot.cd_full = duration
-        else
-            slot.cd_expires = nil
-            slot.cd_full = nil
+        if canaccessallvalues(duration, start_time) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if start_time and type(duration) == "number" and duration > 1.51 then
+                            slot.cd_expires = start_time + duration
+                            slot.cd_full = duration
+                        else
+                            slot.cd_expires = nil
+                            slot.cd_full = nil
+                        end
+                    end
+                end
+            end
         end
     end
     local expires = slot.cd_expires
@@ -4311,10 +4324,18 @@ local function hud_ability_cooldown(self, slot, now)
             return 0, 180
         end
         local start_time, duration = api.GetSpellCooldown(spell_query(31884))
-        if start_time and duration and duration > 1.51 then
-            local remaining = start_time + duration - now
-            if remaining > 0 then
-                return remaining, duration
+        if canaccessallvalues(duration, start_time) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if start_time and duration and duration > 1.51 then
+                            local remaining = start_time + duration - now
+                            if remaining > 0 then
+                                return remaining, duration
+                            end
+                        end
+                    end
+                end
             end
         end
         return 0, 180
@@ -4334,10 +4355,18 @@ local function hud_ability_cooldown(self, slot, now)
                 return 0, 0
             end
             local start_time, duration = api.GetSpellCooldown(spell_query(ds_id))
-            if start_time and duration and duration > 1.51 then
-                local remaining = start_time + duration - now
-                if remaining > 0 then
-                    return remaining, duration
+            if canaccessallvalues(duration, start_time) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if canaccessvalue(duration) then
+                            if start_time and duration and duration > 1.51 then
+                                local remaining = start_time + duration - now
+                                if remaining > 0 then
+                                    return remaining, duration
+                                end
+                            end
+                        end
+                    end
                 end
             end
             return 0, 0
@@ -4359,10 +4388,18 @@ local function hud_ability_cooldown(self, slot, now)
             return 0, 0
         end
         local start_time, duration = api.GetSpellCooldown(spell_query(hid))
-        if start_time and duration and duration > 1.51 then
-            local remaining = start_time + duration - now
-            if remaining > 0 then
-                return remaining, duration
+        if canaccessallvalues(duration, start_time) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if start_time and duration and duration > 1.51 then
+                            local remaining = start_time + duration - now
+                            if remaining > 0 then
+                                return remaining, duration
+                            end
+                        end
+                    end
+                end
             end
         end
         return 0, 0
@@ -4380,10 +4417,17 @@ local function hud_ability_cooldown(self, slot, now)
             return 0, 0
         end
         local start_time, duration = api.GetSpellCooldown(spell_query(hs_id))
-        if start_time and duration and duration > 1.51 then
-            local remaining = start_time + duration - now
-            if remaining > 0 then
-                return remaining, duration
+        if canaccessvalue(duration) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if not issecretvalue(start_time) and not issecretvalue(duration)
+                        and start_time and duration and duration > 1.51 then
+                        local remaining = start_time + duration - now
+                        if remaining > 0 then
+                            return remaining, duration
+                        end
+                    end
+                end
             end
         end
         return 0, 0
@@ -4400,10 +4444,18 @@ local function hud_ability_cooldown(self, slot, now)
             return 0, 0
         end
         local start_time, duration = api.GetSpellCooldown(spell_query(AM_SPELL_ID))
-        if start_time and duration and duration > 1.51 then
-            local remaining = start_time + duration - now
-            if remaining > 0 then
-                return remaining, duration
+        if canaccessallvalues(duration, start_time) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if start_time and duration and duration > 1.51 then
+                            local remaining = start_time + duration - now
+                            if remaining > 0 then
+                                return remaining, duration
+                            end
+                        end
+                    end
+                end
             end
         end
         return 0, 0
@@ -4426,10 +4478,18 @@ local function hud_ability_cooldown(self, slot, now)
             return 0, 0
         end
         local start_time, duration = api.GetSpellCooldown(spell_query(name), slot.spell)
-        if start_time and duration and duration > 1.51 then
-            local remaining = start_time + duration - now
-            if remaining > 0 then
-                return remaining, duration
+        if canaccessallvalues(duration, start_time) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if start_time and duration and duration > 1.51 then
+                            local remaining = start_time + duration - now
+                            if remaining > 0 then
+                                return remaining, duration
+                            end
+                        end
+                    end
+                end
             end
         end
         return 0, 0
@@ -4439,10 +4499,18 @@ local function hud_ability_cooldown(self, slot, now)
         end
         local name = hud_slot_name(slot) or "Holy Shield"
         local start_time, duration = api.GetSpellCooldown(spell_query(name), slot.spell)
-        if start_time and duration and duration > 1.51 then
-            local remaining = start_time + duration - now
-            if remaining > 0 then
-                return remaining, duration
+        if canaccessallvalues(duration, start_time) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if start_time and duration and duration > 1.51 then
+                            local remaining = start_time + duration - now
+                            if remaining > 0 then
+                                return remaining, duration
+                            end
+                        end
+                    end
+                end
             end
         end
         return 0, 10
@@ -4452,10 +4520,18 @@ local function hud_ability_cooldown(self, slot, now)
         end
         local name = hud_slot_name(slot) or "Avenger's Shield"
         local start_time, duration = api.GetSpellCooldown(spell_query(name), slot.spell)
-        if start_time and duration and duration > 1.51 then
-            local remaining = start_time + duration - now
-            if remaining > 0 then
-                return remaining, duration
+        if canaccessallvalues(duration, start_time) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if start_time and duration and duration > 1.51 then
+                            local remaining = start_time + duration - now
+                            if remaining > 0 then
+                                return remaining, duration
+                            end
+                        end
+                    end
+                end
             end
         end
         return 0, 30
@@ -4465,10 +4541,18 @@ local function hud_ability_cooldown(self, slot, now)
         end
         local name = hud_slot_name(slot) or "Holy Strike"
         local start_time, duration = api.GetSpellCooldown(spell_query(name), slot.spell)
-        if start_time and duration and duration > 1.51 then
-            local remaining = start_time + duration - now
-            if remaining > 0 then
-                return remaining, duration
+        if canaccessallvalues(duration, start_time) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if start_time and duration and duration > 1.51 then
+                            local remaining = start_time + duration - now
+                            if remaining > 0 then
+                                return remaining, duration
+                            end
+                        end
+                    end
+                end
             end
         end
         return 0, 6

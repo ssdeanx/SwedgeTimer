@@ -1,0 +1,357 @@
+[Skip to content](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html#VPContent)
+
+On this page
+
+# All Annotations [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#all-annotations)
+
+Quick reference for every annotation wowlua-ls supports. For detailed usage and examples, see the [guide](https://tradeskillmaster.github.io/wowlua-ls/guide/basic-annotations.html).
+
+## Type annotations [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#type-annotations)
+
+| Annotation | Description | Guide |
+| --- | --- | --- |
+| `@param name type` | Parameter type. `name?` for optional. | [Basic Annotations](https://tradeskillmaster.github.io/wowlua-ls/guide/basic-annotations.html) |
+| `@return type [name]` | Return type. Use multiple lines or one comma-separated line (`@return A, B`) for multi-return. | [Basic Annotations](https://tradeskillmaster.github.io/wowlua-ls/guide/basic-annotations.html) |
+| `@return (A, B) | (C, D)` | Tuple-union return with correlated narrowing. | [Multi-Return](https://tradeskillmaster.github.io/wowlua-ls/guide/multi-return.html) |
+| `@return ...T` | Variadic return: fills remaining positions with T. | [Multi-Return](https://tradeskillmaster.github.io/wowlua-ls/guide/multi-return.html) |
+| `@type type` | Variable type annotation. `@type A, B` types each target of a multi-target assignment (`local a, b = ...`) in order. | [Basic Annotations](https://tradeskillmaster.github.io/wowlua-ls/guide/basic-annotations.html) |
+| `@as type` | Inline expression type assertion (`--[[@as T]]`). | [Basic Annotations](https://tradeskillmaster.github.io/wowlua-ls/guide/basic-annotations.html) |
+| `@cast var [+|-]type` | Change variable type: replace, add (`+`), remove (`-`). | [Basic Annotations](https://tradeskillmaster.github.io/wowlua-ls/guide/basic-annotations.html) |
+
+## Class and type annotations [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#class-and-type-annotations)
+
+| Annotation | Description | Guide |
+| --- | --- | --- |
+| `@class Name` | Define a named class type. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html) |
+| `@class Name : Parent` | Class with inheritance. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html) |
+| `@class Name : A, B` | Multiple parent classes (comma-separated). | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html#multiple-parents) |
+| `@class Name : A & B` | Multiple parent classes (intersection syntax). | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html#multiple-parents) |
+| `@class Name : table<K, V>` | Class with dictionary key/value types. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html) |
+| `@class (partial) Name` / `@class (exact) Name` | Accepted for compatibility; no effect. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html#partial-classes) |
+| `@class Name<T>` | Parameterized class. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html) |
+| `@class Name<T: Constraint>` | Parameterized class with type constraint. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html) |
+| `@enum Name` | Enum type: bidirectionally compatible with `number` or `string` (inferred from values). | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html#enum-types-enum) |
+| `@enum (key) Name` | Key-based enum: creates a string enum from table keys instead of values. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html#key-based-enums-enum-key) |
+| `@event TypeName "EVENT_NAME"` | Declare an event with typed payload (hover + handler param narrowing). | [Events](https://tradeskillmaster.github.io/wowlua-ls/guide/events.html) |
+| `@event TypeName` \+ `---|` | Batch event declarations with inline params. | [Events](https://tradeskillmaster.github.io/wowlua-ls/guide/events.html#batch-declarations-with) |
+| `@field name type` | Class field declaration. `self` in the type names the class. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html#referring-to-the-class-with-self) |
+| `@field [K] V` | Bracket-index field. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html) |
+| `@field private name type` | Private field. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html) |
+| `@field protected name type` | Protected field. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html) |
+| `@field public name type` | Public field (the default). | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html) |
+| `@private` / `@protected` (on a field assignment or method) | Visibility declared inline on a field assignment or a method definition, instead of in the `@class` block. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html#field-visibility) |
+| `@correlated f1, f2, ...` | Fields or locals that are always nil/non-nil together. | [Nil Safety](https://tradeskillmaster.github.io/wowlua-ls/guide/nil-safety.html) |
+
+## Generic annotations [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#generic-annotations)
+
+| Annotation | Description | Guide |
+| --- | --- | --- |
+| `@generic T` | Generic type parameter on a function. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html) |
+| `@generic T: Class` | Constrained generic. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html) |
+| `@generic T, K: keyof T` | Key-constrained generic: K must be a field name of T. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html#keyof-constraints) |
+| `@generic K: keyof self` | Method receiver key constraint: K must be a field name of the call's receiver. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html#keyof-constraints) |
+| `@generic T, ...M` | Variadic generic: collects excess arguments into an intersection. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html#variadic-generics) |
+| `@return T & ...M` / `@return & ...M` | Return the variadic arguments as one intersection value, with or without a leading type. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html#variadic-generics) |
+| `@requires T: Constraint` | Method is only callable when the receiver's class type parameter `T` satisfies the constraint. |  |
+| `@stores-into N` | Calling the function stores the arguments passed for `T` parameters as elements of argument `N`, a `T[]` parameter, so a list created as `{}` takes their types as its element type. The built-in stubs mark `table.insert`. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html#how-inference-works) |
+| ``@param name `T``` | Resolve string argument as a class name. | [Generics](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html) |
+| `@overload fun(...)` | Function overload signature. On a `@class`, makes instances callable with that signature. |  |
+
+## Factory and builder annotations [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#factory-and-builder-annotations)
+
+| Annotation | Description | Guide |
+| --- | --- | --- |
+| `@defclass T` | Class factory function. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html) |
+| `@defclass T : P` | Class factory with parent parameter. | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html) |
+| ``@param ... `T``` (on a `@defclass` fn) | Embed each string-literal vararg as a parent (Ace `NewAddon(name, "AceEvent-3.0", …)`). | [Classes](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html#embedding-libraries-via-varargs) |
+| `@builds-field idx type` | Builder method adds a field. | [Builder Pattern](https://tradeskillmaster.github.io/wowlua-ls/guide/builder-pattern.html) |
+| `@return built` | Return the accumulated built type. | [Builder Pattern](https://tradeskillmaster.github.io/wowlua-ls/guide/builder-pattern.html) |
+| `@return built : Parent` | Built type with parent class. | [Builder Pattern](https://tradeskillmaster.github.io/wowlua-ls/guide/builder-pattern.html) |
+| `@built-name idx` | Name the built type from a string argument. | [Builder Pattern](https://tradeskillmaster.github.io/wowlua-ls/guide/builder-pattern.html) |
+| `@built-extends` | Built type inherits from receiver's built type. | [Builder Pattern](https://tradeskillmaster.github.io/wowlua-ls/guide/builder-pattern.html) |
+| `@return self` | Method returns the receiver (for chaining). | [Builder Pattern](https://tradeskillmaster.github.io/wowlua-ls/guide/builder-pattern.html) |
+| `@return self<X>` | Method returns the receiver re-parameterized with type argument `X`. |  |
+
+## Narrowing and guard annotations [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#narrowing-and-guard-annotations)
+
+| Annotation | Description | Guide |
+| --- | --- | --- |
+| `@type-narrows target class` | Type guard function (index-based). | [Type Guards](https://tradeskillmaster.github.io/wowlua-ls/guide/type-guards.html) |
+| `@type-narrows ClassName` | Type guard method (narrows self). | [Type Guards](https://tradeskillmaster.github.io/wowlua-ls/guide/type-guards.html) |
+| `@returns-class-name` | Method whose string return value names the receiver's class; `recv:m() == "Class"` narrows `recv` to `Class`. | [Type Guards](https://tradeskillmaster.github.io/wowlua-ls/guide/type-guards.html#returns-class-name) |
+| `@narrows-arg N` | Bare call narrows the Nth argument's type to the return type. | [Type Guards](https://tradeskillmaster.github.io/wowlua-ls/guide/type-guards.html#narrows-arg) |
+| `@flavor-narrows flavor[, flavor...]` | Flavor guard function or boolean. | [Flavor Filtering](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html#custom-flavor-guards-with-flavor-narrows) |
+
+## Secret-value annotations [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#secret-value-annotations)
+
+Retail only. A value that may be secret is typed `secret<T>` (see [Type syntax](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html#type-syntax)); these annotations describe the functions that produce, accept, or test secrets. See [Secret Values](https://tradeskillmaster.github.io/wowlua-ls/guide/secrets.html).
+
+| Annotation | Description |
+| --- | --- |
+| `@secret-guard param kind` | Guard function: its boolean result proves `param` (`...` for varargs) secret or not. `kind` is `is-secret`, `accessible`, or `any-secret`. |
+| `@secret-args none|tainted|untainted [param...]` | Secret arguments: `none` never accepted, `untainted` accepted only from Blizzard code — both reported in addon code ( [`secret-argument`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html)); `tainted` accepted from addon code, and the results carry the arguments' secrecy. With parameter names (`...` for the varargs), the policy applies to those parameters only; the Lua library uses this for its number-typed parameters. Leave the annotation off a function that accepts secrets and returns ordinary values. |
+| `@secret-unless param value...` | A call passing one of these string literals for `param` returns ordinary values (`@secret-unless unit player pet`). |
+| `@secret-when Predicate [description]` | The restriction under which results (or an `@event`'s payload) may be secret. Shown in hover; secret results are still typed in `@return`. On a `@class`, the restriction under which its `secret<T>` fields hold secrets. A [context guard](https://tradeskillmaster.github.io/wowlua-ls/guide/secrets.html#guarding-by-context) that clears every predicate of a call or class makes its results or fields ordinary. |
+| `@secret-clears Predicate[,Predicate...] [binding...] [== Value]` | Context guard: a `false` result (or one equal to `Value`) clears the listed predicates in the code it guards. Each binding is a parameter of the guard, optionally followed by `=` and the names the cleared APIs give that same value (`unit=unit,unitToken`): a later call is cleared only where its argument for one of those parameters is the same local, field, or literal. `*` in place of the predicates clears every secret in that code and takes no bindings. |
+| `@secret-restriction-guard param|Restriction [== Value]` | Context guard: a `false` result (or one equal to `Value`) proves an addon restriction inactive: the fixed `Restriction` (`Combat`, `Encounter`, `ChallengeMode`, `PvPMatch`, `Map`, `Chat`), or the one `param` names as `Enum.AddOnRestrictionType.<Restriction>`. |
+| `@secret-precondition Name [FailureMode] [description]` | A precondition the call needs. `FailureMode` is `ReturnNothing`, `ReturnWithError`, or `Error`; the first two make every return nilable in the stubs. Shown in hover. |
+| `@secret-satisfies Name [binding...]` | Context guard: a `true` result proves the `@secret-precondition``Name` holds, so a guarded call that would return nothing when it fails loses the `nil` from its returns. Bindings work as in `@secret-clears`. |
+| `@secret-aspect Aspect` | Widget aspect (`Text`, `Alpha`, …) the method makes secret or reads. Shown in hover. |
+
+## Metadata annotations [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#metadata-annotations)
+
+| Annotation | Description |
+| --- | --- |
+| `@alias Name type` | Type alias. Supports parameters: `@alias Name<K,V> V[]`, including constrained parameters: `@alias Box<T: Frame> { value: T }`. Use `@alias (opaque) Name type` for a nominally distinct type (see below). |
+| `@alias Name` \+ `---|` lines | Multi-line alias: each `---| "value"` line adds a member, optionally followed by a `# description`. A `---|>` line (LuaLS's default-value marker) is a member like the others. Redeclaring an existing alias (a built-in one or another file's) with only literal members adds them to it, e.g. your own widget names to `AceGUIWidgetType`. |
+| `@deprecated [message]` | Mark a function/method as deprecated. Call sites are struck through and get a [`deprecated`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html) warning; the name shows a deprecation notice in hover and completion. Optional trailing text (e.g. the replacement API) is shown in the hover notice and appended to the warning. |
+| `@nodiscard` | Warn if return value is ignored. |
+| `@meta` | Declaration-only file. Suppresses runtime/behavior diagnostics, but annotation-integrity checks still fire: a malformed, misplaced, or dangling annotation is a real error even in a stub. This covers undefined type/class references ( [`undefined-doc-name`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html), [`undefined-doc-class`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html)), malformed annotations, `@field`/`@param` not attached to a `@class`/function ( [`doc-field-no-class`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html), [`doc-func-no-function`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html)), invalid `@diagnostic` codes, and `nil` table-key types. An annotated declaration here can also [override a built-in stub](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html#meta-and-overriding-built-in-stubs) of the same name. |
+| `@diagnostic disable: code[, code...]` | Suppress diagnostics from this line on; `enable` turns them back on. `disable-line` covers the same line and `disable-next-line` the line below. Without codes, applies to every diagnostic. [Guide](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html#suppressing-diagnostics) |
+| `@see symbol` | Cross-reference shown in hover. |
+| `@constructor` | Above a method: marks it as the class constructor. Fields it assigns to `self` don't trigger [`inject-field`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html), and calling the class table (`MyClass(...)`) checks the arguments against its parameters. |
+| `@constructor name` | In a `@class` block: names the constructor method, like marking that method with `@constructor`. Subclasses inherit it. |
+| `@accessor name [visibility]` | Set visibility for methods defined through a sub-table accessor. [Guide](https://tradeskillmaster.github.io/wowlua-ls/guide/classes.html#accessor-visibility-accessor) |
+| `@creates-global N` | Calling this function with a string literal at param `N` creates a named global. The global's type is taken from the call's return type. |
+| `@generates-events N [Field]` | Calling this method with an array table at param `N` synthesizes an enum-like `Field` table (default `Event`) on the receiver class, one member per array entry. |
+| `@returns-enum` | A call passing only string literals returns an enum-like table: each argument becomes a member numbered by its position (`EnumUtil.MakeEnum`). |
+| `@callback-event-arg N` | Marks a callback-registry consumer method (`RegisterCallback`/`TriggerEvent`/…) whose argument `N` is an event name, enabling event-name completion and the `unknown-callback-event` diagnostic. |
+
+The LuaLS tags `@operator`, `@vararg`, `@package`, `@public`, `@async`, `@module`, `@source`, `@version`, and `@nodoc` are accepted without a diagnostic but have no effect.
+
+### `@creates-global N` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#creates-global-n)
+
+Some functions create a global as a side effect of being called - for example World of Warcraft's `CreateFrame("Frame", "MyFrame")` defines `_G.MyFrame`. Mark such a function so that reading the created name in another file does not produce a false [`undefined-global`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html) diagnostic:
+
+- `N` (1-based) is the parameter whose **string-literal** argument names the created global.
+
+The created global's **type is the call's actual return type**; you don't specify it. This means a call carrying a template/mixin gets the full type: a `CreateFrame("Frame", "MyFrame", parent, "MyTemplate")` global is typed `Frame & MyTemplate`, not a bare `Frame`.
+
+lua
+
+```
+---@param frameType FrameType
+---@param name? string
+---@return T frame
+---@creates-global 2   -- param 2 names the global; its type is the return type
+function CreateFrame(frameType, name, ...) end
+
+---@param name string
+---@return Font
+---@creates-global 1   -- param 1 names the global; it is a Font (from @return)
+function CreateFont(name) end
+```
+
+Only string-literal arguments are detected; dynamic names (e.g. `CreateFrame("Frame", varName)`) are not registered.
+
+INFO
+
+Currently, only functions defined in API stubs are detected as `@creates-global` sources. The annotation is parsed on workspace-defined functions but their calls are not scanned for created globals.
+
+### `@generates-events N [Field]` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#generates-events-n-field)
+
+Some methods populate an enum-like table on their receiver as a side effect of being called. World of Warcraft's `CallbackRegistryMixin:GenerateCallbackEvents({ "OnFoo", ... })` builds `self.Event = { OnFoo = "OnFoo", ... }`, which addons later reference as `Mixin.Event.OnFoo`. Mark such a method so those accesses resolve instead of producing a false [`undefined-field`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html):
+
+- `N` (1-based) is the call argument that holds the **array table** of event names.
+- `Field` (optional, default `Event`) is the table field synthesized on the receiver class.
+
+lua
+
+```
+---@generates-events 1 Event   -- arg 1 is the event array; build `self.Event`
+---@param events string[]
+function CallbackRegistryMixin:GenerateCallbackEvents(events) end
+```
+
+The receiver must be a single-name class (e.g. `ScrollBoxListMixin`, not a dotted chain). Each array entry contributes one `string` member: string literals use their value, and field references (`SomeEvents.OnFoo`) use the leaf name `OnFoo`, matching the value-equals-name convention. Accessing an event that isn't in the array still resolves leniently: the synthesized table is not closed.
+
+lua
+
+```
+ScrollBoxListMixin:GenerateCallbackEvents({
+    BaseScrollBoxEvents.OnScroll,        -- → ScrollBoxListMixin.Event.OnScroll
+    "OnDataProviderReassigned",          -- → ScrollBoxListMixin.Event.OnDataProviderReassigned
+})
+
+local e = ScrollBoxListMixin.Event.OnDataProviderReassigned  -- string, no diagnostic
+```
+
+### `@callback-event-arg N` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#callback-event-arg-n)
+
+Addons that mix in `CallbackRegistryMixin` usually register and fire events by string-literal name rather than through the `.Event` table:
+
+lua
+
+```
+addonTable.CallbackRegistry:RegisterCallback("SettingChanged", handler)
+addonTable.CallbackRegistry:TriggerEvent("SettingChanged", value)
+```
+
+`@callback-event-arg N` marks a consumer method whose `N`-th argument is such an event name. Combined with the registry's declared events (from `GenerateCallbackEvents`, including an `addonTable.Constants.Events`-style string array resolved across files), the language server then:
+
+- **completes** the registered event names inside the string argument, and
+- flags an unregistered name with [`unknown-callback-event`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html) (off by default).
+
+lua
+
+```
+---@callback-event-arg 1   -- arg 1 is the event name
+---@param event string
+function CallbackRegistryMixin:RegisterCallback(event, func, owner, ...) end
+```
+
+The registry receiver is matched by name (a global, a class, or an `addonTable.X` namespace field; the addon-namespace alias is normalized so the declaration and the call sites agree across files, and scoped by addon so separate addons in one workspace don't share an event set). When a registry's event set can't be fully determined, validation is suppressed for it so no false positives are reported.
+
+### `@returns-enum` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#returns-enum)
+
+World of Warcraft's `EnumUtil.MakeEnum("Idle", "Running", "Done")` returns the table `{ Idle = 1, Running = 2, Done = 3 }`. Mark such a function with `@returns-enum` and a call whose arguments are all string literals is typed as that table: each argument becomes a `number` member, numbered from 1 in argument order. Members complete and resolve like the fields of the equivalent table constructor, and a misspelled member is reported as [`undefined-field`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html):
+
+lua
+
+```
+---@param ... string
+---@return table
+---@returns-enum
+function EnumUtil.MakeEnum(...) end
+
+local State = EnumUtil.MakeEnum("Idle", "Running", "Done")
+local s = State.Running  -- number
+local t = State.Runing   -- warning: undefined-field
+```
+
+Put `---@enum Name` above the call to name the enum, so it can be used as a type:
+
+lua
+
+```
+---@enum State
+local State = EnumUtil.MakeEnum("Idle", "Running", "Done")
+
+---@param state State
+local function setState(state) end
+
+setState(State.Running)  -- OK
+```
+
+An enum assigned to a global or a table field (`addon.State = EnumUtil.MakeEnum(...)`) keeps its members in other files. A call with any other argument (`EnumUtil.MakeEnum(unpack(names))`) returns the function's declared type. The built-in stubs annotate `EnumUtil.MakeEnum`.
+
+### `@meta` and overriding built-in stubs [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#meta-and-overriding-built-in-stubs)
+
+A `@meta` file is a declaration-only stub — the workspace analogue of the built-in WoW API stubs. Besides suppressing runtime diagnostics, a `@meta` file can **override** a built-in stub: an annotated method declared in a `@meta` file that reuses a built-in class + method name replaces the stub's signature, so hover, signature help, and completion use your declaration. Go-to-definition still offers both sites (your override and the original stub).
+
+This is how you correct or refine a bundled library annotation. For example, to give `AceDB-3.0:New` your own signature, put it in a `types.lua`:
+
+lua
+
+```
+---@meta
+
+---@class AceDB-3.0
+local AceDB = {}
+
+---@param name string
+---@return MyDatabase
+function AceDB:New(name) end
+```
+
+Rules:
+
+- **`@meta` only.** An annotated method in an ordinary (non-`@meta`) workspace file does **not** override a stub — it merges additively, keeping the stub's type. This keeps normal addon code that happens to reuse a built-in method name from silently clobbering the stub, and leaves a vendored _copy_ of a library's real source (which is not `@meta`) additive.
+- **Annotated only.** A bare (unannotated) method in a `@meta` file leaves the richer stub in place — a typeless declaration never downgrades a typed stub.
+- A colliding `@class` field (`---@field New fun(...)`) overrides the same way.
+
+## Opaque aliases [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#opaque-aliases)
+
+`@alias (opaque)` creates a nominally distinct type that prevents accidental mixing of values that share the same underlying type:
+
+lua
+
+```
+---@alias (opaque) PlayerID number
+---@alias (opaque) ItemID number
+
+---@param id PlayerID
+local function lookupPlayer(id) end
+
+lookupPlayer(42)            -- OK: number literal matches inner type
+lookupPlayer(getItemID())   -- ERROR: ItemID is not PlayerID
+```
+
+**Rules:**
+
+- Literal values and base-type values are accepted where an opaque alias is expected (e.g. `42` passes as `PlayerID`)
+- An opaque alias flows out to its base type freely (e.g. `PlayerID` passes where `number` is expected)
+- Different opaque aliases with the same inner type are **not** interchangeable (`ItemID` cannot be used as `PlayerID`)
+- Arithmetic and other operators unwrap to the inner type; results decay to the base type (`PlayerID + 1` produces `number`)
+- Hover displays the alias name, not the inner type
+
+Works with any inner type including string literal unions:
+
+lua
+
+```
+---@alias (opaque) Answer "YES"|"NO"
+---@alias (opaque) Toggle "YES"|"NO"
+
+---@param a Answer
+local function process(a) end
+
+process("YES")          -- OK
+process(getToggle())    -- ERROR: Toggle is not Answer
+```
+
+## Type syntax [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#type-syntax)
+
+| Syntax | Meaning |
+| --- | --- |
+| `string`, `number`, `boolean`, `nil`, `any` | Primitives |
+| `integer` | Integer subtype of number |
+| `table` | Any table |
+| `function` | Any function |
+| `A | B` | Union |
+| `A & B` | Intersection |
+| `T[]` | Array |
+| `T[K]` | Indexed access: field type of K on T |
+| `keyof T` | A string that is one of `T`'s field/method names (see below) |
+| `secret<T>` | A `T` that may be a [secret value](https://tradeskillmaster.github.io/wowlua-ls/guide/secrets.html) (retail); `T|secret<T>` means the same. As a parameter type with a generic `T`, it binds `T` to the argument's type without its secrecy (`secretunwrap`) |
+| `[T1, T2]` | Tuple: fixed-shape table (`{ [1]: T1, [2]: T2 }`) |
+| `T?` | Optional (`T | nil`) |
+| `?T` | Optional, prefix form (same as `T?`) |
+| `T!` | Non-nil / lateinit |
+| `table<K, V>` | Map type |
+| `{[K]: V}` | Map type (same as `table<K, V>`); can be combined with named fields: `{[string]: number, count: number}` |
+| `fun(a: T): R` | Function type |
+| `{f: T, g?: U}` | Anonymous table shape |
+| `"literal"` | String literal type |
+| `true`, `false` | Boolean literal types |
+| `0`, `-1`, `0xFF` | Number literal types (e.g. a `| (0, nil, nil)` tuple-union case) |
+| `params<F>` | Function parameter projection (vararg only) |
+| `params<EventType>` | Event payload projection: types varargs per-event |
+| `returns<F>` | Function return type projection. As a vararg type (`@param ... returns<F>`), binds `F` to the types of the arguments passed there |
+| `returns<F, param>` | `F`'s returns starting at the position given by argument `param` (how `select(n, ...)` is typed) |
+| `expression<C>` | Expression string type: fields of class C become variables |
+| `expression<C, R>` | Expression string with return type constraint R |
+| `expression<C, R>` (R is `@generic`) | Result type R inferred from the expression and propagated to the return |
+| `expression<C & F>` | Expression string with additional functions/fields from F |
+| `expression<C & F, R>` | Expression with extra environment and return constraint |
+
+### `keyof T` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/annotations.html\#keyof-t)
+
+`keyof self` / `keyof ClassName` is a first-class type: a string that must be one of the target's field/method names. `self` resolves to the call receiver at each call site. On such an argument the language server:
+
+- **completes** the receiver's member names inside the string,
+- **go-to-definition** and **hover** jump to / show the named member, and
+- reports a [`type-mismatch`](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html) when the literal isn't a member: a closed set, unlike an open `"a"|"b"` string enum.
+
+It composes in overloads and intersections, which is what libraries like **AceEvent-3.0** need: a handler is dispatched as a method on the receiver, and the 1-arg form reuses the event name as that method:
+
+lua
+
+```
+---@overload fun(self, event: FrameEvent & keyof self)  -- 1-arg: event is both an event AND a method of self
+---@param event FrameEvent
+---@param callback keyof self | function
+function AceEvent:RegisterEvent(event, callback, arg) end
+```
+
+So `self:RegisterEvent("PLAYER_LOGIN")` navigates to `self:PLAYER_LOGIN` (and the game event), `self:RegisterEvent("EVT", "OnEvt")` navigates to `self:OnEvt`, and a handler the receiver doesn't define is flagged. Also usable as a `@generic` constraint (`@generic K: keyof self`); see the [generics guide](https://tradeskillmaster.github.io/wowlua-ls/guide/generics.html#keyof-constraints).

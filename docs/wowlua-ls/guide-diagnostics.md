@@ -1,0 +1,636 @@
+[Skip to content](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html#VPContent)
+
+On this page
+
+# Diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#diagnostics)
+
+wowlua-ls ships 80+ diagnostics covering type safety, annotation correctness, code quality, and WoW-specific checks. Each one is individually suppressible and configurable.
+
+## How diagnostics work [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#how-diagnostics-work)
+
+Diagnostics run automatically as you type. They're grouped by severity:
+
+- **Error**: syntax errors, and `safety-limit` when analysis of a file stopped early
+- **Warning**: likely a bug or an annotation problem
+- **Hint**: code quality suggestions, unused variables, style issues
+
+Each diagnostic has a **code** (like `type-mismatch` or `unused-local`) that you use to suppress or configure it. This page covers the most common ones; see [All Diagnostics](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html) for the complete list.
+
+## Quick fixes [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#quick-fixes)
+
+Many diagnostics offer **quick fixes** (code actions — the lightbulb / `Ctrl` + `.` in most editors). Every diagnostic also always offers the three suppression actions (disable on this line / for this line above / for this file), and codes with two or more fixable instances get a "Fix all in this file" batch action.
+
+| Diagnostic | Quick fix |
+| --- | --- |
+| `undefined-global` | Add `local` declaration · Add to allowed **read** globals in `.wowluarc.json` |
+| `create-global` | Add `local` declaration · Add to allowed **write** globals in `.wowluarc.json` |
+| `undefined-field` / `inject-field` | Add `---@field` to the class |
+| `missing-fields` | Fill required fields with placeholders |
+| `missing-parameter` | Add a `nil` argument |
+| `redundant-parameter` | Remove the extra argument(s) |
+| `redundant-return` | Remove the redundant `return` |
+| `redundant-value` / `redundant-return-value` | Remove the surplus value(s) |
+| `not-precedence` | Add parentheses (around the comparison, or around `not`) |
+| `count-down-loop` | Add an explicit `-1` step |
+| `wrong-flavor-api` | Wrap in a `WOW_PROJECT_ID` flavor guard |
+| `invalid-op` | Provide an `or 0` / `or ""` fallback for a possibly-nil operand |
+| `secret-*` | Wrap the statement in a `canaccessvalue` guard (`canaccessallvalues` for several values) |
+| type-mismatch family | Insert an `--[[@as T]]` cast |
+| `unused-local` | Prefix the name with `_` |
+| `incomplete-signature-doc` | Generate the missing `@param` / `@return` annotations |
+| `trailing-space` | Remove the trailing whitespace |
+
+The config-editing fixes (`undefined-global`, `create-global`) only appear when a `.wowluarc.json` governs the file. The `wrong-flavor-api` guard compares `WOW_PROJECT_ID` against one constant for each flavor that runs the code (your target flavors, minus any an enclosing guard rules out) and has the API: `WOW_PROJECT_MAINLINE` (Retail), `WOW_PROJECT_CLASSIC` (Classic Era), `WOW_PROJECT_CAMELOT` (Forever). It isn't offered when Classic is among them, since Classic spans several expansion constants. The `secret-*` guard is offered only when each flagged value is a name or field chain and the statement is a call, assignment, `if`, `while`, or `repeat` (not a `local` declaration or `return`).
+
+## Suppressing diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#suppressing-diagnostics)
+
+### Inline [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#inline)
+
+Suppress a diagnostic on the same line by appending `disable-line` at the end:
+
+lua
+
+```
+local unused = computeSomething() ---@diagnostic disable-line: unused-local
+```
+
+When the diagnostic lands on an annotation line itself (for example `class-shadows-builtin` on a `---@class`), append the directive to that same comment line:
+
+lua
+
+```
+---@class Frame ---@diagnostic disable-line: class-shadows-builtin
+---@field extra string
+```
+
+### Previous line [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#previous-line)
+
+lua
+
+```
+---@diagnostic disable-next-line: unused-local
+local unused = computeSomething()
+```
+
+### Per-block [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#per-block)
+
+lua
+
+```
+---@diagnostic disable: create-global
+MY_GLOBAL = true
+OTHER_GLOBAL = false
+---@diagnostic enable: create-global
+```
+
+### Per-project [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#per-project)
+
+In `.wowluarc.json`:
+
+json
+
+```
+{
+  "diagnostics": {
+    "disable": ["inject-field", "unused-local"]
+  }
+}
+```
+
+### LuaLS compatibility aliases [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#luals-compatibility-aliases)
+
+For compatibility with LuaLS suppress comments, these aliases are accepted:
+
+| Alias | Maps to |
+| --- | --- |
+| `invisible` | `access-private`, `access-protected` |
+| `param-type-mismatch` | `type-mismatch` |
+| `return-type-mismatch` | `return-mismatch` |
+
+## Type safety diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#type-safety-diagnostics)
+
+These catch type errors - the most valuable diagnostics for finding real bugs.
+
+### `type-mismatch`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#type-mismatch)
+
+Argument type doesn't match the function's `@param` annotation:
+
+lua
+
+```
+---@param name string
+function greet(name) end
+
+greet(42) -- type-mismatch: expected string, got number
+```
+
+A function with `@overload`s is checked against the signature the call matches. A call that matches none is checked against the one with the fewest mismatched arguments, so an argument only another signature rejects isn't reported.
+
+### `return-mismatch`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#return-mismatch)
+
+Return type doesn't match the function's `@return` annotation:
+
+lua
+
+```
+---@return string
+function getName()
+    return 42 -- return-mismatch
+end
+```
+
+### `field-type-mismatch`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#field-type-mismatch)
+
+Assignment to a field doesn't match its `@field` type:
+
+lua
+
+```
+---@class Config
+---@field name string
+
+---@type Config
+local cfg = {}
+cfg.name = 42 -- field-type-mismatch
+```
+
+### `assign-type-mismatch`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#assign-type-mismatch)
+
+Reassignment doesn't match the variable's `@type` annotation:
+
+lua
+
+```
+---@type string
+local x = "hello"
+x = 42 -- assign-type-mismatch
+```
+
+### `generic-constraint-mismatch`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#generic-constraint-mismatch)
+
+Generic argument doesn't satisfy the class constraint:
+
+lua
+
+```
+---@class Box<T: number|string>
+
+---@type Box<boolean> -- generic-constraint-mismatch
+local b = {}
+```
+
+The same check applies to constrained parameterized aliases (`@alias Name<T: Constraint> ...`):
+
+lua
+
+```
+---@class Frame
+---@alias Wrapper<T: Frame> { value: T }
+
+---@type Wrapper<number> -- generic-constraint-mismatch
+local w = {}
+```
+
+### `need-check-nil`WarningOff by default [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#need-check-nil)
+
+Field/method access on a possibly-nil value:
+
+lua
+
+```
+---@param name string?
+function greet(name)
+    print(name:upper()) -- need-check-nil
+end
+```
+
+A possibly-nil argument for a parameter that doesn't accept nil is reported here too, rather than as `type-mismatch`.
+
+Enable in `.wowluarc.json`: `"diagnostics": { "enable": ["need-check-nil"] }`
+
+### `grouped-return-mismatch`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#grouped-return-mismatch)
+
+Return values don't match any declared tuple-union case:
+
+lua
+
+```
+---@return (string, number) | (nil, nil)
+function example()
+    return "hello", nil -- grouped-return-mismatch
+end
+```
+
+## Argument diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#argument-diagnostics)
+
+### `missing-parameter`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#missing-parameter)
+
+Required argument not provided:
+
+lua
+
+```
+---@param a number
+---@param b number
+function add(a, b) end
+
+add(1) -- missing-parameter: b
+```
+
+### `redundant-parameter`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#redundant-parameter)
+
+Extra arguments beyond what the function accepts:
+
+lua
+
+```
+---@param x number
+function single(x) end
+
+single(1, 2) -- redundant-parameter
+```
+
+### `cannot-call`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#cannot-call)
+
+Calling a value whose type is known to be non-callable:
+
+lua
+
+```
+---@type table
+local tbl = {}
+tbl() -- cannot-call: cannot call a value of type 'table'
+
+---@type number
+local n = 5
+n() -- cannot-call
+```
+
+### `invalid-op`WarningOff by default [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#invalid-op)
+
+Arithmetic, concatenation, or a `<`/`>`/`<=`/`>=` comparison applied to incompatible types, or `#` applied to a value that has no length. Common when `+` is used instead of `..` for string concatenation:
+
+lua
+
+```
+error("Missing context: " + tostring(field))
+-- invalid-op: cannot apply '+' to 'string' and 'string' (use '..' to concatenate)
+
+local x = true + 1
+-- invalid-op: cannot apply '+' to 'true' and 'number'
+
+local count = 3
+print(count > "5")
+-- invalid-op: cannot apply '>' to 'number' and 'string'
+```
+
+Enable in `.wowluarc.json`: `"diagnostics": { "enable": ["invalid-op"] }`
+
+## Return diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#return-diagnostics)
+
+### `missing-return-value`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#missing-return-value)
+
+Return with fewer values than declared:
+
+lua
+
+```
+---@return string, number
+function getInfo()
+    return "hello" -- missing-return-value
+end
+```
+
+### `missing-return`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#missing-return)
+
+Function with `@return` but no return statement on some paths:
+
+lua
+
+```
+---@param name string?
+---@return string
+function getName(name)
+    if name then
+        return name
+    end
+    -- missing-return (falls off without returning)
+end
+```
+
+### `redundant-return-value`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#redundant-return-value)
+
+Returning more values than declared:
+
+lua
+
+```
+---@return string
+function getName()
+    return "hello", 42 -- redundant-return-value
+end
+```
+
+### `implicit-nil-return`HintOff by default [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#implicit-nil-return)
+
+Bare `return` in a function with all-optional `@return` types:
+
+lua
+
+```
+---@param loaded boolean
+---@return string?
+function maybeName(loaded)
+    if not loaded then return end -- implicit-nil-return
+    return "name"
+end
+```
+
+## Global and field diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#global-and-field-diagnostics)
+
+### `undefined-global`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#undefined-global)
+
+Reference to an unresolved global name:
+
+lua
+
+```
+print(MyUnknownGlobal) -- undefined-global
+```
+
+Suppress with `globals.read` in `.wowluarc.json` for known external globals. Dynamic global patterns like `_G["PREFIX" .. key] = value` are detected automatically: reads matching the prefix won't trigger this diagnostic.
+
+### `undefined-field`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#undefined-field)
+
+Accessing a field that doesn't exist on a `@class`:
+
+lua
+
+```
+---@class Player
+---@field name string
+
+---@type Player
+local p = {}
+print(p.level) -- undefined-field
+```
+
+An anonymous table shape in an annotation lists all of its fields, so it is checked the same way:
+
+lua
+
+```
+---@param opts {name: string, size?: number}
+local function create(opts)
+    print(opts.color) -- undefined-field
+end
+```
+
+A field read used as a **defensive existence check** is not flagged - it is probing whether the field exists, not assuming it does. This covers the left operand of `and`/`or`, the condition of an `if`/`while`, and the access that such a guard protects:
+
+lua
+
+```
+local nodeID = button.GetNodeID and button:GetNodeID() -- no undefined-field
+if frame.SetBackdrop then
+    frame:SetBackdrop(nil) -- guarded by the condition: no undefined-field
+end
+local cache = obj.Custom or obj.Fallback -- the `or` fallback idiom
+```
+
+A deeper access on a now-known field is still checked, so genuine typos are not hidden: `if obj.cfg then obj.cfg.typo end` still flags `typo`.
+
+An intersection type declared on a variable (`---@type`, `---@param`, or an `--[[@as]]` cast) is checked against all of its members:
+
+lua
+
+```
+---@type Frame & {test: boolean}
+local frame = CreateFrame("Frame")
+print(frame.test)   -- no undefined-field
+frame:NonExisting() -- undefined-field
+```
+
+A frame created from a template (`CreateFrame("Frame", nil, nil, "BackdropTemplate")`) or returned by `Mixin()` has an intersection type too, but is not checked: such frames commonly receive members at runtime from XML key values and template scripts.
+
+### `inject-field`Hint [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#inject-field)
+
+Setting a field not declared on a `@class`:
+
+lua
+
+```
+---@class Player
+---@field name string
+
+---@type Player
+local p = {}
+p.level = 10 -- inject-field
+```
+
+### `create-global`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#create-global)
+
+Creating a global variable (assignment or function definition without `local`):
+
+lua
+
+```
+MyGlobal = true -- create-global
+function GlobalFunc() end -- create-global
+```
+
+Suppress with `globals.write` in `.wowluarc.json`.
+
+### `missing-fields`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#missing-fields)
+
+Missing required fields when constructing a `@class` table:
+
+lua
+
+```
+---@class Config
+---@field name string
+---@field debug boolean
+
+---@type Config
+local cfg = { name = "test" } -- missing-fields: debug
+```
+
+## Annotation diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#annotation-diagnostics)
+
+### `invalid-class-parent`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#invalid-class-parent)
+
+Inheriting from a primitive or literal type instead of a class:
+
+lua
+
+```
+---@class Nums : number      -- invalid-class-parent
+---@class Lit : "foo"        -- invalid-class-parent
+---@class Union : 1 | 2 | 3  -- invalid-class-parent
+```
+
+### `undefined-doc-class`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#undefined-doc-class)
+
+Undefined parent in `@class Foo : Parent`:
+
+lua
+
+```
+---@class Child : NonexistentParent -- undefined-doc-class
+```
+
+### `undefined-doc-name`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#undefined-doc-name)
+
+Undefined type name in any annotation:
+
+lua
+
+```
+---@param x NonexistentType -- undefined-doc-name
+function foo(x) end
+```
+
+### `unknown-cast-variable`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#unknown-cast-variable)
+
+`@cast` names a variable that isn't in scope, so the cast has no effect:
+
+lua
+
+```
+local parent = frame:GetParent()
+---@cast parnet Frame -- unknown-cast-variable (typo: should be 'parent')
+```
+
+### `undefined-doc-param`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#undefined-doc-param)
+
+`@param` name doesn't match any function parameter:
+
+lua
+
+```
+---@param nme string -- undefined-doc-param (typo: should be 'name')
+function greet(name) end
+```
+
+### `duplicate-doc-param` / `duplicate-doc-field` / `duplicate-doc-alias`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#duplicate-doc-param-duplicate-doc-field-duplicate-doc-alias)
+
+Duplicate annotation declarations.
+
+### `circle-doc-class`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#circle-doc-class)
+
+Circular inheritance chain:
+
+lua
+
+```
+---@class A : B
+---@class B : A -- circle-doc-class
+```
+
+### `malformed-annotation`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#malformed-annotation)
+
+Unknown or incomplete `---@` annotation.
+
+### `unknown-diag-code`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#unknown-diag-code)
+
+Unknown code in `@diagnostic` directives.
+
+## Code quality diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#code-quality-diagnostics)
+
+### `unused-local`Hint [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#unused-local)
+
+Unreferenced local variable. An unused local function (`local function f()` or `local f = function() end`) reports `unused-function` instead.
+
+### `unused-function`HintOff by default [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#unused-function)
+
+A function (global, method, or local) that nothing in the workspace references. Enable with `"diagnostics": { "enable": ["unused-function"] }` in `.wowluarc.json`. See the [reference](https://tradeskillmaster.github.io/wowlua-ls/reference/diagnostics.html#unused-function) for what counts as a reference.
+
+### `redefined-local`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#redefined-local)
+
+Same-scope local variable redefinition.
+
+### `shadowed-local`Hint [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#shadowed-local)
+
+Local variable shadows a variable from an outer scope. Fires for `local` declarations, for-loop variables, and function parameters. Suppressed for `_`-prefixed names.
+
+### `unreachable-code` / `code-after-break`Hint [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#unreachable-code-code-after-break)
+
+Code after `return` or `break`.
+
+### `deprecated`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#deprecated)
+
+Call to a function marked `@deprecated`.
+
+### `discard-returns`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#discard-returns)
+
+Ignoring the return value of a `@nodiscard` function.
+
+### `not-precedence`Hint [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#not-precedence)
+
+`not x < y` parses as `(not x) < y`, which is almost certainly not what you meant.
+
+### `count-down-loop`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#count-down-loop)
+
+Numeric for-loop step direction doesn't match start/end:
+
+lua
+
+```
+for i = 10, 1 do -- count-down-loop: needs step -1
+    print(i)
+end
+```
+
+## Style diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#style-diagnostics)
+
+### `empty-block`Hint [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#empty-block)
+
+Empty `if`/`while`/`for`/`repeat` body. Suppressed if the body contains a comment.
+
+### `redundant-return`Hint [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#redundant-return)
+
+Bare `return` as the last statement of a function's top block.
+
+### `trailing-space`Hint [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#trailing-space)
+
+Line ends with whitespace.
+
+## WoW-specific diagnostics [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#wow-specific-diagnostics)
+
+### `wrong-flavor-api`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#wrong-flavor-api)
+
+API call not available in all declared project flavors. See [Flavor Filtering](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html).
+
+### `secret-arithmetic` / `secret-comparison` / `secret-condition` / `secret-table-key` / `secret-argument` / `secret-access`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#secret-arithmetic-secret-comparison-secret-condition-secret-table-key-secret-argument-secret-access)
+
+Retail 12.x only. Flags operations that error when a value is secret: arithmetic, comparisons (including numeric `for` bounds), testing a secret boolean, using it as a table key, passing it to an API that rejects secrets from addon code (most of the API, `math.*` included), and indexing it (`name:upper()` included), calling it, or taking its length. Guard with `canaccessvalue` or `issecretvalue`. See [Secret Values](https://tradeskillmaster.github.io/wowlua-ls/guide/secrets.html).
+
+### `access-private` / `access-protected`Warning [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#access-private-access-protected)
+
+Accessing a private or protected field from outside its visibility scope.
+
+## Strict typing diagnostics Hint [​](https://tradeskillmaster.github.io/wowlua-ls/guide/diagnostics.html\#strict-typing-diagnostics)
+
+These are off by default. They mark every value whose type is unknown (no type at all, `any`, or `any?`), so you can find the gaps in your type coverage:
+
+| Code | Fires on |
+| --- | --- |
+| `unknown-param-type` | A parameter, including `_` and `self`, or a reassignment of one |
+| `unknown-return-type` | A returned value, even in a function with an `@return` annotation, or a file's annotated return value |
+| `unknown-local-type` | A `local`, `for`, or global variable, or a reassignment of one |
+| `unknown-field-type` | A class field's assigned value, or its `---@field` type |
+
+An explicit `any` annotation (`---@param x any`, `---@return any`, `---@type any` on a declaration, `---@field name any`) is reported as "is annotated `any`".
+
+Enable in `.wowluarc.json`:
+
+json
+
+```
+{
+  "diagnostics": {
+    "enable": ["unknown-param-type", "unknown-return-type"]
+  }
+}
+```

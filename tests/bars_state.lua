@@ -1009,10 +1009,10 @@ local CLASSES = {
       textures = 12, fontstrings = 5, lines = 1, extra_frames = 23 },
     { key = "WARRIOR", hands = { "mainhand", "offhand", "ranged" },
       -- HU-22 lazy bars: the fixture carries the shipped defaults, where the
-      -- warrior ranged bar ships disabled - so init builds mainhand+offhand
+      -- warrior offhand and ranged bars ship disabled - so init builds mainhand
       -- only. `hands` stays the class truth (iter_hands authority); `built`
       -- is what the construction pins below assert.
-      built = { "mainhand", "offhand" },
+      built = { "mainhand" },
       -- shield block (3 texture) + slam (2 texture, 1 fontstring) + 5 debuffs
       -- (15 texture, 5 fontstring) + overpower (4 texture, 1 fontstring)
       -- + Rampage badge (1 fontstring) + rage-bank cue (1 texture,
@@ -1020,6 +1020,7 @@ local CLASSES = {
       -- (1 texture, W1)
       textures = 26, fontstrings = 10, lines = 0, extra_frames = 0 },
     { key = "HUNTER", hands = { "mainhand", "offhand", "ranged" },
+      built = { "mainhand", "ranged" },
       -- hunter_ui: cast bar (4 texture, 1 fontstring) + range helper (1 texture)
       -- + rapid fire (1 texture, 1 fontstring) + aspect icon (2 texture) + 4 frames
       -- + movement-safe cast zone (2 texture) + Bestial Wrath / Frenzy badges
@@ -1033,13 +1034,14 @@ local CLASSES = {
       -- 1 frame) + 3 debuffs (9 texture, 3 fontstring)
       textures = 18, fontstrings = 7, lines = 0, extra_frames = 1 },
     { key = "SHAMAN", hands = { "mainhand", "offhand" },
+      built = { "mainhand" },
       -- mainhand: 3 marker textures + spark + windfury (2) + flame shock (3 texture, 1 fontstring)
-      -- + 2 badge fontstrings + 4 shield rects = 13; offhand: the spark mirror = 1
-      textures = 14, fontstrings = 3, lines = 0, extra_frames = 0 },
+      -- + 2 badge fontstrings + 4 shield rects = 13 (offhand disabled by default)
+      textures = 13, fontstrings = 3, lines = 0, extra_frames = 0 },
     { key = "ROGUE", hands = { "mainhand", "offhand", "ranged" },
       -- HU-22 lazy bars: same shipped-default gate as the warrior - the rogue
-      -- ranged bar ships disabled, so init builds mainhand+offhand only.
-      built = { "mainhand", "offhand" },
+      -- offhand and ranged bars ship disabled, so init builds mainhand only.
+      built = { "mainhand" },
       -- D3: mainhand only - tick spark + pooling wash + SS window band/text +
       -- swap band/text + poison reminder (4 extra textures, 3 extra fontstrings);
       -- the guide (nextaction_ui) and HUD suites are not loaded here so no frames
@@ -1182,8 +1184,10 @@ for i = 1, #CLASSES do
             check(mh_vf.weave_windfury_bg ~= nil, "SHAMAN: Windfury ICD strip created")
             check(mh_vf.weave_fs_bg ~= nil, "SHAMAN: Flame Shock bar created")
             eq(#mh_vf.weave_shield_rects, 4, "SHAMAN: four shield charge rects created")
-            local oh_vf = visuals(b, "offhand")
-            check(oh_vf.weave_spark_offhand ~= nil, "SHAMAN: offhand spark mirror created")
+            if b.ST:bar_is_built("offhand") then
+                local oh_vf = visuals(b, "offhand")
+                check(oh_vf.weave_spark_offhand ~= nil, "SHAMAN: offhand spark mirror created")
+            end
             check(b.ST.weave_catalog.LB ~= nil, "SHAMAN: the weave catalogue resolved Lightning Bolt")
             eq(b.ST.weave_catalog.LB.cast_seconds, 2.5, "SHAMAN: the catalogue carries the client cast time")
         elseif spec.key == "ROGUE" then
@@ -1257,6 +1261,8 @@ do
     local b = boot({ class = "PALADIN" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local vf = visuals(b, "mainhand")
     local db = hand_db(b, "mainhand")
     local w, h = vf.width, vf.height
@@ -1503,6 +1509,8 @@ do
     do
         local b = boot({ class = "WARRIOR" })
         local sb, ST = b.sb, b.ST
+        ST:get_hand_table("offhand").enabled = true
+        ST:bring_up_hand("offhand")
         local vf = visuals(b, "mainhand")
         -- The class hook does not paint bar texts; silence it so this block's clock
         -- arithmetic cannot be perturbed by a hook's own writes.
@@ -1541,6 +1549,10 @@ do
     do
         local b = boot({ class = "WARRIOR" })
         local sb, ST = b.sb, b.ST
+        ST:get_hand_table("offhand").enabled = true
+        ST:bring_up_hand("offhand")
+        ST:get_hand_table("offhand").enabled = true
+        ST:bring_up_hand("offhand")
         local vf = visuals(b, "offhand")
         sb.clock = 10
         start_swing(b, "offhand", 2.6, 2.6) -- ends at 12.6
@@ -1576,6 +1588,8 @@ do
     do
         local b = boot({ class = "WARRIOR" })
         local sb, ST = b.sb, b.ST
+        ST:get_hand_table("offhand").enabled = true
+        ST:bring_up_hand("offhand")
         sb.clock = 10
         start_swing(b, "offhand", 2.6, 2.6) -- ends at 12.6
         sb.clock = 10.5
@@ -1595,6 +1609,8 @@ do
     do
         local b = boot({ class = "WARRIOR" })
         local sb, ST = b.sb, b.ST
+        ST:get_hand_table("offhand").enabled = true
+        ST:bring_up_hand("offhand")
         local vf = visuals(b, "mainhand")
         local spark = vf.spark
         local function deco_calls()
@@ -1661,6 +1677,8 @@ do
     do
         local b = boot({ class = "WARRIOR" })
         local sb, ST = b.sb, b.ST
+        ST:get_hand_table("offhand").enabled = true
+        ST:bring_up_hand("offhand")
         local vf = visuals(b, "mainhand")
         local fill = vf.bar
         local class = ST[ST.player_class]
@@ -1702,6 +1720,8 @@ do
     local b = boot({ class = "PALADIN", engine = "absent" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local vf = visuals(b, "mainhand")
     eq(ST.swing_engine, "inert-standin", "H1: the absent engine selects the inert stand-in")
     eq(ST.mainhand.engine_dead, true, "H1: init_timers marks the dead engine per hand")
@@ -1723,6 +1743,8 @@ do
     local b = boot({ class = "PALADIN" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local vf = visuals(b, "mainhand")
     local real_hook = ST.PALADIN.on_bar_update
     local site = "class:PALADIN:on_bar_update"
@@ -1787,6 +1809,8 @@ do
     local b = boot({ class = "PALADIN" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local vf = visuals(b, "mainhand")
     local cdb = class_db(b)
     local w, h = vf.width, vf.height
@@ -1911,6 +1935,8 @@ do
     local b = boot({ class = "PALADIN" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local vf = visuals(b, "mainhand")
     local cdb = class_db(b)
     local w, h = vf.width, vf.height
@@ -2125,6 +2151,8 @@ do
     local b = boot({ class = "WARRIOR" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local vf = visuals(b, "mainhand")
     local cdb = class_db(b)
     local w = vf.width
@@ -2288,6 +2316,8 @@ do
     vertex_eq(vf.bar.color, db_color(cdb.hs_color), "warrior rage: unrelated power events do nothing")
 
     -- The broker feed is mainhand-only: the offhand tick must not reach it.
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     tick(b, "offhand")
     eq(sb.ldb_calls.offhand, nil, "warrior ldb: the offhand tick never feeds the broker")
 end
@@ -2439,6 +2469,8 @@ do
     local b = boot({ class = "HUNTER" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local ui = b.st.hunter_ui
     local db = hand_db(b, "ranged")
     local cdb = class_db(b)
@@ -2672,6 +2704,8 @@ do
     local b = boot({ class = "DRUID" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local vf = visuals(b, "mainhand")
     local cdb = class_db(b)
     local w, h = vf.width, vf.height
@@ -2816,6 +2850,8 @@ do
     local b = boot({ class = "SHAMAN" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local vf = visuals(b, "mainhand")
     local oh_vf = visuals(b, "offhand")
     local cdb = class_db(b)
@@ -3437,6 +3473,8 @@ do
     local b = boot({ class = "HUNTER" })
     local sb = b.sb
     local ST = b.ST
+    ST:get_hand_table("offhand").enabled = true
+    ST:bring_up_hand("offhand")
     local function shown(hand)
         local frame = ST:get_bar_frame(hand)
         return frame ~= nil and frame.shown == true
@@ -3560,6 +3598,8 @@ do
         local key = with_offhand[i]
         local b = boot({ class = key })
         local ST = b.ST
+        ST:get_hand_table("offhand").enabled = true
+        ST:bring_up_hand("offhand")
         local mh = ST.mainhand.anchor_frame
         local oh = ST.offhand.anchor_frame
         near(oh.width, mh.width, 1e-9, key .. ": offhand width equals the mainhand at init")
@@ -3663,9 +3703,11 @@ end
 --   for warrior." (the activity gate is class-agnostic: rogue === warrior).
 do
     -- ---- 12a. The range/placement geometry helpers --------------------------------
-    -- Warrior rows: mainhand y -120 h 20 (top -110, bottom -130), offhand y -142 h 20
-    -- (top -132, bottom -152). The power slot hangs one gap + its own height under the
-    -- bottom-most row: bottom -152 - 2 - 14 = -168. The band is therefore [-168, -110].
+    -- Warrior rows: mainhand y -120 h 20 (top -110, bottom -130); offhand y -142 h 20
+    -- (top -132, bottom -152) but it ships DISABLED (`enabled = false`), and a disabled
+    -- hand has no frames and no fill, so it reserves nothing. The power slot hangs one
+    -- gap + its own height under the bottom-most RENDERED row: -130 - 2 - 14 = -146.
+    -- The band is therefore [-146, -110].
     local b = boot({ class = "WARRIOR" })
     local ST = b.ST
     local profile = ST.db.profile.WARRIOR
@@ -3678,9 +3720,9 @@ do
         "placement: the fresh shipped ranged row is left exactly where it ships")
     local band_top, band_bottom = ST:melee_reserved_band()
     eq(band_top, -110, "placement: the reserved band starts at the top of the melee stack")
-    eq(band_bottom, -168, "placement: the reserved band reaches through the power-bar slot")
-    check(ST:row_intersects_band(-158.5, -173.5, band_top, band_bottom) == true,
-        "placement: the old -166 ranged row (h 15) demonstrably intersects the band")
+    eq(band_bottom, -146, "placement: the reserved band reaches through the power-bar slot")
+    check(ST:row_intersects_band(-143.5, -158.5, band_top, band_bottom) == true,
+        "placement: a row h 15 parked on the power slot demonstrably intersects the band")
     check(ST:row_intersects_band(-90.5, -105.5, band_top, band_bottom) == false,
         "placement: the shipped -98 ranged row clears the band")
     check(ST:row_intersects_band(-110, -130, band_top, band_bottom) == true,
@@ -3729,12 +3771,12 @@ do
     mh.point, mh.y = "TOPLEFT", -110
     local dragged_top, dragged_bottom = ST:melee_reserved_band()
     eq(dragged_top, -110, "band: a dragged melee anchor still yields the band's top")
-    eq(dragged_bottom, -168, "band: a dragged melee anchor still yields the power slot")
+    eq(dragged_bottom, -146, "band: a dragged melee anchor still yields the power slot")
     -- A SCALED melee row is read at its rendered size in the band too.
     mh.point, mh.y, mh.scale = "CENTER", -100, 1.5
     local scaled_top, scaled_bottom = ST:melee_reserved_band()
     eq(scaled_top, -85, "band: a scaled melee row raises the band to its rendered top")
-    eq(scaled_bottom, -168, "band: the power slot still hangs under the offhand row")
+    eq(scaled_bottom, -131, "band: the power slot hangs under the scaled melee row")
     mh.point, mh.y, mh.scale = mh_point, mh_y, mh_scale
     -- An unreadable melee row makes the band nil (the rule answers "unknown", no guess).
     mh.y = nil
@@ -3795,8 +3837,11 @@ do
         eq(#case.sb.prints, prints_before + 1,
             "forced: " .. class .. " tells the user once that its saved row moved")
         local notice = case.sb.prints[#case.sb.prints]
-        check(type(notice) == "string" and notice:find("ranged bar was moved", 1, true) ~= nil,
-            "forced: " .. class .. " the notice names what moved")
+        -- -166 is BELOW the band now that the offhand ships disabled, so the row is a
+        -- standard-layout placement, not a power-slot rescue: the notice must say which.
+        check(type(notice) == "string"
+            and notice:find("placed in the standard layout", 1, true) ~= nil,
+            "forced: " .. class .. " the notice names the placement")
         eq(hand.y, -98, "forced: " .. class .. " lands on the shipped row a fresh profile gets")
         eq(hand.x, 0, "forced: " .. class .. " keeps the shipped x")
         eq(hand.point, "CENTER", "forced: " .. class .. " keeps the shipped anchor point")
@@ -3826,6 +3871,10 @@ do
         eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
             "placement: a ranged row on the mainhand row is re-placed")
         eq(hand.y, -98, "placement: it lands on the shipped row")
+        local notice = case.sb.prints[#case.sb.prints]
+        check(type(notice) == "string"
+            and notice:find("ranged bar was moved above the melee bars", 1, true) ~= nil,
+            "placement: an in-band rescue says the row belonged to the power bar")
     end
 
     -- R4: a DRAGGED row (a user x, a non-CENTER anchor) is MOVED. This pin replaces the
@@ -3841,8 +3890,9 @@ do
         eq(hand.y, -98, "forced: a dragged row lands on the shipped row")
         eq(#case.sb.prints, prints_before + 1, "forced: the dragged-row move prints once")
         local notice = case.sb.prints[#case.sb.prints]
-        check(type(notice) == "string" and notice:find("ranged bar was moved", 1, true) ~= nil,
-            "forced: the dragged-row notice names what moved")
+        check(type(notice) == "string"
+            and notice:find("placed in the standard layout", 1, true) ~= nil,
+            "forced: the dragged-row notice names the placement")
     end
 
     -- R4: a SCALED row is moved too - the new layout's row is scale 1.
@@ -4005,6 +4055,81 @@ do
             "F2: a second run on the same profile changes nothing (once per profile)")
     end
 
+    -- ---- 12f. The ENABLED-HAND SIGNATURE re-checks the row --------------------------
+    -- Shipping `offhand.enabled = false` CHANGED the reserved band (a disabled hand has no
+    -- frames, so it reserves no row), but the version latch alone never re-evaluates a
+    -- profile: the ranged row would keep a placement chosen for a band that no longer
+    -- exists - which is exactly the reported "ranged bar sits on the mainhand bar" state.
+    -- The signature rides beside the version and re-checks the row, WITHOUT fighting a
+    -- drag that is already clear.
+    do
+        local case = boot({ class = "WARRIOR" })
+        local sig_st = case.ST
+        eq(sig_st:ranged_placement_signature(), "mainhand",
+            "signature: a disabled offhand is not part of the enabled melee set")
+        eq(sig_st:hand_row_is_reserved("offhand"), false,
+            "signature: the disabled offhand reserves no row")
+        case.ST.db.profile.WARRIOR.offhand.enabled = true
+        eq(sig_st:ranged_placement_signature(), "mainhand+offhand",
+            "signature: enabling the offhand adds it back to the set")
+        eq(sig_st:hand_row_is_reserved("offhand"), true,
+            "signature: the enabled offhand reserves its row again")
+        case.ST.db.profile.WARRIOR.offhand.enabled = false
+    end
+
+    -- A profile that already ran the enforced pass (version + signature) whose enabled set
+    -- then changed: a row that is already CLEAR must be left exactly where the user put it.
+    do
+        -- -70 is CLEAR of the band but is NOT the shipped target (-98): without the
+        -- "never fight a clear drag" guard this row would be normalised back.
+        local case = fresh_case("WARRIOR", -70)
+        local class_row = case.ST.db.profile.WARRIOR
+        rawset(class_row, "ranged_placement_hands", "mainhand+offhand") -- the old set
+        rawset(class_row, "ranged_placement_213", case.ST.RANGED_PLACEMENT_VERSION)
+        local real, writes = counted_ranged(case, "WARRIOR")
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "kept",
+            "signature: a clear row survives an enabled-set change (a drag is not fought)")
+        eq(writes(), 0, "signature: the re-check writes nothing to a clear row")
+        eq(real.y, -70, "signature: the user's clear row keeps its y")
+        eq(rawget(class_row, "ranged_placement_hands"), "mainhand",
+            "signature: the new enabled-hand set is latched even when the row is kept")
+    end
+
+    -- ... and a row the NEW band puts in the reserved area is corrected.
+    do
+        local case, hand = fresh_case("WARRIOR", -140)   -- inside [-146, -110]
+        local class_row = case.ST.db.profile.WARRIOR
+        rawset(class_row, "ranged_placement_hands", "mainhand+offhand")
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "signature: an enabled-set change re-places a row now inside the band")
+        eq(hand.y, -98, "signature: the re-placed row lands on the shipped row")
+        eq(hand.x, 0, "signature: the re-placed row keeps the shipped x")
+    end
+
+    -- A profile with NO stored signature is the first enforced pass and stays FORCED (the
+    -- operator's ruling that a legacy drag does not win), even when the row is clear.
+    do
+        local case, hand = fresh_case("WARRIOR", -60)
+        local class_row = case.ST.db.profile.WARRIOR
+        rawset(class_row, "ranged_placement_hands", nil)
+        rawset(class_row, "ranged_placement_213", case.ST.RANGED_PLACEMENT_VERSION)
+        eq(case.ST:migrate_ranged_placement(case.ST.db.profile), "moved",
+            "signature: a profile without a stored signature is still forced (legacy latch)")
+        eq(hand.y, -98, "signature: the forced pass lands on the shipped row")
+        eq(rawget(class_row, "ranged_placement_hands"), "mainhand",
+            "signature: the forced pass latches the enabled-hand set")
+    end
+
+    -- A caster class renders no melee row at all (mainhand.enabled is false), so there is
+    -- nothing to clear: the shipped ranged row is the whole rule, never "unknown".
+    for _, class in ipairs({ "MAGE", "PRIEST", "WARLOCK" }) do
+        local case = boot({ class = class })
+        eq(case.ST:has_reserved_melee_row(), false,
+            "signature: " .. class .. " renders no melee row")
+        eq(case.ST:melee_reserved_band(), nil,
+            "signature: " .. class .. " has no reserved band")
+    end
+
     -- Static wiring: the rule is called once from OnInitialize, before the options build,
     -- and it is pcall'd (a bad profile can never abort login). No per-tick work is a
     -- structural property too: the name may appear in bars.lua exactly ONCE - its
@@ -4050,6 +4175,8 @@ do
             "pair: a sizing pass does not create the unset key either")
         eq(visuals(pair_b, "mainhand"):GetHeight(), 16,
             "pair: unset keeps the mainhand's own 20 px row (20 minus the 2x2 px border)")
+        hand_db(pair_b, "offhand").enabled = true
+        pair_st:bring_up_hand("offhand")
         eq(visuals(pair_b, "offhand"):GetHeight(), 16, "pair: unset keeps the offhand matched")
 
         class_db(pair_b).melee_bar_height = 30

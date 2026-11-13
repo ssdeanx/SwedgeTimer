@@ -484,8 +484,16 @@ end
 --=========================================================================================
 do
     local b = boot()
+    check(not b.ST:bar_is_built("offhand"), "default offhand is OFF and unbuilt at init")
+    eq(b.ST:get_hand_table("offhand").enabled, false, "default offhand db reads disabled")
+end
+
+do
+    local b = boot({ pre_init = function(bb)
+        bb.ST.HUNTER.defaults.offhand.enabled = true
+    end })
     local sb, ST = b.sb, b.ST
-    check(ST:bar_is_built("offhand"), "fixture: default offhand builds (enabled + weaponed)")
+    check(ST:bar_is_built("offhand"), "fixture: enabled+weaponed offhand builds")
     local built_frames = sb.frames_created
     -- Spy the seam: disabling must not call it.
     local calls = 0

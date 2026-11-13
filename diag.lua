@@ -703,10 +703,34 @@ local function bar_line(self, hand)
     end
     local row = profile_hand(self, hand)
     local window = call_self(self, "hand_activity_window", hand)
+    -- The LIVE anchor: point / relative frame / x,y. `pos=` above is the SAVED LibWindow
+    -- row; the melee stack re-pins a hand's anchor to another bar at runtime, so the saved
+    -- row and the rendered row can legitimately differ. Without this the one question a
+    -- layout report asks - where is the frame actually anchored - had no answer.
+    local anchor_text = "?"
+    local get_point = read(anchor, "GetPoint")
+    if type(get_point) == "function" then
+        local ok_point, point, relative, _, point_x, point_y =
+            pcall(get_point, anchor, 1)
+        if ok_point and type(point) == "string" then
+            local relative_name = "?"
+            local name_fn = read(relative, "GetName")
+            if type(name_fn) == "function" then
+                local ok_name, name = pcall(name_fn, relative)
+                if ok_name and type(name) == "string" then
+                    relative_name = name
+                end
+            end
+            -- Raw coordinates, the same shape `pos=` uses: these are layout numbers, and
+            -- a reader comparing the live anchor to the saved row wants them side by side.
+            anchor_text = string.format("%s/%s/%s,%s", point, relative_name,
+                show(point_x), show(point_y))
+        end
+    end
     return string.format(
         "%s bar %s built=%s shown=%s why=%s gate=%s active=%s win=%s left=%s src=%s"
             .. " alpha=%s tick=%s start=%s speed=%s ends_at=%s now=%s progress=%s"
-            .. " full=%s paused=%s dead=%s vf_width=%s fill=%s pos=%s,%s%s",
+            .. " full=%s paused=%s dead=%s vf_width=%s fill=%s pos=%s,%s anchor=%s%s",
         PREFIX,
         tostring(hand),
         built and "yes" or "no",
@@ -731,6 +755,7 @@ local function bar_line(self, hand)
         number_text(frame_read(fill, "GetWidth")),
         show(read(row, "x")),
         show(read(row, "y")),
+        anchor_text,
         queue_text(self, hand))
 end
 

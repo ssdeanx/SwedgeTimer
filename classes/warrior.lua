@@ -1401,7 +1401,7 @@ st.class_loaders["WARRIOR"] = function()
         for spell_id in pairs(cleave_ids) do
             -- Name-vs-id rule: the query is the localized name on TBC.
             local query = spell_query(spell_id)
-            local result = query ~= nil and api.IsCurrentSpell(query)
+            local result = query ~= nil and api.IsCurrentSpell(query) ---@diagnostic disable-line: redundant-parameter
             if result then
                 -- print('matched cleave id: '..tostring(spell_id))
                 self.cleave_queued = true
@@ -1486,7 +1486,7 @@ st.class_loaders["WARRIOR"] = function()
                     sod_stance_found = true
                 end
                 if stance == nil then
-                    local stance_key = (type(spell_id) == "number")
+                    local stance_key = (spell_id ~= nil and type(spell_id) == "number")
                         and WARRIOR_STANCES.ids[spell_id] or nil
                     if stance_key == nil and type(name) == "string" then
                         stance_key = WARRIOR_STANCES.names[name]
@@ -1513,7 +1513,7 @@ st.class_loaders["WARRIOR"] = function()
                         n = WARRIOR_RAMPAGE_MAX_STACKS
                     end
                     rampage_stacks = n
-                    if type(expiration) == "number" and expiration > 0 then
+                    if type(expiration) == "number" and (expiration or 0) > 0 then
                         rampage_expires = expiration
                     end
                 end
@@ -2382,7 +2382,7 @@ st.class_loaders["WARRIOR"] = function()
                         local def = warrior_debuff_defs[i]
                         local key = def.key
                         if found[key] == nil then
-                            local is_match = (type(spell_id) == "number" and def.ids[spell_id] ~= nil)
+                            local is_match = (spell_id ~= nil and type(spell_id) == "number" and def.ids[spell_id] ~= nil)
                                 or def.fallback_names[name] == true
                                 or (def.localized_names ~= nil and def.localized_names[name] == true)
                             if is_match then
@@ -2498,7 +2498,7 @@ st.class_loaders["WARRIOR"] = function()
         local id = slam_current_id
         if id then
             local _, _, _, cast_ms = api.GetSpellInfo(id)
-            if type(cast_ms) == "number" and cast_ms > 0 then
+            if type(cast_ms) == "number" and (cast_ms or 0) > 0 then
                 return cast_ms / 1000
             end
         end
@@ -2516,10 +2516,17 @@ st.class_loaders["WARRIOR"] = function()
     -- and the spell id 8th.
     local function get_live_player_cast()
         local name, _, _, start_ms, end_ms, _, _, _, spell_id = api.UnitCastingInfo("player")
-        if type(start_ms) ~= "number" or type(end_ms) ~= "number" or end_ms <= start_ms then
-            name, _, _, start_ms, end_ms, _, _, spell_id = api.UnitChannelInfo("player")
+        if canaccessvalue(end_ms) then
+            if canaccessvalue(start_ms) then
+                if type(start_ms) ~= "number" or type(end_ms) ~= "number" or (end_ms or 0) <= (start_ms or 0) then
+                    name, _, _, start_ms, end_ms, _, _, spell_id = api.UnitChannelInfo("player")
+                end
+            end
         end
-        if type(start_ms) ~= "number" or type(end_ms) ~= "number" or end_ms <= start_ms then
+        if not canaccessvalue(start_ms) or not canaccessvalue(end_ms) then
+            return nil, nil, nil, nil
+        end
+        if type(start_ms) ~= "number" or type(end_ms) ~= "number" or (end_ms or 0) <= (start_ms or 0) then
             return nil, nil, nil, nil
         end
         return name, spell_id, start_ms / 1000, end_ms / 1000
@@ -3665,7 +3672,7 @@ st.class_loaders["WARRIOR"] = function()
             guide_reads_unknown = true
             return nil, nil
         end
-        if type(remaining) ~= "number" or type(duration) ~= "number" or duration <= 1.51 then
+        if type(remaining) ~= "number" or type(duration) ~= "number" or (duration or 0) <= 1.51 then
             return 0, nil
         end
         if remaining <= 0 then
@@ -3952,7 +3959,7 @@ st.class_loaders["WARRIOR"] = function()
             -- continues past it.
             if name ~= nil then
                 if source == "player" or source == nil then
-                    local match = (type(spell_id) == "number" and rend_ids[spell_id] ~= nil)
+                    local match = (spell_id ~= nil and type(spell_id) == "number" and rend_ids[spell_id] ~= nil)
                         or name == "Rend"
                     if not match then
                         if localized == nil then
@@ -4025,7 +4032,7 @@ st.class_loaders["WARRIOR"] = function()
             -- continues past it.
             if name ~= nil then
                 if source == "player" or source == nil then
-                    local match = (type(spell_id) == "number" and sunder_armor_ids[spell_id] ~= nil)
+                    local match = (type(spell_id) == "number" and sunder_armor_ids[spell_id or 0] ~= nil)
                         or name == "Sunder Armor"
                     if not match then
                         if localized == nil then
@@ -5148,10 +5155,18 @@ st.class_loaders["WARRIOR"] = function()
     local function hud_ability_cooldown(self, slot, now)
         local query = hud_slot_name(slot) or slot.spell
         local start_time, duration = api.GetSpellCooldown(query)
-        if start_time and duration and duration > 1.51 then
-            local remaining = start_time + duration - now
-            if remaining > 0 then
-                return remaining, duration
+        if canaccessallvalues(duration, start_time) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if canaccessvalue(duration) then
+                        if start_time and duration and duration > 1.51 then
+                            local remaining = start_time + duration - now
+                            if remaining > 0 then
+                                return remaining, duration
+                            end
+                        end
+                    end
+                end
             end
         end
         return 0, ST.WARRIOR.HUD_COOLDOWN_FALLBACK[slot.key] or 0

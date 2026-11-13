@@ -268,13 +268,11 @@ local function read_equipped_speed(hand)
 		end
 	end
 	end
-	if canaccessvalue(speed) then
-		if is_restricted(speed) or type(speed) ~= "number" or (speed or 0) <= 0 then
-			if hand == "ranged" and type(UnitRangedDamage) == "function" then
-				local ok, damage = pcall(UnitRangedDamage, "player")
-				if ok then
-					speed = damage
-				end
+	if is_restricted(speed) or not canaccessvalue(speed) or type(speed) ~= "number" or speed <= 0 then
+		if hand == "ranged" and type(UnitRangedDamage) == "function" then
+			local ok, damage = pcall(UnitRangedDamage, "player")
+			if ok then
+				speed = damage
 			end
 		end
 	end
@@ -344,12 +342,6 @@ local function on_unit_attack_speed(unit)
 		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
 	end
-	-- A restricted reading keeps every cycle on its scheduled speed: an opaque value
-	-- must never reach the rescale arithmetic below.
-	if is_secret(main_speed) or is_secret(off_speed) or is_secret(ranged_speed) then
-		stats.speed_read_keeps = stats.speed_read_keeps + 1
-		return
-	end
 	local speeds = {
 		mainhand = main_speed,
 		offhand = off_speed,
@@ -407,12 +399,6 @@ local function on_weapon_slot_changed()
 		stats.speed_read_keeps = stats.speed_read_keeps + 1
 		return
 	end
-	-- A restricted reading keeps every cycle on its scheduled speed: an opaque value
-	-- must never reach the restart arithmetic below.
-	if is_secret(main_speed) or is_secret(off_speed) or is_secret(ranged_speed) then
-		stats.speed_read_keeps = stats.speed_read_keeps + 1
-		return
-	end
 	local speeds = {
 		mainhand = main_speed,
 		offhand = off_speed,
@@ -423,7 +409,8 @@ local function on_weapon_slot_changed()
 		local cycle = active_cycles[hand]
 		if cycle then
 			local new_speed = speeds[hand]
-			if type(new_speed) == "number" and new_speed > 0 then
+			if not is_secret(new_speed) and canaccessvalue(new_speed)
+				and type(new_speed) == "number" and new_speed > 0 then
 				-- Restart, not rescale: equipping a weapon resets the client's swing
 				-- cycle, so the bar must show a full cycle of the equipped speed.
 				local t = now()

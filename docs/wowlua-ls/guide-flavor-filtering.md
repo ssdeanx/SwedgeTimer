@@ -1,0 +1,254 @@
+[Skip to content](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html#VPContent)
+
+On this page
+
+# Flavor Filtering [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#flavor-filtering)
+
+WoW ships four game versions (retail, classic, classic era, and World of Warcraft: Forever) and their APIs differ. If your addon targets more than one, calling an API that doesn't exist in one of your targets is a runtime error you won't catch until someone reports it. wowlua-ls catches it at edit time.
+
+## Setup [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#setup)
+
+There are two ways to configure flavor filtering: manually via `.wowluarc.json`, or automatically from your `.toc` files. Both can be used together - when they are, the effective flavor for each file is the **intersection** of the two.
+
+### Option 1: `.wowluarc.json` (project-wide) [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#option-1-wowluarc-json-project-wide)
+
+Declare your target flavors in `.wowluarc.json`:
+
+json
+
+```
+{
+  "flavors": ["retail", "classic"]
+}
+```
+
+Accepted values:
+
+| Name | Meaning |
+| --- | --- |
+| `retail` (alias: `mainline`) | The live retail game |
+| `classic` | Rolling Classic progression (including MoP Classic) |
+| `classic_era` | Classic Era (vanilla) |
+| `forever` | [World of Warcraft: Forever](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html#world-of-warcraft-forever) |
+
+### Option 2: TOC-based detection (per-file) [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#option-2-toc-based-detection-per-file)
+
+If your addon uses [flavor-specific TOC files](https://warcraft.wiki.gg/wiki/TOC_format), the LS reads the file listings from each TOC and automatically determines which flavors each `.lua` file is loaded for. No `.wowluarc.json` configuration is needed.
+
+**Filename suffixes:**
+
+| TOC suffix | Flavors |
+| --- | --- |
+| `_Mainline` | Retail, plus Forever when the addon [targets it](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html#world-of-warcraft-forever) |
+| `_Standard` | Retail |
+| `_Camelot`, `_Forever` | Forever |
+| `_Classic` | Classic + Classic Era |
+| `_Vanilla` | Classic Era |
+| `_Cata`, `_Wrath`, `_TBC`, `_Mists` | Classic |
+
+The unsuffixed (base) TOC covers whichever flavors aren't claimed by any suffixed TOC in the same addon. Like the game, the LS prefers a game-specific TOC over its family's: with both `_Vanilla.toc` and `_Classic.toc`, Classic Era loads `_Vanilla.toc`, so `_Classic.toc` counts as Classic only; `_Camelot.toc` (or `_Forever.toc`) takes Forever away from `_Mainline.toc` the same way.
+
+```
+MyAddon/
+├── MyAddon.toc           # Loaded on Classic (the other flavors have their own)
+├── MyAddon_Mainline.toc  # Loaded on Retail
+└── MyAddon_Vanilla.toc   # Loaded on Classic Era
+```
+
+A file listed in `MyAddon_Mainline.toc` is treated as retail-only. A file listed in both `_Mainline.toc` and `_Vanilla.toc` is available on retail and classic era. A file in the base `MyAddon.toc` covers whichever flavors don't have a suffixed TOC.
+
+**`AllowLoadGameType` / `ExcludeLoadGameType` restrictions:**
+
+The LS also respects `## AllowLoadGameType:` / `## ExcludeLoadGameType:` headers and their per-line directive forms:
+
+toc
+
+```
+## AllowLoadGameType: vanilla
+Core.lua
+```
+
+toc
+
+```
+RetailUI.lua [AllowLoadGameType mainline]
+TableBuilder.lua [ExcludeLoadGameType vanilla tbc wrath]
+SharedCode.lua
+```
+
+`ExcludeLoadGameType` is the inverse of `AllowLoadGameType`: the file loads on every flavor except the ones listed. Values may be separated by commas or plain whitespace.
+
+Because wowlua-ls groups WoW's game types into four flavors, an exclusion removes a flavor only once every game type in it is listed. `[ExcludeLoadGameType vanilla tbc wrath]` above still loads on Cataclysm and Mists, so it counts as Retail + Classic; `[ExcludeLoadGameType vanilla tbc wrath cata mists]` is what leaves Retail alone. `classic` and `mainline` stand for all of their game types, and `mainline` includes Forever's `camelot` (also written `forever`).
+
+The directive may follow the file path (the form the WoW client documents, shown above) or precede it (`[AllowLoadGameType mainline] RetailUI.lua`). These intersect with the TOC's suffix flavor, further restricting which flavors a file is loaded for.
+
+Other per-line conditions (`[AllowLoadTextLocale ...]`, `[AllowLoad ...]`) and path variables (`[Family]`, `[Game]`, `[TextLocale]`) are recognized in either position, but only the game-type conditions affect flavor: the rest are parsed so they don't corrupt the file path. See the [TOC file guide](https://tradeskillmaster.github.io/wowlua-ls/guide/toc-files.html#per-line-directives) for the full list.
+
+**Path variables (`[Family]` and `[Game]`):**
+
+TOC files can use `[Family]` and `[Game]` variables in file paths to load different files per flavor:
+
+toc
+
+```
+Compat/[Game]/Init.lua
+```
+
+The LS expands each variable to all possible values and checks which files exist on disk:
+
+| Variable | Values |
+| --- | --- |
+| `[Family]` | `Mainline` (retail + Forever), `Classic` (classic + classic era) |
+| `[Game]` | `Standard` (retail), `Camelot`/`Forever` (Forever), `Vanilla` (classic era), `Cata`/`Wrath`/`TBC`/`Mists` (classic) |
+
+Each expanded file gets the flavor mask of its expansion value. Files that don't exist on disk are skipped.
+
+**Intersection with `.wowluarc.json`:**
+
+When both sources provide flavor information, the effective flavor for a file is the intersection. For example, if `.wowluarc.json` declares `["classic_era"]` and a file is listed in `_Classic.toc` (classic + classic\_era), the file's effective flavor is classic\_era.
+
+## The `wrong-flavor-api` diagnostic [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#the-wrong-flavor-api-diagnostic)
+
+When a file's flavors are known (from `flavors` or a flavor-specific `.toc`), the LS warns when you call an API that isn't available in all of them. With `"flavors": ["retail", "classic"]`:
+
+lua
+
+```
+-- The Great Vault doesn't exist on Classic
+C_WeeklyRewards.HasAvailableRewards()
+-- warning: wrong-flavor-api: API 'C_WeeklyRewards.HasAvailableRewards' not available in flavor 'Classic' (available in: Retail, Forever)
+```
+
+Hovering over a WoW API function shows its availability, e.g. `Flavors: Retail, Forever`.
+
+## Flavor-aware deprecation [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#flavor-aware-deprecation)
+
+WoW API deprecations are retail-side (Forever, which runs the retail client, included): many functions Blizzard marks `@deprecated` (e.g. `GetMerchantItemInfo`, replaced on retail by `C_MerchantFrame.GetItemInfo`) remain the live, correct API on Classic and Classic Era. The `deprecated` diagnostic accounts for this. It won't flag a call when the API is still live in a flavor your addon targets (and the editor won't strike the call through either: the semantic-token "deprecated" styling follows the same rule):
+
+lua
+
+```
+-- In a Classic Era addon (or a multi-flavor addon that includes Classic):
+local _, _, price = GetMerchantItemInfo(index)  -- no `deprecated` warning here
+
+-- In a retail-only addon, the same call IS flagged:
+-- warning: deprecated: 'GetMerchantItemInfo' is deprecated
+```
+
+The addon's targeted flavors are taken from your `.wowluarc.json``flavors`, else a flavor-specific `.toc` (suffix / `AllowLoadGameType`), else the `.toc``## Interface:` version line, so a config-less multi-version addon (`## Interface: 120005, 50503, 11508`) is still recognized as targeting Classic. If there is no flavor signal at all, the warning fires as before. The same targeted flavors also scope [secret values](https://tradeskillmaster.github.io/wowlua-ls/guide/secrets.html) and flavor guards. Without a `flavors` config, `wrong-flavor-api` reads the `## Interface:` lines only when one of them declares [Forever](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html#world-of-warcraft-forever), and then holds each file to the flavors those lines declare.
+
+## Conditional narrowing [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#conditional-narrowing)
+
+The LS understands flavor-conditional code:
+
+### `WOW_PROJECT_ID` guards [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#wow-project-id-guards)
+
+lua
+
+```
+if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE then
+    -- Narrowed to retail
+    C_WeeklyRewards.HasAvailableRewards() -- no warning
+else
+    -- Narrowed to non-retail flavors
+end
+
+-- The right-hand side of `and` is narrowed too
+local hasRewards = WOW_PROJECT_ID == WOW_PROJECT_MAINLINE and C_WeeklyRewards.HasAvailableRewards()
+```
+
+Comparisons joined with `or` or `and` narrow to the flavors they cover together, so `WOW_PROJECT_ID == WOW_PROJECT_MAINLINE or WOW_PROJECT_ID == WOW_PROJECT_CAMELOT` is retail and [Forever](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html#world-of-warcraft-forever).
+
+### Custom flavor guards with `@flavor-narrows` [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#custom-flavor-guards-with-flavor-narrows)
+
+Mark your own guard functions or boolean variables:
+
+lua
+
+```
+---@flavor-narrows retail
+---@return boolean
+local function IsRetail()
+    return WOW_PROJECT_ID == WOW_PROJECT_MAINLINE
+end
+
+if IsRetail() then
+    C_WeeklyRewards.HasAvailableRewards() -- no warning (narrowed to retail)
+end
+
+if not IsRetail() then return end
+-- Rest of file is retail-only
+C_WeeklyRewards.HasAvailableRewards() -- no warning
+```
+
+#### Boolean flavor guards [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#boolean-flavor-guards)
+
+A boolean variable or field assigned a `WOW_PROJECT_ID` comparison is a flavor guard on its own, with no annotation needed (`~=` guards every other flavor):
+
+lua
+
+```
+local isRetail = WOW_PROJECT_ID == WOW_PROJECT_MAINLINE
+
+if isRetail then
+    C_WeeklyRewards.HasAvailableRewards() -- no warning
+end
+```
+
+This is especially useful with the addon namespace pattern, where the boolean is set in one file and used across others:
+
+lua
+
+```
+-- In init.lua:
+local _, ns = ...
+ns.isRetail = WOW_PROJECT_ID == WOW_PROJECT_MAINLINE
+
+-- In another file:
+local _, ns = ...
+if ns.isRetail then
+    C_WeeklyRewards.HasAvailableRewards() -- no warning
+end
+```
+
+A boolean computed any other way, or later reassigned something other than a comparison (`flag = flag or cond`), needs `@flavor-narrows`, which also takes precedence over an inferred guard:
+
+lua
+
+```
+---@type boolean
+---@flavor-narrows retail
+local isRetail = select(4, GetBuildInfo()) >= 100000
+```
+
+Flavor guards work with all narrowing patterns: if/else, early exit, `not`, and `and`.
+
+Flavor guards also scope the retail-only [secret-value](https://tradeskillmaster.github.io/wowlua-ls/guide/secrets.html) diagnostics, and for those no `flavors` declaration is needed.
+
+## World of Warcraft: Forever [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#world-of-warcraft-forever)
+
+Forever (game type `camelot`, also written `forever`) is a vanilla-era game running on the retail client. It has retail's API, minus some systems and plus its own, and shares retail's secret values and deprecations. Its interface versions start at `1.60` (`## Interface: 16001`), well above Classic Era's `1.15`.
+
+An addon targets Forever when its `.wowluarc.json``flavors` includes `forever`, or, if it sets no `flavors`, when one of its `.toc` files lists a Forever `## Interface:` version. Otherwise Forever is left out even though the game would load the addon's `_Mainline.toc`, so a retail addon doesn't get warnings about APIs that Forever lacks.
+
+```
+MyAddon/
+├── MyAddon_Mainline.toc  # ## Interface: 120100 — Retail
+└── MyAddon_Camelot.toc   # ## Interface: 16001 — Forever
+```
+
+Forever reports `WOW_PROJECT_ID == WOW_PROJECT_CAMELOT`, so a `WOW_PROJECT_MAINLINE` guard covers retail alone. To cover both games on the retail client, check for either:
+
+lua
+
+```
+if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE or WOW_PROJECT_ID == WOW_PROJECT_CAMELOT then
+    -- Narrowed to retail and Forever
+end
+```
+
+## When to use it [​](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html\#when-to-use-it)
+
+Flavor filtering is most valuable for addons that ship a single codebase across retail and classic. Without it, you won't know about missing APIs until a classic player reports a Lua error.
+
+If your addon only targets one flavor, you don't need any of this: with no `flavors` list and no flavor-specific `.toc`, the diagnostic stays off.

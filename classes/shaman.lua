@@ -970,10 +970,24 @@ end
 -- end-time seconds (ms/1000 keeps the GetTime() domain for DELAYED re-anchoring).
 local function get_live_player_cast()
 	local name, _, _, start_ms, end_ms, _, _, _, spell_id = api.UnitCastingInfo("player")
-	if type(start_ms) ~= "number" or type(end_ms) ~= "number" or end_ms <= start_ms then
-		name, _, _, start_ms, end_ms, _, _, spell_id = api.UnitChannelInfo("player")
+	if canaccessvalue(end_ms) then
+		if canaccessvalue(start_ms) then
+			if type(start_ms) ~= "number" or type(end_ms) ~= "number" or (end_ms or 0) <= (start_ms or 0) then
+				name, _, _, start_ms, end_ms, _, _, spell_id = api.UnitChannelInfo("player")
+			end
+		end
 	end
-	if type(start_ms) ~= "number" or type(end_ms) ~= "number" or end_ms <= start_ms then
+	if canaccessvalue(end_ms) then
+		if canaccessvalue(start_ms) then
+			if type(start_ms) ~= "number" or type(end_ms) ~= "number" or (end_ms or 0) <= (start_ms or 0) then
+				return nil, nil, nil, nil
+			end
+		end
+	end
+	if not canaccessvalue(start_ms) or not canaccessvalue(end_ms) then
+		return nil, nil, nil, nil
+	end
+	if type(start_ms) ~= "number" or type(end_ms) ~= "number" then
 		return nil, nil, nil, nil
 	end
 	return name, spell_id, start_ms / 1000, end_ms / 1000
@@ -4020,10 +4034,18 @@ end
 local function hud_ability_cooldown(self, slot, now)
 	local query = hud_slot_name(slot) or slot.spell
 	local start_time, duration = api.GetSpellCooldown(query, slot.spell)
-	if start_time and duration and duration > 1.51 then
-		local remaining = start_time + duration - now
-		if remaining > 0 then
-			return remaining, duration
+	if canaccessallvalues(duration, start_time) then
+		if canaccessvalue(duration) then
+			if canaccessvalue(duration) then
+				if canaccessvalue(duration) then
+					if start_time and duration and duration > 1.51 then
+						local remaining = start_time + duration - now
+						if remaining > 0 then
+							return remaining, duration
+						end
+					end
+				end
+			end
 		end
 	end
 	return 0, ST.SHAMAN.get_hud_cooldown_fallback(self, slot)

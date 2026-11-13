@@ -443,8 +443,8 @@ function ui.init(self)
     -- bar-driven class hook stops when a bar is hidden), so the frame ticks itself
     -- as well. Fades step by clock delta, and the compute half is throttled, so
     -- being driven from two places cannot double-step anything.
-    frame:SetScript("OnUpdate", function()
-        ui.update(ST)
+    frame:SetScript("OnUpdate", function(_, elapsed)
+        ui.update(ST, elapsed)
     end)
 
     frame:Hide()
@@ -843,7 +843,7 @@ st.guard.label("nextaction", "Next action")
 --=========================================================================================
 -- Per-frame update (driven by the class hook and by the frame's own OnUpdate)
 --=========================================================================================
-function ui.update(self)
+function ui.update(self, frame_elapsed)
     local frame = ui.frame
     if not frame then
         return
@@ -852,16 +852,30 @@ function ui.update(self)
     if not provider then
         return
     end
-    local now = api.get_time()
-    local elapsed = now - (ui.last_tick or now)
-    ui.last_tick = now
-
-    -- Alpha fades run every call; the compute+display half ticks at UPDATE_INTERVAL.
-    if frame:IsShown() then
-        animate(elapsed)
-    end
-    if now - (ui.last_compute or 0) < UPDATE_INTERVAL then
-        return
+    local shown = frame:IsShown()
+    local now
+    local elapsed
+    if type(frame_elapsed) == "number" and shown and ui.last_compute ~= nil then
+        elapsed = frame_elapsed
+        ui.elapsed_accum = (ui.elapsed_accum or 0) + elapsed
+        if ui.elapsed_accum < UPDATE_INTERVAL then
+            animate(elapsed)
+            return
+        end
+        now = api.get_time()
+        ui.last_tick = now
+        ui.elapsed_accum = 0
+    else
+        now = api.get_time()
+        elapsed = now - (ui.last_tick or now)
+        ui.last_tick = now
+        if shown then
+            animate(elapsed)
+        end
+        if now - (ui.last_compute or 0) < UPDATE_INTERVAL then
+            return
+        end
+        ui.elapsed_accum = 0
     end
     ui.last_compute = now
 

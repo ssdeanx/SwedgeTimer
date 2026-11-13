@@ -486,7 +486,12 @@ function RT.on_update(self, elapsed)
     if RT.inert or not self.db then
         return
     end
-    -- Per-frame entry: the layout poll and apply_settings below read the class
+    RT.update_counter = RT.update_counter + (elapsed or 0.016)
+    if RT.update_counter < TICK then
+        return
+    end
+    RT.update_counter = 0
+    -- Throttled entry: the layout poll and apply_settings below read the class
     -- row. No row means no label settings, so a live label hides (the state a
     -- switched-off label paints) instead of throwing out of the driver tick.
     local class_db = self.get_class_table and self:get_class_table() or nil
@@ -496,11 +501,6 @@ function RT.on_update(self, elapsed)
         end
         return
     end
-    RT.update_counter = RT.update_counter + (elapsed or 0.016)
-    if RT.update_counter < TICK then
-        return
-    end
-    RT.update_counter = 0
     if RT.pending_apply and not (InCombatLockdown and InCombatLockdown()) then
         RT.apply_settings(self)
         return

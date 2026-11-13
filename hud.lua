@@ -2066,7 +2066,12 @@ function HUD.on_update(self, elapsed)
     if not frame then
         return
     end
-    -- Per-frame entry: every branch below reads the class row (layout poll,
+    HUD.update_counter = HUD.update_counter + (elapsed or 0.016)
+    if HUD.update_counter < TICK then
+        return
+    end
+    HUD.update_counter = 0
+    -- Throttled entry: every branch below reads the class row (layout poll,
     -- visibility, paint). With no row there is nothing to lay out, so hide the
     -- row instead of throwing out of the driver tick.
     local class_db = self.get_class_table and self:get_class_table() or nil
@@ -2076,11 +2081,6 @@ function HUD.on_update(self, elapsed)
         end
         return
     end
-    HUD.update_counter = HUD.update_counter + (elapsed or 0.016)
-    if HUD.update_counter < TICK then
-        return
-    end
-    HUD.update_counter = 0
     if HUD.pending_apply and not (InCombatLockdown and InCombatLockdown()) then
         HUD.apply_settings(self)
         return

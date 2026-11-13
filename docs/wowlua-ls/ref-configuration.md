@@ -1,0 +1,407 @@
+[Skip to content](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html#VPContent)
+
+On this page
+
+# Configuration Reference [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#configuration-reference)
+
+Complete `.wowluarc.json` schema. For practical guidance, see the [Configuration guide](https://tradeskillmaster.github.io/wowlua-ls/guide/configuration.html).
+
+## Editor support [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#editor-support)
+
+A JSON Schema is provided for autocompletion and validation. The VS Code extension registers it automatically. For other editors, add a `$schema` property to your config file:
+
+json
+
+```
+{
+  "$schema": "https://raw.githubusercontent.com/TradeSkillMaster/wowlua-ls/main/editors/vscode/wowluarc.schema.json",
+  "flavors": ["retail"]
+}
+```
+
+## Schema [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#schema)
+
+json
+
+```
+{
+  "addonRoot": false,
+  "ignore": ["string"],
+  "library": ["string"],
+  "framexml": true,
+  "flavors": ["retail", "classic", "classic_era"],
+  "globals": {
+    "read": ["string"],
+    "write": ["string"],
+    "allowSlashCommands": true,
+    "allowBindingGlobals": true
+  },
+  "inference": {
+    "backwardParamTypes": true,
+    "correlatedReturnOverloads": true,
+    "implicitProtectedPrefix": false
+  },
+  "hint": {
+    "enable": true,
+    "parameterNames": true,
+    "variableTypes": true,
+    "functionReturnTypes": false,
+    "forVariableTypes": true,
+    "parameterTypes": false,
+    "chainedReturnTypes": false
+  },
+  "codeLens": {
+    "enable": true,
+    "references": true,
+    "implementations": true,
+    "overrides": true
+  },
+  "editor": {
+    "autoInsertEnd": true
+  },
+  "completion": {
+    "snippets": true,
+    "callSnippets": true
+  },
+  "plugins": ["string"],
+  "diagnostics": {
+    "disable": ["string"],
+    "enable": ["string"],
+    "severity": {
+      "diagnostic-code": "error | warning | information | hint"
+    }
+  }
+}
+```
+
+Key naming
+
+Multi-word keys are `camelCase` (e.g. `addonRoot`, `backwardParamTypes`). The former `snake_case` spellings (`addon_root`, `backward_param_types`, …) are still accepted for backward compatibility — the JSON Schema marks them deprecated, so editors flag them with a strikethrough rather than as invalid — but the camelCase form is canonical and recommended.
+
+## Fields [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#fields)
+
+### `addonRoot` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#addonroot)
+
+- **Type:**`boolean`
+- **Default:**`false`
+
+Marks this directory as a separate addon root. In multi-addon workspaces, each addon root gets its own isolated addon namespace table (`local _, ns = ...`), so fields defined in one addon aren't visible in another. Lua globals remain shared across all addon roots.
+
+json
+
+```
+{ "addonRoot": true }
+```
+
+Not needed for single-addon projects.
+
+### `plugins` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#plugins)
+
+- **Type:**`string[]`
+- **Default:**`[]`
+
+Paths to Lua diagnostic plugin scripts. Relative to the config file's directory. Isolated per file: only the plugins declared by a file's nearest config run against it. Plugin lists are not inherited from parent configs. Plugins load when the language server starts, so a newly added entry takes effect after a restart. See the [Diagnostic Plugins guide](https://tradeskillmaster.github.io/wowlua-ls/guide/plugins.html) for the full API.
+
+json
+
+```
+{ "plugins": [".wowlua-ls/my-check.lua"] }
+```
+
+### `ignore` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#ignore)
+
+- **Type:**`string[]`
+- **Default:**`[]`
+
+Path prefixes to exclude from scanning. Relative to the config file's directory. Patterns ending with `/` match directory prefixes. Entries may also use glob wildcards: `*` (any characters within a path component), `?` (single character), and `**` (any number of directory levels).
+
+json
+
+```
+{ "ignore": ["Libs/", "External/*.lua", "Generated/**/*.lua"] }
+```
+
+Built-in default
+
+`.github/` directories are **always** skipped - no configuration needed. They hold GitHub repository metadata and CI/build tooling (build scripts run by the standalone Lua interpreter, where `io`/`os`/etc. are real standard-library globals), never addon code that ships in-game, so analyzing them as WoW Lua would only produce spurious diagnostics. Anything you add to `ignore` is excluded _in addition_ to this default.
+
+### `library` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#library)
+
+- **Type:**`string[]`
+- **Default:**`[]`
+
+Paths to scan for type information but with all diagnostics suppressed. Useful for third-party libraries where you want classes, globals, and type information available to the rest of your project, but can't fix any diagnostic issues in the library code. Relative entries use the same pattern syntax as `ignore`. Absolute paths, and relative paths that point _outside_ the workspace (for example `../shared`), are also supported for libraries that live next to your addon rather than inside it.
+
+json
+
+```
+{ "library": ["Libs/", "../shared-libs", "/home/user/shared-libs/"] }
+```
+
+Unlike `ignore` (which skips files entirely), `library` files are fully scanned and analyzed: their `@class`, `@alias`, global functions, and other type information are available throughout the workspace. Only diagnostic output is suppressed.
+
+External library directories are automatically added as extra scan directories, so libraries don't need to be inside your workspace. A relative entry that escapes the workspace root (one containing `..`) is resolved against the directory holding the `.wowluarc.json` and scanned as an external directory. Prefer this over an absolute path for libraries checked into version control, since it stays portable across machines.
+
+Marking a directory as a library suppresses diagnostics for the **whole subtree**, including any nested `.wowluarc.json` files inside it. A vendored library that ships its own `.wowluarc.json` (for example one pulled in via a symlink) cannot re-enable diagnostics for itself. The parent's `library` declaration wins. See [Hierarchy behavior](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html#hierarchy-behavior) for how this differs from other settings.
+
+#### Symlinked or duplicated library paths are scanned once [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#symlinked-or-duplicated-library-paths-are-scanned-once)
+
+If the same physical library is reachable through several workspace paths — for example a library that is both its own workspace folder _and_ symlinked into each addon's `Libs/` — the language server detects the shared filesystem identity (device + inode) and analyzes it a single time. Go-to-definition, find-references, and code-lens counts resolve to the real source rather than a vendored alias, and you do **not** need to `ignore` the extra copies to avoid duplicate definitions. This applies to symlinks, hardlinks, and Windows junctions; two genuinely separate copies of a library on disk (each a real file with its own inode) are still analyzed independently.
+
+### `framexml` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#framexml)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Whether FrameXML API globals are available. Set to `false` to treat FrameXML-specific globals as undefined.
+
+### `flavors` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#flavors)
+
+- **Type:**`string[]`
+- **Default:**`[]`
+- **Values:**`"retail"` (alias `"mainline"`), `"classic"`, `"classic_era"`, `"forever"`
+
+WoW flavor names the project targets. Enables the `wrong-flavor-api` diagnostic when non-empty. Without it, files listed in a flavor-specific `.toc` (e.g. `MyAddon_Vanilla.toc`) are still checked against that `.toc`'s flavors.
+
+> **Note:** Flavor filtering can also be derived automatically from `.toc` file listings - see the [Flavor Filtering guide](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html). When both sources are present, the effective flavor for each file is the intersection of the project-level `flavors` and the TOC-derived per-file flavor.
+
+> **Note:** The `deprecated` diagnostic is also flavor-aware: a retail-only deprecation (e.g. `GetMerchantItemInfo`) isn't flagged in an addon that targets Classic, where the API is still live. It derives the addon's targeted flavors from this setting, else a flavor-specific `.toc`, else the `.toc``## Interface:` versions (so it works even without a `flavors` config). See [Flavor-aware deprecation](https://tradeskillmaster.github.io/wowlua-ls/guide/flavor-filtering.html#flavor-aware-deprecation).
+
+### `globals.read` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#globals-read)
+
+- **Type:**`string[]`
+- **Default:**`[]`
+
+Global names that may be accessed without triggering `undefined-global`. Entries may use glob wildcards: `*` (any characters) and `?` (single character).
+
+json
+
+```
+{ "globals": { "read": ["LibStub", "MyAddon*Mixin"] } }
+```
+
+> **Tip:**`SavedVariables` and `SavedVariablesPerCharacter` declared in `.toc` files are automatically added to both `globals.read` and `globals.write` \- no manual configuration needed.
+
+> **Quick fix:** An `undefined-global` warning offers **"Add `<name>` to allowed read globals in `.wowluarc.json`"** (alongside "Add `local` declaration"), which appends the name to this list in the nearest config file. It is offered only when a `.wowluarc.json` already governs the file.
+
+### `globals.write` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#globals-write)
+
+- **Type:**`string[]`
+- **Default:**`[]`
+
+Global names that may be created/assigned without triggering `create-global`. Names listed here may also be read without triggering `undefined-global`, so a global your addon defines doesn't need a `read` entry too. Entries may use glob wildcards: `*` (any characters) and `?` (single character).
+
+json
+
+```
+{ "globals": { "write": ["MyAddon*", "SavedVar*"] } }
+```
+
+> **Quick fix:** A `create-global` warning offers **"Add `<name>` to allowed write globals in `.wowluarc.json`"** (alongside "Add `local` declaration"), appending the name to this list. Like the read fix, it is offered only when a `.wowluarc.json` already governs the file.
+
+### `globals.allowSlashCommands` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#globals-allowslashcommands)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Automatically treat globals matching `SLASH_*` as allowed write/read globals. WoW slash commands are defined by assigning `SLASH_COMMANDNAME1`, `SLASH_COMMANDNAME2`, etc. to global variables, so these are always intentional. Set to `false` to require explicit listing in `globals.write`.
+
+### `globals.allowBindingGlobals` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#globals-allowbindingglobals)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Automatically treat globals matching `BINDING_HEADER_*` and `BINDING_NAME_*` as allowed write/read globals. WoW keybinding labels are defined by assigning `BINDING_HEADER_ADDON` and `BINDING_NAME_ACTION` to global variables, and the binding system reads them at runtime. Set to `false` to require explicit listing in `globals.write`.
+
+Automatically allowed globals
+
+In addition to the settings above, the language server automatically detects dynamic global creation via `_G["PREFIX" .. key] = value` (or `_G[name .. "SUFFIX"]`) patterns in your workspace. When detected, a wildcard glob (e.g. `PREFIX*`) is registered so reads of those globals don't trigger `undefined-global`. This requires no configuration. The prefix/suffix must be at least 3 characters to avoid overly broad matching.
+
+Names your `.xml` files bind are also allowed, for both reads and writes: `mixin=` / `secureMixin=` table names and `<On… function="…">` script-handler function names.
+
+### `inference.backwardParamTypes` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#inference-backwardparamtypes)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Infer parameter types from body usage (arithmetic, concatenation, typed-function argument calls).
+
+### `inference.correlatedReturnOverloads` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#inference-correlatedreturnoverloads)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Infer correlated return patterns (all-set-or-all-nil) for automatic sibling narrowing.
+
+### `inference.implicitProtectedPrefix` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#inference-implicitprotectedprefix)
+
+- **Type:**`boolean`
+- **Default:**`false`
+
+Treat runtime-discovered data fields starting with `_` as implicitly `protected`. Does not affect explicit `@field` declarations or methods.
+
+### `hint.enable` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#hint-enable)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Master switch for inlay hints. When `false`, no inlay hints are shown regardless of individual category settings.
+
+### `hint.parameterNames` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#hint-parameternames)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Show parameter name hints at call sites (e.g. `foo(/*name:*/ "hello")`). Suppressed when the argument text already matches the parameter name, and on a trailing call/`...` argument that sits before another named parameter (e.g. `foo(unpack(t))` where `foo` takes two params) — its values may fan out across those later params, so a single name label would misrepresent the mapping.
+
+### `hint.variableTypes` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#hint-variabletypes)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Show inferred type hints on `local` variable declarations that have no explicit `@type` annotation. Suppressed for `nil`, `any`, and function-valued variables.
+
+### `hint.functionReturnTypes` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#hint-functionreturntypes)
+
+- **Type:**`boolean`
+- **Default:**`false`
+
+Show inferred return type hints on function definitions that have no `@return` annotation.
+
+### `hint.forVariableTypes` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#hint-forvariabletypes)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Show inferred type hints on `for ... in` loop variables.
+
+### `hint.parameterTypes` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#hint-parametertypes)
+
+- **Type:**`boolean`
+- **Default:**`false`
+
+Show inferred type hints on function parameters that have no `@param` annotation. Suppressed for `self`, `any`, and `nil` parameters.
+
+### `hint.chainedReturnTypes` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#hint-chainedreturntypes)
+
+- **Type:**`boolean`
+- **Default:**`false`
+
+Show intermediate return type hints in method chains. When a method call's return value is immediately used as the receiver of another method/field access, the return type is shown after the closing `)`. Suppressed when the return type is `any`, `nil`, or `?`.
+
+### `codeLens.enable` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#codelens-enable)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Master switch for code lenses. When `false`, no code lenses are shown regardless of individual category settings.
+
+### `codeLens.references` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#codelens-references)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Show "N usages" lenses on function definitions.
+
+### `codeLens.implementations` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#codelens-implementations)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Show "N implementations" lenses on `@class` declarations.
+
+### `codeLens.overrides` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#codelens-overrides)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Show "overrides Parent" lenses on methods that override a parent class method. Clicking the lens navigates to the overridden (parent) method's definition.
+
+### `editor.autoInsertEnd` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#editor-autoinsertend)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Automatically insert `end` or `until` when Enter is pressed after a block-opening keyword (`if … then`, `while … do`, `for … do`, `function`, `repeat`). The closing keyword is only inserted when the block isn't already closed further down in the file.
+
+json
+
+```
+{ "editor": { "autoInsertEnd": false } }
+```
+
+### `completion.snippets` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#completion-snippets)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Emit snippet completions (`InsertTextFormat.Snippet`). This covers both function-call parameter auto-fill and annotation-tag bodies (e.g. `@param`). Set to `false` to disable all snippet completions; items then insert plain text only. Requires snippet support from the editor.
+
+### `completion.callSnippets` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#completion-callsnippets)
+
+- **Type:**`boolean`
+- **Default:**`true`
+
+Auto-fill a function's parameters when you complete a function name, e.g. completing `strmatch` inserts `strmatch(${1:s}, ${2:pattern})` with the cursor on the first parameter. Set to `false` to insert just the function name (`strmatch`) and let you type the call yourself. This is independent of [`completion.snippets`](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html#completion-snippets): annotation-tag snippets still work when only `callSnippets` is disabled.
+
+json
+
+```
+{ "completion": { "callSnippets": false } }
+```
+
+### `diagnostics.disable` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#diagnostics-disable)
+
+- **Type:**`string[]`
+- **Default:**`[]`
+
+Diagnostic codes to suppress.
+
+### `diagnostics.enable` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#diagnostics-enable)
+
+- **Type:**`string[]`
+- **Default:**`[]`
+
+Diagnostic codes to enable. Used for default-off diagnostics or to counteract a `disable` entry in the same config.
+
+### `diagnostics.severity` [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#diagnostics-severity)
+
+- **Type:**`Record<string, "error" | "warning" | "information" | "hint">`
+- **Default:**`{}`
+
+Override severity for specific diagnostic codes. `"info"` is accepted as a shorthand for `"information"`.
+
+## Hierarchy behavior [​](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html\#hierarchy-behavior)
+
+When `.wowluarc.json` files are nested, settings combine according to one of these policies:
+
+- **Isolated**: the single **nearest** ancestor config fully determines the setting. Keys it does not set fall back to their **default**, _not_ to a parent config's value. This applies to everything that affects diagnostics, so that running a check from a subdirectory produces the same results as running it from the project root (configs above the scan root are never consulted).
+- **Inherited**: the deepest config that sets the key wins, falling back to ancestor configs and then the default. This applies to editor-experience settings that do not affect diagnostics.
+- **Inherited downward**: the `library` setting alone uses this: once any ancestor config marks a subtree as a library, every file beneath it has diagnostics suppressed, and a nested config inside that subtree cannot opt back in. (Whether a subtree _is_ a library still affects only diagnostics, so this is the one diagnostics setting that is not isolated. Its entire purpose is to silence a whole vendored subtree, including any config files that subtree carries.)
+
+| Setting | Policy |
+| --- | --- |
+| `diagnostics.disable` | **Isolated**: nearest config's `disable` only |
+| `diagnostics.enable` | **Isolated**: applied after the nearest config's `disable` |
+| `diagnostics.severity` | **Isolated**: nearest config's severity map only |
+| `globals.read` | **Isolated**: nearest config only, plus the `.toc``SavedVariables` of every enclosing addon folder |
+| `globals.write` | **Isolated**: nearest config only, plus the `.toc``SavedVariables` of every enclosing addon folder |
+| `globals.allowSlashCommands` | **Isolated** |
+| `globals.allowBindingGlobals` | **Isolated** |
+| `framexml` | **Isolated** |
+| `flavors` | **Isolated** (then intersected with any TOC-derived per-file mask) |
+| `inference.*` | **Isolated** |
+| `ignore` | **Isolated**: nearest config's patterns, relative to its directory |
+| `library` | **Inherited downward**: any ancestor config that marks a subtree as a library suppresses diagnostics for that whole subtree, and a nested config inside it cannot un-mark itself; absolute library directories are scanned workspace-wide |
+| `plugins` | **Isolated**: only the nearest config's plugins run against a file |
+| `hint.*` | Inherited |
+| `codeLens.*` | Inherited |
+| `editor.*` | Inherited |
+| `completion.*` | Inherited |
+| `addonRoot` | Nearest (deepest) `addonRoot: true` wins (structural) |
+
+Isolated settings do not inherit
+
+If a nested directory has its own `.wowluarc.json`, it only inherits the **inherited** settings above. Any **isolated** setting it does not restate reverts to its default. It does _not_ pick up the parent's value. For example, a subdirectory config that only sets `diagnostics.enable` will lose a parent's `flavors` and `framexml` settings unless it repeats them. Auto-discovered `.toc``SavedVariables` are not part of any config: they apply to every file under the `.toc` file's directory, and a `.toc` never replaces the `.wowluarc.json` above it.
+
+The one exception is [`library`](https://tradeskillmaster.github.io/wowlua-ls/reference/configuration.html#library), which is inherited downward.

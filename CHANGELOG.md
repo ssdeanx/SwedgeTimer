@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.2.1]
+
+**Verification status:** offline gate only — `bash tests/run.sh` **59 steps / 0 failed**; `luacheck .` **5 warnings / 0 errors in 105 files**. In-client behaviour on WoW Forever and Classic clients is **UNCONFIRMED**; no in-client pass is recorded for 2.2.1.
+
+### Changed
+
+- **Version 2.2.1:** `SwedgeTimer.toc` and `main.lua` report version `2.2.1`.
+- **Offhand bar off by default (`config_presets.lua`):** `offhand.enabled` now defaults to `false` for all dual-wield/ranged classes (`DEATHKNIGHT`, `HUNTER`, `ROGUE`, `SHAMAN`, `WARRIOR`; `DRUID` already defaulted to `false`). As a result, `power_bar.lua` anchors under the `mainhand` bar by default and automatically moves under `offhand` when the offhand bar is enabled (and an offhand weapon is equipped).
+- **Bar anchor cleanup (`bars.lua`):** removed the redundant `anchor_frame:SetPoint("CENTER")` call immediately preceding `LWIN.RestorePosition(anchor_frame)` in `configure_bar_size_and_positions`.
+
+### Performance
+
+- **Stateless `iter_hands()` (`main.lua`):** replaced the per-call closure allocation in `ST:iter_hands()` with a cached stateless iterator, eliminating ~40 closure allocations/sec from the 20 Hz range/visibility heartbeat.
+- **Throttled driver fast-paths (`hud.lua`, `rotationtext.lua`, `nextaction_ui.lua`):** `HUD.on_update` and `RT.on_update` now check their `TICK` accumulator before calling `get_class_table()`, and `nextaction_ui.update` uses the `OnUpdate` `elapsed` argument between compute intervals instead of calling `api.get_time()` on every frame.
+- **Reduced redundant frame widget calls (`bars.lua`, `main.lua`):** `ST:handle_oor_hand` caches `_last_alpha` per hand before calling `SetAlpha`, `onupdate_common` caches `_spark_shown` before calling `spark:Show()`/`Hide()`, and `set_bar_texts` caches `_st_shown` per font string before calling `Show()`/`Hide()`.
+
+### Fixed
+
+- **WoW Forever swing speed secret-safety (`swing_source.lua`):**
+  - `read_equipped_speed("ranged")` now falls back to `UnitRangedDamage("player")` when `UnitAttackSpeed("player")` returns a restricted (secret) or non-accessible ranged speed, instead of gating the fallback behind `canaccessvalue(speed)`.
+  - `on_unit_attack_speed` and `on_weapon_slot_changed` now check `is_secret`/`canaccessvalue` per active hand instead of aborting all hands if an unused hand's speed is secret.
+
 ## [2.2.0]
 
 **Verification status:** offline gate only — `bash tests/run.sh` **59 steps / 0 failed**; `luacheck .` **4 warnings / 0 errors in 105 files**. In-client behaviour on the Forever client is **UNCONFIRMED**; no in-client pass is recorded for 2.2.0.

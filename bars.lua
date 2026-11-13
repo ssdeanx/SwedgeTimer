@@ -409,6 +409,53 @@ function ST:saved_row_extent(hand)
     return y + (row_height / 2), y - (row_height / 2)
 end
 
+-- The enabled-hand signature, stored beside the version latch under its own key (the
+-- version latch keeps its historical numeric shape, so every pinned assertion and every
+-- saved profile keeps reading the same value). It exists because shipping
+-- `offhand.enabled = false` CHANGES the reserved band: the version latch alone would keep
+-- a profile latched forever and the ranged row would never be re-checked against the new
+-- hand set. The signature is the set of hands whose bar is switched on, in the class's
+-- own hand order, joined by "+".
+ST.RANGED_PLACEMENT_HANDS_FLAG = "ranged_placement_hands"
+
+-- One hand's saved row participates in the reserved band only while its bar is switched
+-- on: a disabled hand has no frames and no fill (HU-22 lazy bars), so reserving its stale
+-- row would push the ranged bar above empty space. `~= false` is deliberate - a profile
+-- saved before the key existed has no value there and keeps the old reserved-row reading.
+function ST:hand_row_is_reserved(hand)
+    local db = self:get_hand_table(hand)
+    return type(db) == "table" and db.enabled ~= false
+end
+
+-- The enabled-MELEE-hand signature (see RANGED_PLACEMENT_HANDS_FLAG): exactly the hands
+-- that feed the reserved band, so a change in the set is a change in what the ranged row
+-- has to clear. The ranged hand is excluded on purpose - it is the row being placed, and
+-- whether its own bar is switched on must not force a re-check. Iterates the class hand
+-- set, so it needs no class name and no frame: it is safe at OnInitialize, before any
+-- frame or options table exists.
+function ST:ranged_placement_signature()
+    local parts = {}
+    for hand in self:iter_hands() do
+        if hand ~= "ranged" and self:hand_row_is_reserved(hand) then
+            parts[#parts + 1] = hand
+        end
+    end
+    return table.concat(parts, "+")
+end
+
+-- Does the class render ANY melee row? A caster class ships `mainhand.enabled = false`
+-- and owns no offhand, so it has no stack to clear - the ranged row is then placed by the
+-- class's own shipped row alone, never refused as "unknown". Used to tell "there is no
+-- melee row" apart from "a melee row exists but cannot be read".
+function ST:has_reserved_melee_row()
+    for hand in self:iter_hands() do
+        if hand ~= "ranged" and self:hand_row_is_reserved(hand) then
+            return true
+        end
+    end
+    return false
+end
+
 -- The band the ranged row must stay out of: the melee stack (every owned hand except the
 -- ranged one) plus the power-bar slot hanging under its bottom edge. Returns (top, bottom),
 -- or nil when any involved row is unreadable or the class has no melee row. The extents
@@ -417,7 +464,7 @@ end
 function ST:melee_reserved_band()
     local top, bottom
     for hand in self:iter_hands() do
-        if hand ~= "ranged" then
+        if hand ~= "ranged" and self:hand_row_is_reserved(hand) then
             local row_top, row_bottom = self:saved_row_extent(hand)
             if row_top == nil or row_bottom == nil then
                 return nil
@@ -522,10 +569,27 @@ function ST:migrate_ranged_placement(profile)
     -- `true` and must be evaluated once more under this ruling (the operator's own profile
     -- is exactly that case), while a profile that already ran this pass holds the number
     -- and is never touched again.
-    if rawget(class_row, ST.RANGED_PLACEMENT_FLAG) == ST.RANGED_PLACEMENT_VERSION then
+    --
+    -- The HAND SIGNATURE rides beside the version. The version alone latches a profile
+    -- forever, so a change to which hands are switched on (the shipped
+    -- `offhand.enabled = false` is exactly that) would never be re-checked against the
+    -- reserved band. A stored signature means this class already ran the enforced pass, so
+    -- a later pass is a RE-CHECK, not a first placement: it only moves a row that actually
+    -- sits in the band, and never fights a drag that is already clear (the standing
+    -- "a drag made AFTER the pass is never fought" contract). A profile with no stored
+    -- signature is the first enforced pass and keeps the operator's FORCED behaviour.
+    local signature = self:ranged_placement_signature()
+    local stored_version = rawget(class_row, ST.RANGED_PLACEMENT_FLAG)
+    local stored_signature = rawget(class_row, ST.RANGED_PLACEMENT_HANDS_FLAG)
+    if stored_version == ST.RANGED_PLACEMENT_VERSION and stored_signature == signature then
         return "done"
     end
+    local re_evaluating = stored_version == ST.RANGED_PLACEMENT_VERSION
+        and stored_signature ~= nil
+    -- Both latches are written BEFORE the geometry is read, so every outcome - an
+    -- unreadable layout included - is evaluated at most once per hand set.
     class_row[ST.RANGED_PLACEMENT_FLAG] = ST.RANGED_PLACEMENT_VERSION
+    class_row[ST.RANGED_PLACEMENT_HANDS_FLAG] = signature
     if not self:has_hand("ranged") then
         -- Paladin/shaman/druid have no ranged bar at all (main.lua class_hands): there is
         -- nothing to place. The check is the hand set, never the class name, so a class
@@ -542,16 +606,31 @@ function ST:migrate_ranged_placement(profile)
     local band_top, band_bottom = self:melee_reserved_band()
     local _, ranged_height = self:hand_bar_size("ranged")
     ranged_height = tonumber(ranged_height)
-    if band_top == nil or band_bottom == nil or ranged_height == nil or ranged_height <= 0 then
+    if ranged_height == nil or ranged_height <= 0 then
         return "unknown"
     end
     -- The new layout's row: the class's own shipped ranged y when it clears the band by
     -- RANGED_PLACEMENT_GAP, else the lowest integer y that does - the same arithmetic a
     -- fresh profile ships, so a migrated row lands exactly where a new one starts.
-    local minimum = band_top + ST.RANGED_PLACEMENT_GAP + (ranged_height / 2)
-    local target = self:shipped_ranged_y()
-    if target == nil or target < minimum then
-        target = math.ceil(minimum)
+    local target
+    if band_top == nil or band_bottom == nil then
+        -- An unreadable band is only acceptable when there is no melee row to clear. A
+        -- class that renders NO melee bar (every caster class ships mainhand.enabled
+        -- false) has nothing to collide with, so the shipped ranged row is the whole rule.
+        -- A reserved melee row that merely could not be READ stays "unknown": no guess.
+        if self:has_reserved_melee_row() then
+            return "unknown"
+        end
+        target = self:shipped_ranged_y()
+    else
+        local minimum = band_top + ST.RANGED_PLACEMENT_GAP + (ranged_height / 2)
+        target = self:shipped_ranged_y()
+        if target == nil or target < minimum then
+            target = math.ceil(minimum)
+        end
+    end
+    if target == nil then
+        return "unknown"
     end
     -- Already the target row: no write and no notice. This is every fresh profile (AceDB
     -- filled the shipped row, which is the new layout) and every profile this pass already
@@ -567,6 +646,11 @@ function ST:migrate_ranged_placement(profile)
     -- new layout replaces. Read before the write, from the row's own geometry.
     local row_top, row_bottom = self:saved_row_extent("ranged")
     local was_in_band = self:row_intersects_band(row_top, row_bottom, band_top, band_bottom)
+    -- A signature re-check only corrects a row the new hand set put IN the band. A row the
+    -- user dragged somewhere clear stays exactly where the user put it.
+    if re_evaluating and not was_in_band then
+        return "kept"
+    end
     ranged.x = ST.SHIPPED_HAND_X
     ranged.y = target
     ranged.point = ST.SHIPPED_HAND_POINT
@@ -605,7 +689,6 @@ function ST:configure_bar_size_and_positions(hand, width_override, height_overri
     local anchor_frame = self:get_anchor_frame(hand)
     if anchor_frame then
         anchor_frame:ClearAllPoints()
-        anchor_frame:SetPoint("CENTER")
         anchor_frame:SetWidth(bar_width)
         anchor_frame:SetHeight(bar_height)
         LWIN.RestorePosition(anchor_frame)
@@ -1218,9 +1301,15 @@ function ST:onupdate_common(hand, elapsed)
                 d.spark_deco_r, d.spark_deco_g = cr, cg
                 d.spark_deco_b, d.spark_deco_a = cb, ca
             end
-            frame.spark:Show()
+            if d._spark_shown ~= true then
+                d._spark_shown = true
+                frame.spark:Show()
+            end
         else
-            frame.spark:Hide()
+            if d._spark_shown ~= false then
+                d._spark_shown = false
+                frame.spark:Hide()
+            end
             if db.show_spark == false then
                 -- Turning the option off invalidates the cache, so turning it back on
                 -- repaints the decoration once instead of trusting a key nothing has
@@ -1629,6 +1718,27 @@ function ST:needs_range_string(hand)
     return false
 end
 
+local function update_bar_text_slot(font_string, enabled, hide_inactive, is_full, text)
+    if not font_string then
+        return
+    end
+    if enabled and not (hide_inactive and is_full) then
+        if font_string._st_last_text ~= text then
+            font_string._st_last_text = text
+            font_string:SetText(text)
+        end
+        if font_string._st_shown ~= true then
+            font_string._st_shown = true
+            font_string:Show()
+        end
+    else
+        if font_string._st_shown ~= false then
+            font_string._st_shown = false
+            font_string:Hide()
+        end
+    end
+end
+
 function ST:set_bar_texts(hand, now)
     if not self:bar_is_built(hand) then
         return
@@ -1707,56 +1817,12 @@ function ST:set_bar_texts(hand, now)
         lookup.range_finder = hand_tab._last_range_str
     end
 
-    if frame.left_text then
-        if db.left_text_enabled then
-            if db.left_text_hide_inactive and hand_tab.is_full then
-                frame.left_text:Hide()
-            else
-                local text = lookup[db.left_text_key]
-                if frame.left_text._st_last_text ~= text then
-                    frame.left_text._st_last_text = text
-                    frame.left_text:SetText(text)
-                end
-                frame.left_text:Show()
-            end
-        else
-            frame.left_text:Hide()
-        end
-    end
-
-    if frame.center_text then
-        if db.center_text_enabled then
-            if db.center_text_hide_inactive and hand_tab.is_full then
-                frame.center_text:Hide()
-            else
-                local text = lookup[db.center_text_key]
-                if frame.center_text._st_last_text ~= text then
-                    frame.center_text._st_last_text = text
-                    frame.center_text:SetText(text)
-                end
-                frame.center_text:Show()
-            end
-        else
-            frame.center_text:Hide()
-        end
-    end
-
-    if frame.right_text then
-        if db.right_text_enabled then
-            if db.right_text_hide_inactive and hand_tab.is_full then
-                frame.right_text:Hide()
-            else
-                local text = lookup[db.right_text_key]
-                if frame.right_text._st_last_text ~= text then
-                    frame.right_text._st_last_text = text
-                    frame.right_text:SetText(text)
-                end
-                frame.right_text:Show()
-            end
-        else
-            frame.right_text:Hide()
-        end
-    end
+    update_bar_text_slot(frame.left_text, db.left_text_enabled, db.left_text_hide_inactive, hand_tab.is_full,
+        lookup[db.left_text_key])
+    update_bar_text_slot(frame.center_text, db.center_text_enabled, db.center_text_hide_inactive, hand_tab.is_full,
+        lookup[db.center_text_key])
+    update_bar_text_slot(frame.right_text, db.right_text_enabled, db.right_text_hide_inactive, hand_tab.is_full,
+        lookup[db.right_text_key])
 end
 
 function ST:set_deadzone_width(hand)

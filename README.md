@@ -34,6 +34,22 @@ SwedgeTimer provides dedicated, cycle-accurate rotation engines and real-time le
 
 ---
 
+## 🚀 What's New in v2.2.1
+
+> [!IMPORTANT]
+> **<span style="color:#FFD700">CPU Optimizations, Offhand Default & WoW Forever Swing Accuracy!</span>** SwedgeTimer v2.2.1 reduces idle and per-frame CPU usage across the bar tick, HUD, rotation label, next-action guide, and 20 Hz visibility/range loop, sets the offhand bar **off by default** (so the power bar anchors cleanly under the mainhand bar unless offhand is enabled), and hardens WoW Forever's `PLAYER_SWING` speed recovery against per-hand secret values.
+
+### ⚡ Performance & CPU Optimizations (v2.2.1)
+
+- **Zero-allocation `iter_hands()` (`main.lua`):** replaced the per-call closure in `ST:iter_hands()` with a cached stateless iterator.
+- **Early-exit `OnUpdate` throttling (`hud.lua`, `rotationtext.lua`, `nextaction_ui.lua`):** `HUD.on_update` and `RT.on_update` now check their `TICK` accumulator before reading class DB tables, and `nextaction_ui.update` uses `OnUpdate` `elapsed` between compute ticks instead of reading the client clock every frame.
+- **Cached frame state (`bars.lua`, `main.lua`):** `handle_oor_hand`, `onupdate_common` (spark), and `set_bar_texts` cache visibility/alpha state so unchanged frames skip redundant `Show()`/`Hide()`/`SetAlpha()` calls.
+
+### ⚔️ Offhand Default & WoW Forever Accuracy (v2.2.1)
+
+- **Offhand bar off by default (`config_presets.lua`):** `offhand.enabled` defaults to `false` across all classes; the power bar (`power_bar.lua`) anchors beneath the mainhand bar by default and automatically shifts beneath the offhand bar when offhand is enabled.
+- **WoW Forever secret-safe speed recovery (`swing_source.lua`):** `read_equipped_speed("ranged")` now falls back to `UnitRangedDamage` when `UnitAttackSpeed` returns a secret value, and `UNIT_ATTACK_SPEED` / `WEAPON_SLOT_CHANGED` check secrecy per active hand rather than aborting all hands if an unused hand is secret.
+
 ## 🚀 What's New in v2.2.0
 
 > [!IMPORTANT]

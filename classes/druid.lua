@@ -3376,10 +3376,18 @@ end
 local function hud_ability_cooldown(self, slot, now)
     local query = hud_slot_name(slot) or slot.spell
     local start_time, duration = api.GetSpellCooldown(query, slot.spell)
-    if start_time and duration and duration > 1.51 then
-        local remaining = start_time + duration - now
-        if remaining > 0 then
-            return remaining, duration
+    if canaccessallvalues(duration, start_time) then
+        if canaccessvalue(duration) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if start_time and duration and duration > 1.51 then
+                        local remaining = start_time + duration - now
+                        if remaining > 0 then
+                            return remaining, duration
+                        end
+                    end
+                end
+            end
         end
     end
     return 0, HUD_COOLDOWN_FALLBACK[slot.key] or 0

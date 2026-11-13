@@ -371,6 +371,7 @@ ST.DEATHKNIGHT.defaults = {
         gcd1b_marker_mode = "spell",
     },
 	offhand = {
+        enabled = false,
         y = -142,
 		bar_color_default = {13, 79, 115, 0.8},
         show_gcd_underlay = false,
@@ -680,6 +681,7 @@ ST.HUNTER.defaults = {
         y = -142,
     },
     offhand = {
+        enabled = false,
         require_in_range = false,
         show_condition = "either",
 		bar_color_default = {13, 79, 115, 0.9},
@@ -1150,6 +1152,7 @@ ST.ROGUE.defaults = {
         bar_color_default = get_default_class_color("ROGUE", 0.9),
     },
 	offhand = {
+        enabled = false,
         y = -142,
 		bar_color_default = {13, 79, 115, 0.8},
         show_gcd_underlay = false,
@@ -1329,6 +1332,7 @@ ST.SHAMAN.defaults = {
         gcd1b_marker_mode = "spell",
     },
 	offhand = {
+        enabled = false,
         y = -142,
 		bar_color_default = {13, 79, 115, 0.8},
         show_gcd_underlay = false,
@@ -1543,6 +1547,7 @@ ST.WARRIOR.defaults = {
         bar_color_default = get_default_class_color("WARRIOR", 0.9),
     },
 	offhand = {
+        enabled = false,
         y = -142,
 		bar_color_default = {13, 79, 115, 0.8},
         show_gcd_underlay = false,

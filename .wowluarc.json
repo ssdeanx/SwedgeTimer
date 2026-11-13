@@ -2,37 +2,43 @@
     "$schema": "https://raw.githubusercontent.com/TradeSkillMaster/wowlua-ls/main/editors/vscode/wowluarc.schema.json",
     "flavors": [
         "retail",
-        "mainline",
         "classic",
         "classic_era",
         "forever"
     ],
     "library": [
-        "Libs/LibStub/",
+        "Libs/AceAddon-3.0/",
+        "Libs/AceConfig-3.0/",
+        "Libs/AceConsole-3.0/",
+        "Libs/AceDB-3.0/",
+        "Libs/AceDBOptions-3.0/",
+        "Libs/AceEvent-3.0/",
+        "Libs/AceGUI-3.0/",
+        "Libs/AceGUI-3.0-SharedMediaWidgets/",
         "Libs/CallbackHandler-1.0/",
-        "Libs/LibDetours-1.0/",
-        "Libs/LibForeverInspector/"
-    ],
-    "ignore": [
-        "docs/",
-        "Tests/",
-        "Media/",
-        "OLD/",
-        "bench/",
-        "desks/",
-        "mnemon-mirror/",
+        "Libs/LibClassicDurations/",
+        "Libs/LibClassicSwingTimerAPI/",
+        "Libs/LibCustomGlow-1.0/",
         "Libs/LibDataBroker-1.1/",
         "Libs/LibDBIcon-1.0/",
         "Libs/LibRangeCheck-2.0/",
-        "Libs/LibSharedMedia-3.0/"
+        "Libs/LibSharedMedia-3.0/",
+        "Libs/LibStub/",
+        "Libs/LibWindow-1.1/"
+    ],
+    "ignore": [
+        "docs/",
+        "tests/",
+        "bench/",
+        "desks/"
     ],
     "globals": {
         "read": [
-            "*"
+            "debug",
+            "InterfaceOptionsFrame"
         ],
-        "write": [
-            "*"
-        ],
+        "write": [],
+        "allowSlashCommands": true,
         "allowBindingGlobals": true
     },
     "hint": {

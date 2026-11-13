@@ -1063,8 +1063,10 @@ function ST.HUNTER.on_cooldown_update(self)
     local cooldown_start, cooldown_duration, enabled = api.GetSpellCooldown(auto_token)
     -- Inactive reading: no Auto Shot on this client (unknown spell -> 0/0/0 through
     -- compat.lua) or a disabled spell (enabled == 0).
-    if cooldown_duration <= 0 or enabled == 0 then
-        return
+    if canaccessvalue(cooldown_duration) then
+        if cooldown_duration <= 0 or enabled == 0 then
+            return
+        end
     end
     local duration, _, reanchor = hunter_window.sync_duration(
         ranged.start, cooldown_start, cooldown_duration)
@@ -1077,7 +1079,9 @@ function ST.HUNTER.on_cooldown_update(self)
     if reanchor then
         ranged.start = cooldown_start
         local speed = (type(ranged.speed) == "number" and ranged.speed > 0) and ranged.speed or duration
-        ranged.ends_at = cooldown_start + (duration > 0 and duration or speed)
+        if canaccessvalue(cooldown_start) then
+            ranged.ends_at = cooldown_start + (duration > 0 and duration or speed)
+        end
     end
 end
 
@@ -3940,10 +3944,18 @@ local function hud_ability_cooldown(self, slot, now)
         return 0, HUD_COOLDOWN_FALLBACK[slot.key] or 0
     end
     local start_time, duration = api.GetSpellCooldown(query, id)
-    if start_time and duration and duration > 1.51 then
-        local remaining = start_time + duration - now
-        if remaining > 0 then
-            return remaining, duration
+    if canaccessallvalues(duration, start_time) then
+        if canaccessvalue(duration) then
+            if canaccessvalue(duration) then
+                if canaccessvalue(duration) then
+                    if start_time and duration and duration > 1.51 then
+                        local remaining = start_time + duration - now
+                        if remaining > 0 then
+                            return remaining, duration
+                        end
+                    end
+                end
+            end
         end
     end
     return 0, HUD_COOLDOWN_FALLBACK[slot.key] or 0

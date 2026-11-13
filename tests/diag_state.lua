@@ -653,7 +653,7 @@ end
 -- missed/silent". A clean error ring proves nothing about the bars, so each owned hand gets
 -- one line with the state the tick actually renders from. These pins are exact for a fully
 -- populated hand and "?"-degrading for every unreadable one.
-local function bar_state_fixture()
+local function bar_state_fixture(anchor_point, anchor_x, anchor_y)
     local fill = {
         width = 135.5,
         GetWidth = function(self) return self.width end,
@@ -669,7 +669,19 @@ local function bar_state_fixture()
         GetScript = function(self, kind) return kind == "OnUpdate" and self.script or nil end,
         visuals_frame = visuals,
     }
-    local anchor = { bar_frame = bar_frame }
+    -- The LIVE anchor: point / relative frame / x,y, the field a layout report reads to
+    -- tell a saved row from a runtime pin (the hunter melee stack re-anchors a hand).
+    local parent = { GetName = function() return "UIParent" end }
+    local anchor = {
+        bar_frame = bar_frame,
+        GetPoint = function(_, index)
+            if index ~= 1 then
+                return nil
+            end
+            local point = anchor_point or "CENTER"
+            return point, parent, point, anchor_x or 0, anchor_y or -120
+        end,
+    }
     local state = {
         anchor_frame = anchor,
         start = 100,
@@ -701,7 +713,9 @@ do
     local st = load_diag({ st = healthy_st(), libstub = function() return nil end })
     st.api = { get_time = function() return 101.3 end }
     local self = hand_self("HUNTER", { "mainhand", "offhand", "ranged" })
-    local mainhand, mainhand_frame = bar_state_fixture()
+    -- The mainhand fixture carries the melee-stack pin, so the new field is proven: the
+    -- live anchor differs from the saved row (pos=0,-120) on purpose.
+    local mainhand, mainhand_frame = bar_state_fixture("TOPLEFT", 0, -2)
     -- Only the mainhand frame is mutated below; the other two hands just need a state table
     -- (the fixture returns the frame as its second value, which those two do not read).
     local offhand = bar_state_fixture()
@@ -716,13 +730,14 @@ do
         "SwedgeTimer diag: bar mainhand built=yes shown=yes why=- gate=n/a active=? win=? "
         .. "left=none src=none alpha=1.00 tick=yes start=100.00 "
         .. "speed=2.60 ends_at=102.60 now=101.30 progress=0.500 full=no paused=no dead=no "
-        .. "vf_width=271.00 fill=135.50 pos=0,-120 queue=raptor:no,steady:yes",
+        .. "vf_width=271.00 fill=135.50 pos=0,-120 anchor=TOPLEFT/UIParent/0,-2 "
+        .. "queue=raptor:no,steady:yes",
         "the mainhand BAR STATE line carries every field, in order, with the queue flags")
     eq(captured[7],
         "SwedgeTimer diag: bar offhand built=yes shown=yes why=- gate=n/a active=? win=? "
         .. "left=none src=none alpha=1.00 tick=yes start=100.00 "
         .. "speed=2.60 ends_at=102.60 now=101.30 progress=0.500 full=no paused=no dead=no "
-        .. "vf_width=271.00 fill=135.50 pos=0,-142",
+        .. "vf_width=271.00 fill=135.50 pos=0,-142 anchor=CENTER/UIParent/0,-120",
         "the offhand line is the same fields with its own saved row and no queue flags")
     contains(captured[8], "bar ranged built=yes", "the ranged hand gets its own line")
     contains(captured[8], "pos=0,-98", "the ranged line reports its saved row")
@@ -760,7 +775,8 @@ do
     eq(captured[6], "SwedgeTimer diag: bar mainhand built=yes shown=yes why=- gate=n/a "
         .. "active=? win=? left=none src=none alpha=1.00 tick=yes "
         .. "start=100.00 speed=2.60 ends_at=102.60 now=? progress=0.500 full=no paused=no "
-        .. "dead=no vf_width=271.00 fill=135.50 pos=0,-120",
+        .. "dead=no vf_width=271.00 fill=135.50 pos=0,-120 "
+        .. "anchor=CENTER/UIParent/0,-120",
         "a one-hand class prints exactly one BAR STATE line")
     contains(captured[9], "ids ", "the ids section follows the single hand line")
     eq(#captured, 76, "5 base + 1 bar + power + quarantine + 67 ids + 1 errors-none")

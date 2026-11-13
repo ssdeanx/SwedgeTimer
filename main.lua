@@ -2,7 +2,7 @@
 -- Main module for SwedgeTimer
 --=========================================================================================
 local addon_name, st = ...
-local version = "2.2.0"
+local version = "2.2.1"
 -- local version = "2.0"
 local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEvent-3.0")
 -- Exposed for the diagnostic report (diag.lua); keep in sync with the ## Version
@@ -130,18 +130,27 @@ function ST:get_class_hands()
 	return hands or {}
 end
 
+local hand_next_cache = {}
+
+local function next_hand_iter(next_map, current)
+	return next_map[current]
+end
+
 function ST:iter_hands()
-	-- Iterates over melee/ranged/offhand
-	local i = 0
+	-- Iterates over melee/ranged/offhand without per-call closure allocation
 	local hands = self:get_class_hands()
-	local n = #hands
-	return function()
-		i = i + 1
-		if i <= n then
-			return hands[i]
+	local next_map = hand_next_cache[hands]
+	if next_map == nil then
+		next_map = {}
+		local prev = false
+		for i = 1, #hands do
+			local h = hands[i]
+			next_map[prev] = h
+			prev = h
 		end
-		return nil
+		hand_next_cache[hands] = next_map
 	end
+	return next_hand_iter, next_map, false
 end
 
 -- True when the player's class has a bar for that hand. The class hands list is the
@@ -330,6 +339,13 @@ function ST:check_bar_enable_settings(db_class, hand)
 	return true -- If we get to the end the bar should be shown.
 end
 
+local function show_hand_frames(bar_frame, hiding_anchor_frame)
+	bar_frame:Show()
+	if hiding_anchor_frame ~= nil then
+		hiding_anchor_frame:Show()
+	end
+end
+
 function ST:show_bar(hand)
 	local db_class = self:get_class_table()
 	-- HU-22 lazy bars: an unbuilt hand behaves exactly like a disabled bar -
@@ -341,11 +357,7 @@ function ST:show_bar(hand)
 	if self:check_bar_enable_settings(db_class, hand) then
 		if self.player_class == "DRUID" then
 			if self.should_show_bar_this_form then
-				bar_frame:Show()
-				local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
-				if hiding_anchor_frame ~= nil then
-					hiding_anchor_frame:Show()
-				end
+				show_hand_frames(bar_frame, self:get_hiding_anchor_frame(hand))
 			else
 				self:note_hand_hide_reason(hand, "form")
 				self:hide_bar(hand)
@@ -358,18 +370,10 @@ function ST:show_bar(hand)
 				self:note_hand_hide_reason(hand, "spec")
 				self:hide_bar(hand)
 			else
-				bar_frame:Show()
-				local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
-				if hiding_anchor_frame ~= nil then
-					hiding_anchor_frame:Show()
-				end
+				show_hand_frames(bar_frame, self:get_hiding_anchor_frame(hand))
 			end
 		else
-				bar_frame:Show()
-				local hiding_anchor_frame = self:get_hiding_anchor_frame(hand)
-				if hiding_anchor_frame ~= nil then
-					hiding_anchor_frame:Show()
-				end
+				show_hand_frames(bar_frame, self:get_hiding_anchor_frame(hand))
 		end
 	else
 		-- check_bar_enable_settings refused after the poll above already cleared the class
@@ -3053,17 +3057,16 @@ function ST:handle_oor_hand(hand)
 		return
 	end
 	-- self:Print(db.dim_oor)
-	if db.dim_oor then
-		-- if hand == "offhand" then
-		-- 	-- self:Print(self:get_in_range(hand))
-		-- end
-		if not self:get_in_range(hand) then
-			frame:SetAlpha(db.dim_alpha)
-		else
-			frame:SetAlpha(1.0)
+	local target_alpha = 1.0
+	if db.dim_oor and not self:get_in_range(hand) then
+		target_alpha = db.dim_alpha
+	end
+	local state = self[hand]
+	if type(state) ~= "table" or state._last_alpha ~= target_alpha then
+		if type(state) == "table" then
+			state._last_alpha = target_alpha
 		end
-	else
-		frame:SetAlpha(1.0)
+		frame:SetAlpha(target_alpha)
 	end
 end
 
