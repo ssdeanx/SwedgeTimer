@@ -1663,8 +1663,9 @@ function ST:set_opts_funcs()
         end
         if hand_token == nil then
             -- The multi-hand groups: follow their first melee hand, if any.
-            for i = 1, #(hands or {}) do
-                local h = hands[i]
+            local hand_list = hands or {}
+            for i = 1, #hand_list do
+                local h = hand_list[i]
                 if h == "mainhand" or h == "offhand" then
                     hand_token = h
                     break

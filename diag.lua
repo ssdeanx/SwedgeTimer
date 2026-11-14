@@ -367,17 +367,38 @@ local function config_line(self)
         guides_text(self))
 end
 
+-- Per-hand swing WIRE counts: START/UPDATE/STOP receipts, as `mh:0/0/0,oh:...,r:...`.
+-- This is the one link in the "bar is visible but frozen" chain that had no observable:
+-- the BAR STATE lines prove whether the tick is installed and what it renders, and
+-- `engine=` names which source is selected - but nothing proved whether that source ever
+-- DELIVERED a cycle. `ST:note_swing_wire` already counts every receipt; this exposes it,
+-- so "engine selected but silent" and "engine delivering but the tick not painting" are
+-- different answers instead of the same guess.
+-- A wire counter: a whole number, or 0 for a hand with no receipts yet. The counter
+-- table only exists once ST:note_swing_wire has run at least once, so an absent row is a
+-- truthful zero (never "?", which would read as unreadable).
+local function swing_count(value)
+    if type(value) ~= "number" then
+        return "0"
+    end
+    return string.format("%d", value)
+end
+
+-- Forward declaration: the body needs class_hand_tokens, which is defined below.
+local swing_wire_text
+
 -- Verbose line: the init readiness flags and the deadline/init state.
 local function flags_line(self)
     return string.format(
-        "%s flags stl_ready=%s llm_ready=%s lrc_ready=%s lrc_unavailable=%s deadline=%s init=%s",
+        "%s flags stl_ready=%s llm_ready=%s lrc_ready=%s lrc_unavailable=%s deadline=%s init=%s wire=%s",
         PREFIX,
         flag(read(self, "stl_ready")),
         flag(read(self, "llm_ready")),
         flag(read(self, "lrc_ready")),
         flag(read(self, "lrc_unavailable")),
         read(self, "init_deadline_fired") == true and "fired" or "no",
-        read(self, "interfaces_are_initialised") == true and "yes" or "no")
+        read(self, "interfaces_are_initialised") == true and "yes" or "no",
+        swing_wire_text(self))
 end
 
 -- Verbose line: the UI modules this TOC set loaded and the guide-provider count.
@@ -492,6 +513,29 @@ local function class_hand_tokens(self)
         return hands
     end
     return BAR_HANDS
+end
+
+function swing_wire_text(self) -- assigned to the forward declaration above
+    local counts = read(self, "swing_wire_counts")
+    if type(counts) ~= "table" then
+        return "none"
+    end
+    local hands = class_hand_tokens(self)
+    local short = { mainhand = "mh", offhand = "oh", ranged = "r" }
+    local parts = {}
+    for i = 1, #hands do
+        local hand = hands[i]
+        local row = read(counts, hand)
+        parts[#parts + 1] = string.format("%s:%s/%s/%s",
+            short[hand] or tostring(hand),
+            swing_count(read(row, "start")),
+            swing_count(read(row, "update")),
+            swing_count(read(row, "stop")))
+    end
+    if #parts == 0 then
+        return "?"
+    end
+    return table.concat(parts, ",")
 end
 
 -- Seconds / pixel widths / alpha: two decimals, or "?" (unknown is never rendered as 0).

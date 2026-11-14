@@ -1117,7 +1117,10 @@ local function build_row(ST, row_key)
 		return true, false, false
 	end
 	local list = A.state.lists and A.state.lists[row_key] or nil
-	if type(list) ~= "table" or #list == 0 then
+	if type(list) ~= "table" then
+		return true, false, false
+	end
+	if #list == 0 then
 		return true, false, false
 	end
 	if state.container == nil then

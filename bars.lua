@@ -31,6 +31,7 @@ local format = string.format
 ---@field latency table
 ---@field gcd table
 ---@field is_cat_or_bear boolean
+---@field convert_color fun(self: ST, t: table, new_alpha: number?): number, number, number, number
 local ST = LibStub("AceAddon-3.0"):GetAddon(addon_name)
 local LWIN = LibStub("LibWindow-1.1")
 
@@ -1939,8 +1940,11 @@ function ST:new_pips(parent, opts)
     local y = tonumber(opts.y) or 0
     frame:SetPoint(point, parent, point, x, y)
 
+    -- convert_color takes a 0-255 RGBA table and returns FOUR values (main.lua:195
+    -- unpacks it), never a table: the earlier table-style read indexed a number and the
+    -- missing `fill` local made it unpack(nil), which threw inside every pips build.
     local fill = opts.color or PIPS_COLOR
-    local fill_r, fill_g, fill_b = self:convert_color(fill)
+    local fill_r, fill_g, fill_b, fill_a = self:convert_color(fill)
     local empty_r, empty_g, empty_b, empty_a
     if opts.empty_color then
         empty_r, empty_g, empty_b, empty_a = self:convert_color(opts.empty_color)
@@ -1989,7 +1993,7 @@ function ST:new_pips(parent, opts)
         for i = 1, count do
             local cell = cells[i]
             if i <= n then
-                cell:SetVertexColor(fill_r, fill_g, fill_b, fill[4] or 1)
+                cell:SetVertexColor(fill_r, fill_g, fill_b, fill_a or 1)
             else
                 cell:SetVertexColor(empty_r, empty_g, empty_b, empty_a or 1)
             end

@@ -9,7 +9,7 @@ local ST = LibStub("AceAddon-3.0"):NewAddon(addon_name, "AceConsole-3.0", "AceEv
 -- header in every toc.
 ST.addon_version = version
 local LSM = LibStub("LibSharedMedia-3.0")
-local STL = LibStub("LibClassicSwingTimerAPI", true)
+local STL = LibStub("LibClassicSwingTimerAPI", true) --[[@as any]]
 -- Single-TOC release (2026-11-07): swing_lib_gate.lua pre-registers a tagged stub so the
 -- vendored classic library no-ops on clients where it must not run (Forever, Retail,
 -- Cata, Mists); swing_lib_gate_release.lua removes it again right after the library's
@@ -87,6 +87,9 @@ ST.WARRIOR = {}
 -- Funcs/iterables to automate common tasks
 --=========================================================================================
 local SwingTimerInfo = function(hand)
+	if STL == nil then
+		return nil, nil, nil
+	end
 	return STL:SwingTimerInfo(hand)
 end
 
@@ -142,6 +145,7 @@ function ST:iter_hands()
 	local next_map = hand_next_cache[hands]
 	if next_map == nil then
 		next_map = {}
+		---@type string|boolean
 		local prev = false
 		for i = 1, #hands do
 			local h = hands[i]
@@ -188,6 +192,12 @@ function ST:is_value_in_array(value, array)
 	return false
 end
 
+---@param t table RGBA in 0-255
+---@param new_alpha number?
+---@return number r
+---@return number g
+---@return number b
+---@return number a
 function ST:convert_color(t, new_alpha)
 	-- Convert standard 0-255 colors down to WoW 0-1 ranges.
 	local r, g, b, a = unpack(t)
@@ -198,6 +208,12 @@ function ST:convert_color(t, new_alpha)
 	return r, g, b, a
 end
 
+---@param t table RGBA in 0-1
+---@param new_alpha number?
+---@return number r
+---@return number g
+---@return number b
+---@return number a
 function ST:convert_color_up(t, new_alpha)
 	-- Convert WoW 0-1 ranges up to standard 0-255 ranges.
 	local r, g, b, a = unpack(t)

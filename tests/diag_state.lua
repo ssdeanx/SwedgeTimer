@@ -453,7 +453,7 @@ do
     eq(captured[1], login_line, "verbose: line 1 is the same login line")
     eq(captured[2],
         "SwedgeTimer diag: flags stl_ready=true llm_ready=false lrc_ready=true "
-        .. "lrc_unavailable=false deadline=no init=yes",
+        .. "lrc_unavailable=false deadline=no init=yes wire=none",
         "verbose line 2 is the exact readiness-flag line")
     eq(captured[3],
         "SwedgeTimer diag: modules practice=yes hud=yes rotation=yes design=yes providers=6/6",
@@ -473,6 +473,26 @@ do
     contains(captured[77], "SwedgeTimer diag: ids 60052", "verbose: last wanted id (60052) renders")
     eq(captured[78], "SwedgeTimer diag: errors not observed (no error handler installed)",
         "verbose line 78 reports that no error handler was installed (F1)")
+
+    -- The swing WIRE counters: the engine-to-handler receipts. This is the link that
+    -- separates "the engine was selected but never delivered a cycle" (the frozen-bar
+    -- fault) from "it delivered and the tick is not painting" - a bar line alone cannot
+    -- tell them apart. `none` until the first receipt; then one START/UPDATE/STOP triple
+    -- per hand, with 0 for a hand that has not ticked yet.
+    do
+        local wire_self = healthy_self()
+        wire_self.swing_wire_counts = {
+            mainhand = { start = 3, update = 12, stop = 3 },
+            ranged = { start = 1, update = 4, stop = 1 },
+        }
+        check(run_report(st, wire_self, true), "wire counts: verbose does not throw")
+        contains(captured[2], "wire=mh:3/12/3,oh:0/0/0,r:1/4/1",
+            "wire counts: every hand reports its START/UPDATE/STOP receipts")
+        wire_self.swing_wire_counts = { mainhand = { start = 0, update = 0, stop = 0 } }
+        run_report(st, wire_self, true)
+        contains(captured[2], "wire=mh:0/0/0,oh:0/0/0,r:0/0/0",
+            "wire counts: a zeroed counter renders as zero, never as unknown")
+    end
 
     self = healthy_self()
     self.init_deadline_fired = true
